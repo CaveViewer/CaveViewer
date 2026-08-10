@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from concurrent.futures import Future, ThreadPoolExecutor
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass
 import hashlib
 import json
 import logging
@@ -57,6 +58,10 @@ from caveviewer.gui.map_opening import pick_folder_dialog, resolve_selected_map_
 from caveviewer.gui import recording
 from caveviewer.gui import bitmap_font
 from caveviewer.gui import manual_dive_trace
+from caveviewer.gui.artifact_capture_controller import (
+    ArtifactCapturePresentationController,
+    ArtifactCaptureStatus,
+)
 from caveviewer.gui.manual_dive_trace_controller import ManualDiveTraceStateController
 from caveviewer.gui import recorded_dive
 from caveviewer.gui import render_upload
@@ -74,9 +79,9 @@ from caveviewer.gui.platform.presentation_actions import (
     create_presentation_actions_adapter,
 )
 from caveviewer.gui.platform.probes.recording import VideoRecordingTarget
-from caveviewer.gui.platform.saved_recording_reveal import (
-    SavedRecordingRevealAdapter,
-    create_saved_recording_reveal_adapter,
+from caveviewer.gui.platform.saved_artifact_reveal import (
+    SavedArtifactRevealAdapter,
+    create_saved_artifact_reveal_adapter,
 )
 from caveviewer.gui.platform.recording_process import (
     RecordingProcessAdapter,
@@ -143,6 +148,15 @@ _BENCHMARK_STREAMING_ENV_FIELDS = (
 
 _RecordingStopResult = recording.RecordingStopResult
 _RecordingReadbackSlot = recording.RecordingReadbackSlot
+
+
+@dataclass(frozen=True)
+class _PendingManualDiveTraceWriter:
+    """One trace writer paired with its user-visible completion policy."""
+
+    recorder: manual_dive_trace.ManualDiveTraceRecorder
+    show_completion: bool
+    reveal_on_success: bool
 
 
 def _import_controller_property(attribute_name: str):
@@ -519,17 +533,17 @@ def _window_backend_adapter_for_runtime(
     return create_window_backend_adapter()
 
 
-def _saved_recording_reveal_adapter_for_runtime(
+def _saved_artifact_reveal_adapter_for_runtime(
     platform_runtime: PlatformRuntime | None = None,
     *,
     platform_adapter=None,
-) -> SavedRecordingRevealAdapter:
-    """Use the injected recording-reveal action with a legacy facade fallback."""
+) -> SavedArtifactRevealAdapter:
+    """Use the injected artifact-reveal action with a legacy facade fallback."""
     if platform_runtime is not None:
-        return platform_runtime.saved_recording_reveal_adapter
+        return platform_runtime.saved_artifact_reveal_adapter
     if platform_adapter is None:
         platform_adapter = get_platform_adapter()
-    return create_saved_recording_reveal_adapter(platform_adapter)
+    return create_saved_artifact_reveal_adapter(platform_adapter)
 
 
 def _recording_process_adapter_for_runtime(
@@ -639,8 +653,14 @@ class CaveViewerWindow(mglw.WindowConfig):
     RIGHT_COLUMN_PANEL_BORDER_RGBA = (0.42, 0.54, 0.72, 0.62)
     RIGHT_COLUMN_PANEL_BORDER_PX = 1.5
     RECORDING_COUNTDOWN_START_NUMBER = 3
+    RECORDING_COUNTDOWN_TITLE = "Prepare to record a dive"
     MANUAL_DIVE_TRACE_COUNTDOWN_START_NUMBER = 3
-    MANUAL_DIVE_TRACE_SAVE_CONFIRMATION_SECONDS = 3.0
+    MANUAL_DIVE_TRACE_COUNTDOWN_TITLE = "Prepare to plan a dive"
+    DIVE_STATUS_PANEL_WIDTH_FRACTION = 0.52
+    DIVE_STATUS_PANEL_MIN_WIDTH = 520.0
+    DIVE_STATUS_PANEL_HEIGHT = 116.0
+    DIVE_STATUS_TITLE_PIXEL_SIZE = 2.50
+    DIVE_STATUS_NOTE_PIXEL_SIZE = 1.70
     RECORDING_READBACK_BUFFER_COUNT = 3
     RECORDING_READBACK_COMPONENTS = 3
     RECORDING_RAW_PIX_FMT = "rgb24"
@@ -809,10 +829,9 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._manual_dive_trace: (
             manual_dive_trace.ManualDiveTraceRecorder | None
         ) = None
-        self._manual_dive_trace_writers: list[
-            manual_dive_trace.ManualDiveTraceRecorder
-        ] = []
+        self._manual_dive_trace_writers: list[_PendingManualDiveTraceWriter] = []
         self._manual_dive_trace_controller = ManualDiveTraceStateController()
+        self._artifact_capture_presentation = ArtifactCapturePresentationController()
         self._pending_recorded_dive_trace = (
             CaveViewerWindow.cave_recorded_dive_trace
         )
@@ -1146,12 +1165,12 @@ class CaveViewerWindow(mglw.WindowConfig):
             self._presentation_actions_adapter = actions
         return actions
 
-    def _active_saved_recording_reveal_adapter(self) -> SavedRecordingRevealAdapter:
+    def _active_saved_artifact_reveal_adapter(self) -> SavedArtifactRevealAdapter:
         """Return the runtime action adapter or preserve direct legacy callers."""
         platform_runtime = getattr(self, "_platform_runtime", None)
         if platform_runtime is not None:
-            return _saved_recording_reveal_adapter_for_runtime(platform_runtime)
-        return _saved_recording_reveal_adapter_for_runtime(
+            return _saved_artifact_reveal_adapter_for_runtime(platform_runtime)
+        return _saved_artifact_reveal_adapter_for_runtime(
             platform_adapter=self._active_platform_adapter(),
         )
 
@@ -1204,6 +1223,16 @@ class CaveViewerWindow(mglw.WindowConfig):
         if controller is None:
             controller = ManualDiveTraceStateController()
             self.__dict__["_manual_dive_trace_controller"] = controller
+        return controller
+
+    def _ensure_artifact_capture_presentation(
+        self,
+    ) -> ArtifactCapturePresentationController:
+        """Return the shared post-save feedback and reveal scheduler."""
+        controller = self.__dict__.get("_artifact_capture_presentation")
+        if controller is None:
+            controller = ArtifactCapturePresentationController()
+            self.__dict__["_artifact_capture_presentation"] = controller
         return controller
 
     def _ensure_recording_capture(self) -> RecordingCaptureResources:
@@ -2093,20 +2122,22 @@ class CaveViewerWindow(mglw.WindowConfig):
     def _toggle_recording(self) -> None:
         self._drain_recording_stop_results()
         if self._recording_stop_in_progress():
-            self._show_recording_status(
-                "Finishing recording",
-                "Video is still being finalized.",
-                kind="info",
-                duration=2.0,
+            self._show_artifact_capture_status(
+                self._ensure_artifact_capture_presentation().saving_status("Video")
             )
             return
 
         if self._recording_session is not None:
-            self._stop_recording(show_message=True)
+            self._stop_recording(show_message=True, reveal_on_success=True)
             return
 
         if self._recording_countdown_until is not None:
-            self._ensure_recording_controller().cancel_countdown(now=time.perf_counter())
+            now = time.perf_counter()
+            self._ensure_recording_controller().clear_countdown()
+            self._show_artifact_capture_status(
+                self._ensure_artifact_capture_presentation().canceled_status("Video"),
+                now=now,
+            )
             _LOG.info("Recording countdown canceled.")
             return
 
@@ -2155,7 +2186,7 @@ class CaveViewerWindow(mglw.WindowConfig):
     def _recording_unavailable(self, reason: str) -> None:
         message = f"Cannot start recording: {reason}"
         _LOG.warning(message)
-        self._show_recording_status(
+        self._show_capture_status(
             "Recording unavailable",
             reason,
             kind="error",
@@ -2251,7 +2282,7 @@ class CaveViewerWindow(mglw.WindowConfig):
             self._release_recording_readback_buffers()
             _LOG.warning(f"Cannot start recording: failed to create recording readback resources: {exc}")
             self._ensure_recording_controller().clear_countdown()
-            self._show_recording_status(
+            self._show_capture_status(
                 "Recording unavailable",
                 "Could not prepare the recording framebuffer.",
                 kind="error",
@@ -2340,13 +2371,13 @@ class CaveViewerWindow(mglw.WindowConfig):
     def _recording_display_path(self, path: str | None) -> str | None:
         return recording.recording_display_path(path)
 
-    def _show_recording_status(
+    def _show_capture_status(
         self,
         message: str,
         detail: str | None = None,
         *,
         kind: str = "info",
-        duration: float = 2.8,
+        duration: float | None = 2.8,
         now: float | None = None,
     ) -> None:
         self._ensure_recording_controller().show_status(
@@ -2357,7 +2388,27 @@ class CaveViewerWindow(mglw.WindowConfig):
             now=time.perf_counter() if now is None else now,
         )
 
-    def _stop_recording(self, *, show_message: bool = False) -> None:
+    def _show_artifact_capture_status(
+        self,
+        status: ArtifactCaptureStatus,
+        *,
+        now: float | None = None,
+    ) -> None:
+        """Present one shared artifact-capture status through the HUD."""
+        self._show_capture_status(
+            status.message,
+            status.detail,
+            kind=status.kind,
+            duration=status.duration,
+            now=now,
+        )
+
+    def _stop_recording(
+        self,
+        *,
+        show_message: bool = False,
+        reveal_on_success: bool = False,
+    ) -> None:
         self._ensure_recording_stop_state()
         self._drain_recording_stop_results()
         if self._recording_stop_in_progress():
@@ -2380,7 +2431,10 @@ class CaveViewerWindow(mglw.WindowConfig):
             return
 
         session.signal_writer_stop()
-        work = session.stop_work(show_message=show_message)
+        work = session.stop_work(
+            show_message=show_message,
+            reveal_on_success=reveal_on_success,
+        )
         self._recording_stop_thread = recording.start_stop_finalizer(
             work,
             result_queue=self._recording_stop_results,
@@ -2390,10 +2444,8 @@ class CaveViewerWindow(mglw.WindowConfig):
             logger=_LOG,
         )
         if show_message:
-            self._show_recording_status(
-                "Finishing recording",
-                kind="info",
-                duration=2.0,
+            self._show_artifact_capture_status(
+                self._ensure_artifact_capture_presentation().saving_status("Video")
             )
 
     def _drain_recording_stop_results(self) -> None:
@@ -2416,7 +2468,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         if not output_path:
             return
         try:
-            self._active_saved_recording_reveal_adapter().reveal_saved_recording(
+            self._active_saved_artifact_reveal_adapter().reveal_saved_artifact(
                 output_path
             )
         except Exception as exc:
@@ -2427,6 +2479,20 @@ class CaveViewerWindow(mglw.WindowConfig):
                 exc,
             )
 
+    def _drain_due_saved_artifact_reveals(self, *, now: float | None = None) -> None:
+        """Reveal artifacts only after their shared success message has been visible."""
+        controller = self._ensure_artifact_capture_presentation()
+        if not controller.has_pending_reveals:
+            return
+        current_time = time.perf_counter() if now is None else now
+        for request in controller.take_due_reveals(
+            now=current_time
+        ):
+            self._reveal_saved_output(
+                request.output_path,
+                output_kind=request.artifact_name.lower(),
+            )
+
     def _apply_recording_stop_result(self, result: _RecordingStopResult) -> None:
         self._ensure_recording_controller().reset_after_stop_result()
 
@@ -2435,15 +2501,14 @@ class CaveViewerWindow(mglw.WindowConfig):
             if result.dropped_frames:
                 _LOG.warning(f"Recording saved after dropping {result.dropped_frames} frame(s).")
             if result.show_message:
-                self._show_recording_status(
-                    "Recording saved",
-                    kind="success",
-                    duration=3.2,
-                )
-                self._reveal_saved_output(
+                now = time.perf_counter()
+                status = self._ensure_artifact_capture_presentation().saved_status(
+                    "Video",
                     result.output_path,
-                    output_kind="recording",
+                    now=now,
+                    reveal=result.reveal_on_success,
                 )
+                self._show_artifact_capture_status(status, now=now)
         else:
             if result.stderr_text and result.writer_error:
                 detail = f": {result.stderr_text}; writer_error={result.writer_error}"
@@ -2455,11 +2520,11 @@ class CaveViewerWindow(mglw.WindowConfig):
                 detail = ""
             _LOG.warning(f"Recording encoder exited with code {result.returncode}{detail}")
             if result.show_message:
-                self._show_recording_status(
-                    "Recording failed",
-                    self._recording_failure_detail(result.stderr_text),
-                    kind="error",
-                    duration=3.4,
+                self._show_artifact_capture_status(
+                    self._ensure_artifact_capture_presentation().failed_status(
+                        "Video",
+                        self._recording_failure_detail(result.stderr_text),
+                    )
                 )
 
     def _recording_failure_detail(self, stderr_text: str) -> str:
@@ -2583,8 +2648,9 @@ class CaveViewerWindow(mglw.WindowConfig):
         now: float,
         controller: RecordingStateController | ManualDiveTraceStateController,
         start_number: int,
+        title: str,
     ) -> None:
-        """Render the shared numeric countdown used before capture begins."""
+        """Render the shared titled countdown used before capture begins."""
         display = controller.countdown_display(
             now=now,
             start_number=start_number,
@@ -2597,6 +2663,7 @@ class CaveViewerWindow(mglw.WindowConfig):
             number=display.number,
             progress=display.progress,
             fixed_text_scale=self.UI_TEXT_SCALE,
+            title=title,
         )
 
     def _print_texture_diagnostics(self, manifest: dict, textures_dir: str) -> None:
@@ -2850,18 +2917,8 @@ class CaveViewerWindow(mglw.WindowConfig):
         return controller.pause(now=now)
 
     def _render_dive_status(self, window_size: tuple[int, int]) -> None:
-        """Render status shared by manual tracing and Recorded Dive playback."""
-        if self._render_recorded_dive_progress(window_size):
-            return
-        if getattr(self, "_manual_dive_trace", None) is not None:
-            self._render_dive_status_prompt(
-                window_size,
-                title="Dive trace active",
-                note=(
-                    "Fly the reference route, then press "
-                    f"{self._primary_shortcut_label()} + T to stop and save."
-                ),
-            )
+        """Render status for Recorded Dive playback."""
+        self._render_recorded_dive_progress(window_size)
 
     @staticmethod
     def _recorded_dive_time_label(elapsed_s: float) -> str:
@@ -2904,10 +2961,16 @@ class CaveViewerWindow(mglw.WindowConfig):
         title: str,
         note: str,
     ) -> None:
-        """Draw a small top prompt for trace or playback state."""
+        """Draw a small top prompt for Recorded Dive playback state."""
         w, h = window_size
-        panel_w = min(max(420.0, w * 0.44), w - 48.0)
-        panel_h = 104.0
+        panel_w = min(
+            max(
+                self.DIVE_STATUS_PANEL_MIN_WIDTH,
+                w * self.DIVE_STATUS_PANEL_WIDTH_FRACTION,
+            ),
+            w - 48.0,
+        )
+        panel_h = self.DIVE_STATUS_PANEL_HEIGHT
         x0 = (w - panel_w) / 2.0
         y0 = 30.0
         x1 = x0 + panel_w
@@ -2981,14 +3044,14 @@ class CaveViewerWindow(mglw.WindowConfig):
         title_h = add_centered_text(
             title,
             y0 + 24.0,
-            2.25,
+            self.DIVE_STATUS_TITLE_PIXEL_SIZE,
             (0.9490, 0.8510, 0.5490, 1.0),
             max_width=panel_w - 48.0,
         )
         add_centered_text(
             note,
             y0 + 24.0 + title_h + 18.0,
-            1.45,
+            self.DIVE_STATUS_NOTE_PIXEL_SIZE,
             (0.835, 0.855, 0.86, 0.92),
             max_width=panel_w - 48.0,
         )
@@ -4982,7 +5045,7 @@ class CaveViewerWindow(mglw.WindowConfig):
             self.minimap.render(window_size, self.camera.position, self.camera.forward(),
                                 self._bookmarks)
 
-    def _render_recording_status_message(self, window_size: tuple[int, int]) -> None:
+    def _render_capture_status_message(self, window_size: tuple[int, int]) -> None:
         now = time.perf_counter()
         status = self._ensure_recording_controller().active_status(now=now)
         if status is None:
@@ -4990,7 +5053,7 @@ class CaveViewerWindow(mglw.WindowConfig):
 
         message = status.message
         detail = status.detail
-        kind = status.kind
+        kind = status.kind or "info"
 
         w, h = window_size
         self._render_recording_countdown_scrim(window_size, alpha=0.42)
@@ -4999,88 +5062,22 @@ class CaveViewerWindow(mglw.WindowConfig):
             "success": "OK",
             "error": "!",
             "cancel": "X",
-        }.get(kind, "OK")
-        symbol_size = 5.2 if symbol == "OK" else 7.2
+            "info": "...",
+        }.get(kind, "...")
+        symbol_size = 5.2 if symbol == "OK" else 3.8 if symbol == "..." else 7.2
         center_x = w / 2.0
-        ring_center_y = h / 2.0 - 54.0
+        ring_center_y = h / 2.0
         self.import_progress_panel.draw_ring_label(
             center_x=center_x,
             center_y=ring_center_y,
             window_size=window_size,
             label=symbol,
-            progress=1.0,
+            progress=None if kind == "info" else 1.0,
             pixel_size=symbol_size,
             fixed_text_scale=self.UI_TEXT_SCALE,
+            title=message,
+            note=detail,
         )
-
-        verts = []
-
-        def px_to_ndc(x: float, y: float) -> tuple[float, float]:
-            return (x / w) * 2.0 - 1.0, 1.0 - (y / h) * 2.0
-
-        def add_quad_px(qx0: float, qy0: float, qx1: float, qy1: float,
-                        rgba: tuple[float, float, float, float]) -> None:
-            nx0, ny0 = px_to_ndc(qx0, qy0)
-            nx1, ny1 = px_to_ndc(qx1, qy1)
-            top, bottom = max(ny0, ny1), min(ny0, ny1)
-            left, right = min(nx0, nx1), max(nx0, nx1)
-            quad = [
-                (left, bottom), (right, bottom), (right, top),
-                (left, bottom), (right, top), (left, top),
-            ]
-            for vx, vy in quad:
-                verts.append((vx, vy, *rgba))
-
-        def add_centered_text(
-            text: str,
-            y: float,
-            pixel_size: float,
-            rgba: tuple[float, float, float, float],
-        ) -> float:
-            pixel_size = bitmap_font.pixel_size_at_text_scale(pixel_size, self.UI_TEXT_SCALE)
-            min_pixel_size = bitmap_font.pixel_size_at_text_scale(1.35, self.UI_TEXT_SCALE)
-            bounds = bitmap_font.text_bounds_px(text, pixel_size)
-            text_w = bounds[2] - bounds[0]
-            max_w = max(120.0, w - 96.0)
-            if text_w > max_w:
-                pixel_size = max(min_pixel_size, pixel_size * max_w / text_w)
-                bounds = bitmap_font.text_bounds_px(text, pixel_size)
-                text_w = bounds[2] - bounds[0]
-            text_h = bounds[3] - bounds[1]
-            origin_x = (w - text_w) / 2.0 - bounds[0]
-            origin_y = y - bounds[1]
-            r, g, b, a = rgba
-            for glyph in bitmap_font.iter_text_pixels(text, origin_x, origin_y, pixel_size):
-                px0, py0, px1, py1 = glyph[0], glyph[1], glyph[2], glyph[3]
-                glyph_alpha = glyph[4] if len(glyph) > 4 else 1.0
-                add_quad_px(px0, py0, px1, py1, (r, g, b, a * glyph_alpha))
-            return text_h
-
-        message_y = ring_center_y + 86.0
-        main_color = (0.8980, 0.6314, 0.1216, 1.0)
-        detail_color = (0.835, 0.855, 0.86, 0.88)
-        main_h = add_centered_text(message, message_y, 2.9, main_color)
-        if detail:
-            add_centered_text(detail, message_y + main_h + 18.0, 1.65, detail_color)
-
-        data = np.array(verts, dtype=np.float32)
-        if len(verts) > self._status_panel_max_verts:
-            self._status_panel_vbo.release()
-            self._status_panel_max_verts = max(self._status_panel_max_verts * 2, len(verts))
-            self._status_panel_vbo = self.ctx.buffer(reserve=self._status_panel_max_verts * 6 * 4)
-            self._status_panel_vao = self.ctx.vertex_array(
-                self._hud_panel_program,
-                [(self._status_panel_vbo, "2f 4f", "in_pos", "in_color")],
-            )
-
-        self._status_panel_vbo.write(data.tobytes())
-        self.ctx.disable(moderngl.CULL_FACE)
-        self.ctx.disable(moderngl.DEPTH_TEST)
-        self.ctx.enable(moderngl.BLEND)
-        self._status_panel_vao.render(moderngl.TRIANGLES, vertices=len(verts))
-        self.ctx.disable(moderngl.BLEND)
-        self.ctx.enable(moderngl.DEPTH_TEST)
-        self.ctx.enable(moderngl.CULL_FACE)
 
     def _render_recording_countdown_scrim(self, window_size: tuple[int, int], alpha: float = 0.62) -> None:
         """Darken the cave view behind the countdown ring without hiding it."""
@@ -5166,6 +5163,7 @@ class CaveViewerWindow(mglw.WindowConfig):
                 "iconified", _ICONIFIED_RENDER_POLL_INTERVAL_S
             ):
                 self._drain_recording_stop_results()
+                self._drain_due_saved_artifact_reveals()
             return
         self._reset_render_throttle("iconified")
 
@@ -5175,6 +5173,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         # on frames that early-return before normal HUD interaction.
         self._sync_render_mode_loading_policy()
         self._drain_recording_stop_results()
+        self._drain_due_saved_artifact_reveals()
 
         if self._startup_focus_enabled:
             self._request_startup_focus_once()
@@ -5534,6 +5533,7 @@ class CaveViewerWindow(mglw.WindowConfig):
                     now=now,
                     controller=self._ensure_recording_controller(),
                     start_number=self.RECORDING_COUNTDOWN_START_NUMBER,
+                    title=self.RECORDING_COUNTDOWN_TITLE,
                 )
             else:
                 recording_read_ms = self._recording_update_after_scene(
@@ -5549,6 +5549,7 @@ class CaveViewerWindow(mglw.WindowConfig):
                 now=now,
                 controller=self._ensure_manual_dive_trace_controller(),
                 start_number=self.MANUAL_DIVE_TRACE_COUNTDOWN_START_NUMBER,
+                title=self.MANUAL_DIVE_TRACE_COUNTDOWN_TITLE,
             )
             overlay_ms = 0.0
         else:
@@ -5594,7 +5595,7 @@ class CaveViewerWindow(mglw.WindowConfig):
             self.controls_overlay.update(visual_stats)
             self.controls_overlay.render(self.wnd.size)
             self._render_dive_status(self.wnd.size)
-            self._render_recording_status_message(self.wnd.size)
+            self._render_capture_status_message(self.wnd.size)
             overlay_ms = (time.perf_counter() - t0) * 1000.0
 
         total_ms = (time.perf_counter() - frame_start) * 1000.0
@@ -5910,13 +5911,18 @@ class CaveViewerWindow(mglw.WindowConfig):
         if writers is None:
             writers = []
             self._manual_dive_trace_writers = writers
-        writers.append(recorder)
+        show_completion = reason in {"user_stopped", "writer_failed"}
+        writers.append(
+            _PendingManualDiveTraceWriter(
+                recorder=recorder,
+                show_completion=show_completion,
+                reveal_on_success=reason == "user_stopped",
+            )
+        )
         _LOG.info("Manual Guided Dive trace is saving: %s", output_path)
-        if reason == "user_stopped":
-            self._show_recording_status(
-                "Saving dive trace…",
-                kind="info",
-                duration=self.MANUAL_DIVE_TRACE_SAVE_CONFIRMATION_SECONDS,
+        if show_completion:
+            self._show_artifact_capture_status(
+                self._ensure_artifact_capture_presentation().saving_status("Dive trace")
             )
         return True
 
@@ -5927,10 +5933,10 @@ class CaveViewerWindow(mglw.WindowConfig):
         if controller.countdown_active:
             controller.clear_countdown()
             now = time.perf_counter()
-            self._show_recording_status(
-                "Dive trace canceled",
-                kind="cancel",
-                duration=self.MANUAL_DIVE_TRACE_SAVE_CONFIRMATION_SECONDS,
+            self._show_artifact_capture_status(
+                self._ensure_artifact_capture_presentation().canceled_status(
+                    "Dive trace"
+                ),
                 now=now,
             )
             _LOG.info("Manual Guided Dive trace countdown canceled.")
@@ -5938,17 +5944,19 @@ class CaveViewerWindow(mglw.WindowConfig):
         return self._start_manual_dive_trace_countdown()
 
     def _update_manual_dive_trace(self, *, now: float | None = None) -> None:
-        """Advance countdown, trace writer completion, and delayed file reveal."""
+        """Advance the trace countdown and apply finished writer outcomes."""
         now = time.perf_counter() if now is None else now
         controller = self._ensure_manual_dive_trace_controller()
         if controller.countdown_ready(now=now):
             controller.clear_countdown()
             if not self._start_manual_dive_trace():
-                self._show_recording_status(
+                self._show_capture_status(
                     "Dive trace unavailable",
                     "Could not start the trace for this map.",
                     kind="error",
-                    duration=self.MANUAL_DIVE_TRACE_SAVE_CONFIRMATION_SECONDS,
+                    duration=(
+                        self._ensure_artifact_capture_presentation().confirmation_seconds
+                    ),
                     now=now,
                 )
 
@@ -5962,33 +5970,36 @@ class CaveViewerWindow(mglw.WindowConfig):
                     recorder.observe(pose)
 
         pending = getattr(self, "_manual_dive_trace_writers", [])
-        for finished in tuple(pending):
-            result = finished.poll_result()
+        for pending_writer in tuple(pending):
+            result = pending_writer.recorder.poll_result()
             if result is None:
                 continue
-            pending.remove(finished)
+            pending.remove(pending_writer)
             if result.completed:
                 _LOG.info("Manual Guided Dive trace saved: %s", result.output_path)
-                self._show_recording_status(
-                    "Dive trace saved",
-                    "Opening its location…",
-                    kind="success",
-                    duration=self.MANUAL_DIVE_TRACE_SAVE_CONFIRMATION_SECONDS,
-                    now=now,
-                )
-                controller.defer_reveal(
-                    result.output_path,
-                    now=now,
-                    delay_s=self.MANUAL_DIVE_TRACE_SAVE_CONFIRMATION_SECONDS,
-                )
+                if pending_writer.show_completion:
+                    status = self._ensure_artifact_capture_presentation().saved_status(
+                        "Dive trace",
+                        result.output_path,
+                        now=now,
+                        reveal=pending_writer.reveal_on_success,
+                    )
+                    self._show_artifact_capture_status(status, now=now)
             else:
                 _LOG.warning(
                     "Manual Guided Dive trace failed to save: %s (%s)",
                     result.partial_path,
                     result.error or "unknown error",
                 )
-        for output_path in controller.take_due_reveals(now=now):
-            self._reveal_saved_output(output_path, output_kind="dive trace")
+                if pending_writer.show_completion:
+                    self._show_artifact_capture_status(
+                        self._ensure_artifact_capture_presentation().failed_status(
+                            "Dive trace",
+                            result.error or "The trace writer did not finish.",
+                        ),
+                        now=now,
+                    )
+        self._drain_due_saved_artifact_reveals(now=now)
 
     def _mark_manual_dive_trace_discontinuity(
         self,

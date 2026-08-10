@@ -482,7 +482,7 @@ class MapImportController:
             self.log.info("Import paused. Resume checkpoint: %s", resume_dir)
         self.log.info("Open this map again to resume the import.")
         if self._owner._has_map_loaded:
-            self._owner._show_recording_status(
+            self._owner._show_capture_status(
                 "Import paused",
                 "Resume point saved. Open this map again to continue.",
                 kind="success",

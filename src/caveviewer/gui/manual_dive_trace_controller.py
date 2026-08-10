@@ -1,14 +1,14 @@
-"""Render-thread interaction state for manual Guided Dive tracing.
+"""Render-thread countdown state for manual Guided Dive tracing.
 
-The controller owns the countdown shown before tracing starts and the delayed
-native-file-reveal schedule after a completed trace is confirmed.  The viewer
-owns the OpenGL presentation and platform reveal side effect, while
-``ManualDiveTraceRecorder`` owns the background JSONL writer.
+The viewer owns presentation and platform side effects, while
+``ManualDiveTraceRecorder`` owns the background JSONL writer.  Shared
+post-save feedback and delayed native reveal live in
+``artifact_capture_controller`` so video and trace artifacts behave alike.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 import math
 
 
@@ -22,11 +22,10 @@ class ManualDiveTraceCountdownSnapshot:
 
 @dataclass
 class ManualDiveTraceStateController:
-    """Track the user-visible countdown and deferred trace-file reveals."""
+    """Track the user-visible countdown before a trace begins."""
 
     countdown_started_at: float | None = None
     countdown_until: float | None = None
-    _pending_reveals: list[tuple[float, str]] = field(default_factory=list)
 
     @property
     def countdown_active(self) -> bool:
@@ -68,25 +67,3 @@ class ManualDiveTraceStateController:
         number = max(0, min(number_limit, int(math.ceil(remaining)) - 1))
         progress = max(0.0, min(1.0, elapsed / duration))
         return ManualDiveTraceCountdownSnapshot(number=number, progress=progress)
-
-    def defer_reveal(
-        self,
-        output_path: str,
-        *,
-        now: float,
-        delay_s: float,
-    ) -> None:
-        """Hold a completed file reveal until its success confirmation is visible."""
-        self._pending_reveals.append((now + max(0.0, delay_s), output_path))
-
-    def take_due_reveals(self, *, now: float) -> tuple[str, ...]:
-        """Return completed trace paths whose confirmation time has elapsed."""
-        due_paths: list[str] = []
-        remaining: list[tuple[float, str]] = []
-        for reveal_at, output_path in self._pending_reveals:
-            if now >= reveal_at:
-                due_paths.append(output_path)
-            else:
-                remaining.append((reveal_at, output_path))
-        self._pending_reveals = remaining
-        return tuple(due_paths)

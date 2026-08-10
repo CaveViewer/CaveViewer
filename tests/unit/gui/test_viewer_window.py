@@ -419,6 +419,19 @@ class FakeManualDiveTrace:
         return self.result
 
 
+def _pending_manual_trace_writer(
+    recorder,
+    *,
+    show_completion: bool = True,
+    reveal_on_success: bool = True,
+):
+    return viewer_window._PendingManualDiveTraceWriter(
+        recorder=recorder,
+        show_completion=show_completion,
+        reveal_on_success=reveal_on_success,
+    )
+
+
 @pytest.mark.parametrize(
     ("presentation_profile", "primary_modifiers"),
     [
@@ -521,6 +534,7 @@ def test_manual_trace_countdown_uses_the_shared_countdown_overlay():
         now=10.1,
         controller=controller,
         start_number=3,
+        title="Prepare to plan a dive",
     )
 
     assert calls[0] == ("scrim", (800, 600))
@@ -533,8 +547,86 @@ def test_manual_trace_countdown_uses_the_shared_countdown_overlay():
             "number": 3,
             "progress": pytest.approx(0.025),
             "fixed_text_scale": 1.28,
+            "title": "Prepare to plan a dive",
         },
     )
+
+
+def test_capture_status_uses_the_import_label_layout(monkeypatch):
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window.wnd = SimpleNamespace(size=(800, 600))
+    window.UI_TEXT_SCALE = 1.28
+    controller = window._ensure_recording_controller()
+    controller.show_status(
+        "Video saved",
+        detail="Opening its location…",
+        kind="success",
+        duration=3.0,
+        now=10.0,
+    )
+    calls = []
+    window._render_recording_countdown_scrim = lambda *args, **kwargs: calls.append(
+        ("scrim", args, kwargs)
+    )
+    window.import_progress_panel = SimpleNamespace(
+        draw_ring_label=lambda **kwargs: calls.append(("ring", kwargs))
+    )
+    monkeypatch.setattr(viewer_window.time, "perf_counter", lambda: 10.0)
+
+    window._render_capture_status_message((800, 600))
+
+    assert calls == [
+        ("scrim", ((800, 600),), {"alpha": 0.42}),
+        (
+            "ring",
+            {
+                "center_x": 400.0,
+                "center_y": 300.0,
+                "window_size": (800, 600),
+                "label": "OK",
+                "progress": 1.0,
+                "pixel_size": 5.2,
+                "fixed_text_scale": 1.28,
+                "title": "Video saved",
+                "note": "Opening its location…",
+            },
+        ),
+    ]
+
+
+def test_saving_capture_status_uses_an_indeterminate_ring(monkeypatch):
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window.wnd = SimpleNamespace(size=(800, 600))
+    window.UI_TEXT_SCALE = 1.28
+    controller = window._ensure_recording_controller()
+    controller.show_status(
+        "Saving dive trace…",
+        kind="info",
+        duration=None,
+        now=10.0,
+    )
+    calls = []
+    window._render_recording_countdown_scrim = lambda *args, **kwargs: None
+    window.import_progress_panel = SimpleNamespace(
+        draw_ring_label=lambda **kwargs: calls.append(kwargs)
+    )
+    monkeypatch.setattr(viewer_window.time, "perf_counter", lambda: 10.0)
+
+    window._render_capture_status_message((800, 600))
+
+    assert calls == [
+        {
+            "center_x": 400.0,
+            "center_y": 300.0,
+            "window_size": (800, 600),
+            "label": "...",
+            "progress": None,
+            "pixel_size": 3.8,
+            "fixed_text_scale": 1.28,
+            "title": "Saving dive trace…",
+            "note": None,
+        }
+    ]
 
 
 def test_manual_trace_map_change_cancels_a_pending_countdown():
@@ -835,7 +927,10 @@ def test_manual_trace_stop_is_nonblocking_and_keeps_writer_for_polling():
     assert window._stop_manual_dive_trace(reason="map_changed") is True
 
     assert window._manual_dive_trace is None
-    assert window._manual_dive_trace_writers == [recorder]
+    pending_writer = window._manual_dive_trace_writers[0]
+    assert pending_writer.recorder is recorder
+    assert pending_writer.show_completion is False
+    assert pending_writer.reveal_on_success is False
     assert recorder.stopped == [
         (
             ManualDivePose.from_camera(window.camera),
@@ -844,18 +939,34 @@ def test_manual_trace_stop_is_nonblocking_and_keeps_writer_for_polling():
     ]
 
 
+def test_user_stopped_manual_trace_shows_persistent_shared_saving_status():
+    window = _recording_window()
+    window.camera = _manual_trace_camera()
+    recorder = FakeManualDiveTrace()
+    window._manual_dive_trace = recorder
+    window._manual_dive_trace_writers = []
+
+    assert window._stop_manual_dive_trace(reason="user_stopped") is True
+
+    assert window._recording_status_message == "Saving dive trace…"
+    assert window._recording_status_until is None
+    pending_writer = window._manual_dive_trace_writers[0]
+    assert pending_writer.show_completion is True
+    assert pending_writer.reveal_on_success is True
+
+
 def test_completed_manual_trace_confirms_and_reveals_published_file(tmp_path):
     output_path = tmp_path / "trace.jsonl"
     output_path.write_text('{"record": "trace_completed"}\n', encoding="utf-8")
     revealed = []
 
-    class FakeSavedRecordingRevealAdapter:
-        def reveal_saved_recording(self, path):
+    class FakeSavedArtifactRevealAdapter:
+        def reveal_saved_artifact(self, path):
             revealed.append(path)
 
     window = _recording_window()
     window._platform_runtime = SimpleNamespace(
-        saved_recording_reveal_adapter=FakeSavedRecordingRevealAdapter()
+        saved_artifact_reveal_adapter=FakeSavedArtifactRevealAdapter()
     )
     recorder = FakeManualDiveTrace()
     recorder.result = ManualDiveTraceResult(
@@ -865,7 +976,7 @@ def test_completed_manual_trace_confirms_and_reveals_published_file(tmp_path):
         error=None,
     )
     window._manual_dive_trace = None
-    window._manual_dive_trace_writers = [recorder]
+    window._manual_dive_trace_writers = [_pending_manual_trace_writer(recorder)]
 
     window._update_manual_dive_trace(now=10.0)
 
@@ -883,16 +994,16 @@ def test_completed_manual_trace_confirms_and_reveals_published_file(tmp_path):
     assert revealed == [str(output_path)]
 
 
-def test_pending_or_failed_manual_trace_never_confirms_or_reveals(tmp_path):
+def test_background_trace_completion_is_silent_and_does_not_reveal(tmp_path):
     revealed = []
 
-    class FakeSavedRecordingRevealAdapter:
-        def reveal_saved_recording(self, path):
+    class FakeSavedArtifactRevealAdapter:
+        def reveal_saved_artifact(self, path):
             revealed.append(path)
 
     window = _recording_window()
     window._platform_runtime = SimpleNamespace(
-        saved_recording_reveal_adapter=FakeSavedRecordingRevealAdapter()
+        saved_artifact_reveal_adapter=FakeSavedArtifactRevealAdapter()
     )
     pending = FakeManualDiveTrace()
     failed = FakeManualDiveTrace()
@@ -903,28 +1014,37 @@ def test_pending_or_failed_manual_trace_never_confirms_or_reveals(tmp_path):
         error="disk full",
     )
     window._manual_dive_trace = None
-    window._manual_dive_trace_writers = [pending, failed]
+    pending_writer = _pending_manual_trace_writer(
+        pending,
+        show_completion=False,
+        reveal_on_success=False,
+    )
+    failed_writer = _pending_manual_trace_writer(
+        failed,
+        show_completion=False,
+        reveal_on_success=False,
+    )
+    window._manual_dive_trace_writers = [pending_writer, failed_writer]
 
     window._update_manual_dive_trace()
 
-    assert window._manual_dive_trace_writers == [pending]
+    assert window._manual_dive_trace_writers == [pending_writer]
     assert window._recording_status_message is None
     assert revealed == []
 
 
-def test_manual_trace_reveal_failure_keeps_saved_status(tmp_path, monkeypatch):
+def test_map_changed_trace_save_is_silent_after_successful_publication(tmp_path):
+    revealed = []
+
+    class FakeSavedArtifactRevealAdapter:
+        def reveal_saved_artifact(self, path):
+            revealed.append(path)
+
     output_path = tmp_path / "trace.jsonl"
     output_path.write_text('{"record": "trace_completed"}\n', encoding="utf-8")
-    logger = FakeLogger()
-    monkeypatch.setattr(viewer_window, "_LOG", logger)
-
-    class FailingSavedRecordingRevealAdapter:
-        def reveal_saved_recording(self, path):
-            raise RuntimeError(f"blocked: {path}")
-
     window = _recording_window()
     window._platform_runtime = SimpleNamespace(
-        saved_recording_reveal_adapter=FailingSavedRecordingRevealAdapter()
+        saved_artifact_reveal_adapter=FakeSavedArtifactRevealAdapter()
     )
     recorder = FakeManualDiveTrace()
     recorder.result = ManualDiveTraceResult(
@@ -934,7 +1054,73 @@ def test_manual_trace_reveal_failure_keeps_saved_status(tmp_path, monkeypatch):
         error=None,
     )
     window._manual_dive_trace = None
-    window._manual_dive_trace_writers = [recorder]
+    window._manual_dive_trace_writers = [
+        _pending_manual_trace_writer(
+            recorder,
+            show_completion=False,
+            reveal_on_success=False,
+        )
+    ]
+
+    window._update_manual_dive_trace(now=10.0)
+    window._update_manual_dive_trace(now=20.0)
+
+    assert window._recording_status_message is None
+    assert revealed == []
+
+
+def test_failed_user_stopped_trace_shows_shared_failure_without_reveal(tmp_path):
+    revealed = []
+
+    class FakeSavedArtifactRevealAdapter:
+        def reveal_saved_artifact(self, path):
+            revealed.append(path)
+
+    window = _recording_window()
+    window._platform_runtime = SimpleNamespace(
+        saved_artifact_reveal_adapter=FakeSavedArtifactRevealAdapter()
+    )
+    recorder = FakeManualDiveTrace()
+    recorder.result = ManualDiveTraceResult(
+        output_path=str(tmp_path / "trace.jsonl"),
+        partial_path=str(tmp_path / ".trace.jsonl.part"),
+        completed=False,
+        error="disk full",
+    )
+    window._manual_dive_trace = None
+    window._manual_dive_trace_writers = [_pending_manual_trace_writer(recorder)]
+
+    window._update_manual_dive_trace(now=10.0)
+
+    assert window._recording_status_message == "Could not save dive trace"
+    assert window._recording_status_detail == "disk full"
+    assert window._recording_status_kind == "error"
+    assert revealed == []
+
+
+def test_manual_trace_reveal_failure_keeps_saved_status(tmp_path, monkeypatch):
+    output_path = tmp_path / "trace.jsonl"
+    output_path.write_text('{"record": "trace_completed"}\n', encoding="utf-8")
+    logger = FakeLogger()
+    monkeypatch.setattr(viewer_window, "_LOG", logger)
+
+    class FailingSavedArtifactRevealAdapter:
+        def reveal_saved_artifact(self, path):
+            raise RuntimeError(f"blocked: {path}")
+
+    window = _recording_window()
+    window._platform_runtime = SimpleNamespace(
+        saved_artifact_reveal_adapter=FailingSavedArtifactRevealAdapter()
+    )
+    recorder = FakeManualDiveTrace()
+    recorder.result = ManualDiveTraceResult(
+        output_path=str(output_path),
+        partial_path=str(tmp_path / ".trace.jsonl.part"),
+        completed=True,
+        error=None,
+    )
+    window._manual_dive_trace = None
+    window._manual_dive_trace_writers = [_pending_manual_trace_writer(recorder)]
 
     window._update_manual_dive_trace(now=10.0)
 
@@ -971,19 +1157,8 @@ def test_manual_trace_marks_bookmark_recall_as_discontinuity():
     assert reason == "bookmark_recall"
 
 
-@pytest.mark.parametrize(
-    ("presentation_profile", "shortcut_label"),
-    [
-        (select_presentation_profile(platform_name="unsupported"), "Ctrl"),
-        (select_presentation_profile(platform_name="darwin"), "Cmd"),
-    ],
-)
-def test_manual_trace_active_renders_persistent_save_prompt(
-    presentation_profile,
-    shortcut_label,
-):
+def test_manual_trace_active_does_not_render_a_top_screen_prompt():
     window = object.__new__(viewer_window.CaveViewerWindow)
-    window._presentation_profile = presentation_profile
     window._manual_dive_trace = FakeManualDiveTrace()
     calls = []
     window._render_dive_status_prompt = (
@@ -992,18 +1167,7 @@ def test_manual_trace_active_renders_persistent_save_prompt(
 
     window._render_dive_status((800, 600))
 
-    assert calls == [
-        (
-            (800, 600),
-            {
-                "title": "Dive trace active",
-                "note": (
-                    "Fly the reference route, then press "
-                    f"{shortcut_label} + T to stop and save."
-                ),
-            },
-        )
-    ]
+    assert calls == []
 
 
 def test_desktop_relative_window_size_uses_eighty_percent_per_axis(monkeypatch):
@@ -1305,9 +1469,9 @@ def test_recording_toggle_cancels_existing_countdown(monkeypatch):
 
     assert window._recording_countdown_started_at is None
     assert window._recording_countdown_until is None
-    assert window._recording_status_message == "Recording canceled"
+    assert window._recording_status_message == "Video canceled"
     assert window._recording_status_kind == "cancel"
-    assert window._recording_status_until == pytest.approx(12.8)
+    assert window._recording_status_until == pytest.approx(13.0)
 
 
 def test_recording_signal_writer_stop_replaces_full_frame_with_sentinel():
@@ -1851,8 +2015,9 @@ def test_viewer_window_delegates_recording_encoder_ownership():
     assert "target=self._recording_stderr_reader" not in source
 
 
-def test_recording_success_reveals_saved_file_after_user_visible_stop():
+def test_recording_success_confirms_before_revealing_saved_file(monkeypatch):
     revealed = []
+    monkeypatch.setattr(viewer_window.time, "perf_counter", lambda: 10.0)
 
     class FakePlatformAdapter:
         def reveal_file(self, path):
@@ -1869,26 +2034,35 @@ def test_recording_success_reveals_saved_file_after_user_visible_stop():
             writer_error=None,
             dropped_frames=0,
             show_message=True,
+            reveal_on_success=True,
         )
     )
 
-    assert window._recording_status_message == "Recording saved"
-    assert window._recording_status_detail is None
+    assert window._recording_status_message == "Video saved"
+    assert window._recording_status_detail == "Opening its location…"
     assert window._recording_status_kind == "success"
+    assert window._recording_status_until == pytest.approx(13.0)
+    assert revealed == []
+
+    window._drain_due_saved_artifact_reveals(now=12.99)
+    assert revealed == []
+
+    window._drain_due_saved_artifact_reveals(now=13.0)
     assert revealed == ["/recordings/cave.mp4"]
 
 
 def test_recording_success_uses_injected_runtime_reveal_adapter(monkeypatch):
     revealed = []
+    monkeypatch.setattr(viewer_window.time, "perf_counter", lambda: 10.0)
 
-    class FakeSavedRecordingRevealAdapter:
-        def reveal_saved_recording(self, path):
+    class FakeSavedArtifactRevealAdapter:
+        def reveal_saved_artifact(self, path):
             revealed.append(path)
 
     window = _recording_window()
     window._platform_adapter = None
     window._platform_runtime = SimpleNamespace(
-        saved_recording_reveal_adapter=FakeSavedRecordingRevealAdapter()
+        saved_artifact_reveal_adapter=FakeSavedArtifactRevealAdapter()
     )
     monkeypatch.setattr(
         viewer_window,
@@ -1904,10 +2078,13 @@ def test_recording_success_uses_injected_runtime_reveal_adapter(monkeypatch):
             writer_error=None,
             dropped_frames=0,
             show_message=True,
+            reveal_on_success=True,
         )
     )
 
-    assert window._recording_status_message == "Recording saved"
+    assert window._recording_status_message == "Video saved"
+    assert revealed == []
+    window._drain_due_saved_artifact_reveals(now=13.0)
     assert revealed == ["/recordings/cave.mp4"]
 
 
@@ -1936,9 +2113,38 @@ def test_recording_success_does_not_reveal_after_background_stop():
     assert revealed == []
 
 
+def test_interrupted_recording_success_can_confirm_without_revealing():
+    revealed = []
+
+    class FakePlatformAdapter:
+        def reveal_file(self, path):
+            revealed.append(path)
+
+    window = _recording_window()
+    window._platform_adapter = FakePlatformAdapter()
+
+    window._apply_recording_stop_result(
+        recording.RecordingStopResult(
+            output_path="/recordings/cave.mp4",
+            returncode=0,
+            stderr_text="",
+            writer_error=None,
+            dropped_frames=0,
+            show_message=True,
+            reveal_on_success=False,
+        )
+    )
+
+    assert window._recording_status_message == "Video saved"
+    assert window._recording_status_detail is None
+    window._drain_due_saved_artifact_reveals(now=999.0)
+    assert revealed == []
+
+
 def test_recording_reveal_failure_keeps_saved_status(monkeypatch):
     logger = FakeLogger()
     monkeypatch.setattr(viewer_window, "_LOG", logger)
+    monkeypatch.setattr(viewer_window.time, "perf_counter", lambda: 10.0)
 
     class FakePlatformAdapter:
         def reveal_file(self, path):
@@ -1955,13 +2161,17 @@ def test_recording_reveal_failure_keeps_saved_status(monkeypatch):
             writer_error=None,
             dropped_frames=0,
             show_message=True,
+            reveal_on_success=True,
         )
     )
 
-    assert window._recording_status_message == "Recording saved"
+    assert window._recording_status_message == "Video saved"
     assert window._recording_status_kind == "success"
+    assert logger.warning_messages == []
+
+    window._drain_due_saved_artifact_reveals(now=13.0)
     assert logger.warning_messages == [
-        "Could not reveal saved recording /recordings/cave.mp4: "
+        "Could not reveal saved video /recordings/cave.mp4: "
         "blocked: /recordings/cave.mp4"
     ]
 
@@ -2020,9 +2230,9 @@ def test_stop_recording_kills_encoder_after_timeout_and_reports_failure(monkeypa
     window._recording_next_frame_time = 20.0
     window._recording_frame_queue = session.frame_queue
 
-    window._stop_recording(show_message=True)
+    window._stop_recording(show_message=True, reveal_on_success=True)
 
-    assert window._recording_status_message == "Finishing recording"
+    assert window._recording_status_message == "Saving video…"
     assert window._recording_status_detail is None
     assert window._recording_stop_thread is not None
     window._recording_stop_thread.join(timeout=1.0)
@@ -2041,7 +2251,7 @@ def test_stop_recording_kills_encoder_after_timeout_and_reports_failure(monkeypa
     assert window._recording_readback_pending == []
     assert window._recording_readback_byte_count == 0
     assert window._recording_frame_queue is None
-    assert window._recording_status_message == "Recording failed"
+    assert window._recording_status_message == "Could not save video"
     assert window._recording_status_detail == "Disk may be full"
     assert window._recording_status_kind == "error"
     assert window._recording_stop_thread is None

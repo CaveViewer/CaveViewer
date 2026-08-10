@@ -206,31 +206,6 @@ class ImportProgressPanel:
             for (x, y) in quad:
                 verts.append((x, y, *rgba))
 
-        def add_text(text, x, y, pixel_size, rgba):
-            r, g, b, a = rgba
-            for glyph in bitmap_font.iter_text_pixels(text, x, y, pixel_size):
-                px0, py0, px1, py1 = glyph[0], glyph[1], glyph[2], glyph[3]
-                glyph_alpha = glyph[4] if len(glyph) > 4 else 1.0
-                add_quad_px(px0, py0, px1, py1, (r, g, b, a * glyph_alpha))
-
-        def add_centered_text(text, y, pixel_size, rgba, *, max_width=None) -> float:
-            text = " ".join(str(text or "").split())
-            if not text:
-                return 0.0
-            max_width = (w - 96.0) if max_width is None else max_width
-            min_pixel_size = 1.20
-            bounds = bitmap_font.text_bounds_px(text, pixel_size)
-            text_w = bounds[2] - bounds[0]
-            if text_w > max_width:
-                pixel_size = max(min_pixel_size, pixel_size * max_width / text_w)
-                bounds = bitmap_font.text_bounds_px(text, pixel_size)
-                text_w = bounds[2] - bounds[0]
-            text_h = bounds[3] - bounds[1]
-            origin_x = (w - text_w) / 2.0 - bounds[0]
-            origin_y = y - bounds[1]
-            add_text(text, origin_x, origin_y, pixel_size, rgba)
-            return text_h
-
         add_quad_px(0, 0, w, h, self._BACKDROP_RGBA)
 
         panel_h = 310.0
@@ -253,20 +228,14 @@ class ImportProgressPanel:
 
         logo_cx = w / 2.0
         logo_cy = panel_y0 + panel_h * 0.50
-        title_y = logo_cy - (self.LOGO_SIZE / 2.0) - 42.0
-        add_centered_text(title, title_y, self.TITLE_TEXT_SIZE, self._TITLE_TEXT_RGBA)
-
-        stage_label = self._stage_label(stage)
-        stage_size = self.STAGE_TEXT_SIZE
-        stage_y = logo_cy + (self.LOGO_SIZE / 2.0) + 30.0
-        stage_h = add_centered_text(
-            stage_label, stage_y, stage_size, self._STAGE_TEXT_RGBA
-        )
-        add_centered_text(
-            note,
-            stage_y + stage_h + 22.0,
-            self.NOTE_TEXT_SIZE,
-            self._NOTE_TEXT_RGBA,
+        self._add_ring_labels(
+            add_quad_px=add_quad_px,
+            center_x=logo_cx,
+            center_y=logo_cy,
+            window_width=w,
+            title=title,
+            stage=self._stage_label(stage),
+            note=note,
         )
 
         data = np.array(verts, dtype=np.float32)
@@ -375,8 +344,9 @@ class ImportProgressPanel:
         progress: float,
         alpha: float = 1.0,
         fixed_text_scale: float | None = None,
+        title: str | None = None,
     ) -> None:
-        """Render the loading ring with a centered countdown number."""
+        """Render the loading ring with an optional title and countdown number."""
         self.ctx.disable(moderngl.CULL_FACE)
         self.ctx.disable(moderngl.DEPTH_TEST)
         self.ctx.enable(moderngl.BLEND)
@@ -399,6 +369,16 @@ class ImportProgressPanel:
             ]
             for (vx, vy) in quad:
                 verts.append((vx, vy, *rgba))
+
+        self._add_ring_labels(
+            add_quad_px=add_quad_px,
+            center_x=center_x,
+            center_y=center_y,
+            window_width=w,
+            title=title,
+            alpha=alpha,
+            fixed_text_scale=fixed_text_scale,
+        )
 
         text = str(max(0, min(9, int(number))))
         pixel_size = 9.0
@@ -437,12 +417,15 @@ class ImportProgressPanel:
         center_y: float,
         window_size: tuple[int, int],
         label: str,
-        progress: float = 1.0,
+        progress: float | None = 1.0,
         pixel_size: float = 5.4,
         alpha: float = 1.0,
         fixed_text_scale: float | None = None,
+        title: str | None = None,
+        stage: str | None = None,
+        note: str | None = None,
     ) -> None:
-        """Render the loading ring with a centered text label."""
+        """Render the loading ring with import-style labels and center text."""
         self.ctx.disable(moderngl.CULL_FACE)
         self.ctx.disable(moderngl.DEPTH_TEST)
         self.ctx.enable(moderngl.BLEND)
@@ -465,6 +448,18 @@ class ImportProgressPanel:
             ]
             for (vx, vy) in quad:
                 verts.append((vx, vy, *rgba))
+
+        self._add_ring_labels(
+            add_quad_px=add_quad_px,
+            center_x=center_x,
+            center_y=center_y,
+            window_width=w,
+            title=title,
+            stage=stage,
+            note=note,
+            alpha=alpha,
+            fixed_text_scale=fixed_text_scale,
+        )
 
         if fixed_text_scale is not None:
             pixel_size = bitmap_font.pixel_size_at_text_scale(pixel_size, fixed_text_scale)
@@ -494,6 +489,77 @@ class ImportProgressPanel:
         self.ctx.disable(moderngl.BLEND)
         self.ctx.enable(moderngl.DEPTH_TEST)
         self.ctx.enable(moderngl.CULL_FACE)
+
+    def _add_ring_labels(
+        self,
+        *,
+        add_quad_px,
+        center_x: float,
+        center_y: float,
+        window_width: float,
+        title: str | None = None,
+        stage: str | None = None,
+        note: str | None = None,
+        alpha: float = 1.0,
+        fixed_text_scale: float | None = None,
+    ) -> None:
+        """Append labels using the shared title, stage, and note hierarchy."""
+
+        def add_centered_text(
+            text: str | None,
+            y: float,
+            pixel_size: float,
+            rgba: tuple[float, float, float, float],
+        ) -> float:
+            text = " ".join(str(text or "").split())
+            if not text:
+                return 0.0
+            if fixed_text_scale is not None:
+                pixel_size = bitmap_font.pixel_size_at_text_scale(
+                    pixel_size,
+                    fixed_text_scale,
+                )
+            max_width = window_width - 96.0
+            min_pixel_size = 1.20
+            bounds = bitmap_font.text_bounds_px(text, pixel_size)
+            text_width = bounds[2] - bounds[0]
+            if text_width > max_width:
+                pixel_size = max(min_pixel_size, pixel_size * max_width / text_width)
+                bounds = bitmap_font.text_bounds_px(text, pixel_size)
+                text_width = bounds[2] - bounds[0]
+            text_height = bounds[3] - bounds[1]
+            origin_x = center_x - text_width / 2.0 - bounds[0]
+            origin_y = y - bounds[1]
+            r, g, b, base_alpha = rgba
+            for glyph in bitmap_font.iter_text_pixels(
+                text,
+                origin_x,
+                origin_y,
+                pixel_size,
+            ):
+                px0, py0, px1, py1 = glyph[0], glyph[1], glyph[2], glyph[3]
+                glyph_alpha = glyph[4] if len(glyph) > 4 else 1.0
+                add_quad_px(
+                    px0,
+                    py0,
+                    px1,
+                    py1,
+                    (r, g, b, base_alpha * alpha * glyph_alpha),
+                )
+            return text_height
+
+        title_y = center_y - (self.LOGO_SIZE / 2.0) - 42.0
+        add_centered_text(title, title_y, self.TITLE_TEXT_SIZE, self._TITLE_TEXT_RGBA)
+
+        stage_y = center_y + (self.LOGO_SIZE / 2.0) + 30.0
+        stage_height = add_centered_text(
+            stage,
+            stage_y,
+            self.STAGE_TEXT_SIZE,
+            self._STAGE_TEXT_RGBA,
+        )
+        note_y = stage_y if stage_height == 0.0 else stage_y + stage_height + 22.0
+        add_centered_text(note, note_y, self.NOTE_TEXT_SIZE, self._NOTE_TEXT_RGBA)
 
     def _stage_label(self, stage: str) -> str:
         normalized = " ".join((stage or "").strip().lower().split())
