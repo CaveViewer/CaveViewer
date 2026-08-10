@@ -250,3 +250,101 @@ def test_finalizer_publishes_all_assets_and_pushes_one_signed_metadata_commit(
     assert (working_repository / "updates/macos/stable.json.sig").read_bytes() == (
         working_repository / "updates/macos/arm64/stable.json.sig"
     ).read_bytes()
+
+
+def test_finalizer_reuses_existing_release_and_updates_a_release_branch(
+    tmp_path: Path,
+):
+    working_repository = tmp_path / "working"
+    origin_repository = tmp_path / "origin.git"
+    artifacts_dir = tmp_path / "artifacts"
+    fake_bin = tmp_path / "bin"
+    gh_log = tmp_path / "gh.log"
+    private_key_path = tmp_path / "release-key.pem"
+    version = "9.9.9"
+    release_branch = "release/v9.9.9-metadata"
+
+    working_repository.mkdir()
+    _copy_release_files(working_repository)
+    _write_release_artifacts(artifacts_dir, version)
+
+    fake_bin.mkdir()
+    fake_gh = fake_bin / "gh"
+    fake_gh.write_text(
+        "#!/usr/bin/env bash\n"
+        "printf '%s\\n' \"$*\" >> \"$GH_LOG\"\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+
+    private_key = Ed25519PrivateKey.generate()
+    private_key_path.write_bytes(
+        private_key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption(),
+        )
+    )
+
+    _run("git", "init", "--bare", origin_repository, cwd=tmp_path)
+    _run("git", "init", "-b", "main", cwd=working_repository)
+    _run("git", "config", "user.name", "Release Test", cwd=working_repository)
+    _run(
+        "git", "config", "user.email", "release-test@example.invalid", cwd=working_repository
+    )
+    _run("git", "add", ".", cwd=working_repository)
+    _run("git", "commit", "-m", "Source revision", cwd=working_repository)
+    _run("git", "remote", "add", "origin", origin_repository, cwd=working_repository)
+    _run("git", "push", "-u", "origin", "main", cwd=working_repository)
+    source_sha = _run("git", "rev-parse", "HEAD", cwd=working_repository)
+    _run("git", "branch", release_branch, source_sha, cwd=working_repository)
+    _run("git", "push", "origin", release_branch, cwd=working_repository)
+    _run("git", "checkout", "--detach", source_sha, cwd=working_repository)
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{fake_bin}{os.pathsep}{env['PATH']}",
+            "GH_LOG": str(gh_log),
+            "GH_TOKEN": "test-token",
+            "CAVEVIEWER_GITHUB_REPO": "example/CaveViewer",
+            "CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY": str(private_key_path),
+            "CAVEVIEWER_RELEASE_SIGNING_PYTHON": sys.executable,
+        }
+    )
+    finalizer = working_repository / "scripts" / "common" / "finalize_release.sh"
+
+    output = _run(
+        finalizer,
+        "--platforms=all",
+        f"--version={version}",
+        "--notes=Recovered release metadata",
+        f"--artifacts-dir={artifacts_dir}",
+        f"--target-branch={release_branch}",
+        f"--expected-source-sha={source_sha}",
+        "--reuse-existing-release",
+        cwd=working_repository,
+        env=env,
+    )
+
+    assert f"Release v{version} metadata is ready on {release_branch}." in output
+    commands = gh_log.read_text(encoding="utf-8").splitlines()
+    assert any(command.startswith("release view ") for command in commands)
+    assert not any(command.startswith("release create ") for command in commands)
+    assert not any(command.startswith("release upload ") for command in commands)
+
+    main_sha = _run(
+        "git", "--git-dir", origin_repository, "rev-parse", "refs/heads/main", cwd=tmp_path
+    )
+    release_sha = _run(
+        "git",
+        "--git-dir",
+        origin_repository,
+        "rev-parse",
+        f"refs/heads/{release_branch}",
+        cwd=tmp_path,
+    )
+    assert main_sha == source_sha
+    assert release_sha == _run("git", "rev-parse", "HEAD", cwd=working_repository)
+    assert release_sha != source_sha

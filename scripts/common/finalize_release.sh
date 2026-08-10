@@ -14,7 +14,8 @@ print_usage() {
   cat <<'EOF'
 Usage:
   finalize_release.sh --platforms=<targets> --version=<version> --notes=<notes> \
-    --artifacts-dir=<path> --target-branch=<branch> --expected-source-sha=<sha> [--pre-release]
+    --artifacts-dir=<path> --target-branch=<branch> --expected-source-sha=<sha> \
+    [--pre-release] [--reuse-existing-release]
   finalize_release.sh --help
 
 Targets:
@@ -31,6 +32,7 @@ artifacts_dir=""
 target_branch=""
 expected_source_sha=""
 pre_release=false
+reuse_existing_release=false
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -78,6 +80,10 @@ while [ "$#" -gt 0 ]; do
       ;;
     --pre-release)
       pre_release=true
+      shift
+      ;;
+    --reuse-existing-release)
+      reuse_existing_release=true
       shift
       ;;
     -h|--help)
@@ -350,8 +356,15 @@ if [ "$current_version" != "$normalized_version" ]; then
 fi
 
 # Only touch the GitHub release after every local artifact, manifest, signature,
-# version, and branch preflight succeeds.
-if gh release view "$tag" --repo "$repo" >/dev/null 2>&1; then
+# version, and branch preflight succeeds. Recovery workflows can regenerate
+# signed metadata from an already-published release without replacing its assets.
+if $reuse_existing_release; then
+  if ! gh release view "$tag" --repo "$repo" >/dev/null 2>&1; then
+    echo "Error: cannot reuse release $tag because it does not exist."
+    exit 1
+  fi
+  echo "Reusing existing release $tag; release assets are unchanged."
+elif gh release view "$tag" --repo "$repo" >/dev/null 2>&1; then
   echo "Release $tag already exists; uploading/replacing the requested assets."
   gh release upload "$tag" "${release_assets[@]}" --repo "$repo" --clobber
 else
@@ -383,4 +396,8 @@ fi
 # rather than rebasing metadata onto source that the artifacts did not use.
 git -C "$repo_root" push origin "HEAD:refs/heads/$target_branch"
 
-echo "Release $tag is published with one signed metadata update."
+if $reuse_existing_release; then
+  echo "Release $tag metadata is ready on $target_branch."
+else
+  echo "Release $tag is published with one signed metadata update."
+fi
