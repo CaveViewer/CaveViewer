@@ -1,15 +1,12 @@
-"""Resolve viewer-window plans and retain the legacy launch compatibility façade."""
+"""Resolve viewer-window plans for the platform launch preflight."""
 
 from __future__ import annotations
 
 import os
 import sys
-from collections.abc import Callable, Mapping
-from typing import Any
+from collections.abc import Mapping
 
 from caveviewer.core.capabilities import (
-    ViewerLaunchRoute,
-    ViewerLaunchTarget,
     WindowBackendPlan,
     WindowSystem,
 )
@@ -59,58 +56,7 @@ def resolve_window_backend_plan(
         attempts.append(WindowSystem.WAYLAND)
     if not attempts:
         # The capability probe will report this known missing display route to
-        # production callers. Retain the historical attempt for direct legacy
-        # users of this compatibility function.
+        # production callers. Retain the historical Wayland attempt so the
+        # authorized backend can return its actionable initialization failure.
         attempts.append(WindowSystem.WAYLAND)
     return WindowBackendPlan(mode=mode, attempts=tuple(attempts))
-
-
-def run_window_config(
-    config_class: type,
-    *,
-    runner: Callable[..., None],
-    environ: Mapping[str, str] | None = None,
-    platform_name: str | None = None,
-    glfw_loader: Callable[[WindowSystem], Any] | None = None,
-    window_size_fraction: float | None = None,
-    fallback_window_size: tuple[int, int] | None = None,
-    force_resizable_window: bool = False,
-    backend_plan: WindowBackendPlan | None = None,
-) -> None:
-    """Compatibility façade over the focused ``WindowBackendAdapter``.
-
-    New viewer code receives an injected adapter from ``PlatformRuntime`` and
-    passes it a capability-authorized ``ViewerLaunchTarget`` directly. This
-    wrapper preserves existing direct callers and focused executor tests while
-    keeping all native GLFW/ModernGL work inside ``window_backend.py``.
-    """
-    from .window_backend import (
-        ViewerWindowLaunchRequest,
-        create_window_backend_adapter,
-    )
-
-    request = ViewerWindowLaunchRequest(
-        config_class=config_class,
-        runner=runner,
-        window_size_fraction=window_size_fraction,
-        fallback_window_size=fallback_window_size,
-        force_resizable_window=force_resizable_window,
-    )
-    environment = os.environ if environ is None else environ
-    resolved_platform_name = sys.platform if platform_name is None else platform_name
-    plan = backend_plan or resolve_window_backend_plan(
-        environ=environment,
-        platform_name=resolved_platform_name,
-    )
-    target = ViewerLaunchTarget(
-        route=(
-            ViewerLaunchRoute.GLFW_MODERNGL
-            if resolved_platform_name.startswith("linux")
-            else ViewerLaunchRoute.NATIVE_MODERNGL
-        ),
-        backend_plan=plan,
-    )
-    create_window_backend_adapter(glfw_loader=glfw_loader).launch_viewer(
-        target,
-        request,
-    )
