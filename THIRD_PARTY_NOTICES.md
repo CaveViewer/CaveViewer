@@ -11,13 +11,16 @@ resolved from package metadata when the environment is installed.
 
 | Package | Requirement |
 |---|---|
+| cryptography | `cryptography>=43.0.0` |
 | dbus-fast (Linux) | `dbus-fast==5.0.22` |
 | freetype-py | `freetype-py==2.5.1` |
 | glfw / bundled GLFW libraries (Linux) | `glfw==2.10.0` |
+| imageio-ffmpeg | `imageio-ffmpeg>=0.5.1` |
 | moderngl | `moderngl==5.12.0` |
 | moderngl-window | `moderngl-window==3.1.1` |
 | numpy | `numpy==2.5.0` |
-| Pillow | `Pillow==12.2.0` |
+| Pillow | `Pillow==12.3.0` |
+| pygltflib | `pygltflib==1.16.5` |
 | pyglm | `pyglm>=2.7.1` |
 | truststore | `truststore>=0.10.0` |
 

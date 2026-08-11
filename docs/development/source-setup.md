@@ -546,7 +546,7 @@ compact layout.
 |---|---|---|
 | `CAVEVIEWER_UI_TEXT_SCALE` | `1.28` (`1.472` on macOS) | Development override for adaptable in-app overlay text such as loading screens, controls/help overlay, and status readouts. Right-side viewer controls use `CAVEVIEWER_VIEWER_UI_SCALE` instead so labels and button geometry stay matched. |
 | `CAVEVIEWER_VIEWER_UI_SCALE` | `auto` | Development override for the always-visible viewer HUD scale. By default CaveViewer keeps the compact baseline at 1536x864 and grows the right-side controls on larger viewer surfaces. |
-| `CAVEVIEWER_TK_SCALE` | _(display DPI)_ | Windows/Linux override for Tk dialog scaling, clamped to `0.75` through `4.0`. The Linux AppImage launcher normally derives this value from the desktop Xft DPI setting. |
+| `CAVEVIEWER_TK_SCALE` | _(display DPI)_ | Windows/Linux override for Tk interface scaling, clamped to `0.75` through `4.0`. The Linux AppImage launcher normally derives this value from the desktop Xft DPI setting. |
 | `CAVEVIEWER_APPRUN_INSTALL_ONLY` | `0` | Linux AppImage launcher smoke mode. Set to `1` to install/update the desktop file, AppStream metadata, and hicolor icons in the user's XDG data home, print the installed paths, and exit without launching the GUI. |
 | `CAVEVIEWER_APPRUN_UNINSTALL` | `0` | Linux AppImage launcher uninstall mode. Set to `1` to remove CaveViewer's per-user desktop file, AppStream metadata, and hicolor icons, then exit without launching the GUI. It does not remove maps, settings, caches, or downloaded update packages. |
 | `CAVEVIEWER_NO_DESKTOP_INTEGRATION` | `0` | Linux AppImage launcher opt-out. Set to `1` to skip the best-effort per-user desktop integration step. |
@@ -579,9 +579,9 @@ form; valid values are normalized when focus leaves the field. A focused
 required field may remain temporarily empty while the user replaces its value;
 Apply is disabled immediately while any required value is blank, while the
 required message and read-only form lock appear only after focus leaves that
-empty field. Cancel, Escape, and window close remain available and discard
-unapplied edits. Valid worker counts are treated as advisory caps and do not
-show a bottom warning.
+empty field. Cancel discards unapplied edits; Escape navigation and closing the
+startup window ask before discarding them. Valid worker counts are treated as
+advisory caps and do not show a bottom warning.
 
 The Preferences implementation is split by responsibility:
 `src/caveviewer/core/preferences/schema.py` owns the typed `PreferenceSpec` schema,
@@ -604,7 +604,7 @@ persistence or the runtime environment. Invalid saved or environment values
 fall back independently to that field's valid default, so one stale value does
 not discard the rest of the configuration. Preferences are saved through an
 atomic temporary-file replacement; a write failure remains visible in the
-dialog and does not close it or alter the previous preferences file.
+embedded Preferences panel and does not alter the previous preferences file.
 
 First-time map imports are isolated from the viewer event loop by
 `src/caveviewer/gui/import_process.py`. The viewer process keeps OpenGL/window
@@ -618,11 +618,11 @@ for that map cache when termination completes. The child also lowers its
 desktop scheduling priority and caps common native compute libraries to one
 thread unless the user has already set those library-specific variables.
 
-The splash screen, Preferences, and Map Library dialogs share their Tk
+The splash screen and its embedded Preferences and Map Library panels share Tk
 color and control tokens through `src/caveviewer/gui/tk_theme.py`. Map-folder
-validation lives in `src/caveviewer/gui/map_selection.py`, allowing both
-map-selection dialogs to reuse it without importing private splash-screen
-implementation details.
+validation lives in `src/caveviewer/gui/map_selection.py`, allowing map-opening
+entry points to reuse it without importing private splash-screen implementation
+details.
 
 CaveViewer keeps exactly one Tk root per process. On macOS the splash root is
 withdrawn, kept alive for the global app-menu callbacks, and reused on later
@@ -704,12 +704,12 @@ Legacy aliases remain supported at lower precedence:
 `CAVEVIEWER_SAMPLE_MAPS_REPO`, `CAVEVIEWER_SAMPLE_DATA_TAG`, and
 `CAVEVIEWER_SAMPLE_MAPS_API_URL`.
 
-The Map Library dialog keeps Tk work on the Tk thread. Catalog fetches and
-map-library download/extract work run in background workers; workers publish
-progress and terminal status through queues, and the dialog applies those
+The embedded Map Library panel keeps Tk work on the Tk thread. Catalog fetches
+and map-library download/extract work run in background workers; workers publish
+progress and terminal status through queues, and the panel applies those
 messages from `after()` callbacks. Worker callbacks must not read or mutate Tk
-widgets directly. Closing the dialog cancels the active download and its pending
-queue poll callback.
+widgets directly. Closing the startup window cancels the active download and
+its pending queue poll callback.
 
 After a successful authoritative refresh, a downloaded map no longer offered
 by its source stays in its prior position in **CaveViewer Maps** with a muted

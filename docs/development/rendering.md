@@ -242,9 +242,11 @@ $env:CAVEVIEWER_UPLOAD_TIME_BUDGET_MS = "2"
 | `CAVEVIEWER_MEMORY_UTILIZATION_TARGET` | `8` | 1-80% | Percentage of available system RAM targeted for loaded chunk data. |
 | `CAVEVIEWER_GPU_MEMORY_GB` | auto | 0.5-50 GB | Optional GPU memory ceiling. If active-GPU detection finds a smaller budget, the detected value wins. |
 | `CAVEVIEWER_GPU_MEMORY_UTILIZATION_TARGET` | `70` | 1-80% | Percentage of GPU memory targeted for combined texture and geometry streaming residency. |
+| `CAVEVIEWER_TEXTURE_RESIDENT_CACHE_MB` | auto | positive MB | Optional upper bound for the GPU texture-residency LRU cache. It can lower, but never raise, the automatic limit; use it for constrained GPUs or diagnostic runs. |
 | `CAVEVIEWER_MAX_TEXTURE_SIZE` | auto | 512-16384 px | Optional maximum decoded texture dimension. Automatic sizing usually gives better balance. |
 | `CAVEVIEWER_IO_WORKERS` | `2` | 1-32 workers | Requested maximum background chunk-loading workers. Runtime starts conservatively and grows only when RAM allows. |
 | `CAVEVIEWER_IO_NICE` | `5` | 0+ | Positive Linux per-thread nice increment for chunk-loading workers; `0` disables it. The GUI/render thread is not changed. |
+| `CAVEVIEWER_IMPORT_NICE` | `5` | 0+ | macOS/Linux only: positive nice increment used to lower the spawned cache-import process priority; `0` leaves its priority unchanged. Windows always requests below-normal import priority. |
 | `CAVEVIEWER_IO_RESERVED_CPUS` | `3` | 2-32 logical CPUs | Logical CPUs kept out of the loading pool. |
 | `CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME` | `1` | 1-16 chunks | Base maximum ready chunks advanced by the render thread per frame. Startup and catch-up modes can temporarily raise this. |
 | `CAVEVIEWER_UPLOAD_GROUPS_PER_FRAME` | `1` | 1-64 operations | Base maximum render-thread upload slices advanced from one ready chunk per frame. Startup and catch-up modes can temporarily raise this. |

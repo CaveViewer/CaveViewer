@@ -9,7 +9,7 @@ contract is documented in [repository-layout.md](repository-layout.md).
 caveviewer.app
     ├── caveviewer.storage_paths XDG and portable storage roots
     ├── caveviewer.core       preferences, discovery, import/cache, streaming policy
-    └── caveviewer.gui        dialogs, rendering, platform integration
+    └── caveviewer.gui        startup panels, dialogs, rendering, platform integration
           ├── caveviewer.core
           └── caveviewer.benchmarking benchmark controller adapter
 
@@ -437,10 +437,10 @@ texture is resized.
 
 ## UI and platform boundaries
 
-Tk dialogs should keep validation and workflow state in testable controller or
-model modules. `caveviewer.gui.platform` contains OS-specific focus, update,
-and system integration behavior. Unsupported platforms use the default
-adapter.
+Tk panels and dialogs should keep validation and workflow state in testable
+controller or model modules. `caveviewer.gui.platform` contains OS-specific
+focus, update, and system integration behavior. Unsupported platforms use the
+default adapter.
 
 ### Capability, policy, and feature-gating contract
 
@@ -485,8 +485,9 @@ native UI effect       -> PresentationActionsAdapter -> action-time call
 ```
 
 `PresentationProfile` contains only process-stable conventions: font families
-and candidates, splash/preferences/dialog layouts, shortcut and mouse-input
-labels, text scaling, startup focus policy, and backend sizing preferences.
+and candidates, splash and embedded-panel layouts plus native-dialog layouts,
+shortcut and mouse-input labels, text scaling, startup focus policy, and backend
+sizing preferences.
 It is selected without creating Tk widgets or probing the display. The narrow
 action adapter performs only process DPI setup, macOS About-menu registration,
 and best-effort viewer focus. The current facade preserves the broad adapter's
@@ -699,7 +700,7 @@ policy-gated independently of the other desktop actions: an enabled Portal/Tk
 composite or degraded Tk/injected route may run, while a missing, indeterminate,
 or changed chooser route is blocked before the chooser is invoked. Long map
 library downloads request desktop notification and inhibit support through this
-same capability, but the visible Map Library dialog suppresses duplicate
+same capability, but the visible Map Library panel suppresses duplicate
 desktop notifications because it already presents progress and completion
 actions. Background update downloads request notification and inhibit support
 while the package is being downloaded and verified; a visible splash suppresses
