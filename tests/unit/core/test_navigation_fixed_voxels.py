@@ -8,7 +8,6 @@ import pytest
 from caveviewer.core.navigation.fixed_voxels import (
     FIXED_ORTHOGONAL_VOXEL_METHOD,
     FixedVoxelRegion,
-    build_fixed_isotropic_voxel_tiles,
     build_fixed_orthogonal_voxel_tiles,
     segment_voxel_probe_fractions,
 )
@@ -44,7 +43,7 @@ def test_segment_probe_preserves_quarter_metre_vertical_boundaries():
 
 
 def test_subdivides_large_region_without_coarsening_voxels():
-    result = build_fixed_isotropic_voxel_tiles(
+    result = build_fixed_orthogonal_voxel_tiles(
         (
             FixedVoxelRegion(
                 bounds_min=(0.0, 0.0, 0.0),
@@ -58,6 +57,7 @@ def test_subdivides_large_region_without_coarsening_voxels():
         ),
         triangle_provider=_floor_provider,
         voxel_size_m=1.0,
+        vertical_voxel_size_m=1.0,
         chunk_edge_m=32.0,
         max_voxels_per_chunk=125,
         max_surface_samples_per_chunk=10_000,
@@ -72,7 +72,7 @@ def test_subdivides_large_region_without_coarsening_voxels():
 
 
 def test_retains_seeded_empty_chunk_but_discards_unseeded_empty_chunk():
-    result = build_fixed_isotropic_voxel_tiles(
+    result = build_fixed_orthogonal_voxel_tiles(
         (
             FixedVoxelRegion(
                 bounds_min=(0.0, 0.0, 0.0),
@@ -85,6 +85,7 @@ def test_retains_seeded_empty_chunk_but_discards_unseeded_empty_chunk():
             ),
         ),
         triangle_provider=lambda _lower, _upper: (),
+        vertical_voxel_size_m=1.0,
     )
 
     assert len(result.tiles) == 1
@@ -93,7 +94,7 @@ def test_retains_seeded_empty_chunk_but_discards_unseeded_empty_chunk():
 
 
 def test_adjacent_fixed_chunks_share_a_one_voxel_seam_shell():
-    result = build_fixed_isotropic_voxel_tiles(
+    result = build_fixed_orthogonal_voxel_tiles(
         (
             FixedVoxelRegion(
                 bounds_min=(0.0, 0.0, 0.0),
@@ -106,6 +107,7 @@ def test_adjacent_fixed_chunks_share_a_one_voxel_seam_shell():
         ),
         triangle_provider=lambda _lower, _upper: (),
         voxel_size_m=1.0,
+        vertical_voxel_size_m=1.0,
         chunk_edge_m=2.0,
     )
 
@@ -126,7 +128,7 @@ def test_fails_closed_when_surface_sampling_cannot_complete():
     )
 
     with pytest.raises(ValueError, match="sampling remains truncated"):
-        build_fixed_isotropic_voxel_tiles(
+        build_fixed_orthogonal_voxel_tiles(
             (
                 FixedVoxelRegion(
                     bounds_min=(0.0, 0.0, 0.0),
@@ -135,13 +137,14 @@ def test_fails_closed_when_surface_sampling_cannot_complete():
                 ),
             ),
             triangle_provider=lambda _lower, _upper: (triangles,),
+            vertical_voxel_size_m=1.0,
             max_surface_samples_per_chunk=1,
         )
 
 
 def test_rejects_chunk_count_overflow_before_rasterization():
     with pytest.raises(ValueError, match="chunk limit exceeded"):
-        build_fixed_isotropic_voxel_tiles(
+        build_fixed_orthogonal_voxel_tiles(
             (
                 FixedVoxelRegion(
                     bounds_min=(0.0, 0.0, 0.0),
@@ -149,6 +152,7 @@ def test_rejects_chunk_count_overflow_before_rasterization():
                 ),
             ),
             triangle_provider=lambda _lower, _upper: (),
+            vertical_voxel_size_m=1.0,
             chunk_edge_m=2.0,
             max_chunks=2,
         )
