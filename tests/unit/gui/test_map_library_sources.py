@@ -7,10 +7,8 @@ from types import SimpleNamespace
 import pytest
 
 from caveviewer.gui.map_library_sources import (
-    GITHUB_RELEASE_MAP_SOURCE_ID,
     MapCatalogRefresh,
     MapLibraryCatalogService,
-    normalize_catalog_refreshes,
 )
 
 
@@ -74,16 +72,12 @@ def test_catalog_service_rejects_duplicate_source_ids():
         MapLibraryCatalogService((source, source))
 
 
-def test_legacy_catalog_tuple_normalizes_to_non_authoritative_fallback_on_error():
-    map_entry = SimpleNamespace(catalog_id="cached")
+def test_catalog_service_isolates_an_invalid_source_result():
+    service = MapLibraryCatalogService((_Source("official", object()),))
 
-    refreshes = normalize_catalog_refreshes(([map_entry], "offline"))
+    refreshes = service.fetch_catalogs()
 
-    assert refreshes == (
-        MapCatalogRefresh(
-            source_id=GITHUB_RELEASE_MAP_SOURCE_ID,
-            maps=(map_entry,),
-            authoritative=False,
-            error="offline",
-        ),
-    )
+    assert refreshes[0].source_id == "official"
+    assert refreshes[0].maps == ()
+    assert not refreshes[0].authoritative
+    assert "MapCatalogRefresh" in (refreshes[0].error or "")

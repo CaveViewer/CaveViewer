@@ -43,7 +43,6 @@ from caveviewer.gui.map_library_sources import (
     GITHUB_RELEASE_MAP_SOURCE_ID,
     MapCatalogRefresh,
     default_map_library_catalog_service,
-    normalize_catalog_refreshes,
 )
 from caveviewer.gui.map_library_panel import (
     MapLibraryMenuAction,
@@ -183,7 +182,7 @@ class MapLibraryWorkflow:
         is_app_supplied_path: Callable[[str, str], bool] = (
             is_app_supplied_standard_library_map_path
         ),
-        fetch_catalog: Callable[[], Any] | None = None,
+        fetch_catalog: Callable[[], tuple[MapCatalogRefresh, ...]] | None = None,
         bootstrap_managed_installs: Callable[[str, list[Any]], list[Any]] = (
             bootstrap_managed_standard_library_map_installs
         ),
@@ -239,7 +238,9 @@ class MapLibraryWorkflow:
         self.existing_path = existing_path
         self.remove_downloaded = remove_downloaded
         self.is_app_supplied_path = is_app_supplied_path
-        self.fetch_catalog = fetch_catalog or default_map_library_catalog_service().fetch_catalogs
+        self.fetch_catalog = (
+            fetch_catalog or default_map_library_catalog_service().fetch_catalogs
+        )
         self.bootstrap_managed_installs = bootstrap_managed_installs
         self.managed_installs = managed_installs
         self.set_managed_install_former = set_managed_install_former
@@ -1626,18 +1627,7 @@ class MapLibraryWorkflow:
             self.schedule_catalog_poll()
             return
 
-        try:
-            refreshes = normalize_catalog_refreshes(catalog_result)
-        except (TypeError, ValueError) as exc:
-            refreshes = (
-                MapCatalogRefresh(
-                    source_id=GITHUB_RELEASE_MAP_SOURCE_ID,
-                    maps=(),
-                    authoritative=False,
-                    error=f"Couldn't load the map library: {exc}",
-                ),
-            )
-        completion = self.controller.complete_catalog_fetch(refreshes)
+        completion = self.controller.complete_catalog_fetch(catalog_result)
         self.reconcile_standard_catalog(completion.refreshes)
 
         pending_map = completion.pending_map
@@ -1864,6 +1854,13 @@ class MapLibraryWorkflow:
         def fetch_worker() -> None:
             try:
                 result = self.fetch_catalog()
+                if not isinstance(result, tuple) or not all(
+                    isinstance(refresh, MapCatalogRefresh) for refresh in result
+                ):
+                    raise TypeError(
+                        "Map catalog service must return a tuple of "
+                        "MapCatalogRefresh values"
+                    )
             except Exception as exc:
                 result = (
                     MapCatalogRefresh(

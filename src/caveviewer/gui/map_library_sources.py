@@ -73,6 +73,15 @@ class MapLibraryCatalogService:
         for source in self._sources:
             try:
                 result = source.fetch_catalog()
+                if not isinstance(result, MapCatalogRefresh):
+                    raise TypeError(
+                        "Map source must return a MapCatalogRefresh value"
+                    )
+                if result.source_id != source.source_id:
+                    raise ValueError(
+                        "Map source returned a catalog for a different source id: "
+                        f"{result.source_id!r} != {source.source_id!r}"
+                    )
             except Exception as exc:
                 result = MapCatalogRefresh(
                     source_id=source.source_id,
@@ -80,11 +89,6 @@ class MapLibraryCatalogService:
                     authoritative=False,
                     error=f"Couldn't load {source.display_name}: {exc}",
                     display_name=source.display_name,
-                )
-            if result.source_id != source.source_id:
-                raise ValueError(
-                    "Map source returned a catalog for a different source id: "
-                    f"{result.source_id!r} != {source.source_id!r}"
                 )
             results.append(result)
         return tuple(results)
@@ -106,38 +110,3 @@ def enabled_map_library_sources() -> tuple[MapLibrarySource, ...]:
 def default_map_library_catalog_service() -> MapLibraryCatalogService:
     """Build the catalog service used by the splash Map Library."""
     return MapLibraryCatalogService(enabled_map_library_sources())
-
-
-def normalize_catalog_refreshes(value: Any) -> tuple[MapCatalogRefresh, ...]:
-    """Normalize transitional catalog call shapes into typed source results.
-
-    Existing injected callers returned ``(maps, error)``.  Keeping that shape
-    accepted at this boundary makes the source-adapter migration incremental,
-    while production code and new tests use ``MapCatalogRefresh`` directly.
-    """
-    if isinstance(value, MapCatalogRefresh):
-        return (value,)
-
-    if isinstance(value, tuple) and len(value) == 2:
-        maps, error = value
-        if error is None or isinstance(error, str):
-            try:
-                normalized_maps = tuple(maps)
-            except TypeError as exc:
-                raise TypeError("Legacy map catalog result must contain maps") from exc
-            return (
-                MapCatalogRefresh(
-                    source_id=GITHUB_RELEASE_MAP_SOURCE_ID,
-                    maps=normalized_maps,
-                    authoritative=error is None,
-                    error=error,
-                ),
-            )
-
-    try:
-        results = tuple(value)
-    except TypeError as exc:
-        raise TypeError("Map catalog service returned an unsupported result") from exc
-    if not all(isinstance(result, MapCatalogRefresh) for result in results):
-        raise TypeError("Map catalog service must return MapCatalogRefresh values")
-    return results

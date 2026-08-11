@@ -814,12 +814,6 @@ def fetch_standard_library_catalog_refresh() -> MapCatalogRefresh:
     )
 
 
-def fetch_standard_library_catalog() -> tuple[list[StandardLibraryMapInfo], str | None]:
-    """Compatibility wrapper for legacy callers of the GitHub catalog helper."""
-    refresh = fetch_standard_library_catalog_refresh()
-    return list(refresh.maps), refresh.error
-
-
 def _log_map_library_config_once() -> None:
     global _MAP_LIBRARY_CONFIG_LOGGED
     if _MAP_LIBRARY_CONFIG_LOGGED:

@@ -306,6 +306,21 @@ def _standard_key(catalog_id_or_display_name: str) -> tuple[str, str]:
     return GITHUB_RELEASE_MAP_SOURCE_ID, catalog_id_or_display_name
 
 
+def _catalog_refresh(
+    *maps,
+    authoritative: bool = True,
+    error: str | None = None,
+) -> tuple[MapCatalogRefresh, ...]:
+    return (
+        MapCatalogRefresh(
+            source_id=GITHUB_RELEASE_MAP_SOURCE_ID,
+            maps=maps,
+            authoritative=authoritative,
+            error=error,
+        ),
+    )
+
+
 def _workflow(
     maps,
     *,
@@ -368,7 +383,7 @@ def _workflow(
         is_app_supplied_path=(
             is_app_supplied_path or (lambda _path, _root: False)
         ),
-        fetch_catalog=fetch_catalog or (lambda: ([], None)),
+        fetch_catalog=fetch_catalog or (lambda: _catalog_refresh()),
         set_managed_install_former=(
             set_managed_install_former or (lambda _map, *, former: None)
         ),
@@ -1171,7 +1186,7 @@ def test_pending_download_waits_for_catalog_then_starts_resolved_download():
 
     state = _workflow(
         [pending_map],
-        fetch_catalog=lambda: ([catalog_map], None),
+        fetch_catalog=lambda: _catalog_refresh(catalog_map),
         start_download_worker=start_download_worker,
     )
     state.panel.add_standard_row(
@@ -1200,7 +1215,7 @@ def test_catalog_refresh_adds_new_remote_standard_library_rows():
     )
     state = _workflow(
         [initial_map],
-        fetch_catalog=lambda: ([initial_map, new_map], None),
+        fetch_catalog=lambda: _catalog_refresh(initial_map, new_map),
     )
 
     state.workflow.populate_panel("parent", [])
@@ -1225,7 +1240,10 @@ def test_catalog_refresh_removes_stale_not_downloaded_rows():
         asset_name="current.zip",
         catalog_id="current-cave",
     )
-    state = _workflow([stale_map], fetch_catalog=lambda: ([current_map], None))
+    state = _workflow(
+        [stale_map],
+        fetch_catalog=lambda: _catalog_refresh(current_map),
+    )
 
     state.workflow.populate_panel("parent", [])
     state.workflow.poll_catalog_fetch()
@@ -1244,7 +1262,7 @@ def test_catalog_refresh_keeps_former_local_maps_muted_with_normal_actions():
     rebuild_controller = _FakeCacheRebuildController()
     state = _workflow(
         [stale_map],
-        fetch_catalog=lambda: ([], None),
+        fetch_catalog=lambda: _catalog_refresh(),
         is_downloaded=lambda _root, library_map: (
             library_map.catalog_id == "downloaded-stale-cave"
         ),
@@ -1307,7 +1325,7 @@ def test_catalog_refresh_keeps_a_former_local_map_in_its_prior_position():
     )
     state = _workflow(
         [first_map, former_map, last_map],
-        fetch_catalog=lambda: ([first_map, last_map, new_map], None),
+        fetch_catalog=lambda: _catalog_refresh(first_map, last_map, new_map),
         is_downloaded=lambda _root, library_map: library_map is former_map,
         existing_path=lambda _root, library_map: (
             "/library/Former Cave" if library_map is former_map else None
@@ -1336,13 +1354,9 @@ def test_non_authoritative_catalog_refresh_never_blocks_a_downloaded_map():
     library_map = _library_map(catalog_id="cached-cave")
     state = _workflow(
         [library_map],
-        fetch_catalog=lambda: (
-            MapCatalogRefresh(
-                source_id=GITHUB_RELEASE_MAP_SOURCE_ID,
-                maps=(),
-                authoritative=False,
-                error="offline",
-            ),
+        fetch_catalog=lambda: _catalog_refresh(
+            authoritative=False,
+            error="offline",
         ),
         is_downloaded=lambda _root, _map: True,
         existing_path=lambda _root, _map: "/library/Cached Cave",
@@ -1365,13 +1379,9 @@ def test_persisted_former_map_remains_available_with_normal_actions_while_offlin
     )
     state = _workflow(
         [],
-        fetch_catalog=lambda: (
-            MapCatalogRefresh(
-                source_id=GITHUB_RELEASE_MAP_SOURCE_ID,
-                maps=(),
-                authoritative=False,
-                error="offline",
-            ),
+        fetch_catalog=lambda: _catalog_refresh(
+            authoritative=False,
+            error="offline",
         ),
         managed_installs=lambda: [install],
         is_downloaded=lambda _root, _map: True,
@@ -1392,7 +1402,11 @@ def test_unavailable_catalog_details_show_retry_state():
     pending_map = _library_map(download_url=None)
     state = _workflow(
         [pending_map],
-        fetch_catalog=lambda: ([pending_map], "offline"),
+        fetch_catalog=lambda: _catalog_refresh(
+            pending_map,
+            authoritative=False,
+            error="offline",
+        ),
     )
     state.panel.add_standard_row(
         state.controller.row(pending_map, downloaded=False),
