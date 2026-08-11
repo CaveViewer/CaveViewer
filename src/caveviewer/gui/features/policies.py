@@ -692,17 +692,6 @@ def decide_update_package_reveal(
     """
     if capability.status is CapabilityStatus.AVAILABLE and capability.value is not None:
         route = capability.value
-        if route is UpdatePackageRevealRoute.LEGACY_ADAPTER:
-            return FeatureDecision(
-                feature=FeatureId.UPDATE_PACKAGE_REVEAL,
-                state=FeatureState.DEGRADED,
-                reason_code="update_package_reveal_legacy_adapter",
-                explanation=(
-                    "Verified update package reveal is available through the "
-                    "compatibility adapter."
-                ),
-                route=route.value,
-            )
         return FeatureDecision(
             feature=FeatureId.UPDATE_PACKAGE_REVEAL,
             state=FeatureState.ENABLED,

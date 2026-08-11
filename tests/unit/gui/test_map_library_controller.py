@@ -4,11 +4,16 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from caveviewer.gui.map_library_controller import (
     MapLibraryController,
     StandardLibraryMapAvailability,
 )
-from caveviewer.gui.map_library_sources import GITHUB_RELEASE_MAP_SOURCE_ID
+from caveviewer.gui.map_library_sources import (
+    GITHUB_RELEASE_MAP_SOURCE_ID,
+    MapCatalogRefresh,
+)
 
 
 def _library_map(
@@ -133,12 +138,28 @@ def test_catalog_refresh_updates_standard_library_size_metadata():
     )
     controller = MapLibraryController([library_map])
 
-    completion = controller.complete_catalog_fetch([catalog_entry], error=None)
+    completion = controller.complete_catalog_fetch(
+        (
+            MapCatalogRefresh(
+                source_id=GITHUB_RELEASE_MAP_SOURCE_ID,
+                maps=(catalog_entry,),
+                authoritative=True,
+            ),
+        )
+    )
     row = controller.row(library_map, downloaded=False)
 
-    assert completion.maps == (catalog_entry,)
+    assert completion.refreshes[0].maps == (catalog_entry,)
     assert completion.error is None
     assert row.detail == "52 MB"
+
+
+def test_catalog_fetch_requires_typed_refreshes():
+    library_map = _library_map()
+    controller = MapLibraryController([library_map])
+
+    with pytest.raises(TypeError, match="tuple of MapCatalogRefresh"):
+        controller.complete_catalog_fetch((library_map,))
 
 
 def test_source_qualified_keys_do_not_collide_for_matching_catalog_ids():

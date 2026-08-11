@@ -25,7 +25,6 @@ from caveviewer.core.preferences.schema import (
     default_preferences,
     default_map_library_dir,
     default_recording_dir,
-    effective_preferences,
     normalize_preferences,
     require_validated_preferences,
     resolve_preferences,

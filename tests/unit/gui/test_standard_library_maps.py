@@ -131,9 +131,11 @@ def test_catalog_manifest_populates_remote_maps_and_caches(
     monkeypatch.setattr(standard_library_maps.urllib.request, "urlopen", fake_urlopen)
     standard_library_maps._MAP_LIBRARY_CONFIG_LOGGED = False
 
-    catalog, error = standard_library_maps.fetch_standard_library_catalog()
+    refresh = standard_library_maps.fetch_standard_library_catalog_refresh()
+    catalog = refresh.maps
 
-    assert error is None
+    assert refresh.authoritative
+    assert refresh.error is None
     assert [(item.catalog_id, item.display_name, item.asset_name) for item in catalog] == [
         ("brand-new-cave", "Brand New Cave", "Brand.New.Cave.zip")
     ]
@@ -195,9 +197,11 @@ def test_catalog_uses_bundled_manifest_when_release_has_no_catalog_asset(
     )
     standard_library_maps._MAP_LIBRARY_CONFIG_LOGGED = False
 
-    catalog, error = standard_library_maps.fetch_standard_library_catalog()
+    refresh = standard_library_maps.fetch_standard_library_catalog_refresh()
+    catalog = refresh.maps
 
-    assert error is None
+    assert refresh.authoritative
+    assert refresh.error is None
     assert len(catalog) == 2
     assert catalog[0].download_url == "https://example.invalid/map.zip"
     assert catalog[0].size_bytes == 1234
@@ -271,8 +275,11 @@ def test_catalog_http_errors_keep_local_catalog(
         lambda *_args, **_kwargs: (_ for _ in ()).throw(error),
     )
 
-    catalog, message = standard_library_maps.fetch_standard_library_catalog()
+    refresh = standard_library_maps.fetch_standard_library_catalog_refresh()
+    catalog = refresh.maps
+    message = refresh.error
 
+    assert not refresh.authoritative
     assert len(catalog) == len(standard_library_maps.bundled_standard_library_catalog())
     assert all(item.download_url is None for item in catalog)
     assert message_fragment in (message or "")
@@ -294,8 +301,11 @@ def test_catalog_network_errors_are_actionable(
         ),
     )
 
-    catalog, message = standard_library_maps.fetch_standard_library_catalog()
+    refresh = standard_library_maps.fetch_standard_library_catalog_refresh()
+    catalog = refresh.maps
+    message = refresh.error
 
+    assert not refresh.authoritative
     assert len(catalog) == len(standard_library_maps.bundled_standard_library_catalog())
     assert message_fragment in (message or "")
 
@@ -324,8 +334,11 @@ def test_catalog_network_errors_use_cached_remote_catalog(monkeypatch, tmp_path)
         ),
     )
 
-    catalog, message = standard_library_maps.fetch_standard_library_catalog()
+    refresh = standard_library_maps.fetch_standard_library_catalog_refresh()
+    catalog = refresh.maps
+    message = refresh.error
 
+    assert not refresh.authoritative
     assert message and "offline" in message
     assert [(item.catalog_id, item.display_name, item.download_url) for item in catalog] == [
         ("cached-cave", "Cached Cave", None)
@@ -344,7 +357,11 @@ def test_catalog_rejects_malformed_json(monkeypatch, tmp_path):
         "urlopen",
         lambda *_args, **_kwargs: BadJsonResponse({}),
     )
-    catalog, message = standard_library_maps.fetch_standard_library_catalog()
+    refresh = standard_library_maps.fetch_standard_library_catalog_refresh()
+    catalog = refresh.maps
+    message = refresh.error
+
+    assert not refresh.authoritative
     assert len(catalog) == len(standard_library_maps.bundled_standard_library_catalog())
     assert "unexpected response" in (message or "")
 
@@ -369,9 +386,12 @@ def test_catalog_rejects_malformed_remote_manifest(monkeypatch, tmp_path):
 
     monkeypatch.setattr(standard_library_maps.urllib.request, "urlopen", fake_urlopen)
 
-    catalog, message = standard_library_maps.fetch_standard_library_catalog()
+    refresh = standard_library_maps.fetch_standard_library_catalog_refresh()
+    catalog = refresh.maps
+    message = refresh.error
 
     assert len(catalog) == len(standard_library_maps.bundled_standard_library_catalog())
+    assert not refresh.authoritative
     assert "unexpected map library catalog" in (message or "")
 
 

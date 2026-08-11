@@ -1,9 +1,8 @@
-"""macOS UI integration and architecture-specific update behavior."""
+"""macOS UI integration and verified-package reveal behavior."""
 
 from __future__ import annotations
 
 import os
-import platform
 import plistlib
 import shutil
 import subprocess
@@ -30,9 +29,6 @@ class MacOSSplashPlatformAdapter(DefaultSplashPlatformAdapter):
 
     def ui_font_family(self) -> str:
         return "Helvetica Neue"
-
-    def install_channel(self) -> str:
-        return "macos_app"
 
     def persist_downloaded_payload(self, temp_payload_path: str, download_url: str | None) -> str:
         downloads_dir = os.path.join(os.path.expanduser("~"), "Downloads")
@@ -188,48 +184,6 @@ class MacOSSplashPlatformAdapter(DefaultSplashPlatformAdapter):
             ),
         )
 
-    def default_update_repo(self) -> str:
-        return "CaveViewer/CaveViewer"
-
-    def default_update_manifest_url(self, repo: str, branch: str) -> str:
-        architecture = _macos_process_architecture()
-        if architecture is None:
-            # An explicit 404 is safer than offering an incompatible binary.
-            architecture = "unsupported"
-        return (
-            f"https://raw.githubusercontent.com/{repo}/{branch}/"
-            f"updates/macos/{architecture}/stable.json"
-        )
-
-    def update_check_user_agent(self) -> str:
-        return "CaveViewer-UpdateChecker"
-
-    def supports_install_channel(self, channel: str) -> bool:
-        return channel == "macos_app"
-
-    def unsupported_install_channel_message(self, channel: str) -> str:
-        return f"Unsupported install channel '{channel}'. macOS updates are DMG-only."
-
-    def channel_download_url_keys(self, channel: str) -> tuple[str, ...]:
-        if channel == "macos_app":
-            return ("download_url_macosx_dmg", "download_url_macos", "download_url")
-        return super().channel_download_url_keys(channel)
-
-    def channel_download_size_keys(self, channel: str) -> tuple[str, ...]:
-        if channel == "macos_app":
-            return ("download_size_bytes_macosx_dmg", "download_size_bytes_macos", "download_size_bytes")
-        return super().channel_download_size_keys(channel)
-
-    def channel_sha256_keys(self, channel: str) -> tuple[str, ...]:
-        if channel == "macos_app":
-            return ("sha256_macosx_dmg", "sha256_macos", "sha256")
-        return super().channel_sha256_keys(channel)
-
-    def missing_download_url_message(self, channel: str) -> str:
-        if channel == "macos_app":
-            return "Update manifest is missing required field: download_url_macosx_dmg."
-        return super().missing_download_url_message(channel)
-
     def bookmark_save_modifier(self) -> str:
         """On macOS, use Command key for bookmark saving."""
         return "command"
@@ -302,7 +256,6 @@ class MacOSSplashPlatformAdapter(DefaultSplashPlatformAdapter):
             button_row_top_pad_y=8,
             tab_highlight_thickness=0,
             notice_wrap_length=390,
-            resizable_vertical=False,
         )
 
     def dialog_layout_policy(self) -> DialogLayoutPolicy:
@@ -366,17 +319,3 @@ class MacOSSplashPlatformAdapter(DefaultSplashPlatformAdapter):
                     break
             except Exception:
                 pass
-
-
-def _macos_process_architecture(machine: str | None = None) -> str | None:
-    """Return the canonical architecture of this macOS process.
-
-    Process architecture is intentional: a CaveViewer process running through
-    Rosetta should receive the x86_64 build, even on Apple Silicon hardware.
-    """
-    detected = (machine if machine is not None else platform.machine()).strip().lower()
-    if detected in {"arm64", "aarch64"}:
-        return "arm64"
-    if detected in {"x86_64", "amd64", "x64"}:
-        return "x86_64"
-    return None

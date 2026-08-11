@@ -23,7 +23,6 @@ from caveviewer.gui.platform.windowing import (
     WindowBackendError,
     WindowSystem,
     resolve_window_backend_plan,
-    run_window_config,
 )
 from caveviewer.version import APPLICATION_ID
 
@@ -103,6 +102,28 @@ class FakeGlfw:
         return self.video_mode
 
 
+def _launch_glfw(
+    config_class,
+    *,
+    runner,
+    glfw_loader,
+    plan,
+    window_size_fraction=None,
+    fallback_window_size=None,
+    force_resizable_window=False,
+):
+    PlatformWindowBackendAdapter(glfw_loader=glfw_loader).launch_viewer(
+        ViewerLaunchTarget(ViewerLaunchRoute.GLFW_MODERNGL, plan),
+        ViewerWindowLaunchRequest(
+            config_class=config_class,
+            runner=runner,
+            window_size_fraction=window_size_fraction,
+            fallback_window_size=fallback_window_size,
+            force_resizable_window=force_resizable_window,
+        ),
+    )
+
+
 def test_auto_plan_prefers_x11_then_wayland_when_both_are_available():
     plan = resolve_window_backend_plan(
         environ={
@@ -132,20 +153,6 @@ def test_invalid_window_system_is_actionable():
         resolve_window_backend_plan(
             environ={WINDOW_SYSTEM_ENV_VAR: "mir"}, platform_name="linux"
         )
-
-
-def test_non_linux_platform_keeps_existing_moderngl_backend():
-    calls = []
-
-    run_window_config(
-        object,
-        runner=lambda config, args: calls.append((config, args)),
-        environ={},
-        platform_name="darwin",
-        glfw_loader=lambda _system: pytest.fail("GLFW must remain Linux-only"),
-    )
-
-    assert calls == [(object, [])]
 
 
 def test_focused_adapter_executes_the_authorized_target_without_replanning():
@@ -196,14 +203,16 @@ def test_glfw_hints_identity_before_window_creation(monkeypatch):
     calls = []
     monkeypatch.setenv("MODERNGL_WINDOW", "pyglet")
 
-    run_window_config(
+    _launch_glfw(
         object,
         runner=lambda config, args: calls.append(
             (config, args, list(glfw.calls), os.environ["MODERNGL_WINDOW"])
         ),
-        environ={WINDOW_SYSTEM_ENV_VAR: "wayland"},
-        platform_name="linux",
         glfw_loader=lambda _system: glfw,
+        plan=WindowBackendPlan(
+            WindowSystem.WAYLAND,
+            (WindowSystem.WAYLAND,),
+        ),
     )
 
     assert calls[0][0:2] == (object, ["--window", "glfw"])
@@ -247,12 +256,11 @@ def test_relative_size_uses_glfw_workarea_without_duplicate_dpi_scaling():
         glfw.window_hint(glfw.SCALE_TO_MONITOR, glfw.TRUE)
         observed.append((config.window_size, args))
 
-    run_window_config(
+    _launch_glfw(
         Config,
         runner=runner,
-        environ={WINDOW_SYSTEM_ENV_VAR: "x11"},
-        platform_name="linux",
         glfw_loader=lambda _system: glfw,
+        plan=WindowBackendPlan(WindowSystem.X11, (WindowSystem.X11,)),
         window_size_fraction=0.8,
         fallback_window_size=(1600, 1000),
     )
@@ -282,12 +290,11 @@ def test_viewer_launch_can_force_glfw_window_resizable_and_decorated():
         glfw.window_hint(glfw.SCALE_TO_MONITOR, glfw.TRUE)
         observed.append((config.window_size, args))
 
-    run_window_config(
+    _launch_glfw(
         Config,
         runner=runner,
-        environ={WINDOW_SYSTEM_ENV_VAR: "x11"},
-        platform_name="linux",
         glfw_loader=lambda _system: glfw,
+        plan=WindowBackendPlan(WindowSystem.X11, (WindowSystem.X11,)),
         window_size_fraction=0.8,
         fallback_window_size=(1600, 1000),
         force_resizable_window=True,
@@ -307,12 +314,14 @@ def test_wayland_relative_size_converts_physical_workarea_to_logical_coordinates
         window_size = (1600, 1000)
 
     observed = []
-    run_window_config(
+    _launch_glfw(
         Config,
         runner=lambda config, args: observed.append((config.window_size, args)),
-        environ={WINDOW_SYSTEM_ENV_VAR: "wayland"},
-        platform_name="linux",
         glfw_loader=lambda _system: glfw,
+        plan=WindowBackendPlan(
+            WindowSystem.WAYLAND,
+            (WindowSystem.WAYLAND,),
+        ),
         window_size_fraction=0.8,
         fallback_window_size=(1600, 1000),
     )
@@ -328,12 +337,14 @@ def test_wayland_relative_size_keeps_already_logical_workarea_coordinates():
         window_size = (1600, 1000)
 
     observed = []
-    run_window_config(
+    _launch_glfw(
         Config,
         runner=lambda config, args: observed.append((config.window_size, args)),
-        environ={WINDOW_SYSTEM_ENV_VAR: "wayland"},
-        platform_name="linux",
         glfw_loader=lambda _system: glfw,
+        plan=WindowBackendPlan(
+            WindowSystem.WAYLAND,
+            (WindowSystem.WAYLAND,),
+        ),
         window_size_fraction=0.8,
         fallback_window_size=(1600, 1000),
     )
@@ -349,12 +360,14 @@ def test_relative_size_uses_safe_fallback_when_workarea_is_unavailable():
         window_size = (10, 10)
 
     observed = []
-    run_window_config(
+    _launch_glfw(
         Config,
         runner=lambda config, **_kwargs: observed.append(config.window_size),
-        environ={WINDOW_SYSTEM_ENV_VAR: "wayland"},
-        platform_name="linux",
         glfw_loader=lambda _system: glfw,
+        plan=WindowBackendPlan(
+            WindowSystem.WAYLAND,
+            (WindowSystem.WAYLAND,),
+        ),
         window_size_fraction=0.8,
         fallback_window_size=(1280, 720),
     )
@@ -372,12 +385,14 @@ def test_auto_mode_retries_wayland_after_x11_initialization_failure():
         loaded.append(system)
         return wayland if system is WindowSystem.WAYLAND else x11
 
-    run_window_config(
+    _launch_glfw(
         object,
         runner=lambda _config, args: runs.append(args),
-        environ={"WAYLAND_DISPLAY": "wayland-0", "DISPLAY": ":0"},
-        platform_name="linux",
         glfw_loader=load,
+        plan=WindowBackendPlan(
+            WindowSystem.AUTO,
+            (WindowSystem.X11, WindowSystem.WAYLAND),
+        ),
     )
 
     assert loaded == [WindowSystem.X11, WindowSystem.WAYLAND]
@@ -396,13 +411,15 @@ def test_auto_mode_retries_only_known_window_creation_failure():
         if len(attempts) == 1:
             raise ValueError("Failed to create window")
 
-    run_window_config(
+    _launch_glfw(
         object,
         runner=runner,
-        environ={"WAYLAND_DISPLAY": "wayland-0", "DISPLAY": ":0"},
-        platform_name="linux",
         glfw_loader=lambda system: (
             wayland if system is WindowSystem.WAYLAND else x11
+        ),
+        plan=WindowBackendPlan(
+            WindowSystem.AUTO,
+            (WindowSystem.X11, WindowSystem.WAYLAND),
         ),
     )
 
@@ -436,12 +453,14 @@ def test_wayland_uses_egl_to_detect_current_glfw_context(monkeypatch):
     def runner(config, args):
         observed.append((config.init_mgl_context(), args))
 
-    run_window_config(
+    _launch_glfw(
         Config,
         runner=runner,
-        environ={WINDOW_SYSTEM_ENV_VAR: "wayland"},
-        platform_name="linux",
         glfw_loader=lambda _system: glfw,
+        plan=WindowBackendPlan(
+            WindowSystem.WAYLAND,
+            (WindowSystem.WAYLAND,),
+        ),
     )
 
     assert observed == [(created_context, ["--window", "glfw"])]
@@ -464,13 +483,15 @@ def test_auto_mode_retries_wayland_after_x11_context_detection_failure():
                 "(share) eglGetCurrentContext: cannot detect OpenGL context"
             )
 
-    run_window_config(
+    _launch_glfw(
         object,
         runner=runner,
-        environ={"WAYLAND_DISPLAY": "wayland-0", "DISPLAY": ":0"},
-        platform_name="linux",
         glfw_loader=lambda system: loaded.append(system)
         or (wayland if system is WindowSystem.WAYLAND else x11),
+        plan=WindowBackendPlan(
+            WindowSystem.AUTO,
+            (WindowSystem.X11, WindowSystem.WAYLAND),
+        ),
     )
 
     assert loaded == [WindowSystem.X11, WindowSystem.WAYLAND]
@@ -481,14 +502,16 @@ def test_render_configuration_failure_does_not_trigger_backend_fallback():
     loaded = []
 
     with pytest.raises(RuntimeError, match="shader failed"):
-        run_window_config(
+        _launch_glfw(
             object,
             runner=lambda *_args, **_kwargs: (_ for _ in ()).throw(
                 RuntimeError("shader failed")
             ),
-            environ={"WAYLAND_DISPLAY": "wayland-0", "DISPLAY": ":0"},
-            platform_name="linux",
             glfw_loader=lambda system: loaded.append(system) or FakeGlfw(),
+            plan=WindowBackendPlan(
+                WindowSystem.AUTO,
+                (WindowSystem.X11, WindowSystem.WAYLAND),
+            ),
         )
 
     assert loaded == [WindowSystem.X11]
@@ -498,13 +521,15 @@ def test_explicit_wayland_failure_does_not_fall_back():
     loaded = []
 
     with pytest.raises(WindowBackendError, match="wayland"):
-        run_window_config(
+        _launch_glfw(
             object,
             runner=lambda *_args, **_kwargs: None,
-            environ={WINDOW_SYSTEM_ENV_VAR: "wayland", "DISPLAY": ":0"},
-            platform_name="linux",
             glfw_loader=lambda system: loaded.append(system)
             or FakeGlfw(init_result=False),
+            plan=WindowBackendPlan(
+                WindowSystem.WAYLAND,
+                (WindowSystem.WAYLAND,),
+            ),
         )
 
     assert loaded == [WindowSystem.WAYLAND]

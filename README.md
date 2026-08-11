@@ -82,7 +82,7 @@ library.
 2. Use the `Map Library` panel to reopen a recent map or pick an available
    standard library map.
 3. Click `Get` for a standard library map that is not downloaded yet. The
-   dialog stays responsive while CaveViewer downloads and extracts the map in
+   panel stays responsive while CaveViewer downloads and extracts the map in
    the background, and the row button can cancel the active download.
 4. When a map is already downloaded, click `Open` to load it.
 

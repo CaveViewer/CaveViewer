@@ -9,7 +9,7 @@ contract is documented in [repository-layout.md](repository-layout.md).
 caveviewer.app
     ├── caveviewer.storage_paths XDG and portable storage roots
     ├── caveviewer.core       preferences, discovery, import/cache, streaming policy
-    └── caveviewer.gui        dialogs, rendering, platform integration
+    └── caveviewer.gui        startup panels, dialogs, rendering, platform integration
           ├── caveviewer.core
           └── caveviewer.benchmarking benchmark controller adapter
 
@@ -437,10 +437,10 @@ texture is resized.
 
 ## UI and platform boundaries
 
-Tk dialogs should keep validation and workflow state in testable controller or
-model modules. `caveviewer.gui.platform` contains OS-specific focus, update,
-and system integration behavior. Unsupported platforms use the default
-adapter.
+Tk panels and dialogs should keep validation and workflow state in testable
+controller or model modules. `caveviewer.gui.platform` contains OS-specific
+focus, update, and system integration behavior. Unsupported platforms use the
+default adapter.
 
 ### Capability, policy, and feature-gating contract
 
@@ -485,8 +485,9 @@ native UI effect       -> PresentationActionsAdapter -> action-time call
 ```
 
 `PresentationProfile` contains only process-stable conventions: font families
-and candidates, splash/preferences/dialog layouts, shortcut and mouse-input
-labels, text scaling, startup focus policy, and backend sizing preferences.
+and candidates, splash and embedded-panel layouts plus native-dialog layouts,
+shortcut and mouse-input labels, text scaling, startup focus policy, and backend
+sizing preferences.
 It is selected without creating Tk widgets or probing the display. The narrow
 action adapter performs only process DPI setup, macOS About-menu registration,
 and best-effort viewer focus. The current facade preserves the broad adapter's
@@ -501,14 +502,10 @@ user agent, accepted package kinds, and signed-manifest field aliases.
 Environment and CLI-derived overrides turn that profile into an
 `UpdateConfiguration`; `probe_automatic_update()` then produces an immutable
 `UpdateTarget` only when both manifest endpoints are configured and the target
-is supported. `UpdateManager` always operates through that composed runtime:
-its default checker and downloader calls use the target and focused
+is supported. `UpdateManager` requires that composed runtime: its default
+checker and downloader calls use the target and focused
 `TlsTrustAdapter`, so the update path does not consult `SplashPlatformAdapter`
-for release policy or manifest parsing. Former direct manager constructors are
-first converted into the same runtime instead of inventing an enabled update
-decision. `check_for_update_legacy()` and `download_update_legacy()` retain the
-former adapter/global behavior as clearly local compatibility bridges while
-their callers migrate.
+for release policy or manifest parsing.
 
 Verified update-package reveal uses a focused adapter. At composition it
 declares `finder`, `explorer`, or Linux `desktop_service` without mounting a
@@ -517,8 +514,6 @@ resulting static decision, and `UpdateManager` checks it again immediately
 before revealing the verified payload. The action remains non-executing:
 macOS's existing read-only DMG mount/reveal path, Windows Explorer selection,
 and Linux desktop-service fallback are preserved behind the focused facade.
-Direct compatibility callers use a visible degraded `legacy_adapter` route
-until they adopt an injected runtime.
 
 Verified update-package storage uses a similarly focused adapter, but it is
 not a feature gate. Checksum verification has already completed when
@@ -705,7 +700,7 @@ policy-gated independently of the other desktop actions: an enabled Portal/Tk
 composite or degraded Tk/injected route may run, while a missing, indeterminate,
 or changed chooser route is blocked before the chooser is invoked. Long map
 library downloads request desktop notification and inhibit support through this
-same capability, but the visible Map Library dialog suppresses duplicate
+same capability, but the visible Map Library panel suppresses duplicate
 desktop notifications because it already presents progress and completion
 actions. Background update downloads request notification and inhibit support
 while the package is being downloaded and verified; a visible splash suppresses

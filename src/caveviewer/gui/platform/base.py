@@ -28,7 +28,7 @@ class SplashLayoutPolicy:
 
 @dataclass(frozen=True)
 class PreferencesDialogLayoutPolicy:
-    """Platform-specific Preferences dialog layout decisions."""
+    """Platform-specific embedded Preferences panel layout decisions."""
 
     windows_layout: bool
     macos_layout: bool
@@ -46,7 +46,6 @@ class PreferencesDialogLayoutPolicy:
     button_row_top_pad_y: int
     tab_highlight_thickness: int
     notice_wrap_length: int
-    resizable_vertical: bool
 
 
 @dataclass(frozen=True)
@@ -58,15 +57,12 @@ class DialogLayoutPolicy:
 
 
 class SplashPlatformAdapter(Protocol):
-    """Platform-specific hooks used by the splash and update manager."""
+    """Platform-specific hooks still owned by the GUI compatibility adapter."""
 
     def ui_font_family(self) -> str:
         ...
 
     def install_about_handler(self, root: Any, program_name: str, version: str) -> None:
-        ...
-
-    def install_channel(self) -> str:
         ...
 
     def persist_downloaded_payload(self, temp_payload_path: str, download_url: str | None) -> str:
@@ -79,27 +75,6 @@ class SplashPlatformAdapter(Protocol):
         ...
 
     def reveal_file(self, path: str) -> None:
-        ...
-
-    def default_update_repo(self) -> str:
-        ...
-
-    def default_update_manifest_url(self, repo: str, branch: str) -> str:
-        ...
-
-    def update_check_user_agent(self) -> str:
-        ...
-
-    def supports_install_channel(self, channel: str) -> bool:
-        ...
-
-    def unsupported_install_channel_message(self, channel: str) -> str:
-        ...
-
-    def channel_download_url_keys(self, channel: str) -> tuple[str, ...]:
-        ...
-
-    def channel_download_size_keys(self, channel: str) -> tuple[str, ...]:
         ...
 
     def bookmark_save_modifier(self) -> str:
@@ -116,15 +91,6 @@ class SplashPlatformAdapter(Protocol):
 
     def compact_manual_controls_layout(self) -> bool:
         """Return whether the manual controls overlay should use the compact layout."""
-        ...
-
-    def channel_sha256_keys(self, channel: str) -> tuple[str, ...]:
-        ...
-
-    def missing_download_url_message(self, channel: str) -> str:
-        ...
-
-    def detect_package_kind(self, download_url: str, channel: str) -> str:
         ...
 
     def font_candidates(self) -> list[str]:

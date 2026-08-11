@@ -9,7 +9,6 @@ from typing import Any
 from caveviewer.gui.map_library_sources import (
     GITHUB_RELEASE_MAP_SOURCE_ID,
     MapCatalogRefresh,
-    normalize_catalog_refreshes,
 )
 
 
@@ -80,15 +79,6 @@ class CatalogFetchCompletion:
     refreshes: tuple[MapCatalogRefresh, ...]
     error: str | None
     pending_map: Any | None
-
-    @property
-    def maps(self) -> tuple[Any, ...]:
-        """Return the flattened entries for compatibility with old callers."""
-        return tuple(
-            library_map
-            for refresh in self.refreshes
-            for library_map in refresh.maps
-        )
 
 
 @dataclass(frozen=True)
@@ -308,18 +298,15 @@ class MapLibraryController:
 
     def complete_catalog_fetch(
         self,
-        catalog_result,
-        error: str | None = None,
+        refreshes: tuple[MapCatalogRefresh, ...],
     ) -> CatalogFetchCompletion:
         """Apply typed source results and return the pending map to continue."""
-        if isinstance(catalog_result, MapCatalogRefresh):
-            refreshes = normalize_catalog_refreshes(catalog_result)
-        elif isinstance(catalog_result, (tuple, list)) and all(
-            isinstance(item, MapCatalogRefresh) for item in catalog_result
+        if not isinstance(refreshes, tuple) or not all(
+            isinstance(refresh, MapCatalogRefresh) for refresh in refreshes
         ):
-            refreshes = normalize_catalog_refreshes(catalog_result)
-        else:
-            refreshes = normalize_catalog_refreshes((catalog_result, error))
+            raise TypeError(
+                "Map catalog fetch must return a tuple of MapCatalogRefresh values"
+            )
         self.catalog_fetch.loading = False
         self.catalog_fetch.queue = None
         self.catalog_fetch.error = next(

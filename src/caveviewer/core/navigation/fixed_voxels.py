@@ -24,7 +24,6 @@ from caveviewer.core.navigation.voxel_volume import (
 )
 
 
-FIXED_ISOTROPIC_VOXEL_METHOD = "fixed_isotropic_voxel_chunks_v1"
 FIXED_ORTHOGONAL_VOXEL_METHOD = "fixed_orthogonal_voxel_chunks_v2"
 
 
@@ -132,40 +131,6 @@ class FixedVoxelTileBuildResult:
     tiles: tuple[LocalVoxelVolume, ...]
     tile_seed_points: tuple[tuple[Point, ...], ...]
     details: dict[str, object]
-
-
-def build_fixed_isotropic_voxel_tiles(
-    regions: Sequence[FixedVoxelRegion],
-    *,
-    triangle_provider: TriangleProvider,
-    voxel_size_m: float = 1.0,
-    chunk_edge_m: float = 32.0,
-    max_chunks: int = 4_096,
-    max_voxels_per_chunk: int = 65_536,
-    max_surface_samples_per_chunk: int = 250_000,
-    surface_inflation_cells: int = 0,
-) -> FixedVoxelTileBuildResult:
-    """Compatibility wrapper for legacy cubic fixed-resolution callers."""
-    result = build_fixed_orthogonal_voxel_tiles(
-        regions,
-        triangle_provider=triangle_provider,
-        voxel_size_m=voxel_size_m,
-        vertical_voxel_size_m=voxel_size_m,
-        chunk_edge_m=chunk_edge_m,
-        max_chunks=max_chunks,
-        max_voxels_per_chunk=max_voxels_per_chunk,
-        max_surface_samples_per_chunk=max_surface_samples_per_chunk,
-        surface_inflation_cells=surface_inflation_cells,
-    )
-    return FixedVoxelTileBuildResult(
-        tiles=result.tiles,
-        tile_seed_points=result.tile_seed_points,
-        details={
-            **result.details,
-            "method": FIXED_ISOTROPIC_VOXEL_METHOD,
-            "chunk_edge_m": float(result.details["chunk_edge_m"][0]),
-        },
-    )
 
 
 def build_fixed_orthogonal_voxel_tiles(

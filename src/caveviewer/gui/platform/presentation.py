@@ -179,7 +179,6 @@ _DEFAULT_PRESENTATION_PROFILE = PresentationProfile(
         button_row_top_pad_y=18,
         tab_highlight_thickness=1,
         notice_wrap_length=720,
-        resizable_vertical=False,
     ),
     dialog_layout=DialogLayoutPolicy(
         body_pad_x=24,
@@ -250,7 +249,6 @@ def select_presentation_profile(*, platform_name: str) -> PresentationProfile:
                 button_row_top_pad_y=8,
                 tab_highlight_thickness=0,
                 notice_wrap_length=390,
-                resizable_vertical=False,
             ),
             dialog_layout=DialogLayoutPolicy(
                 body_pad_x=18,
@@ -308,7 +306,6 @@ def select_presentation_profile(*, platform_name: str) -> PresentationProfile:
                 button_row_top_pad_y=18,
                 tab_highlight_thickness=1,
                 notice_wrap_length=720,
-                resizable_vertical=True,
             ),
             dialog_layout=DialogLayoutPolicy(
                 body_pad_x=32,
@@ -357,7 +354,6 @@ def select_presentation_profile(*, platform_name: str) -> PresentationProfile:
                 button_row_top_pad_y=18,
                 tab_highlight_thickness=1,
                 notice_wrap_length=720,
-                resizable_vertical=False,
             ),
             default_text_antialiasing_mode="light",
             # Tk's Linux DPI scaling already changes the physical size of Tk
