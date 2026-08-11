@@ -1,4 +1,4 @@
-"""Validate signed update manifests, downloads, cancellation, and error handling."""
+"""Validate typed signed update manifests, downloads, and error handling."""
 
 from __future__ import annotations
 
@@ -9,77 +9,54 @@ import urllib.error
 
 import pytest
 
-from caveviewer.core.capabilities import CapabilitySource
 from caveviewer.gui import update_checker
-from caveviewer.gui.platform.windows import WindowsSplashPlatformAdapter
 from caveviewer.gui.platform.probes.updates import (
-    UpdateConfiguration,
     UpdateManifestSchema,
     UpdateTarget,
 )
 from caveviewer.gui.update_signature import SignatureVerificationError
 
 
-class FakePlatformAdapter:
-    def __init__(self, channel="windows_app", supported=True):
-        self.channel = channel
-        self.supported = supported
+class FakeTlsTrustAdapter:
+    def __init__(self):
+        self.contexts = []
 
-    def install_channel(self):
-        return self.channel
-
-    def default_update_repo(self):
-        return "CaveViewer/Test"
-
-    def default_update_manifest_url(self, repo, branch):
-        return f"https://updates.example/{repo}/{branch}/stable.json"
-
-    def supports_install_channel(self, channel):
-        return self.supported
-
-    def unsupported_install_channel_message(self, channel):
-        return f"Unsupported install channel '{channel}'."
-
-    def channel_download_url_keys(self, channel):
-        return (f"{channel}_url", "download_url")
-
-    def channel_download_size_keys(self, channel):
-        return (f"{channel}_size", "download_size_bytes")
-
-    def channel_sha256_keys(self, channel):
-        return (f"{channel}_sha256", "sha256")
-
-    def missing_download_url_message(self, channel):
-        return f"Missing download URL for {channel}."
-
-    def detect_package_kind(self, download_url, channel):
-        lowered = (download_url or "").lower()
-        for suffix in ("tar.gz", "appimage", "dmg", "pkg", "zip", "msi", "exe"):
-            if lowered.endswith("." + suffix):
-                return suffix
-        return "unknown"
-
-    def update_check_user_agent(self):
-        return "CaveViewer-Test"
+    def augment_ssl_context(self, context):
+        self.contexts.append(context)
 
 
 @pytest.fixture
-def configured_update_checker(monkeypatch):
-    adapter = FakePlatformAdapter()
-    monkeypatch.setattr(update_checker, "_PLATFORM_ADAPTER", adapter)
-    monkeypatch.setattr(update_checker, "_MANIFEST_URL", "https://example.invalid/stable.json")
-    monkeypatch.setattr(update_checker, "_MANIFEST_SIGNATURE_URL", "https://example.invalid/stable.json.sig")
-    return adapter
+def update_target():
+    return UpdateTarget(
+        install_channel="windows_app",
+        manifest_url="https://updates.example/stable.json",
+        manifest_signature_url="https://updates.example/stable.json.sig",
+        user_agent="CaveViewer-Target-Test",
+        manifest_schema=UpdateManifestSchema(
+            download_url_keys=("windows_app_url", "download_url"),
+            download_size_keys=("windows_app_size", "download_size_bytes"),
+            download_sha256_keys=("windows_app_sha256", "sha256"),
+            allowed_package_kinds=frozenset({"zip", "msi", "exe"}),
+            missing_download_url_message="Missing update download URL.",
+        ),
+    )
+
+
+@pytest.fixture
+def tls_trust_adapter():
+    return FakeTlsTrustAdapter()
 
 
 def _set_manifest(monkeypatch, data):
     payload = json.dumps(data).encode("utf-8")
-    monkeypatch.setattr(
-        update_checker,
-        "_fetch_url_bytes",
-        lambda url, headers, timeout: payload,
-    )
-    return payload
+    calls = []
+
+    def fetch(url, *, headers, timeout, tls_trust_adapter):
+        calls.append((url, headers, timeout, tls_trust_adapter))
+        return payload
+
+    monkeypatch.setattr(update_checker, "_fetch_url_bytes_for_adapter", fetch)
+    return payload, calls
 
 
 @pytest.mark.parametrize(
@@ -106,70 +83,15 @@ def test_parse_optional_int(value, expected):
 
 def test_manifest_value_helpers_use_first_valid_alias():
     data = {"old": " ", "new": " value ", "bad_size": "x", "size": "42"}
+
     assert update_checker._first_non_empty_str(data, ("old", "new")) == "value"
     assert update_checker._first_optional_int(data, ("bad_size", "size")) == 42
 
 
-def test_windows_ssl_context_loads_usable_system_certificates(monkeypatch):
-    """A bad certificate or unavailable store must not discard usable roots."""
-    loaded_certificates = []
-    queried_stores = []
-
-    class FakeContext:
-        def load_verify_locations(self, *, cadata):
-            loaded_certificates.append(cadata)
-            if cadata == b"bad certificate":
-                raise ssl.SSLError("invalid certificate")
-
-    context = FakeContext()
-
-    def enum_certificates(store_name):
-        queried_stores.append(store_name)
-        if store_name == "ROOT":
-            raise OSError("store unavailable")
-        return [
-            (b"usable certificate", "x509_asn", None),
-            (b"ignored encoding", "pkcs_7_asn", None),
-            (b"bad certificate", "x509_asn", None),
-        ]
-
-    monkeypatch.setattr(
-        update_checker,
-        "_PLATFORM_ADAPTER",
-        WindowsSplashPlatformAdapter(),
-    )
-    monkeypatch.setattr(update_checker.ssl, "create_default_context", lambda: context)
-    monkeypatch.setattr(
-        update_checker.ssl, "enum_certificates", enum_certificates, raising=False
-    )
-
-    assert update_checker.make_ssl_context() is context
-    assert queried_stores == ["CA", "ROOT"]
-    assert loaded_certificates == [b"usable certificate", b"bad certificate"]
-
-
-def test_ssl_context_uses_injected_tls_trust_adapter(monkeypatch):
-    context = object()
-    augmented_contexts = []
-
-    class FakeTlsTrustAdapter:
-        def augment_ssl_context(self, received_context):
-            augmented_contexts.append(received_context)
-
-    tls_trust_adapter = FakeTlsTrustAdapter()
-    monkeypatch.setattr(update_checker.ssl, "create_default_context", lambda: context)
-
-    assert (
-        update_checker.make_ssl_context(tls_trust_adapter=tls_trust_adapter)
-        is context
-    )
-    assert augmented_contexts == [context]
-
-
-def test_fetch_url_bytes_uses_headers_timeout_and_ssl_context(monkeypatch):
-    """The transport wrapper must preserve request policy for every manifest fetch."""
+def test_fetch_url_bytes_uses_headers_timeout_and_tls_context(monkeypatch):
     opened = {}
     ssl_context = object()
+    tls_trust_adapter = FakeTlsTrustAdapter()
 
     class FakeResponse:
         def __enter__(self):
@@ -185,13 +107,18 @@ def test_fetch_url_bytes_uses_headers_timeout_and_ssl_context(monkeypatch):
         opened.update(request=request, timeout=timeout, context=context)
         return FakeResponse()
 
-    monkeypatch.setattr(update_checker, "make_ssl_context", lambda: ssl_context)
+    monkeypatch.setattr(
+        update_checker,
+        "make_ssl_context",
+        lambda *, tls_trust_adapter: ssl_context,
+    )
     monkeypatch.setattr(update_checker.urllib.request, "urlopen", urlopen)
 
-    payload = update_checker._fetch_url_bytes(
+    payload = update_checker._fetch_url_bytes_for_adapter(
         "https://example.invalid/stable.json",
         headers={"Accept": "application/json"},
         timeout=17,
+        tls_trust_adapter=tls_trust_adapter,
     )
 
     assert payload == b"manifest"
@@ -201,73 +128,12 @@ def test_fetch_url_bytes_uses_headers_timeout_and_ssl_context(monkeypatch):
     assert opened["context"] is ssl_context
 
 
-def test_legacy_download_update_uses_injected_tls_trust_adapter(monkeypatch, tmp_path):
-    platform_adapter = FakePlatformAdapter()
-    tls_trust_adapter = object()
-    context = object()
-    context_calls = []
-
-    class FakeResponse:
-        headers = {}
-
-        def __init__(self):
-            self._chunks = iter((b"payload", b""))
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, traceback):
-            return False
-
-        def read(self, _size):
-            return next(self._chunks)
-
-    monkeypatch.setattr(
-        update_checker,
-        "make_ssl_context",
-        lambda **kwargs: context_calls.append(kwargs) or context,
-    )
-    monkeypatch.setattr(
-        update_checker.urllib.request,
-        "urlopen",
-        lambda request, *, timeout, context: FakeResponse(),
-    )
-    destination = tmp_path / "CaveViewer.zip"
-
-    update_checker.download_update_legacy(
-        "https://updates.example/CaveViewer.zip",
-        7,
-        str(destination),
-        platform_adapter=platform_adapter,
-        tls_trust_adapter=tls_trust_adapter,
-    )
-
-    assert destination.read_bytes() == b"payload"
-    assert context_calls == [
-        {
-            "tls_trust_adapter": tls_trust_adapter,
-            "platform_adapter": platform_adapter,
-        }
-    ]
-
-
-def test_download_update_with_runtime_target_bypasses_legacy_adapter(
-    monkeypatch, tmp_path
+def test_download_update_target_uses_target_user_agent_and_tls_context(
+    monkeypatch,
+    tmp_path,
+    update_target,
+    tls_trust_adapter,
 ):
-    target = UpdateTarget(
-        install_channel="windows_app",
-        manifest_url="https://updates.example/runtime.json",
-        manifest_signature_url="https://updates.example/runtime.json.sig",
-        user_agent="CaveViewer-Target-Test",
-        manifest_schema=UpdateManifestSchema(
-            download_url_keys=("download_url",),
-            download_size_keys=("download_size_bytes",),
-            download_sha256_keys=("sha256",),
-            allowed_package_kinds=frozenset({"zip", "msi", "exe"}),
-            missing_download_url_message="Missing update download URL.",
-        ),
-    )
-    tls_trust_adapter = object()
     context = object()
     context_calls = []
     opened = {}
@@ -289,15 +155,9 @@ def test_download_update_with_runtime_target_bypasses_legacy_adapter(
 
     monkeypatch.setattr(
         update_checker,
-        "_legacy_platform_adapter",
-        lambda: (_ for _ in ()).throw(
-            AssertionError("typed update targets must not construct legacy adapters")
-        ),
-    )
-    monkeypatch.setattr(
-        update_checker,
         "make_ssl_context",
-        lambda **kwargs: context_calls.append(kwargs) or context,
+        lambda *, tls_trust_adapter: context_calls.append(tls_trust_adapter)
+        or context,
     )
     monkeypatch.setattr(
         update_checker.urllib.request,
@@ -315,7 +175,7 @@ def test_download_update_with_runtime_target_bypasses_legacy_adapter(
         "https://updates.example/CaveViewer.zip",
         7,
         str(destination),
-        update_target=target,
+        update_target=update_target,
         tls_trust_adapter=tls_trust_adapter,
     )
 
@@ -323,180 +183,159 @@ def test_download_update_with_runtime_target_bypasses_legacy_adapter(
     assert opened["request"].get_header("User-agent") == "CaveViewer-Target-Test"
     assert opened["timeout"] == 30
     assert opened["context"] is context
-    assert context_calls == [
-        {
-            "tls_trust_adapter": tls_trust_adapter,
-            "platform_adapter": None,
-        }
-    ]
-
-
-def test_download_update_compatibility_facade_forwards_typed_target(monkeypatch):
-    target = object()
-    tls_trust_adapter = object()
-    calls = []
-
-    def download_target(*args, **kwargs):
-        calls.append((args, kwargs))
-
-    monkeypatch.setattr(update_checker, "download_update_target", download_target)
-
-    update_checker.download_update(
-        "https://updates.example/CaveViewer.zip",
-        7,
-        "/tmp/CaveViewer.zip",
-        expected_sha256="expected",
-        update_target=target,
-        tls_trust_adapter=tls_trust_adapter,
-    )
-
-    assert calls == [
-        (
-            (
-                "https://updates.example/CaveViewer.zip",
-                7,
-                "/tmp/CaveViewer.zip",
-            ),
-            {
-                "expected_sha256": "expected",
-                "progress_cb": None,
-                "cancel_cb": None,
-                "phase_cb": None,
-                "update_target": target,
-                "tls_trust_adapter": tls_trust_adapter,
-            },
-        )
-    ]
-
-
-def test_update_check_reports_unconfigured_manifest(monkeypatch):
-    monkeypatch.setattr(update_checker, "_MANIFEST_URL", "")
-    result = update_checker.check_for_update("1.0.0")
-    assert not result.update_available
-    assert "isn't configured" in (result.error or "")
+    assert context_calls == [tls_trust_adapter]
 
 
 @pytest.mark.parametrize("code", [404, 500])
 def test_update_check_handles_manifest_http_errors(
-    configured_update_checker, monkeypatch, code
+    monkeypatch,
+    update_target,
+    tls_trust_adapter,
+    code,
 ):
     error = urllib.error.HTTPError("url", code, "failure", {}, None)
     monkeypatch.setattr(
         update_checker,
-        "_fetch_url_bytes",
+        "_fetch_url_bytes_for_adapter",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(error),
     )
-    result = update_checker.check_for_update("1.0.0")
+
+    result = update_checker.check_for_update_target(
+        "1.0.0",
+        update_target=update_target,
+        tls_trust_adapter=tls_trust_adapter,
+    )
+
     assert not result.update_available
     assert str(code) in (result.error or "")
 
 
-def test_update_check_handles_network_error(configured_update_checker, monkeypatch):
+def test_update_check_handles_network_error(
+    monkeypatch,
+    update_target,
+    tls_trust_adapter,
+):
     monkeypatch.setattr(
         update_checker,
-        "_fetch_url_bytes",
+        "_fetch_url_bytes_for_adapter",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
             urllib.error.URLError("offline")
         ),
     )
-    result = update_checker.check_for_update("1.0.0")
+
+    result = update_checker.check_for_update_target(
+        "1.0.0",
+        update_target=update_target,
+        tls_trust_adapter=tls_trust_adapter,
+    )
+
     assert not result.update_available
     assert "Couldn't reach" in (result.error or "")
 
 
-def test_update_check_handles_ssl_context_error(configured_update_checker, monkeypatch):
+def test_update_check_handles_tls_context_error(
+    monkeypatch,
+    update_target,
+    tls_trust_adapter,
+):
     monkeypatch.setattr(
         update_checker,
         "make_ssl_context",
-        lambda: (_ for _ in ()).throw(ssl.SSLError("group0 not found")),
+        lambda **_kwargs: (_ for _ in ()).throw(ssl.SSLError("store unavailable")),
     )
-    result = update_checker.check_for_update("1.0.0")
+
+    result = update_checker.check_for_update_target(
+        "1.0.0",
+        update_target=update_target,
+        tls_trust_adapter=tls_trust_adapter,
+    )
+
     assert not result.update_available
     assert "Couldn't reach" in (result.error or "")
 
 
-def test_update_check_handles_invalid_json(configured_update_checker, monkeypatch):
+def test_update_check_handles_invalid_json(
+    monkeypatch,
+    update_target,
+    tls_trust_adapter,
+):
     monkeypatch.setattr(
-        update_checker, "_fetch_url_bytes", lambda *_args, **_kwargs: b"{broken"
+        update_checker,
+        "_fetch_url_bytes_for_adapter",
+        lambda *_args, **_kwargs: b"{broken",
     )
-    result = update_checker.check_for_update("1.0.0")
+
+    result = update_checker.check_for_update_target(
+        "1.0.0",
+        update_target=update_target,
+        tls_trust_adapter=tls_trust_adapter,
+    )
+
     assert not result.update_available
     assert "unexpected update manifest format" in (result.error or "")
 
 
-def test_update_check_rejects_unsupported_channel(
-    configured_update_checker, monkeypatch
-):
-    configured_update_checker.supported = False
-    monkeypatch.setattr(
-        update_checker,
-        "_fetch_url_bytes",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("unsupported platforms must not fetch manifests")
-        ),
-    )
-    result = update_checker.check_for_update("1.0.0")
-    assert not result.update_available
-    assert "Unsupported install channel" in (result.error or "")
-
-
 def test_update_check_rejects_wrong_payload_type(
-    configured_update_checker, monkeypatch
+    monkeypatch,
+    update_target,
+    tls_trust_adapter,
 ):
     _set_manifest(
         monkeypatch,
         {"latest_version": "2.0.0", "windows_app_url": "https://x/update.dmg"},
     )
-    result = update_checker.check_for_update("1.0.0")
+
+    result = update_checker.check_for_update_target(
+        "1.0.0",
+        update_target=update_target,
+        tls_trust_adapter=tls_trust_adapter,
+    )
+
     assert not result.update_available
     assert "not valid" in (result.error or "")
 
 
-def test_legacy_adapter_keeps_its_package_classifier(
-    configured_update_checker, monkeypatch
+def test_update_check_rejects_missing_version(
+    monkeypatch,
+    update_target,
+    tls_trust_adapter,
 ):
-    configured_update_checker.detect_package_kind = lambda _url, _channel: "zip"
-    _set_manifest(
-        monkeypatch,
-        {
-            "latest_version": "2.0.0",
-            "windows_app_url": "https://updates.example/update.bundle",
-        },
-    )
-    monkeypatch.setattr(
-        update_checker,
-        "_verify_manifest_signature_required",
-        lambda _payload: True,
+    _set_manifest(monkeypatch, {"download_url": "https://x/update.zip"})
+
+    result = update_checker.check_for_update_target(
+        "1.0.0",
+        update_target=update_target,
+        tls_trust_adapter=tls_trust_adapter,
     )
 
-    result = update_checker.check_for_update("1.0.0")
-
-    assert result.update_available
-    assert result.package_kind == "zip"
-
-
-def test_update_check_rejects_missing_version(monkeypatch, configured_update_checker):
-    configured_update_checker.channel = "custom"
-    _set_manifest(monkeypatch, {"download_url": "https://x/update.bin"})
-    result = update_checker.check_for_update("1.0.0")
     assert not result.update_available
     assert "latest_version" in (result.error or "")
 
 
 def test_update_check_rejects_missing_download_url(
-    monkeypatch, configured_update_checker
+    monkeypatch,
+    update_target,
+    tls_trust_adapter,
 ):
-    configured_update_checker.channel = "custom"
     _set_manifest(monkeypatch, {"latest_version": "2.0.0"})
-    result = update_checker.check_for_update("1.0.0")
+
+    result = update_checker.check_for_update_target(
+        "1.0.0",
+        update_target=update_target,
+        tls_trust_adapter=tls_trust_adapter,
+    )
+
     assert not result.update_available
-    assert "Missing download URL" in (result.error or "")
+    assert "Missing update download URL" in (result.error or "")
 
 
 def test_current_version_does_not_require_signature(
-    configured_update_checker, monkeypatch, caplog
+    monkeypatch,
+    caplog,
+    update_target,
+    tls_trust_adapter,
 ):
-    _set_manifest(
+    _, calls = _set_manifest(
         monkeypatch,
         {
             "latest_version": "1.0.0",
@@ -506,41 +345,65 @@ def test_current_version_does_not_require_signature(
     )
     monkeypatch.setattr(
         update_checker,
-        "_verify_manifest_signature_required",
-        lambda _payload: (_ for _ in ()).throw(AssertionError("must not verify")),
+        "_verify_manifest_signature_required_with_target",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("must not verify current release")
+        ),
     )
+
     with caplog.at_level(logging.INFO, logger="caveviewer"):
-        result = update_checker.check_for_update("1.0.0")
+        result = update_checker.check_for_update_target(
+            "1.0.0",
+            update_target=update_target,
+            tls_trust_adapter=tls_trust_adapter,
+        )
 
     assert not result.update_available
     assert result.latest_version == "1.0.0"
     assert result.release_notes == "Already current"
-    no_update_records = [
-        record
-        for record in caplog.records
-        if record.getMessage().startswith("No update available:")
+    assert calls == [
+        (
+            update_target.manifest_url,
+            {"Accept": "application/json", "User-Agent": "CaveViewer-Target-Test"},
+            8,
+            tls_trust_adapter,
+        )
     ]
-    assert len(no_update_records) == 1
-    assert no_update_records[0].levelno == logging.INFO
+    assert any(
+        record.getMessage().startswith("No update available:")
+        for record in caplog.records
+    )
 
 
 def test_newer_update_requires_valid_signature(
-    configured_update_checker, monkeypatch
+    monkeypatch,
+    update_target,
+    tls_trust_adapter,
 ):
     _set_manifest(
         monkeypatch,
         {"latest_version": "2.0.0", "windows_app_url": "https://x/update.zip"},
     )
     monkeypatch.setattr(
-        update_checker, "_verify_manifest_signature_required", lambda _payload: False
+        update_checker,
+        "_verify_manifest_signature_required_with_target",
+        lambda *_args, **_kwargs: False,
     )
-    result = update_checker.check_for_update("1.0.0")
+
+    result = update_checker.check_for_update_target(
+        "1.0.0",
+        update_target=update_target,
+        tls_trust_adapter=tls_trust_adapter,
+    )
+
     assert not result.update_available
     assert "signature" in (result.error or "")
 
 
 def test_newer_signed_update_returns_download_metadata(
-    configured_update_checker, monkeypatch
+    monkeypatch,
+    update_target,
+    tls_trust_adapter,
 ):
     _set_manifest(
         monkeypatch,
@@ -553,9 +416,17 @@ def test_newer_signed_update_returns_download_metadata(
         },
     )
     monkeypatch.setattr(
-        update_checker, "_verify_manifest_signature_required", lambda _payload: True
+        update_checker,
+        "_verify_manifest_signature_required_with_target",
+        lambda *_args, **_kwargs: True,
     )
-    result = update_checker.check_for_update("1.9.0")
+
+    result = update_checker.check_for_update_target(
+        "1.9.0",
+        update_target=update_target,
+        tls_trust_adapter=tls_trust_adapter,
+    )
+
     assert result.update_available
     assert result.latest_version == "v2.1.0"
     assert result.download_url == "https://x/update.zip"
@@ -565,232 +436,66 @@ def test_newer_signed_update_returns_download_metadata(
     assert result.release_notes == "New release"
 
 
-def test_signature_check_requires_configured_url(monkeypatch):
-    monkeypatch.setattr(update_checker, "_MANIFEST_SIGNATURE_URL", "")
-    assert not update_checker._verify_manifest_signature_required(b"manifest")
-
-
 @pytest.mark.parametrize("code", [404, 500])
-def test_signature_check_handles_http_errors(monkeypatch, code):
-    monkeypatch.setattr(update_checker, "_MANIFEST_SIGNATURE_URL", "https://x/sig")
+def test_signature_check_handles_http_errors(update_target, code):
     error = urllib.error.HTTPError("url", code, "failure", {}, None)
-    monkeypatch.setattr(
-        update_checker,
-        "_fetch_url_bytes",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(error),
+
+    assert not update_checker._verify_manifest_signature_required_with_target(
+        b"manifest",
+        update_target=update_target,
+        fetch_url_bytes=lambda *_args, **_kwargs: (_ for _ in ()).throw(error),
     )
-    assert not update_checker._verify_manifest_signature_required(b"manifest")
 
 
-def test_signature_check_handles_network_error(monkeypatch):
-    monkeypatch.setattr(update_checker, "_MANIFEST_SIGNATURE_URL", "https://x/sig")
-    monkeypatch.setattr(
-        update_checker,
-        "_fetch_url_bytes",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+def test_signature_check_handles_network_error(update_target):
+    assert not update_checker._verify_manifest_signature_required_with_target(
+        b"manifest",
+        update_target=update_target,
+        fetch_url_bytes=lambda *_args, **_kwargs: (_ for _ in ()).throw(
             urllib.error.URLError("offline")
         ),
     )
-    assert not update_checker._verify_manifest_signature_required(b"manifest")
 
 
-def test_signature_check_handles_ssl_context_error(monkeypatch):
-    monkeypatch.setattr(update_checker, "_MANIFEST_SIGNATURE_URL", "https://x/sig")
-    monkeypatch.setattr(
-        update_checker,
-        "make_ssl_context",
-        lambda: (_ for _ in ()).throw(ssl.SSLError("group0 not found")),
-    )
-    assert not update_checker._verify_manifest_signature_required(b"manifest")
-
-
-def test_signature_check_handles_verification_failure(monkeypatch):
-    monkeypatch.setattr(update_checker, "_MANIFEST_SIGNATURE_URL", "https://x/sig")
-    monkeypatch.setattr(update_checker, "_fetch_url_bytes", lambda *_args, **_kwargs: b"sig")
+def test_signature_check_handles_verification_failure(monkeypatch, update_target):
     monkeypatch.setattr(
         update_checker,
         "verify_update_manifest_signature",
         lambda *_args: (_ for _ in ()).throw(SignatureVerificationError("bad sig")),
     )
-    assert not update_checker._verify_manifest_signature_required(b"manifest")
+
+    assert not update_checker._verify_manifest_signature_required_with_target(
+        b"manifest",
+        update_target=update_target,
+        fetch_url_bytes=lambda *_args, **_kwargs: b"signature",
+    )
 
 
-def test_signature_check_accepts_valid_signature(monkeypatch):
-    monkeypatch.setattr(update_checker, "_MANIFEST_SIGNATURE_URL", "https://x/sig")
-    monkeypatch.setattr(update_checker, "_fetch_url_bytes", lambda *_args, **_kwargs: b"sig")
+def test_signature_check_accepts_valid_signature(monkeypatch, update_target):
     verified = []
+    fetched = []
     monkeypatch.setattr(
         update_checker,
         "verify_update_manifest_signature",
         lambda manifest, signature: verified.append((manifest, signature)),
     )
-    assert update_checker._verify_manifest_signature_required(b"manifest")
-    assert verified == [(b"manifest", b"sig")]
 
-
-def test_explicit_legacy_configuration_bypasses_module_update_globals(monkeypatch):
-    adapter = FakePlatformAdapter()
-    tls_trust_adapter = object()
-    configuration = UpdateConfiguration(
-        repository="example/CaveViewer",
-        branch="release-candidate",
-        manifest_channel="stable",
-        manifest_url="https://updates.example/runtime.json",
-        manifest_signature_url="https://updates.example/runtime.json.sig",
-        source=CapabilitySource.USER_OVERRIDE,
+    assert update_checker._verify_manifest_signature_required_with_target(
+        b"manifest",
+        update_target=update_target,
+        fetch_url_bytes=lambda url, headers, timeout: fetched.append(
+            (url, headers, timeout)
+        )
+        or b"signature",
     )
-    fetched = []
-    monkeypatch.setattr(update_checker, "_MANIFEST_URL", "https://wrong.example/old.json")
-    monkeypatch.setattr(
-        update_checker,
-        "_fetch_url_bytes_for_adapter",
-        lambda url, *, headers, timeout, tls_trust_adapter: (
-            fetched.append((url, headers, timeout, tls_trust_adapter))
-            or json.dumps(
-                {
-                    "latest_version": "1.0.0",
-                    "windows_app_url": "https://updates.example/update.zip",
-                }
-            ).encode("utf-8")
-        ),
-    )
-    monkeypatch.setattr(
-        update_checker,
-        "_verify_manifest_signature_required_with_configuration",
-        lambda *_args, **_kwargs: True,
-    )
-
-    result = update_checker.check_for_update_legacy(
-        "1.0.0",
-        configuration=configuration,
-        platform_adapter=adapter,
-        tls_trust_adapter=tls_trust_adapter,
-    )
-
-    assert not result.update_available
+    assert verified == [(b"manifest", b"signature")]
     assert fetched == [
         (
-            "https://updates.example/runtime.json",
-            {"Accept": "application/json", "User-Agent": "CaveViewer-Test"},
+            update_target.manifest_signature_url,
+            {
+                "Accept": "text/plain, application/octet-stream",
+                "User-Agent": "CaveViewer-Target-Test",
+            },
             8,
-            tls_trust_adapter,
         )
     ]
-
-
-def test_explicit_legacy_adapter_keeps_its_default_update_configuration(monkeypatch):
-    adapter = FakePlatformAdapter()
-    tls_trust_adapter = object()
-    fetched = []
-    for name in (
-        "CAVEVIEWER_GITHUB_REPO",
-        "CAVEVIEWER_UPDATE_BRANCH",
-        "CAVEVIEWER_UPDATE_CHANNEL",
-        "CAVEVIEWER_UPDATE_MANIFEST_URL",
-        "CAVEVIEWER_UPDATE_MANIFEST_SIGNATURE_URL",
-    ):
-        monkeypatch.delenv(name, raising=False)
-    monkeypatch.setattr(
-        update_checker,
-        "_fetch_url_bytes_for_adapter",
-        lambda url, *, headers, timeout, tls_trust_adapter: (
-            fetched.append((url, headers, timeout, tls_trust_adapter))
-            or json.dumps(
-                {
-                    "latest_version": "1.0.0",
-                    "windows_app_url": "https://updates.example/update.zip",
-                }
-            ).encode("utf-8")
-        ),
-    )
-
-    result = update_checker.check_for_update_legacy(
-        "1.0.0",
-        platform_adapter=adapter,
-        tls_trust_adapter=tls_trust_adapter,
-    )
-
-    assert not result.update_available
-    assert fetched == [
-        (
-            "https://updates.example/CaveViewer/Test/main/stable.json",
-            {"Accept": "application/json", "User-Agent": "CaveViewer-Test"},
-            8,
-            tls_trust_adapter,
-        )
-    ]
-
-
-def test_explicit_runtime_target_bypasses_legacy_adapter(monkeypatch):
-    target = UpdateTarget(
-        install_channel="windows_app",
-        manifest_url="https://updates.example/runtime.json",
-        manifest_signature_url="https://updates.example/runtime.json.sig",
-        user_agent="CaveViewer-Target-Test",
-        manifest_schema=UpdateManifestSchema(
-            download_url_keys=("download_url",),
-            download_size_keys=("download_size_bytes",),
-            download_sha256_keys=("sha256",),
-            allowed_package_kinds=frozenset({"zip", "msi", "exe"}),
-            missing_download_url_message="Missing update download URL.",
-        ),
-    )
-    tls_trust_adapter = object()
-    fetched = []
-
-    def unexpected_legacy_adapter():
-        raise AssertionError("typed update targets must not construct legacy adapters")
-
-    monkeypatch.setattr(update_checker, "_legacy_platform_adapter", unexpected_legacy_adapter)
-    monkeypatch.setattr(
-        update_checker,
-        "_fetch_url_bytes_for_adapter",
-        lambda url, *, headers, timeout, tls_trust_adapter: (
-            fetched.append((url, headers, timeout, tls_trust_adapter))
-            or json.dumps(
-                {
-                    "latest_version": "1.0.0",
-                    "download_url": "https://updates.example/update.zip",
-                }
-            ).encode("utf-8")
-        ),
-    )
-
-    result = update_checker.check_for_update_target(
-        "1.0.0",
-        update_target=target,
-        tls_trust_adapter=tls_trust_adapter,
-    )
-
-    assert not result.update_available
-    assert fetched == [
-        (
-            "https://updates.example/runtime.json",
-            {"Accept": "application/json", "User-Agent": "CaveViewer-Target-Test"},
-            8,
-            tls_trust_adapter,
-        )
-    ]
-
-
-def test_check_for_update_compatibility_facade_forwards_typed_target(monkeypatch):
-    target = object()
-    tls_trust_adapter = object()
-    expected = update_checker.UpdateCheckResult(
-        update_available=False,
-        current_version="1.0.0",
-    )
-    calls = []
-
-    def check_target(current_version, *, update_target, tls_trust_adapter):
-        calls.append((current_version, update_target, tls_trust_adapter))
-        return expected
-
-    monkeypatch.setattr(update_checker, "check_for_update_target", check_target)
-
-    assert update_checker.check_for_update(
-        "1.0.0",
-        update_target=target,
-        tls_trust_adapter=tls_trust_adapter,
-    ) is expected
-    assert calls == [("1.0.0", target, tls_trust_adapter)]

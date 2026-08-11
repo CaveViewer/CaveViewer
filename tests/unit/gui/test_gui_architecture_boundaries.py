@@ -307,8 +307,8 @@ def test_feature_gate_registry_is_composed_only_by_platform_runtime():
     assert not violations, _format_violations(violations)
 
 
-def test_update_manager_defaults_to_typed_update_clients():
-    """Keep normal update traffic on the runtime-composed target contract."""
+def test_update_manager_requires_runtime_owned_typed_update_clients():
+    """Keep update policy and network traffic on the runtime-owned contract."""
     manager = _parse_module(UPDATE_MANAGER_MODULE)
     initializer = _class_method(manager, "UpdateManager", "__init__")
     assert initializer is not None, "UpdateManager.__init__ is required"
@@ -342,26 +342,44 @@ def test_update_manager_defaults_to_typed_update_clients():
                 )
             )
 
-    legacy_client_names = {
-        "check_for_update",
-        "check_for_update_legacy",
-        "download_update",
-        "download_update_legacy",
+    keyword_only_arguments = {
+        argument.arg for argument in initializer.args.kwonlyargs
     }
-    for node in ast.walk(manager):
-        if (
-            isinstance(node, ast.Attribute)
-            and isinstance(node.value, ast.Name)
-            and node.value.id == "update_checker"
-            and node.attr in legacy_client_names
-        ):
-            violations.append(
-                Violation(
-                    UPDATE_MANAGER_MODULE,
-                    node.lineno,
-                    f"uses legacy update_checker.{node.attr} client",
-                )
+    if "platform_runtime" not in keyword_only_arguments:
+        violations.append(
+            Violation(
+                UPDATE_MANAGER_MODULE,
+                initializer.lineno,
+                "does not require an injected platform_runtime",
             )
+        )
+
+    compatibility_arguments = {
+        "platform_adapter",
+        "desktop_services",
+        "update_package_reveal_adapter",
+        "update_package_storage_adapter",
+    }
+    for argument_name in sorted(keyword_only_arguments & compatibility_arguments):
+        violations.append(
+            Violation(
+                UPDATE_MANAGER_MODULE,
+                initializer.lineno,
+                f"accepts retired direct compatibility input {argument_name}",
+            )
+        )
+
+    if any(
+        isinstance(node, ast.Name) and node.id == "create_platform_runtime"
+        for node in ast.walk(manager)
+    ):
+        violations.append(
+            Violation(
+                UPDATE_MANAGER_MODULE,
+                initializer.lineno,
+                "constructs a platform runtime instead of requiring one",
+            )
+        )
 
     assert not violations, _format_violations(violations)
 

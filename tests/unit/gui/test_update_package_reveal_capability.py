@@ -9,7 +9,6 @@ from caveviewer.gui.platform.probes.update_package_reveal import (
     probe_update_package_reveal,
 )
 from caveviewer.gui.platform.update_package_reveal import (
-    create_legacy_update_package_reveal_adapter,
     create_update_package_reveal_adapter,
 )
 
@@ -67,15 +66,6 @@ def test_unknown_platform_has_no_update_package_reveal_route():
     assert capability.status is CapabilityStatus.UNAVAILABLE
     assert capability.reason_code == "update_package_reveal_route_unsupported"
     assert capability.evidence == {"route": "unsupported"}
-
-
-def test_legacy_adapter_declares_the_compatible_degraded_route():
-    capability = probe_update_package_reveal(
-        create_legacy_update_package_reveal_adapter(FakePlatformAdapter())
-    )
-
-    assert capability.status is CapabilityStatus.AVAILABLE
-    assert capability.value is UpdatePackageRevealRoute.LEGACY_ADAPTER
 
 
 def test_probe_fails_closed_for_missing_or_invalid_route_declarations():

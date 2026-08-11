@@ -645,15 +645,6 @@ def test_viewer_launch_policy_is_a_pure_capability_table(
             "finder",
         ),
         (
-            CapabilityResult.available(
-                UpdatePackageRevealRoute.LEGACY_ADAPTER,
-                reason_code="update_package_reveal_route_available",
-            ),
-            FeatureState.DEGRADED,
-            "update_package_reveal_legacy_adapter",
-            "legacy_adapter",
-        ),
-        (
             CapabilityResult.unavailable(
                 reason_code="update_package_reveal_route_unsupported",
             ),

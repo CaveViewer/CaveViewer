@@ -44,7 +44,6 @@ class UpdatePackageRevealRoute(str, Enum):
     FINDER = "finder"
     EXPLORER = "explorer"
     DESKTOP_SERVICE = "desktop_service"
-    LEGACY_ADAPTER = "legacy_adapter"
 
 
 @dataclass(frozen=True, slots=True)

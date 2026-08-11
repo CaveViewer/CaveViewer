@@ -15,9 +15,10 @@ from caveviewer.core.capabilities import (
     IdleSuspendInhibitionTarget,
     UpdatePackageRevealRoute,
 )
+from caveviewer.gui.download_transport import DownloadCancelled
 from caveviewer.gui.features import FeatureState
-from caveviewer.gui.update_checker import DownloadCancelled, UpdateCheckResult
 from caveviewer.gui import update_manager
+from caveviewer.gui.update_checker import UpdateCheckResult
 from caveviewer.gui.platform.probes.updates import select_update_profile
 from caveviewer.gui.platform.runtime import create_platform_runtime
 from caveviewer.gui.update_manager import UpdateManager, UpdateState
@@ -28,9 +29,6 @@ class FakePlatformAdapter:
         self.downloads_dir = downloads_dir
         self.revealed_paths = []
         self.persisted_payloads = []
-
-    def install_channel(self):
-        return "test_app"
 
     def persist_downloaded_payload(self, temp_payload_path, download_url):
         self.persisted_payloads.append((temp_payload_path, download_url))
@@ -47,18 +45,7 @@ class FakePlatformAdapter:
 
 
 class FakeRuntimePlatformAdapter(FakePlatformAdapter):
-    def __init__(self, downloads_dir: Path, *, supported: bool = True):
-        super().__init__(downloads_dir)
-        self.supported = supported
-
-    def default_update_repo(self):
-        return "CaveViewer/CaveViewer"
-
-    def default_update_manifest_url(self, repo, branch):
-        return f"https://updates.example/{repo}/{branch}/stable.json"
-
-    def supports_install_channel(self, channel):
-        return self.supported and channel == "test_app"
+    pass
 
 
 class FakeUpdatePackageRevealAdapter:
@@ -160,14 +147,22 @@ def _available_result():
     )
 
 
+def _runtime(adapter, desktop_services):
+    return create_platform_runtime(
+        platform_adapter=adapter,
+        desktop_services=desktop_services,
+        environment={},
+    )
+
+
 def _checked_manager(tmp_path, download_update, *, desktop_services=None):
     adapter = FakePlatformAdapter(tmp_path / "Downloads")
+    services = desktop_services or FakeDesktopServices()
     manager = UpdateManager(
         "1.0.63",
-        platform_adapter=adapter,
+        platform_runtime=_runtime(adapter, services),
         check_for_update=lambda *_args, **_kwargs: _available_result(),
         download_update=download_update,
-        desktop_services=desktop_services or FakeDesktopServices(),
         temp_root=str(tmp_path),
     )
     assert manager.check_for_updates()
@@ -176,26 +171,9 @@ def _checked_manager(tmp_path, download_update, *, desktop_services=None):
     return manager, adapter
 
 
-def test_legacy_manager_constructor_composes_the_runtime_feature_gates(tmp_path):
-    manager = UpdateManager(
-        "1.0.63",
-        platform_adapter=FakePlatformAdapter(tmp_path / "Downloads"),
-        desktop_services=FakeDesktopServices(),
-        temp_root=str(tmp_path),
-    )
-    try:
-        assert manager.automatic_update_decision is (
-            manager._platform_runtime.automatic_update_decision
-        )
-        assert manager.update_package_reveal_decision is (
-            manager._platform_runtime.update_package_reveal_decision
-        )
-        assert (
-            manager.automatic_update_decision.reason_code
-            != "automatic_update_legacy_runtime"
-        )
-    finally:
-        manager.shutdown()
+def test_manager_requires_a_process_owned_runtime(tmp_path):
+    with pytest.raises(TypeError, match="platform_runtime"):
+        UpdateManager("1.0.63", temp_root=str(tmp_path))
 
 
 def test_check_transitions_through_checking_to_available(tmp_path):
@@ -207,11 +185,11 @@ def test_check_transitions_through_checking_to_available(tmp_path):
         assert release_check.wait(1)
         return _available_result()
 
+    adapter = FakePlatformAdapter(tmp_path / "Downloads")
     manager = UpdateManager(
         "1.0.63",
-        platform_adapter=FakePlatformAdapter(tmp_path / "Downloads"),
+        platform_runtime=_runtime(adapter, FakeDesktopServices()),
         check_for_update=check_for_update,
-        desktop_services=FakeDesktopServices(),
         temp_root=str(tmp_path),
     )
     try:
@@ -239,11 +217,11 @@ def test_up_to_date_result_is_checked_only_once_per_process(tmp_path):
             latest_version=current_version,
         )
 
+    adapter = FakePlatformAdapter(tmp_path / "Downloads")
     manager = UpdateManager(
         "1.0.63",
-        platform_adapter=FakePlatformAdapter(tmp_path / "Downloads"),
+        platform_runtime=_runtime(adapter, FakeDesktopServices()),
         check_for_update=check_for_update,
-        desktop_services=FakeDesktopServices(),
         temp_root=str(tmp_path),
     )
     try:
@@ -270,6 +248,7 @@ def test_download_reports_progress_verifies_persists_and_cleans_temp_dir(tmp_pat
         progress_cb,
         cancel_cb,
         phase_cb,
+        **_kwargs,
     ):
         assert expected_sha256 == "expected"
         assert not cancel_cb()
@@ -606,10 +585,10 @@ def test_shutdown_timeout_returns_while_download_cleanup_is_blocked(
 
 
 def test_shutdown_rejects_negative_timeout(tmp_path):
+    adapter = FakePlatformAdapter(tmp_path / "Downloads")
     manager = UpdateManager(
         "1.0.63",
-        platform_adapter=FakePlatformAdapter(tmp_path / "Downloads"),
-        desktop_services=FakeDesktopServices(),
+        platform_runtime=_runtime(adapter, FakeDesktopServices()),
         temp_root=str(tmp_path),
     )
 
@@ -618,10 +597,10 @@ def test_shutdown_rejects_negative_timeout(tmp_path):
 
 
 def test_non_actionable_states_reject_download_and_reveal(tmp_path):
+    adapter = FakePlatformAdapter(tmp_path / "Downloads")
     manager = UpdateManager(
         "1.0.63",
-        platform_adapter=FakePlatformAdapter(tmp_path / "Downloads"),
-        desktop_services=FakeDesktopServices(),
+        platform_runtime=_runtime(adapter, FakeDesktopServices()),
         temp_root=str(tmp_path),
     )
     try:
@@ -744,26 +723,6 @@ def test_storage_adapter_failure_is_an_ordinary_update_workflow_failure(tmp_path
         manager.shutdown()
 
 
-def test_runtime_rejects_mismatched_update_package_storage_adapter(tmp_path):
-    runtime = create_platform_runtime(
-        platform_adapter=FakeRuntimePlatformAdapter(tmp_path / "Downloads"),
-        desktop_services=FakeDesktopServices(),
-        environment={},
-    )
-
-    with pytest.raises(
-        ValueError,
-        match="update_package_storage_adapter must match the injected platform_runtime",
-    ):
-        UpdateManager(
-            "1.0.63",
-            platform_runtime=runtime,
-            update_package_storage_adapter=FakeUpdatePackageStorageAdapter(
-                tmp_path / "other-package.zip"
-            ),
-        )
-
-
 def test_disabled_runtime_package_reveal_gate_blocks_native_action(tmp_path):
     payload_path = tmp_path / "CaveViewer.bin"
     payload_path.write_bytes(b"verified package")
@@ -798,7 +757,7 @@ def test_disabled_runtime_package_reveal_gate_blocks_native_action(tmp_path):
 
 
 def test_disabled_runtime_gate_starts_no_update_workers_or_downloads(tmp_path):
-    adapter = FakeRuntimePlatformAdapter(tmp_path / "Downloads", supported=False)
+    adapter = FakeRuntimePlatformAdapter(tmp_path / "Downloads")
     update_profile = replace(
         select_update_profile(platform_name="linux", machine="x86_64"),
         supports_automatic_update=False,
@@ -860,13 +819,6 @@ def test_runtime_target_is_passed_to_the_default_update_client(
         "check_for_update_target",
         check_for_update,
     )
-    monkeypatch.setattr(
-        update_manager.update_checker,
-        "check_for_update",
-        lambda *_args, **_kwargs: pytest.fail(
-            "the runtime manager must not use the legacy checker facade"
-        ),
-    )
     manager = UpdateManager(
         "1.0.63",
         platform_runtime=runtime,
@@ -916,13 +868,6 @@ def test_runtime_tls_adapter_is_passed_to_default_update_download(
         update_manager.update_checker,
         "download_update_target",
         download_update,
-    )
-    monkeypatch.setattr(
-        update_manager.update_checker,
-        "download_update",
-        lambda *_args, **_kwargs: pytest.fail(
-            "the runtime manager must not use the legacy download facade"
-        ),
     )
     manager = UpdateManager(
         "1.0.63",

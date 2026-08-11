@@ -62,16 +62,6 @@ def create_update_package_reveal_adapter(
     )
 
 
-def create_legacy_update_package_reveal_adapter(
-    platform_adapter: SplashPlatformAdapter,
-) -> PlatformUpdatePackageRevealAdapter:
-    """Preserve direct legacy manager callers without pretending route certainty."""
-    return PlatformUpdatePackageRevealAdapter(
-        platform_adapter=platform_adapter,
-        selected_route=UpdatePackageRevealRoute.LEGACY_ADAPTER,
-    )
-
-
 def _route_for_platform(platform_name: str) -> UpdatePackageRevealRoute | None:
     normalized = str(platform_name).strip().lower()
     if normalized == "darwin":

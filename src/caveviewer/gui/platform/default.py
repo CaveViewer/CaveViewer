@@ -23,9 +23,6 @@ class DefaultSplashPlatformAdapter(SplashPlatformAdapter):
         # No platform-specific About menu integration outside macOS.
         return None
 
-    def install_channel(self) -> str:
-        return "unsupported"
-
     def persist_downloaded_payload(self, temp_payload_path: str, download_url: str | None) -> str:
         downloads_dir = os.path.join(os.path.expanduser("~"), "Downloads")
         os.makedirs(downloads_dir, exist_ok=True)
@@ -62,57 +59,6 @@ class DefaultSplashPlatformAdapter(SplashPlatformAdapter):
         raise RuntimeError(
             f"Revealing files is unsupported on this platform: {path}"
         )
-
-    def default_update_repo(self) -> str:
-        return "CaveViewer/CaveViewer"
-
-    def default_update_manifest_url(self, repo: str, branch: str) -> str:
-        return f"https://raw.githubusercontent.com/{repo}/{branch}/updates/macos/stable.json"
-
-    def update_check_user_agent(self) -> str:
-        return "CaveViewer-UpdateChecker"
-
-    def supports_install_channel(self, channel: str) -> bool:
-        return False
-
-    def unsupported_install_channel_message(self, channel: str) -> str:
-        return f"Unsupported install channel '{channel}'."
-
-    def channel_download_url_keys(self, channel: str) -> tuple[str, ...]:
-        return ("download_url",)
-
-    def channel_download_size_keys(self, channel: str) -> tuple[str, ...]:
-        return ("download_size_bytes",)
-
-    def channel_sha256_keys(self, channel: str) -> tuple[str, ...]:
-        return ("sha256",)
-
-    def missing_download_url_message(self, channel: str) -> str:
-        return "Update manifest is missing required field: download_url."
-
-    def detect_package_kind(self, download_url: str, channel: str) -> str:
-        url = (download_url or "").strip().lower()
-        if not url:
-            return "unknown"
-        if url.endswith(".tar.gz"):
-            return "tar.gz"
-        if url.endswith(".appimage"):
-            return "appimage"
-        if url.endswith(".msi"):
-            return "msi"
-        if url.endswith(".exe"):
-            return "exe"
-        if url.endswith(".deb"):
-            return "deb"
-        if url.endswith(".rpm"):
-            return "rpm"
-        if url.endswith(".dmg"):
-            return "dmg"
-        if url.endswith(".pkg"):
-            return "pkg"
-        if url.endswith(".zip"):
-            return "zip"
-        return "unknown"
 
     def bookmark_save_modifier(self) -> str:
         """Return the modifier key name for saving bookmarks (default: 'control' for non-macOS)."""

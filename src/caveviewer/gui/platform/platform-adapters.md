@@ -47,12 +47,12 @@ The module uses Python's **Protocol** pattern to define a contract (`SplashPlatf
 - **Extensibility**: New platform-specific methods can be added to the protocol and implemented per-platform
 - **Maintainability**: Platform-specific logic is isolated in dedicated files
 
-`SplashPlatformAdapter` continues to own unmigrated package behavior and a
-temporary compatibility surface. Static GUI presentation now lives in the
-immutable `PresentationProfile`, selected purely from the composed platform
-name. It contains fonts, Tk and splash layouts, shortcut/input conventions,
-text scaling, and startup sizing choices; it never creates a Tk root, probes a
-display, or invokes native APIs. `PresentationActionsAdapter` owns the small
+`SplashPlatformAdapter` continues to own unmigrated package behavior. Static
+GUI presentation now lives in the immutable `PresentationProfile`, selected
+purely from the composed platform name. It contains fonts, Tk and splash
+layouts, shortcut/input conventions, text scaling, and startup sizing choices;
+it never creates a Tk root, probes a display, or invokes native APIs.
+`PresentationActionsAdapter` owns the small
 action-time native boundary for process DPI setup, macOS About registration,
 and viewer focus. Its current implementation is deliberately a narrow facade
 over the established adapter methods while native implementations migrate.
@@ -60,8 +60,8 @@ over the established adapter methods while native implementations migrate.
 Static update release policy now lives in the immutable
 `UpdateProfile` selected from platform and process-architecture facts; the
 runtime checker and downloader receive its resulting `UpdateTarget`, not the
-broad adapter. Direct callers of the former adapter-based update API retain a
-local compatibility bridge while they migrate. `DesktopServices` is
+broad adapter. `UpdateManager` requires the process-owned `PlatformRuntime`
+that contains this target and focused TLS adapter. `DesktopServices` is
 intentionally separate: splash, viewer, settings, map-library, and
 background-task code request host-desktop behavior through one capability
 instead of importing Tk, shell commands, or D-Bus directly. Linux implements
@@ -132,11 +132,9 @@ This means CLI `--update-branch` and other explicit configuration are seen by
 the process-owned manager. `UpdateTarget` carries the signed manifest URLs,
 user agent, accepted package policy, and manifest aliases needed by the network
 client, so the normal runtime path calls the typed target checker/downloader
-instead of broad adapter update methods. `UpdateManager` also converts former
-direct constructor inputs into a runtime before it reads a gate, rather than
-creating an enabled update decision itself. The old adapter/global calls remain
-in explicitly named `check_for_update_legacy()` and `download_update_legacy()`
-compatibility bridges. The manager rechecks the gate before it starts a check
+instead of broad adapter update methods. `UpdateManager` receives that composed
+runtime before it reads a gate, rather than creating update policy itself. The
+manager rechecks the gate before it starts a check
 and before it starts a download; a disabled gate never starts network work.
 Offline failures remain ordinary transient check results, not a platform
 capability failure.
@@ -353,8 +351,6 @@ class MacOSSplashPlatformAdapter(DefaultSplashPlatformAdapter):
     def mouse_look_button_name(self) -> str:
         return "right"
 
-    def install_channel(self) -> str:
-        return "macos_app"  # DMG distribution channel
 ```
 
 ### `windows.py` & `linux.py` – Platform Overrides
@@ -369,8 +365,6 @@ class WindowsSplashPlatformAdapter(DefaultSplashPlatformAdapter):
     def mouse_look_button_name(self) -> str:
         return "left"
 
-    def install_channel(self) -> str:
-        return "windows_app"  # ZIP distribution channel
 ```
 
 ### `default.py` – Fallback Implementations
@@ -382,8 +376,6 @@ class DefaultSplashPlatformAdapter(SplashPlatformAdapter):
     def ui_font_family(self) -> str:
         return "Segoe UI"  # Generic, widely available
 
-    def install_channel(self) -> str:
-        return "unsupported"  # Safe default for unknown platforms
 ```
 
 ## Usage Examples
@@ -482,7 +474,7 @@ assert profile.mouse_look_button_name == "right"
 **When**: Different distribution formats (DMG for macOS, ZIP for Windows, AppImage for Linux)
 
 **How**:
-- `install_channel()` returns the channel identifier
+- `runtime.update_profile.install_channel` identifies the current package channel
 - `UpdatePackageStorageAdapter.persist_verified_package()` promotes a verified
   temporary package into platform-specific user-visible storage
 - `persist_downloaded_payload()` remains the compatibility implementation until
@@ -492,7 +484,7 @@ assert profile.mouse_look_button_name == "right"
   the neutral `Show update` wording so its one-label ready-state transition is
   consistent across platforms.
 - `reveal_downloaded_payload()` exposes the verified package without running it
-- The update system knows which channel the current build came from
+- The typed update profile knows which channel the current build came from
 
 Revealing is deliberately manual and non-executing. macOS mounts the DMG
 read-only and reveals its `.app` in Finder, Windows selects the package in

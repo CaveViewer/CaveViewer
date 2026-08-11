@@ -33,26 +33,8 @@ from caveviewer.gui.platform.probes.updates import select_update_profile
 from caveviewer.gui.platform.runtime import create_platform_runtime
 
 
-class FakeUpdateAdapter:
-    def __init__(self, *, supported: bool = True):
-        self.supported = supported
-        self.update_policy_calls = []
-
-    def default_update_repo(self):
-        self.update_policy_calls.append("default_update_repo")
-        return "CaveViewer/CaveViewer"
-
-    def default_update_manifest_url(self, repo, branch):
-        self.update_policy_calls.append("default_update_manifest_url")
-        return f"https://updates.example/{repo}/{branch}/stable.json"
-
-    def install_channel(self):
-        self.update_policy_calls.append("install_channel")
-        return "test_app"
-
-    def supports_install_channel(self, channel):
-        self.update_policy_calls.append("supports_install_channel")
-        return self.supported and channel == "test_app"
+class FakePlatformAdapter:
+    pass
 
 
 class FakeUpdatePackageStorageAdapter:
@@ -169,7 +151,7 @@ def test_update_profile_selects_static_release_policy(
 
 def test_runtime_resolves_environment_only_when_it_is_composed(monkeypatch):
     monkeypatch.setenv("CAVEVIEWER_UPDATE_BRANCH", "ignored-process-value")
-    adapter = FakeUpdateAdapter()
+    adapter = FakePlatformAdapter()
     desktop_services = object()
     storage_adapter = FakeUpdatePackageStorageAdapter()
     artifact_reveal_adapter = FakeSavedArtifactRevealAdapter()
@@ -214,7 +196,6 @@ def test_runtime_resolves_environment_only_when_it_is_composed(monkeypatch):
     assert runtime.automatic_update_target is runtime.automatic_update_capability.value
     assert runtime.automatic_update_target is not None
     assert runtime.automatic_update_target.install_channel == "linux_app"
-    assert adapter.update_policy_calls == []
     assert runtime.automatic_update_decision.state is FeatureState.ENABLED
     assert (
         runtime.static_feature_decision(FeatureId.AUTOMATIC_UPDATE)
@@ -243,7 +224,7 @@ def test_runtime_disables_unsupported_update_targets_before_network_work():
         supports_automatic_update=False,
     )
     runtime = create_platform_runtime(
-        platform_adapter=FakeUpdateAdapter(),
+        platform_adapter=FakePlatformAdapter(),
         desktop_services=object(),
         update_profile=update_profile,
         environment={},
@@ -259,7 +240,7 @@ def test_runtime_disables_unsupported_update_targets_before_network_work():
 
 def test_runtime_disables_unsupported_update_package_reveal_routes():
     runtime = create_platform_runtime(
-        platform_adapter=FakeUpdateAdapter(),
+        platform_adapter=FakePlatformAdapter(),
         desktop_services=object(),
         environment={},
         platform_name="freebsd",
@@ -290,7 +271,7 @@ def test_runtime_fails_closed_when_static_update_configuration_cannot_be_probed(
         fail_configuration,
     )
     runtime = create_platform_runtime(
-        platform_adapter=FakeUpdateAdapter(),
+        platform_adapter=FakePlatformAdapter(),
         desktop_services=object(),
         environment={},
     )
@@ -316,7 +297,7 @@ def test_runtime_keeps_video_recording_probe_on_demand(monkeypatch):
     monkeypatch.setattr(runtime, "probe_video_recording", probe)
 
     platform_runtime = create_platform_runtime(
-        platform_adapter=FakeUpdateAdapter(),
+        platform_adapter=FakePlatformAdapter(),
         desktop_services=object(),
         environment={},
     )
@@ -359,7 +340,7 @@ def test_runtime_keeps_directory_selection_probe_on_demand(monkeypatch):
 
     monkeypatch.setattr(runtime, "probe_directory_selection", probe)
     platform_runtime = create_platform_runtime(
-        platform_adapter=FakeUpdateAdapter(),
+        platform_adapter=FakePlatformAdapter(),
         desktop_services=desktop_services,
         environment={},
     )
@@ -414,7 +395,7 @@ def test_runtime_keeps_file_selection_probe_on_demand(monkeypatch):
 
     monkeypatch.setattr(runtime, "probe_file_selection", probe)
     platform_runtime = create_platform_runtime(
-        platform_adapter=FakeUpdateAdapter(),
+        platform_adapter=FakePlatformAdapter(),
         desktop_services=desktop_services,
         environment={},
     )
@@ -468,7 +449,7 @@ def test_runtime_keeps_desktop_notification_probe_on_demand(monkeypatch):
 
     monkeypatch.setattr(runtime, "probe_desktop_notification", probe)
     platform_runtime = create_platform_runtime(
-        platform_adapter=FakeUpdateAdapter(),
+        platform_adapter=FakePlatformAdapter(),
         desktop_services=desktop_services,
         environment={},
     )
@@ -522,7 +503,7 @@ def test_runtime_keeps_idle_suspend_inhibition_probe_on_demand(monkeypatch):
 
     monkeypatch.setattr(runtime, "probe_idle_suspend_inhibition", probe)
     platform_runtime = create_platform_runtime(
-        platform_adapter=FakeUpdateAdapter(),
+        platform_adapter=FakePlatformAdapter(),
         desktop_services=desktop_services,
         environment={},
     )
@@ -578,7 +559,7 @@ def test_runtime_keeps_viewer_launch_probe_on_demand(monkeypatch):
 
     monkeypatch.setattr(runtime, "probe_viewer_launch", probe)
     platform_runtime = create_platform_runtime(
-        platform_adapter=FakeUpdateAdapter(),
+        platform_adapter=FakePlatformAdapter(),
         desktop_services=object(),
         environment={},
         platform_name="darwin",

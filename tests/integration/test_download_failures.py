@@ -9,6 +9,38 @@ import zipfile
 import pytest
 
 from caveviewer.gui import standard_library_maps, update_checker
+from caveviewer.gui.download_transport import DownloadCancelled
+from caveviewer.gui.platform.probes.updates import UpdateManifestSchema, UpdateTarget
+
+
+class FakeTlsTrustAdapter:
+    def augment_ssl_context(self, _context):
+        return None
+
+
+_UPDATE_TARGET = UpdateTarget(
+    install_channel="windows_app",
+    manifest_url="https://updates.example/stable.json",
+    manifest_signature_url="https://updates.example/stable.json.sig",
+    user_agent="CaveViewer-Test",
+    manifest_schema=UpdateManifestSchema(
+        download_url_keys=("download_url",),
+        download_size_keys=("download_size_bytes",),
+        download_sha256_keys=("sha256",),
+        allowed_package_kinds=frozenset({"zip", "msi", "exe"}),
+        missing_download_url_message="Missing update download URL.",
+    ),
+)
+_TLS_TRUST_ADAPTER = FakeTlsTrustAdapter()
+
+
+def _download_update(*args, **kwargs):
+    return update_checker.download_update_target(
+        *args,
+        update_target=_UPDATE_TARGET,
+        tls_trust_adapter=_TLS_TRUST_ADAPTER,
+        **kwargs,
+    )
 
 
 class BytesResponse:
@@ -50,7 +82,7 @@ def test_update_download_network_failure_leaves_no_file(tmp_path, monkeypatch):
     )
 
     with pytest.raises(urllib.error.URLError):
-        update_checker.download_update(
+        _download_update(
             "https://invalid.example/update.zip", None, str(destination)
         )
 
@@ -71,7 +103,7 @@ def test_network_failure_does_not_delete_preexisting_destination(tmp_path, monke
     )
 
     with pytest.raises(urllib.error.URLError):
-        update_checker.download_update(
+        _download_update(
             "https://invalid.example/update.zip", None, str(destination)
         )
 
@@ -88,7 +120,7 @@ def test_interrupted_update_download_removes_partial_file(tmp_path, monkeypatch)
     )
 
     with pytest.raises(urllib.error.URLError):
-        update_checker.download_update(
+        _download_update(
             "https://invalid.example/update.zip", None, str(destination)
         )
 
@@ -113,8 +145,8 @@ def test_cancelled_download_removes_partial_and_retry_does_not_resume(
     def request_cancellation(_downloaded, _total):
         cancel_requested[0] = True
 
-    with pytest.raises(update_checker.DownloadCancelled):
-        update_checker.download_update(
+    with pytest.raises(DownloadCancelled):
+        _download_update(
             "https://invalid.example/map-library.zip",
             None,
             str(destination),
@@ -125,7 +157,7 @@ def test_cancelled_download_removes_partial_and_retry_does_not_resume(
     assert not destination.exists()
 
     cancel_requested[0] = False
-    update_checker.download_update(
+    _download_update(
         "https://invalid.example/map-library.zip",
         len(b"complete"),
         str(destination),
@@ -147,7 +179,7 @@ def test_size_mismatch_removes_downloaded_file(tmp_path, monkeypatch):
     )
 
     with pytest.raises(IOError, match="file size"):
-        update_checker.download_update(
+        _download_update(
             "https://invalid.example/update.zip", 100, str(destination)
         )
 
@@ -164,7 +196,7 @@ def test_hash_mismatch_removes_downloaded_file(tmp_path, monkeypatch):
     )
 
     with pytest.raises(IOError, match="hash"):
-        update_checker.download_update(
+        _download_update(
             "https://invalid.example/update.zip",
             7,
             str(destination),
@@ -186,7 +218,7 @@ def test_update_download_reports_verification_phase(tmp_path, monkeypatch):
         lambda *_args, **_kwargs: BytesResponse(payload),
     )
 
-    update_checker.download_update(
+    _download_update(
         "https://invalid.example/update.zip",
         len(payload),
         str(destination),
@@ -211,8 +243,8 @@ def test_cancellation_at_verification_phase_removes_download(tmp_path, monkeypat
         lambda *_args, **_kwargs: BytesResponse(payload),
     )
 
-    with pytest.raises(update_checker.DownloadCancelled):
-        update_checker.download_update(
+    with pytest.raises(DownloadCancelled):
+        _download_update(
             "https://invalid.example/update.zip",
             len(payload),
             str(destination),
