@@ -104,9 +104,15 @@ for a complete release.
 5. Turn `publish` on to upload assets and commit update metadata.
 6. Turn `pre_release` on only when the tag must be a GitHub prerelease and the
    `prerelease.json` channel must be updated.
+7. Turn `reuse_pr_validation` on only when the selected source has already
+   passed its PR validation and no application, packaging, dependency, test, or
+   workflow change has been made since. This skips the duplicate source test
+   suites, not package creation or package validation. Documentation, release
+   notes, and other release metadata changes alone do not require the source
+   suites to run again.
 
-The workflow runs the shared Essential Tests gate once, then fans out four
-package jobs from the same immutable source revision:
+By default, the workflow runs the shared Essential Tests gate once, then fans
+out four package jobs from the same immutable source revision:
 
 ```text
                     ┌─ Windows ────────┐
@@ -117,9 +123,17 @@ Essential Tests ────├─ Linux x86_64 ───┼─ Finalize Release
 
 Each called platform workflow skips its duplicate internal gate. A platform
 workflow dispatched on its own still runs Essential Tests before packaging.
-Normal pushes to `main` or `release/**` also trigger `.github/workflows/tests.yml`;
-those branch-CI runs are separate from the single gate inside All Platform
-Release.
+When `reuse_pr_validation` is selected, the shared gate and the duplicate
+native Intel source suite are skipped; the four platform packages and their
+release-time package checks still run. Use that option only for the already
+validated source described above.
+
+Normal code, dependency, packaging, test, and workflow pushes to `main` or
+`release/**` also trigger `.github/workflows/tests.yml`; those branch-CI runs
+are separate from the single gate inside All Platform Release. Release-only
+metadata commits touch the changelog, version, AppStream release metadata, or
+signed update manifests, so they do not start a duplicate broad test or
+package-smoke run.
 
 GitHub requires write permission to be preserved across each reusable-workflow
 call boundary because a nested workflow cannot elevate permissions later. The
@@ -151,8 +165,10 @@ and call `scripts/macos/smoke_dmg.sh`. The validator checks package metadata and
 digest, mounts the DMG read-only, verifies bundle identity and version, checks
 every bundled Mach-O file for the requested architecture and runner-local
 library references, and exercises a controlled packaged CLI error path. The
-Intel smoke and release workflows also run the complete pytest suite and source
-CLI checks on `macos-15-intel` before building.
+The Intel smoke workflow also runs the complete pytest suite and source CLI
+checks on `macos-15-intel` before building. The Intel release workflow does the
+same by default, and skips only those duplicate source checks when the release
+uses `reuse_pr_validation`.
 
 Run the same package validation locally after creating a native DMG:
 

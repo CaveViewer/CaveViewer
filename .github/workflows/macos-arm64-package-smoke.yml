@@ -9,8 +9,10 @@ on:
       - ".github/workflows/macos-arm64-package-smoke.yml"
       - ".github/workflows/macos-arm64-release.yml"
       - "packaging/**"
+      - "!packaging/linux/io.github.caveviewer.caveviewer.metainfo.xml"
       - "scripts/**"
       - "src/**"
+      - "!src/caveviewer/version.py"
       - "requirements*.txt"
       - "pyproject.toml"
   push:
@@ -21,8 +23,10 @@ on:
       - ".github/workflows/macos-arm64-package-smoke.yml"
       - ".github/workflows/macos-arm64-release.yml"
       - "packaging/**"
+      - "!packaging/linux/io.github.caveviewer.caveviewer.metainfo.xml"
       - "scripts/**"
       - "src/**"
+      - "!src/caveviewer/version.py"
       - "requirements*.txt"
       - "pyproject.toml"
 

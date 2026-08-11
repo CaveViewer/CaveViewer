@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented in this file.
 
+## Release 1.0.77
+
+- Map imports, video recording, and dive tracing now use clearer, more
+  consistent progress messages, so it is easier to see what CaveViewer is
+  doing.
+- If you close CaveViewer while a video or dive trace is being saved, it now
+  stays open until the file is finished, then closes automatically. This helps
+  prevent a recording or trace from being lost when leaving the viewer.
+
 ## Release 1.0.76
 
 - Fixed scrolling in the Map Library and Preferences for macOS trackpads and
