@@ -21,6 +21,11 @@ on:
         required: false
         type: boolean
         default: false
+      reuse_pr_validation:
+        description: "Reuse successful PR validation when app/package source has not changed; skip duplicate test suites"
+        required: false
+        type: boolean
+        default: false
   workflow_call:
     inputs:
       version:
@@ -47,6 +52,11 @@ on:
         required: false
         type: boolean
         default: false
+      reuse_pr_validation:
+        description: "Reuse successful PR validation when app/package source has not changed; skip duplicate test suites"
+        required: false
+        type: boolean
+        default: false
       source_sha:
         description: "Immutable source revision supplied by an orchestrating workflow"
         required: false
@@ -68,14 +78,14 @@ concurrency:
 
 jobs:
   essential-tests:
-    if: ${{ inputs.skip_essential_tests != true }}
+    if: ${{ inputs.skip_essential_tests != true && inputs.reuse_pr_validation != true }}
     uses: ./.github/workflows/tests.yml
     permissions:
       contents: read
 
   build-macos-x86_64:
     needs: essential-tests
-    if: ${{ !cancelled() && (inputs.skip_essential_tests == true || needs.essential-tests.result == 'success') }}
+    if: ${{ !cancelled() && (inputs.skip_essential_tests == true || inputs.reuse_pr_validation == true || needs.essential-tests.result == 'success') }}
     runs-on: macos-15-intel
     permissions:
       contents: read
@@ -102,14 +112,17 @@ jobs:
           python -c 'import platform; assert platform.machine() == "x86_64", platform.machine()'
 
       - name: Install Intel test dependencies
+        if: ${{ inputs.reuse_pr_validation != true }}
         run: |
           python -m pip install --upgrade pip -r requirements.txt -r requirements-dev.txt
           python -m pip install --no-deps -e .
 
       - name: Run complete Intel test suite
+        if: ${{ inputs.reuse_pr_validation != true }}
         run: python -m pytest -p no:cacheprovider -q
 
       - name: Run Intel CLI smoke checks
+        if: ${{ inputs.reuse_pr_validation != true }}
         shell: bash
         run: |
           python - <<'PY'

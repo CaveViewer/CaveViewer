@@ -348,16 +348,24 @@ disabled. A failed or canceled shared gate prevents every package job from
 starting. After a successful gate, all package jobs may run concurrently; the
 release finalizer runs only after every requested package succeeds.
 
+Release dispatches may set `reuse_pr_validation` only when the selected source
+has already passed PR validation and no application, packaging, dependency,
+test, or workflow change has occurred since. It omits duplicate source suites
+while retaining every platform build and release-time package check. A changelog
+or other release-only metadata edit does not make the source suite material
+again.
+
 The single release finalizer commits all requested manifests back to the
-selected branch. That push can start the normal branch CI configured for `main`
-and `release/**`; such runs are separate from the single gate within the
-all-platform release. See [releases.md](releases.md) for the complete sequence.
+selected branch. Branch CI deliberately ignores that metadata-only commit,
+which avoids rerunning broad tests and package smokes after a release. Normal
+code and package changes still start their relevant branch CI. See
+[releases.md](releases.md) for the complete sequence.
 
 The normal macOS matrix runs on ARM64. Intel-specific coverage is provided by
 `macos-x86_64-package-smoke.yml`, which runs the complete suite and CLI smoke
 checks natively on `macos-15-intel`, builds the x86_64 DMG, and validates the
 mounted package. The manually dispatched Intel release workflow repeats those
-native checks before uploading or publishing its artifact.
+native checks unless it is explicitly reusing already-successful PR validation.
 
 ## Before handoff
 

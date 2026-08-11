@@ -9,8 +9,10 @@ on:
       - ".github/workflows/linux-package-smoke.yml"
       - ".github/workflows/linux-x86_64-release.yml"
       - "packaging/**"
+      - "!packaging/linux/io.github.caveviewer.caveviewer.metainfo.xml"
       - "scripts/**"
       - "src/**"
+      - "!src/caveviewer/version.py"
       - "requirements*.txt"
       - "pyproject.toml"
   push:
@@ -21,8 +23,10 @@ on:
       - ".github/workflows/linux-package-smoke.yml"
       - ".github/workflows/linux-x86_64-release.yml"
       - "packaging/**"
+      - "!packaging/linux/io.github.caveviewer.caveviewer.metainfo.xml"
       - "scripts/**"
       - "src/**"
+      - "!src/caveviewer/version.py"
       - "requirements*.txt"
       - "pyproject.toml"
 

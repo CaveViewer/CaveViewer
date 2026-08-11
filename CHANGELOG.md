@@ -10,8 +10,6 @@ All notable changes to this project are documented in this file.
 - If you close CaveViewer while a video or dive trace is being saved, it now
   stays open until the file is finished, then closes automatically. This helps
   prevent a recording or trace from being lost when leaving the viewer.
-- Removed unused internal compatibility and release-maintenance code to make
-  the application easier to maintain.
 
 ## Release 1.0.76
 

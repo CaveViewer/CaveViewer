@@ -21,6 +21,11 @@ on:
         required: false
         type: boolean
         default: false
+      reuse_pr_validation:
+        description: "Reuse successful PR validation when app/package source has not changed; skip duplicate test suites"
+        required: false
+        type: boolean
+        default: false
   workflow_call:
     inputs:
       version:
@@ -47,6 +52,11 @@ on:
         required: false
         type: boolean
         default: false
+      reuse_pr_validation:
+        description: "Reuse successful PR validation when app/package source has not changed; skip duplicate test suites"
+        required: false
+        type: boolean
+        default: false
       source_sha:
         description: "Immutable source revision supplied by an orchestrating workflow"
         required: false
@@ -68,14 +78,14 @@ concurrency:
 
 jobs:
   essential-tests:
-    if: ${{ inputs.skip_essential_tests != true }}
+    if: ${{ inputs.skip_essential_tests != true && inputs.reuse_pr_validation != true }}
     uses: ./.github/workflows/tests.yml
     permissions:
       contents: read
 
   build-windows:
     needs: essential-tests
-    if: ${{ !cancelled() && (inputs.skip_essential_tests == true || needs.essential-tests.result == 'success') }}
+    if: ${{ !cancelled() && (inputs.skip_essential_tests == true || inputs.reuse_pr_validation == true || needs.essential-tests.result == 'success') }}
     runs-on: windows-latest
     permissions:
       contents: read
