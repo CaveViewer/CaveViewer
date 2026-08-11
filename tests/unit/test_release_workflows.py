@@ -606,6 +606,52 @@ def test_essential_workflow_enforces_module_coverage_floors():
     ) in workflow
 
 
+def test_essential_workflow_reuses_validation_for_release_metadata_only_prs():
+    workflow = (WORKFLOWS_DIR / "tests.yml").read_text(encoding="utf-8")
+
+    assert "classify_changes:" in workflow
+    assert "Classify source changes" in workflow
+    assert "github.event_name == 'pull_request'" in workflow
+    assert 'git diff --name-only "$PR_BASE_SHA...$PR_HEAD_SHA"' in workflow
+    assert "skip_source_tests=true" in workflow
+    assert "skip_source_tests=false" in workflow
+    assert "Material source changes detected; running source suites." in workflow
+    for allowed_path in (
+        "CHANGELOG.md",
+        "docs/*",
+        "src/caveviewer/version.py",
+        "packaging/linux/io.github.caveviewer.caveviewer.metainfo.xml",
+        "updates/windows/*.json",
+        "updates/linux/x86_64/*.json",
+        "updates/macos/arm64/*.json",
+        "updates/macos/x86_64/*.json",
+    ):
+        assert allowed_path in workflow
+
+    assert "Validate release metadata without source suites" in workflow
+    assert 'git diff --check "$PR_BASE_SHA...$PR_HEAD_SHA"' in workflow
+    assert "version.py changes more than APP_VERSION; run the source suites." in workflow
+    assert "AppStream metadata changes more than one prepended release entry." in workflow
+    assert "Manifest changed without its signature:" in workflow
+    assert "openssl pkeyutl -verify -pubin" in workflow
+
+    for job_name, next_job_name in (
+        ("unit-tests", "coverage-and-metadata"),
+        ("coverage-and-metadata", "cli-smoke"),
+        ("cli-smoke", None),
+    ):
+        job_start = workflow.index(f"  {job_name}:\n")
+        job_end = (
+            workflow.index(f"\n  {next_job_name}:\n", job_start)
+            if next_job_name is not None
+            else None
+        )
+        job_block = workflow[job_start:job_end]
+        assert "if: ${{ always() }}" in job_block
+        assert "RUN_SOURCE_TESTS:" in job_block
+        assert "Source tests not required" in job_block
+
+
 def test_release_metadata_changes_do_not_start_package_smoke_workflows():
     for workflow_name in (
         "linux-package-smoke.yml",

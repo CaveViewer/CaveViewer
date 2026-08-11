@@ -355,6 +355,19 @@ while retaining every platform build and release-time package check. A changelog
 or other release-only metadata edit does not make the source suite material
 again.
 
+For pull requests, Essential Tests classifies the diff before starting the
+source suites. Changelog and documentation edits, plus generated release
+metadata (the version assignment, one AppStream release entry, and signed
+update manifests), receive a lightweight validation instead of the full matrix.
+That validation checks the allowed diff shape, metadata syntax and consistency,
+and every update-manifest signature. Any other changed path—or an indeterminate
+classification—runs the full suite. The existing required check jobs still run
+as lightweight successful jobs for the metadata case, so protected `main`
+remains mergeable without weakening its PR rule. Do not replace this with a
+workflow-level path filter: GitHub leaves required checks pending when an
+entire workflow is skipped. Malformed release metadata fails the lightweight
+validation and cannot silently bypass the source suite.
+
 The single release finalizer commits all requested manifests back to the
 selected branch. Branch CI deliberately ignores that metadata-only commit,
 which avoids rerunning broad tests and package smokes after a release. Normal

@@ -135,6 +135,15 @@ metadata commits touch the changelog, version, AppStream release metadata, or
 signed update manifests, so they do not start a duplicate broad test or
 package-smoke run.
 
+When that generated metadata is proposed back to protected `main` in a pull
+request, Essential Tests keeps the required check names but does not rerun the
+source suites. It validates the release-only diff, version/AppStream entry,
+update-manifest schema, and Ed25519 signatures instead. Any application,
+dependency, test, workflow, or other packaging change falls back to the full
+source suite. This lets a release-metadata pull request merge without treating
+existing package artifacts as new application code. A malformed metadata diff
+fails that lightweight validation rather than silently bypassing checks.
+
 GitHub requires write permission to be preserved across each reusable-workflow
 call boundary because a nested workflow cannot elevate permissions later. The
 test and build/package jobs explicitly downgrade their own tokens to read-only
@@ -165,7 +174,7 @@ and call `scripts/macos/smoke_dmg.sh`. The validator checks package metadata and
 digest, mounts the DMG read-only, verifies bundle identity and version, checks
 every bundled Mach-O file for the requested architecture and runner-local
 library references, and exercises a controlled packaged CLI error path. The
-The Intel smoke workflow also runs the complete pytest suite and source CLI
+Intel smoke workflow also runs the complete pytest suite and source CLI
 checks on `macos-15-intel` before building. The Intel release workflow does the
 same by default, and skips only those duplicate source checks when the release
 uses `reuse_pr_validation`.
@@ -260,8 +269,9 @@ Publishing also requires an authenticated GitHub CLI and
 - Confirm macOS legacy aliases still match the ARM64 manifests and signatures.
 - Confirm the selected branch contains the single release metadata commit and
   has no unexpected generated files.
-- Confirm the Essential Tests gate passed and inspect any separate push-triggered
-  CI runs.
+- Confirm either the full Essential Tests gate passed or the pull request was
+  classified as release-only metadata and its lightweight metadata validation
+  passed. Inspect any separate push-triggered CI runs.
 - Confirm both native macOS package-smoke workflows passed for macOS packaging,
   dependency, or release-script changes.
 - For stable releases, verify the GitHub release is not marked prerelease and
