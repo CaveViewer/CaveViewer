@@ -20,24 +20,244 @@ permissions:
   contents: read
 
 jobs:
+  classify_changes:
+    name: Classify source changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      skip_source_tests: ${{ steps.classify.outputs.skip_source_tests }}
+      change_class: ${{ steps.classify.outputs.change_class }}
+
+    steps:
+      - name: Check out pull request comparison commits
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Classify changed paths
+        id: classify
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          if [ "$EVENT_NAME" != "pull_request" ]; then
+            echo "skip_source_tests=false" >> "$GITHUB_OUTPUT"
+            echo "change_class=non-pr" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ -z "$PR_BASE_SHA" ] || [ -z "$PR_HEAD_SHA" ]; then
+            echo "::warning::Could not resolve the pull request range; running source tests."
+            echo "skip_source_tests=false" >> "$GITHUB_OUTPUT"
+            echo "change_class=unknown" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          changed_paths="$(git diff --name-only "$PR_BASE_SHA...$PR_HEAD_SHA")"
+          if [ -z "$changed_paths" ]; then
+            echo "::warning::The pull request has no changed paths; running source tests."
+            echo "skip_source_tests=false" >> "$GITHUB_OUTPUT"
+            echo "change_class=unknown" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          non_material_only=true
+          while IFS= read -r path; do
+            echo "Changed path: $path"
+            case "$path" in
+              CHANGELOG.md|docs/*|src/caveviewer/version.py|\
+              packaging/linux/io.github.caveviewer.caveviewer.metainfo.xml|\
+              updates/windows/*.json|updates/windows/*.json.sig|\
+              updates/linux/x86_64/*.json|updates/linux/x86_64/*.json.sig|\
+              updates/macos/*.json|updates/macos/*.json.sig|\
+              updates/macos/arm64/*.json|updates/macos/arm64/*.json.sig|\
+              updates/macos/x86_64/*.json|updates/macos/x86_64/*.json.sig)
+                ;;
+              *)
+                non_material_only=false
+                ;;
+            esac
+          done <<< "$changed_paths"
+
+          if [ "$non_material_only" = true ]; then
+            echo "skip_source_tests=true" >> "$GITHUB_OUTPUT"
+            echo "change_class=release-metadata-or-docs" >> "$GITHUB_OUTPUT"
+            echo "Source suites are not required for this pull request."
+          else
+            echo "skip_source_tests=false" >> "$GITHUB_OUTPUT"
+            echo "change_class=material" >> "$GITHUB_OUTPUT"
+            echo "Material source changes detected; running source suites."
+          fi
+
   sanity:
+    needs: classify_changes
+    if: ${{ always() }}
     name: Syntax, import, and whitespace sanity
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    env:
+      RUN_SOURCE_TESTS: ${{ needs.classify_changes.result != 'success' || needs.classify_changes.outputs.skip_source_tests != 'true' }}
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Validate release metadata without source suites
+        if: ${{ env.RUN_SOURCE_TESTS != 'true' }}
+        shell: bash
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          git diff --check "$PR_BASE_SHA...$PR_HEAD_SHA"
+          python3 - <<'PY'
+          import base64
+          import json
+          import re
+          import subprocess
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+
+          base_sha = __import__("os").environ["PR_BASE_SHA"]
+          head_sha = __import__("os").environ["PR_HEAD_SHA"]
+          version_path = "src/caveviewer/version.py"
+          metainfo_path = "packaging/linux/io.github.caveviewer.caveviewer.metainfo.xml"
+          version_pattern = re.compile(r'^APP_VERSION\s*=\s*"([^"]+)"$', re.MULTILINE)
+
+          def git_show(revision: str, path: str) -> str:
+              return subprocess.check_output(
+                  ["git", "show", f"{revision}:{path}"], text=True
+              )
+
+          def app_version(text: str) -> str:
+              match = version_pattern.search(text)
+              if not match:
+                  raise SystemExit("APP_VERSION is missing from version.py")
+              return match.group(1)
+
+          changed_paths = set(
+              subprocess.check_output(
+                  ["git", "diff", "--name-only", f"{base_sha}...{head_sha}"],
+                  text=True,
+              ).splitlines()
+          )
+          current_version = app_version(Path(version_path).read_text(encoding="utf-8"))
+          version_changed = version_path in changed_paths
+          metainfo_changed = metainfo_path in changed_paths
+
+          if version_changed != metainfo_changed:
+              raise SystemExit(
+                  "Release metadata must update version.py and the AppStream release entry together."
+              )
+
+          if version_changed:
+              base_version_text = git_show(base_sha, version_path)
+              head_version_text = git_show(head_sha, version_path)
+              if app_version(head_version_text) != current_version:
+                  raise SystemExit("Checked-out APP_VERSION does not match the pull request head.")
+              normalized_base = version_pattern.sub('APP_VERSION = "<version>"', base_version_text)
+              normalized_head = version_pattern.sub('APP_VERSION = "<version>"', head_version_text)
+              if normalized_base != normalized_head:
+                  raise SystemExit("version.py changes more than APP_VERSION; run the source suites.")
+
+              def release_entries(text: str) -> list[str]:
+                  releases = ET.fromstring(text).find("releases")
+                  if releases is None:
+                      raise SystemExit("AppStream metadata has no releases element.")
+                  return [ET.tostring(entry, encoding="unicode") for entry in releases]
+
+              base_entries = release_entries(git_show(base_sha, metainfo_path))
+              head_entries = release_entries(git_show(head_sha, metainfo_path))
+              if len(head_entries) != len(base_entries) + 1 or head_entries[1:] != base_entries:
+                  raise SystemExit("AppStream metadata changes more than one prepended release entry.")
+              release_entry = ET.fromstring(head_entries[0])
+              if (
+                  release_entry.tag != "release"
+                  or release_entry.attrib.get("version") != current_version
+                  or not release_entry.attrib.get("date")
+              ):
+                  raise SystemExit("AppStream metadata does not prepend the current version release entry.")
+
+          manifest_paths = sorted(
+              path
+              for path in changed_paths
+              if path.startswith("updates/") and path.endswith(".json")
+          )
+          signature_paths = {
+              path
+              for path in changed_paths
+              if path.startswith("updates/") and path.endswith(".json.sig")
+          }
+          if version_changed and not manifest_paths:
+              raise SystemExit("A version change must include signed update manifests.")
+          for signature_path in signature_paths:
+              if signature_path.removesuffix(".sig") not in manifest_paths:
+                  raise SystemExit(f"Signature changed without its manifest: {signature_path}")
+
+          for manifest_path in manifest_paths:
+              signature_path = f"{manifest_path}.sig"
+              if signature_path not in signature_paths:
+                  raise SystemExit(f"Manifest changed without its signature: {manifest_path}")
+              manifest = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
+              if manifest.get("latest_version") != current_version:
+                  raise SystemExit(f"Manifest version does not match APP_VERSION: {manifest_path}")
+              download_url = manifest.get("download_url")
+              if not isinstance(download_url, str) or f"/releases/download/v{current_version}/" not in download_url:
+                  raise SystemExit(f"Manifest download URL is not for the current release: {manifest_path}")
+              if not isinstance(manifest.get("download_size_bytes"), int) or manifest["download_size_bytes"] <= 0:
+                  raise SystemExit(f"Manifest has an invalid download size: {manifest_path}")
+              sha256 = manifest.get("sha256")
+              if not isinstance(sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", sha256):
+                  raise SystemExit(f"Manifest has an invalid SHA-256: {manifest_path}")
+              try:
+                  signature = base64.b64decode(
+                      Path(signature_path).read_text(encoding="ascii").strip(), validate=True
+                  )
+              except ValueError as exc:
+                  raise SystemExit(f"Manifest signature is not valid base64: {signature_path}") from exc
+              if len(signature) != 64:
+                  raise SystemExit(f"Manifest signature has an invalid Ed25519 length: {signature_path}")
+          PY
+          signature_dir="$(mktemp -d)"
+          trap 'rm -rf "$signature_dir"' EXIT
+          shopt -s nullglob
+          manifests=(
+            updates/windows/*.json
+            updates/linux/x86_64/*.json
+            updates/macos/*.json
+            updates/macos/arm64/*.json
+            updates/macos/x86_64/*.json
+          )
+          for manifest in "${manifests[@]}"; do
+            signature="$signature_dir/$(tr '/' '_' <<< "$manifest").sig"
+            base64 --decode "$manifest.sig" > "$signature"
+            openssl pkeyutl -verify -pubin \
+              -inkey src/caveviewer/resources/release_signing_public_key.pem \
+              -rawin \
+              -in "$manifest" \
+              -sigfile "$signature"
+          done
 
       - name: Set up Python
+        if: ${{ env.RUN_SOURCE_TESTS == 'true' }}
         uses: actions/setup-python@v7.0.0
         with:
           python-version: "3.12"
 
       - name: Compile source tree
+        if: ${{ env.RUN_SOURCE_TESTS == 'true' }}
         run: python -m compileall -q src/caveviewer
 
       - name: Import lightweight entry modules
+        if: ${{ env.RUN_SOURCE_TESTS == 'true' }}
         run: |
           PYTHONPATH=src python - <<'PY'
           import caveviewer
@@ -46,13 +266,19 @@ jobs:
           PY
 
       - name: Check whitespace
+        if: ${{ env.RUN_SOURCE_TESTS == 'true' }}
         run: git diff --check
 
   unit-tests:
     name: Unit tests (${{ matrix.label }})
-    needs: sanity
+    needs:
+      - classify_changes
+      - sanity
+    if: ${{ always() }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
+    env:
+      RUN_SOURCE_TESTS: ${{ needs.classify_changes.result != 'success' || needs.classify_changes.outputs.skip_source_tests != 'true' }}
 
     strategy:
       fail-fast: false
@@ -66,10 +292,16 @@ jobs:
             os: macos-15
 
     steps:
+      - name: Source tests not required
+        if: ${{ env.RUN_SOURCE_TESTS != 'true' || needs.sanity.result != 'success' }}
+        run: echo "Source tests were not run for this required check."
+
       - name: Check out repository
+        if: ${{ env.RUN_SOURCE_TESTS == 'true' && needs.sanity.result == 'success' }}
         uses: actions/checkout@v7
 
       - name: Set up Python
+        if: ${{ env.RUN_SOURCE_TESTS == 'true' && needs.sanity.result == 'success' }}
         uses: actions/setup-python@v7.0.0
         with:
           python-version: "3.12"
@@ -79,24 +311,37 @@ jobs:
             requirements-dev.txt
 
       - name: Install runtime and test dependencies
+        if: ${{ env.RUN_SOURCE_TESTS == 'true' && needs.sanity.result == 'success' }}
         run: |
           python -m pip install --upgrade pip -r requirements.txt -r requirements-dev.txt
           python -m pip install --no-deps -e .
 
       - name: Run unit tests
+        if: ${{ env.RUN_SOURCE_TESTS == 'true' && needs.sanity.result == 'success' }}
         run: python -m pytest tests/unit
 
   coverage-and-metadata:
     name: Coverage and Linux metadata
-    needs: sanity
+    needs:
+      - classify_changes
+      - sanity
+    if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      RUN_SOURCE_TESTS: ${{ needs.classify_changes.result != 'success' || needs.classify_changes.outputs.skip_source_tests != 'true' }}
 
     steps:
+      - name: Source tests not required
+        if: ${{ env.RUN_SOURCE_TESTS != 'true' || needs.sanity.result != 'success' }}
+        run: echo "Source tests were not run for this required check."
+
       - name: Check out repository
+        if: ${{ env.RUN_SOURCE_TESTS == 'true' && needs.sanity.result == 'success' }}
         uses: actions/checkout@v7
 
       - name: Set up Python
+        if: ${{ env.RUN_SOURCE_TESTS == 'true' && needs.sanity.result == 'success' }}
         uses: actions/setup-python@v7.0.0
         with:
           python-version: "3.12"
@@ -106,16 +351,19 @@ jobs:
             requirements-dev.txt
 
       - name: Install Linux desktop metadata validators
+        if: ${{ env.RUN_SOURCE_TESTS == 'true' && needs.sanity.result == 'success' }}
         run: |
           sudo apt-get update
           sudo apt-get install -y appstream desktop-file-utils
 
       - name: Install runtime and test dependencies
+        if: ${{ env.RUN_SOURCE_TESTS == 'true' && needs.sanity.result == 'success' }}
         run: |
           python -m pip install --upgrade pip -r requirements.txt -r requirements-dev.txt
           python -m pip install --no-deps -e .
 
       - name: Validate Linux desktop metadata
+        if: ${{ env.RUN_SOURCE_TESTS == 'true' && needs.sanity.result == 'success' }}
         run: |
           rendered_desktop_dir="$(mktemp -d)"
           trap 'rm -rf "$rendered_desktop_dir"' EXIT
@@ -128,6 +376,7 @@ jobs:
             packaging/linux/io.github.caveviewer.caveviewer.metainfo.xml
 
       - name: Run essential tests with branch coverage
+        if: ${{ env.RUN_SOURCE_TESTS == 'true' && needs.sanity.result == 'success' }}
         run: >-
           python -m pytest
           --cov=caveviewer.app
@@ -147,37 +396,42 @@ jobs:
           --cov-report=xml
 
       - name: Enforce standard-library map coverage floor
+        if: ${{ env.RUN_SOURCE_TESTS == 'true' && needs.sanity.result == 'success' }}
         run: >-
           python -m coverage report
           --include=src/caveviewer/gui/standard_library_maps.py
           --fail-under=85
 
       - name: Enforce Preferences coverage floor
+        if: ${{ env.RUN_SOURCE_TESTS == 'true' && needs.sanity.result == 'success' }}
         run: >-
           python -m coverage report
           --include=src/caveviewer/gui/preferences.py
           --fail-under=85
 
       - name: Enforce application coverage floor
+        if: ${{ env.RUN_SOURCE_TESTS == 'true' && needs.sanity.result == 'success' }}
         run: >-
           python -m coverage report
           --include=src/caveviewer/app.py
           --fail-under=90
 
       - name: Enforce chunker coverage floor
+        if: ${{ env.RUN_SOURCE_TESTS == 'true' && needs.sanity.result == 'success' }}
         run: >-
           python -m coverage report
           --include=src/caveviewer/core/chunking/builder.py
           --fail-under=90
 
       - name: Enforce update-checker coverage floor
+        if: ${{ env.RUN_SOURCE_TESTS == 'true' && needs.sanity.result == 'success' }}
         run: >-
           python -m coverage report
           --include=src/caveviewer/gui/update_checker.py
           --fail-under=90
 
       - name: Upload coverage report
-        if: always()
+        if: ${{ always() && env.RUN_SOURCE_TESTS == 'true' && needs.sanity.result == 'success' }}
         uses: actions/upload-artifact@v7
         with:
           name: essential-test-coverage-linux
@@ -187,9 +441,14 @@ jobs:
 
   cli-smoke:
     name: CLI smoke (${{ matrix.label }})
-    needs: sanity
+    needs:
+      - classify_changes
+      - sanity
+    if: ${{ always() }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
+    env:
+      RUN_SOURCE_TESTS: ${{ needs.classify_changes.result != 'success' || needs.classify_changes.outputs.skip_source_tests != 'true' }}
 
     strategy:
       fail-fast: false
@@ -203,10 +462,16 @@ jobs:
             os: macos-15
 
     steps:
+      - name: Source tests not required
+        if: ${{ env.RUN_SOURCE_TESTS != 'true' || needs.sanity.result != 'success' }}
+        run: echo "Source tests were not run for this required check."
+
       - name: Check out repository
+        if: ${{ env.RUN_SOURCE_TESTS == 'true' && needs.sanity.result == 'success' }}
         uses: actions/checkout@v7
 
       - name: Set up Python
+        if: ${{ env.RUN_SOURCE_TESTS == 'true' && needs.sanity.result == 'success' }}
         uses: actions/setup-python@v7.0.0
         with:
           python-version: "3.12"
@@ -214,11 +479,13 @@ jobs:
           cache-dependency-path: requirements.txt
 
       - name: Install runtime dependencies
+        if: ${{ env.RUN_SOURCE_TESTS == 'true' && needs.sanity.result == 'success' }}
         run: |
           python -m pip install --upgrade pip -r requirements.txt
           python -m pip install --no-deps -e .
 
       - name: Run CLI smoke checks
+        if: ${{ env.RUN_SOURCE_TESTS == 'true' && needs.sanity.result == 'success' }}
         shell: bash
         run: |
           python - <<'PY'
