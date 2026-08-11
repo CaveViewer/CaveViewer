@@ -28,7 +28,7 @@ class SplashLayoutPolicy:
 
 @dataclass(frozen=True)
 class PreferencesDialogLayoutPolicy:
-    """Platform-specific Preferences dialog layout decisions."""
+    """Platform-specific embedded Preferences panel layout decisions."""
 
     windows_layout: bool
     macos_layout: bool
@@ -46,7 +46,6 @@ class PreferencesDialogLayoutPolicy:
     button_row_top_pad_y: int
     tab_highlight_thickness: int
     notice_wrap_length: int
-    resizable_vertical: bool
 
 
 @dataclass(frozen=True)

@@ -42,7 +42,6 @@ from caveviewer.gui.platform.presentation import (
     PresentationProfile,
     get_presentation_profile,
 )
-from caveviewer.gui.tk_shortcuts import bind_primary_shortcut
 from caveviewer.gui.tk_scrolling import vertical_scroll_units
 from caveviewer.gui.tk_theme import DARK_THEME
 from caveviewer.gui.tk_typography import TkTypography, create_tk_typography
@@ -59,33 +58,8 @@ _PANEL_COLOR = DARK_THEME.panel
 _BUTTON_BG = DARK_THEME.primary_button
 _BUTTON_BORDER_COLOR = DARK_THEME.primary_button_border
 
-# These module-level defaults preserve direct callers and documentation
-# examples. Live dialogs resolve their immutable profile from the process
-# runtime so an injected profile remains authoritative.
-_LAYOUT_POLICY = get_presentation_profile().preferences_dialog_layout
-_WINDOWS_LAYOUT = _LAYOUT_POLICY.windows_layout
-_MACOS_LAYOUT = _LAYOUT_POLICY.macos_layout
-_LINUX_LAYOUT = _LAYOUT_POLICY.linux_layout
-# Keep Preferences close to platform-native boxed-list proportions. macOS gets
-# a narrower, denser panel because the window chrome and Tk font metrics leave
-# noticeably more unused space than the Linux and Windows layouts.
-_WRAP_LENGTH = _LAYOUT_POLICY.wrap_length
-_TEXT_ENTRY_WIDTH = _LAYOUT_POLICY.text_entry_width
 _NUMERIC_ENTRY_WIDTH = 8
 _PLACEHOLDER_COLOR = DARK_THEME.placeholder_text
-_BODY_PAD_X = _LAYOUT_POLICY.body_pad_x
-_MIN_WIDTH = _LAYOUT_POLICY.min_width
-_ROW_PAD_X = _LAYOUT_POLICY.row_pad_x
-_ROW_PAD_Y = _LAYOUT_POLICY.row_pad_y
-_CONTROL_ROW_TOP_PAD_Y = _LAYOUT_POLICY.control_row_top_pad_y
-_CONTROL_GAP_X = 10
-_TAB_PAD_X = _LAYOUT_POLICY.tab_pad_x
-_TAB_PAD_Y = _LAYOUT_POLICY.tab_pad_y
-_TAB_GAP_X = 10
-_TAB_BOTTOM_PAD_Y = _LAYOUT_POLICY.tab_bottom_pad_y
-_BUTTON_ROW_TOP_PAD_Y = _LAYOUT_POLICY.button_row_top_pad_y
-_TAB_HIGHLIGHT_THICKNESS = _LAYOUT_POLICY.tab_highlight_thickness
-_NOTICE_WRAP_LENGTH = _LAYOUT_POLICY.notice_wrap_length
 _INLINE_FEEDBACK_PAD_X = 10
 _SCROLLBAR_WIDTH = 14
 _SCROLL_THUMB_WIDTH = 5
@@ -100,7 +74,7 @@ _PREFERENCE_PAGES = (
 
 
 class PreferencesPanel:
-    """Reusable Preferences form that can live in a panel or a dialog."""
+    """Reusable Preferences form displayed in the splash right-hand panel."""
 
     def __init__(
         self,
@@ -163,10 +137,9 @@ class PreferencesPanel:
         )
         self.preferences = self.workflow.load_initial()
         self.form = PreferencesFormController(self.preferences)
-        # The form needs a toplevel for Tk variables, scheduling and native
-        # directory pickers, but its widgets belong to the supplied parent.
-        # A ``PreferencesDialog`` passes its own Toplevel; the splash passes
-        # the right-hand content frame and therefore uses the splash root.
+        # The form needs a toplevel for Tk variables, scheduling, and native
+        # directory pickers, while its widgets belong to the supplied panel.
+        # The splash supplies the right-hand content frame, so this is its root.
         self.dialog = parent.winfo_toplevel()
         self.container = tk.Frame(parent, bg=_BG_COLOR)
         self.container.pack(fill="both", expand=True)
@@ -1121,148 +1094,3 @@ class PreferencesPanel:
             return
         if self.apply_button is not None:
             self.apply_button.focus_set()
-
-
-class PreferencesDialog(PreferencesPanel):
-    """Compatibility wrapper that hosts :class:`PreferencesPanel` in a modal."""
-
-    def __init__(
-        self,
-        parent,
-        *,
-        ui_font_family: str,
-        desktop_services: DesktopServices | None = None,
-        platform_runtime: PlatformRuntime | None = None,
-        presentation_profile: PresentationProfile | None = None,
-        on_applied: Callable[[Preferences], None] | None = None,
-    ) -> None:
-        self._dialog_parent = parent
-        dialog = tk.Toplevel(parent)
-        dialog.withdraw()
-        dialog.title("Preferences")
-        dialog.configure(bg=_BG_COLOR)
-
-        runtime_presentation_profile = (
-            getattr(platform_runtime, "presentation_profile", None)
-            if platform_runtime is not None
-            else None
-        )
-        effective_profile = (
-            runtime_presentation_profile
-            or presentation_profile
-            or get_presentation_profile()
-        )
-        # Windows can report less usable vertical space than the GNOME-style
-        # preference layout wants, so keep width fixed but let people grow the
-        # dialog vertically when the page content is constrained.
-        dialog.resizable(
-            False,
-            effective_profile.preferences_dialog_layout.resizable_vertical,
-        )
-        dialog.transient(parent)
-
-        super().__init__(
-            dialog,
-            ui_font_family=ui_font_family,
-            desktop_services=desktop_services,
-            platform_runtime=platform_runtime,
-            presentation_profile=presentation_profile,
-            on_applied=on_applied,
-        )
-        self.dialog.protocol("WM_DELETE_WINDOW", self.cancel)
-        self.dialog.bind("<Escape>", lambda _event: self.cancel())
-        bind_primary_shortcut(
-            self.dialog,
-            "w",
-            lambda _event: self.cancel(),
-            presentation_profile=self.presentation_profile,
-        )
-        self.dialog.bind("<Return>", lambda _event: self.apply())
-
-    def apply(self) -> bool:
-        if not super().apply():
-            return False
-        self.dialog.destroy()
-        return True
-
-    def cancel(self) -> None:
-        self.dialog.destroy()
-
-    def _natural_height(self) -> int:
-        self.dialog.update_idletasks()
-        return self.dialog.winfo_reqheight()
-
-    def _apply_geometry(self) -> None:
-        geometry_applied = False
-        try:
-            self._dialog_parent.update_idletasks()
-            dialog_w = max(self.dialog.winfo_reqwidth(), self._layout_policy.min_width)
-            dialog_h = self.dialog.winfo_reqheight()
-            screen_w = self.dialog.winfo_screenwidth()
-            screen_h = self.dialog.winfo_screenheight()
-            dialog_w = min(dialog_w, max(320, screen_w - 16))
-            parent_x = self._dialog_parent.winfo_rootx()
-            parent_y = self._dialog_parent.winfo_rooty()
-            parent_w = self._dialog_parent.winfo_width()
-            desired_x = parent_x + parent_w - dialog_w + 72
-            desired_y = parent_y + 8
-            clamped_x = max(8, min(desired_x, screen_w - dialog_w - 8))
-            clamped_y = max(8, min(desired_y, screen_h - 328))
-            dialog_h = min(dialog_h, max(320, screen_h - clamped_y - 8))
-            self.dialog.geometry(
-                f"{dialog_w}x{dialog_h}+{clamped_x}+{clamped_y}"
-            )
-            if self._layout_policy.windows_layout:
-                self.dialog.minsize(dialog_w, min(dialog_h, 360))
-            if self._layout_policy.linux_layout:
-                for _ in range(2):
-                    self.dialog.update_idletasks()
-                fitted_height = min(
-                    self._natural_height(), max(320, screen_h - clamped_y - 8)
-                )
-                self.dialog.geometry(
-                    f"{dialog_w}x{fitted_height}+{clamped_x}+{clamped_y}"
-                )
-            geometry_applied = True
-            self.dialog.after_idle(self._sync_page_scrollbar)
-        except Exception:
-            pass
-        if not geometry_applied:
-            self.dialog.geometry(
-                "+%d+%d"
-                % (
-                    self._dialog_parent.winfo_rootx() + 24,
-                    self._dialog_parent.winfo_rooty() + 24,
-                )
-            )
-
-    def show(self) -> None:
-        self.dialog.update_idletasks()
-        self._apply_geometry()
-        self.dialog.deiconify()
-        self.dialog.lift(self._dialog_parent)
-        self.dialog.wait_visibility()
-        self.dialog.grab_set()
-        self.dialog.focus_force()
-        self.focus_content()
-
-
-def show_preferences_dialog(
-    parent,
-    *,
-    ui_font_family: str,
-    desktop_services: DesktopServices | None = None,
-    platform_runtime: PlatformRuntime | None = None,
-    presentation_profile: PresentationProfile | None = None,
-    on_applied: Callable[[Preferences], None] | None = None,
-) -> None:
-    """Create and display a non-blocking modal Preferences dialog."""
-    options = {
-        "ui_font_family": ui_font_family,
-        "desktop_services": desktop_services,
-        "platform_runtime": platform_runtime,
-        "on_applied": on_applied,
-    }
-    if presentation_profile is not None:
-        options["presentation_profile"] = presentation_profile
-    PreferencesDialog(parent, **options).show()

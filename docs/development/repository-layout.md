@@ -91,7 +91,7 @@ src/caveviewer/gui/standard_library_maps.py   GitHub source adapter and managed 
 src/caveviewer/gui/standard_library_download.py standard-library download workers
 src/caveviewer/gui/preferences.py             preference persistence facade
 src/caveviewer/gui/preferences_form.py        Tk-free preference form state
-src/caveviewer/gui/preferences_dialog.py      Tk preference dialog presentation
+src/caveviewer/gui/preferences_dialog.py      Tk preference panel presentation
 src/caveviewer/gui/recording.py               recording encoder process/thread helpers
 src/caveviewer/gui/recording_controller.py    recording countdown/status/timing state
 src/caveviewer/gui/recording_capture.py       render-thread recording readback resources

@@ -597,7 +597,7 @@ def test_obj_import_batch_preference_maps_thousands_to_faces_env(
     assert os.environ["CAVEVIEWER_OBJ_IMPORT_BATCH_FACES"] == "250000"
 
 
-def test_preferences_dialog_uses_extracted_settings_logic():
+def test_preferences_panel_uses_extracted_settings_logic():
     from caveviewer.gui import preferences_dialog, preferences_form, splash_screen
 
     assert preferences_dialog._NUMERIC_ENTRY_WIDTH == 8
@@ -619,45 +619,7 @@ def test_preferences_dialog_uses_extracted_settings_logic():
     assert "_show_preferences_dialog(" not in splash_source
 
 
-def test_show_preferences_dialog_forwards_the_injected_runtime(monkeypatch):
-    from caveviewer.gui import preferences_dialog
-
-    constructed = []
-
-    class FakeDialog:
-        def __init__(self, *args, **kwargs):
-            constructed.append((args, kwargs))
-
-        def show(self):
-            constructed.append("show")
-
-    parent = object()
-    desktop_services = object()
-    platform_runtime = SimpleNamespace(desktop_services=desktop_services)
-    monkeypatch.setattr(preferences_dialog, "PreferencesDialog", FakeDialog)
-
-    preferences_dialog.show_preferences_dialog(
-        parent,
-        ui_font_family="Test UI",
-        desktop_services=desktop_services,
-        platform_runtime=platform_runtime,
-    )
-
-    assert constructed == [
-        (
-            (parent,),
-            {
-                "ui_font_family": "Test UI",
-                "desktop_services": desktop_services,
-                "platform_runtime": platform_runtime,
-                "on_applied": None,
-            },
-        ),
-        "show",
-    ]
-
-
-def _directory_picker_dialog(
+def _directory_picker_panel(
     preferences_dialog,
     *,
     desktop_services,
@@ -668,15 +630,15 @@ def _directory_picker_dialog(
     values.get = lambda: values.value
     values.set = lambda value: setattr(values, "value", value)
     feedback = []
-    dialog = preferences_dialog.PreferencesDialog.__new__(
-        preferences_dialog.PreferencesDialog
+    panel = preferences_dialog.PreferencesPanel.__new__(
+        preferences_dialog.PreferencesPanel
     )
-    dialog.desktop_services = desktop_services
-    dialog.platform_runtime = platform_runtime
-    dialog.field_vars = {"map_library_dir": values}
-    dialog.dialog = object()
-    dialog._set_feedback = lambda message, kind: feedback.append((message, kind))
-    return dialog, values, feedback
+    panel.desktop_services = desktop_services
+    panel.platform_runtime = platform_runtime
+    panel.field_vars = {"map_library_dir": values}
+    panel.dialog = object()
+    panel._set_feedback = lambda message, kind: feedback.append((message, kind))
+    return panel, values, feedback
 
 
 def test_preferences_directory_browse_rechecks_the_injected_runtime(tmp_path):
@@ -728,20 +690,20 @@ def test_preferences_directory_browse_rechecks_the_injected_runtime(tmp_path):
                 )
             )
 
-    dialog, values, feedback = _directory_picker_dialog(
+    panel, values, feedback = _directory_picker_panel(
         preferences_dialog,
         desktop_services=desktop_services,
         platform_runtime=FakeRuntime(),
         initial_dir=tmp_path,
     )
 
-    dialog._choose_directory("map_library_dir", "Downloaded maps folder")
-    dialog._choose_directory("map_library_dir", "Downloaded maps folder")
+    panel._choose_directory("map_library_dir", "Downloaded maps folder")
+    panel._choose_directory("map_library_dir", "Downloaded maps folder")
 
     assert preflight_calls == [True, True]
     assert len(chooser_calls) == 2
     assert all(call["title"] == "Downloaded maps folder" for call in chooser_calls)
-    assert all(call["parent"] is dialog.dialog for call in chooser_calls)
+    assert all(call["parent"] is panel.dialog for call in chooser_calls)
     assert values.value == str(selected_dir)
     assert feedback == []
 
@@ -774,14 +736,14 @@ def test_preferences_directory_browse_blocks_disabled_route_before_chooser(tmp_p
                 )
             )
 
-    dialog, _values, feedback = _directory_picker_dialog(
+    panel, _values, feedback = _directory_picker_panel(
         preferences_dialog,
         desktop_services=desktop_services,
         platform_runtime=FakeRuntime(),
         initial_dir=tmp_path,
     )
 
-    dialog._choose_directory("map_library_dir", "Downloaded maps folder")
+    panel._choose_directory("map_library_dir", "Downloaded maps folder")
 
     assert preflight_calls == [True]
     assert feedback == [
@@ -805,14 +767,14 @@ def test_preferences_directory_browse_uses_legacy_compatible_service(tmp_path):
             chooser_calls.append(options)
             return SimpleNamespace(path=str(selected_dir))
 
-    dialog, values, feedback = _directory_picker_dialog(
+    panel, values, feedback = _directory_picker_panel(
         preferences_dialog,
         desktop_services=LegacyDesktopServices(),
         platform_runtime=None,
         initial_dir=tmp_path,
     )
 
-    dialog._choose_directory("map_library_dir", "Downloaded maps folder")
+    panel._choose_directory("map_library_dir", "Downloaded maps folder")
 
     assert len(chooser_calls) == 1
     assert values.value == str(selected_dir)
@@ -868,19 +830,19 @@ def test_preferences_directory_browse_reports_desktop_action_failure(tmp_path):
                 )
             )
 
-    dialog, _values, feedback = _directory_picker_dialog(
+    panel, _values, feedback = _directory_picker_panel(
         preferences_dialog,
         desktop_services=desktop_services,
         platform_runtime=FakeRuntime(),
         initial_dir=tmp_path,
     )
 
-    dialog._choose_directory("map_library_dir", "Downloaded maps folder")
+    panel._choose_directory("map_library_dir", "Downloaded maps folder")
 
     assert feedback == [("Desktop picker failed.", MessageKind.ERROR)]
 
 
-def test_preferences_dialog_uses_compact_tabbed_pages():
+def test_preferences_panel_uses_compact_tabbed_pages():
     from caveviewer.gui import preferences_dialog
 
     source = inspect.getsource(preferences_dialog.PreferencesPanel._build)
@@ -899,17 +861,10 @@ def test_preferences_dialog_uses_compact_tabbed_pages():
     fields_by_key = {
         field.key: field for field in preferences_dialog.PREFERENCE_FIELDS
     }
-    layout_policy = preferences_dialog._LAYOUT_POLICY
-
     assert page_keys == ["streaming", "parsing", "storage"]
     assert page_labels == ["Streaming", "Import", "Storage"]
     assert all(len(page) == 2 for page in preferences_dialog._PREFERENCE_PAGES)
     assert set(page_keys) == field_sections
-    assert preferences_dialog._WINDOWS_LAYOUT == layout_policy.windows_layout
-    assert preferences_dialog._MACOS_LAYOUT == layout_policy.macos_layout
-    assert preferences_dialog._LINUX_LAYOUT == layout_policy.linux_layout
-    assert preferences_dialog._WRAP_LENGTH == layout_policy.wrap_length
-    assert preferences_dialog._TEXT_ENTRY_WIDTH == layout_policy.text_entry_width
     assert fields_by_key["io_workers"].label == "Loading worker limit"
     assert fields_by_key["chunk_build_workers"].label == "Cache-building worker limit"
     assert fields_by_key["recording_dir"].label == "Recordings folder"
@@ -923,8 +878,10 @@ def test_preferences_dialog_uses_compact_tabbed_pages():
     assert "self.page_canvas.yview_moveto(0)" in show_page_source
     assert "self.button_row.pack(" in source
     assert "self.page_scroll_shell.pack(side=\"top\", fill=\"both\", expand=True)" in source
-    assert "class PreferencesDialog(PreferencesPanel):" in module_source
-    assert "effective_profile.preferences_dialog_layout.resizable_vertical" in module_source
+    assert "class PreferencesDialog" not in module_source
+    assert "show_preferences_dialog" not in module_source
+    assert "tk.Toplevel" not in module_source
+    assert "resizable_vertical" not in module_source
 
 
 @pytest.mark.parametrize("delta", (-120, -1))
@@ -982,29 +939,29 @@ def test_preferences_invalid_field_switches_to_containing_page():
     shown_pages = []
     focused = []
 
-    dialog = preferences_dialog.PreferencesDialog.__new__(
-        preferences_dialog.PreferencesDialog
+    panel = preferences_dialog.PreferencesPanel.__new__(
+        preferences_dialog.PreferencesPanel
     )
-    dialog.field_page_keys = {"chunk_size_meters": "parsing"}
-    dialog.field_entries = {
+    panel.field_page_keys = {"chunk_size_meters": "parsing"}
+    panel.field_entries = {
         "chunk_size_meters": SimpleNamespace(
             winfo_exists=lambda: True,
             focus_set=lambda: focused.append("chunk_size_meters"),
             selection_range=lambda *_args: None,
         )
     }
-    dialog.field_entry_states = {"chunk_size_meters": "normal"}
-    dialog.numeric_placeholder_keys = set()
-    dialog._show_page = lambda page_key: shown_pages.append(page_key)
-    dialog.dialog = SimpleNamespace(after_idle=lambda callback: callback())
+    panel.field_entry_states = {"chunk_size_meters": "normal"}
+    panel.numeric_placeholder_keys = set()
+    panel._show_page = lambda page_key: shown_pages.append(page_key)
+    panel.dialog = SimpleNamespace(after_idle=lambda callback: callback())
 
-    dialog._focus_invalid_field("chunk_size_meters")
+    panel._focus_invalid_field("chunk_size_meters")
 
     assert shown_pages == ["parsing"]
     assert focused == ["chunk_size_meters"]
 
 
-def test_dialog_stays_open_and_reports_atomic_save_failure(
+def test_preferences_panel_reports_atomic_save_failure(
     valid_preferences, monkeypatch
 ):
     from caveviewer.gui import preferences_dialog
@@ -1012,20 +969,18 @@ def test_dialog_stays_open_and_reports_atomic_save_failure(
 
     snapshot = settings.require_validated_preferences(valid_preferences)
     original_preferences = settings.load_preferences()
-    destroyed = []
     feedback = []
     applied = []
-    dialog = preferences_dialog.PreferencesDialog.__new__(
-        preferences_dialog.PreferencesDialog
+    panel = preferences_dialog.PreferencesPanel.__new__(
+        preferences_dialog.PreferencesPanel
     )
-    dialog.form = SimpleNamespace(
+    panel.form = SimpleNamespace(
         attempt_apply=lambda: (SimpleNamespace(), snapshot)
     )
-    dialog._render_form_state = lambda *_args, **_kwargs: None
-    dialog.numeric_entry_states = {}
-    dialog._set_feedback = lambda message, kind: feedback.append((message, kind))
-    dialog.dialog = SimpleNamespace(destroy=lambda: destroyed.append(True))
-    dialog.preferences = original_preferences
+    panel._render_form_state = lambda *_args, **_kwargs: None
+    panel.numeric_entry_states = {}
+    panel._set_feedback = lambda message, kind: feedback.append((message, kind))
+    panel.preferences = original_preferences
 
     def fail_save(_settings):
         raise settings.PreferencesSaveError("Could not save settings.")
@@ -1037,40 +992,36 @@ def test_dialog_stays_open_and_reports_atomic_save_failure(
         lambda value: applied.append(value),
     )
 
-    dialog.apply()
+    panel.apply()
 
     assert feedback == [("Could not save settings.", MessageKind.ERROR)]
-    assert dialog.preferences is original_preferences
+    assert panel.preferences is original_preferences
     assert applied == []
-    assert destroyed == []
 
 
-def test_dialog_calls_apply_callback_after_success(valid_preferences):
+def test_preferences_panel_calls_apply_callback_after_success(valid_preferences):
     from caveviewer.gui import preferences_dialog
     from caveviewer.gui.preferences_workflow import PreferencesApplyResult
 
     snapshot = settings.require_validated_preferences(valid_preferences)
-    destroyed = []
     applied = []
-    dialog = preferences_dialog.PreferencesDialog.__new__(
-        preferences_dialog.PreferencesDialog
+    panel = preferences_dialog.PreferencesPanel.__new__(
+        preferences_dialog.PreferencesPanel
     )
-    dialog.form = SimpleNamespace(
+    panel.form = SimpleNamespace(
         attempt_apply=lambda: (SimpleNamespace(), snapshot)
     )
-    dialog._render_form_state = lambda *_args, **_kwargs: None
-    dialog.numeric_entry_states = {}
-    dialog.workflow = SimpleNamespace(
+    panel._render_form_state = lambda *_args, **_kwargs: None
+    panel.numeric_entry_states = {}
+    panel.workflow = SimpleNamespace(
         apply=lambda preferences: PreferencesApplyResult(
             preferences=preferences
         )
     )
-    dialog.dialog = SimpleNamespace(destroy=lambda: destroyed.append(True))
-    dialog.on_applied = applied.append
-    dialog.preferences = None
+    panel.on_applied = applied.append
+    panel.preferences = None
 
-    dialog.apply()
+    panel.apply()
 
     assert applied == [snapshot]
-    assert dialog.preferences is snapshot
-    assert destroyed == [True]
+    assert panel.preferences is snapshot

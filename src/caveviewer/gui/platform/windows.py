@@ -77,7 +77,6 @@ class WindowsSplashPlatformAdapter(DefaultSplashPlatformAdapter):
             button_row_top_pad_y=18,
             tab_highlight_thickness=1,
             notice_wrap_length=720,
-            resizable_vertical=True,
         )
 
     def dialog_layout_policy(self) -> DialogLayoutPolicy:

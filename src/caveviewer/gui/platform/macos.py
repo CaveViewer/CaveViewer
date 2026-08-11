@@ -256,7 +256,6 @@ class MacOSSplashPlatformAdapter(DefaultSplashPlatformAdapter):
             button_row_top_pad_y=8,
             tab_highlight_thickness=0,
             notice_wrap_length=390,
-            resizable_vertical=False,
         )
 
     def dialog_layout_policy(self) -> DialogLayoutPolicy:
