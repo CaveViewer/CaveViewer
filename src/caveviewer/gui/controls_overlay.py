@@ -140,8 +140,7 @@ def _get_platform_control_sections(
         ("Minimap click", "Jump to that spot"),
         (f"{primary_shortcut_label} + O", "Switch to a different map"),
         ("Open button", "Switch to a different map"),
-        (f"{primary_shortcut_label} + W", "Close window"),
-        ("Esc", "Quit"),
+        ("Esc", "Close window"),
     ])
 
     recording = [

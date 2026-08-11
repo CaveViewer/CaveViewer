@@ -71,6 +71,12 @@ show **Update ready** for three seconds, then replace it with the amber
 **Show update** link. The link reveals the already verified package; it does
 not install or execute it.
 
+## Viewer controls
+
+The viewer exposes one documented keyboard command for closing its window:
+**Esc**. Do not present a platform-specific `Ctrl/Cmd + W` close shortcut in
+the controls overlay.
+
 ## Viewer loading and capture feedback
 
 The OpenGL viewer uses the same primary/supporting hierarchy while respecting

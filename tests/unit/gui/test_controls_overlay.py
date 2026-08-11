@@ -151,7 +151,8 @@ def test_control_help_copy_uses_profile_for_macos_shortcuts():
     assert rows["Cmd + 0"] == "Reset view (level horizon)"
     assert rows["Cmd + 1..9"] == "Save camera bookmark slot"
     assert rows["Cmd + O"] == "Switch to a different map"
-    assert rows["Cmd + W"] == "Close window"
+    assert rows["Esc"] == "Close window"
+    assert "Cmd + W" not in rows
     assert rows["Cmd + R"] == "Stop or cancel recording"
     assert rows["Cmd + T"] == "Start/stop manual route trace"
 
@@ -167,7 +168,8 @@ def test_control_help_copy_uses_profile_for_control_shortcuts():
     assert rows["Ctrl + 1..9"] == "Save camera bookmark slot"
     assert "Ctrl + A" not in rows
     assert rows["Ctrl + O"] == "Switch to a different map"
-    assert rows["Ctrl + W"] == "Close window"
+    assert rows["Esc"] == "Close window"
+    assert "Ctrl + W" not in rows
     assert rows["Ctrl + R"] == "Stop or cancel recording"
     assert rows["Ctrl + T"] == "Start/stop manual route trace"
 
