@@ -2293,7 +2293,7 @@ def test_stop_recording_kills_encoder_after_timeout_and_reports_failure(monkeypa
     assert any("Recording encoder exited with code -9" in message for message in logger.warning_messages)
 
 
-def test_window_shortcut_closes_viewer_on_control_w():
+def test_window_shortcut_leaves_control_w_unhandled():
     window = object.__new__(viewer_window.CaveViewerWindow)
     window._presentation_profile = select_presentation_profile(
         platform_name="unsupported"
@@ -2304,8 +2304,8 @@ def test_window_shortcut_closes_viewer_on_control_w():
     closed = []
     window.on_close = lambda: closed.append("closed")
 
-    assert window._handle_window_shortcut(87, SimpleNamespace(ctrl=True)) is True
-    assert closed == ["closed"]
+    assert window._handle_window_shortcut(87, SimpleNamespace(ctrl=True)) is False
+    assert closed == []
 
 
 def test_window_shortcut_opens_map_only_when_loaded():
@@ -2379,7 +2379,7 @@ def test_window_shortcut_leaves_command_a_unhandled_on_macos():
     assert window._handle_window_shortcut(65, SimpleNamespace(command=True)) is False
 
 
-def test_window_shortcut_uses_command_modifier_on_macos():
+def test_window_shortcut_leaves_command_w_unhandled_on_macos():
     window = object.__new__(viewer_window.CaveViewerWindow)
     window._presentation_profile = select_presentation_profile(
         platform_name="darwin"
@@ -2391,9 +2391,9 @@ def test_window_shortcut_uses_command_modifier_on_macos():
     closed = []
     window.on_close = lambda: closed.append("closed")
 
-    assert window._handle_window_shortcut(87, SimpleNamespace(command=True)) is True
+    assert window._handle_window_shortcut(87, SimpleNamespace(command=True)) is False
     assert window._handle_window_shortcut(87, SimpleNamespace()) is False
-    assert closed == ["closed"]
+    assert closed == []
 
 def test_linux_launch_defers_sizing_to_glfw_workarea(monkeypatch):
     calls = []

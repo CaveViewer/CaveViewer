@@ -6344,14 +6344,9 @@ class CaveViewerWindow(mglw.WindowConfig):
         return self._active_presentation_profile().primary_shortcut_modifier_label
 
     def _handle_window_shortcut(self, key, modifiers: KeyModifiers) -> bool:
-        """Handle desktop-standard window and open shortcuts."""
+        """Handle modifier-based import-pause and open-map shortcuts."""
         if not self._primary_shortcut_is_down(modifiers):
             return False
-
-        close_key = self._resolve_key_optional(self.wnd.keys, "W")
-        if close_key is not None and key == close_key:
-            self.on_close()
-            return True
 
         pause_key = self._resolve_key_optional(self.wnd.keys, "P")
         if (
