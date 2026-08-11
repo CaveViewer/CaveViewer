@@ -585,11 +585,6 @@ def resolve_preferences(values: Mapping | None = None) -> Preferences:
     return Preferences(resolved)
 
 
-def effective_preferences(values: Mapping | None = None) -> Preferences:
-    """Compatibility name for resolving a validated preference snapshot."""
-    return resolve_preferences(values)
-
-
 def require_validated_preferences(
     values: Mapping[str, str],
 ) -> Preferences:

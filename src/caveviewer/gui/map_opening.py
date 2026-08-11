@@ -137,13 +137,6 @@ def resolve_selected_map_folder(folder: str) -> OpenMapTarget:
     )
 
 
-def map_source_import_decision(
-    model_descriptor: Mapping[str, Any],
-) -> FeatureDecision:
-    """Return the compatibility decision for one already-discovered descriptor."""
-    return map_source_import_preflight(model_descriptor).decision
-
-
 def map_source_import_preflight(
     model_descriptor: Mapping[str, Any],
 ) -> MapSourceImportPreflight:
