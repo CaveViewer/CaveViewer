@@ -6247,6 +6247,24 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._recall_bookmark_slot(slot)
         return True
 
+    def _handle_fly_speed_hotkey(self, key, modifiers: KeyModifiers) -> bool:
+        """Apply one persistent fly-speed step without entering motion state."""
+        speed_step = viewer_input.fly_speed_adjustment_step_for_key(
+            self.wnd.keys,
+            key,
+            shift_down=self._shift_is_down(modifiers),
+        )
+        if speed_step is None:
+            return False
+        if self._recorded_dive_is_paused():
+            return True
+
+        camera = getattr(self, "camera", None)
+        if camera is None:
+            return True
+        camera.adjust_speed(speed_step)
+        return True
+
     def _option_look_active(self) -> bool:
         if not self._active_presentation_profile().option_left_mouse_look_enabled:
             return False
@@ -6319,6 +6337,8 @@ class CaveViewerWindow(mglw.WindowConfig):
                 ):
                     self.controls_overlay.dismiss_begin_screen()
                 return
+            if self._handle_fly_speed_hotkey(key, modifiers):
+                return
             if self._handle_bookmark_hotkey(key, modifiers):
                 return
             if self._handle_manual_dive_trace_hotkey(key, modifiers):
@@ -6328,6 +6348,9 @@ class CaveViewerWindow(mglw.WindowConfig):
             if self._handle_reset_view_shortcut(key, modifiers):
                 return
             self._keys_down.add(key)
+        elif viewer_input.key_event_is_press_or_repeat(keys, action):
+            if not self.controls_overlay.is_waiting_for_begin:
+                self._handle_fly_speed_hotkey(key, modifiers)
         elif action == keys.ACTION_RELEASE:
             self._keys_down.discard(key)
 
@@ -6799,7 +6822,10 @@ class CaveViewerWindow(mglw.WindowConfig):
             return
         if self._recorded_dive_is_paused():
             return
-        self.camera.adjust_speed(y_offset)
+        camera = getattr(self, "camera", None)
+        if camera is None:
+            return
+        camera.adjust_speed(y_offset)
 
     mouse_scroll_event = on_mouse_scroll_event
 

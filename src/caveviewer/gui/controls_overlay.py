@@ -112,6 +112,8 @@ def _get_platform_control_sections(
         ("E", "Move up"),
         ("Q", "Move down"),
         ("Shift", "Speed boost"),
+        ("-", "Decrease fly speed"),
+        ("=", "Increase fly speed"),
         ("Scroll", "Adjust fly speed"),
     ]
 

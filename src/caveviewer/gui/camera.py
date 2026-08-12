@@ -14,6 +14,8 @@ Controls (bound in caveviewer.gui.viewer_window, documented here for reference):
     I,J,K,L   - look (yaw/pitch)
     Z/X       - barrel roll (counterclockwise/clockwise from diver perspective)
     Shift     - speed boost multiplier
+    -         - decrease base fly speed
+    =         - increase base fly speed
     Scroll    - adjust base fly speed (useful since cave scale varies a lot)
 """
 
@@ -206,11 +208,14 @@ class FlyCamera:
         delta[1] += up_amt * speed  # world-vertical, independent of pitch
         self.position += delta
 
-    def adjust_speed(self, scroll_amt: float) -> None:
-        """Multiplicative scroll-wheel speed adjustment; cave passages range
-        from <1m crawls to 50m+ rooms, so an additive adjustment would be
-        annoying at either extreme -- multiplicative scales naturally."""
-        factor = 1.1 ** scroll_amt
+    def adjust_speed(self, step_count: float) -> None:
+        """Adjust persistent speed by signed wheel or keyboard input steps.
+
+        Cave passages range from <1m crawls to 50m+ rooms, so an additive
+        adjustment would be awkward at either extreme; multiplicative scaling
+        remains useful for both mouse-wheel and keyboard controls.
+        """
+        factor = 1.1 ** step_count
         self.move_speed = max(0.1, min(200.0, self.move_speed * factor))
 
     def barrel_roll(self, droll_rad: float) -> None:
