@@ -162,6 +162,9 @@ def test_control_help_copy_uses_profile_for_control_shortcuts():
         select_presentation_profile(platform_name="unsupported")
     )
 
+    assert rows["-"] == "Decrease fly speed"
+    assert rows["="] == "Increase fly speed"
+    assert rows["Scroll"] == "Adjust fly speed"
     assert rows["Left click + mouse"] == "Look around"
     assert "Right click + mouse" not in rows
     assert rows["Ctrl + 0"] == "Reset view (level horizon)"

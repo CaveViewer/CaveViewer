@@ -75,6 +75,75 @@ def key_is_down(keys, keys_down: set, *candidate_names: str) -> bool:
     return False
 
 
+def _key_matches_alias(keys, key, *candidate_names: str) -> bool:
+    """Return whether ``key`` matches one usable backend-specific key alias."""
+    for name in candidate_names:
+        if not hasattr(keys, name):
+            continue
+        candidate = getattr(keys, name)
+        if candidate not in {None, "undefined"} and candidate == key:
+            return True
+    return False
+
+
+def fly_speed_adjustment_step_for_key(
+    keys,
+    key,
+    *,
+    shift_down: bool = False,
+) -> int | None:
+    """Return the signed base-fly-speed adjustment requested by ``key``.
+
+    ``EQUAL`` is the physical ``=``/``+`` key on the common GLFW and pyglet
+    backends, so it represents an increase when Shift is not held. Shift is
+    reserved for the temporary movement-speed boost. Direct plus and
+    keypad-plus aliases follow the same policy. Optional keypad aliases keep
+    the policy usable by backends that expose them even though
+    moderngl-window does not require a common keypad API.
+    """
+    if shift_down:
+        return None
+    if _key_matches_alias(
+        keys,
+        key,
+        "MINUS",
+        "SUBTRACT",
+        "NUMPAD_SUBTRACT",
+        "NUM_SUBTRACT",
+        "KP_SUBTRACT",
+    ):
+        return -1
+    if _key_matches_alias(keys, key, "EQUAL"):
+        return 1
+    if _key_matches_alias(
+        keys,
+        key,
+        "PLUS",
+        "ADD",
+        "NUMPAD_ADD",
+        "NUM_ADD",
+        "KP_ADD",
+    ):
+        return 1
+    return None
+
+
+def key_event_is_press_or_repeat(keys, action) -> bool:
+    """Return whether a backend event should apply a one-shot key action.
+
+    moderngl-window guarantees press/release constants, but GLFW forwards its
+    repeat action without exposing an ``ACTION_REPEAT`` key constant. Treat an
+    otherwise unknown non-release action as repeat in that case; backends that
+    do provide the explicit constant remain strict.
+    """
+    if action == keys.ACTION_PRESS:
+        return True
+    if action == keys.ACTION_RELEASE:
+        return False
+    repeat_action = getattr(keys, "ACTION_REPEAT", None)
+    return repeat_action is None or action == repeat_action
+
+
 def digit_for_key(keys, key) -> int | None:
     """Return bookmark slot ``1..9`` for backend-specific digit key aliases."""
     for digit in range(1, 10):

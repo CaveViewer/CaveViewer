@@ -92,3 +92,36 @@ def test_continuous_input_intent_combines_motion_look_and_roll():
     assert intent.yaw_delta == 50.0
     assert intent.pitch_delta == -50.0
     assert intent.roll_delta == 1.0
+
+
+def test_fly_speed_adjustment_step_supports_standard_and_keypad_keys():
+    keys = SimpleNamespace(
+        MINUS=1,
+        EQUAL=2,
+        PLUS=3,
+        NUMPAD_SUBTRACT=4,
+        NUMPAD_ADD=5,
+    )
+
+    assert viewer_input.fly_speed_adjustment_step_for_key(keys, 1) == -1
+    assert viewer_input.fly_speed_adjustment_step_for_key(keys, 2) == 1
+    assert viewer_input.fly_speed_adjustment_step_for_key(keys, 2, shift_down=True) is None
+    assert viewer_input.fly_speed_adjustment_step_for_key(keys, 3) == 1
+    assert viewer_input.fly_speed_adjustment_step_for_key(keys, 4) == -1
+    assert viewer_input.fly_speed_adjustment_step_for_key(keys, 5) == 1
+    assert viewer_input.fly_speed_adjustment_step_for_key(keys, 99) is None
+
+
+def test_key_event_press_or_repeat_policy_supports_explicit_and_legacy_backends():
+    explicit_keys = SimpleNamespace(
+        ACTION_PRESS=1,
+        ACTION_RELEASE=0,
+        ACTION_REPEAT=2,
+    )
+    legacy_keys = SimpleNamespace(ACTION_PRESS=1, ACTION_RELEASE=0)
+
+    assert viewer_input.key_event_is_press_or_repeat(explicit_keys, 1)
+    assert viewer_input.key_event_is_press_or_repeat(explicit_keys, 2)
+    assert not viewer_input.key_event_is_press_or_repeat(explicit_keys, 0)
+    assert not viewer_input.key_event_is_press_or_repeat(explicit_keys, 3)
+    assert viewer_input.key_event_is_press_or_repeat(legacy_keys, 2)

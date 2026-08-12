@@ -855,6 +855,102 @@ def test_paused_recorded_dive_ignores_speed_scroll_input():
     assert speed_changes == []
 
 
+def _fly_speed_event_window(*, waiting_for_begin: bool = False):
+    speed_changes = []
+    keys = SimpleNamespace(
+        ACTION_PRESS=1,
+        ACTION_RELEASE=0,
+        ACTION_REPEAT=2,
+        MINUS=45,
+        EQUAL=61,
+    )
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window._window_setup_complete = True
+    window._input_is_suppressed = lambda: False
+    window.controls_overlay = SimpleNamespace(
+        is_waiting_for_begin=waiting_for_begin,
+        is_ready_to_begin=False,
+    )
+    window.wnd = SimpleNamespace(keys=keys)
+    window._keys_down = set()
+    window._recorded_dive_controller = None
+    window.camera = SimpleNamespace(
+        adjust_speed=lambda step: speed_changes.append(step),
+        move_speed=4.0,
+    )
+    window._shift_is_down = lambda modifiers: bool(getattr(modifiers, "shift", False))
+    window._handle_window_shortcut = lambda _key, _modifiers: False
+    window._handle_recorded_dive_hotkey = lambda _key, _modifiers: False
+    window._handle_bookmark_hotkey = lambda _key, _modifiers: False
+    window._handle_manual_dive_trace_hotkey = lambda _key, _modifiers: False
+    window._handle_recording_hotkey = lambda _key, _modifiers: False
+    window._handle_reset_view_shortcut = lambda _key, _modifiers: False
+    return window, keys, speed_changes
+
+
+def test_fly_speed_hotkeys_adjust_base_speed_and_ignore_shift_without_motion_state():
+    window, keys, speed_changes = _fly_speed_event_window()
+
+    window.on_key_event(keys.MINUS, keys.ACTION_PRESS, SimpleNamespace())
+    window.on_key_event(keys.EQUAL, keys.ACTION_REPEAT, SimpleNamespace())
+    window.on_key_event(keys.EQUAL, keys.ACTION_PRESS, SimpleNamespace(shift=True))
+    window.on_key_event(keys.EQUAL, keys.ACTION_RELEASE, SimpleNamespace())
+
+    assert speed_changes == [-1, 1]
+    assert window._keys_down == set()
+
+
+def test_fly_speed_hotkeys_respect_startup_and_paused_dive_gates():
+    window, keys, speed_changes = _fly_speed_event_window(
+        waiting_for_begin=True
+    )
+
+    window.on_key_event(keys.MINUS, keys.ACTION_PRESS, SimpleNamespace())
+    assert speed_changes == []
+
+    window.controls_overlay.is_waiting_for_begin = False
+    window._recorded_dive_controller = SimpleNamespace(
+        active=True,
+        state=viewer_window.recorded_dive.RecordedDivePlaybackState.PAUSED,
+    )
+    window.on_key_event(keys.EQUAL, keys.ACTION_PRESS, SimpleNamespace())
+
+    assert speed_changes == []
+
+
+def test_fly_speed_hotkey_does_not_stop_an_active_recorded_dive():
+    window, keys, speed_changes = _fly_speed_event_window()
+    window._recorded_dive_controller = SimpleNamespace(
+        active=True,
+        state=viewer_window.recorded_dive.RecordedDivePlaybackState.PLAYING,
+    )
+    stopped = []
+    window._stop_recorded_dive = lambda *, reason: stopped.append(reason)
+
+    window.on_key_event(keys.MINUS, keys.ACTION_PRESS, SimpleNamespace())
+
+    assert speed_changes == [-1]
+    assert stopped == []
+
+
+def test_fly_speed_hotkey_is_safe_without_a_camera_or_when_input_is_suppressed():
+    window, keys, speed_changes = _fly_speed_event_window()
+    window.camera = None
+
+    window.on_key_event(keys.MINUS, keys.ACTION_PRESS, SimpleNamespace())
+
+    assert speed_changes == []
+
+    window.camera = SimpleNamespace(
+        adjust_speed=lambda step: speed_changes.append(step),
+        move_speed=4.0,
+    )
+    window._input_is_suppressed = lambda: True
+    window.on_key_event(keys.EQUAL, keys.ACTION_PRESS, SimpleNamespace())
+
+    assert speed_changes == []
+
+
 def test_manual_trace_samples_the_current_camera_pose():
     window = object.__new__(viewer_window.CaveViewerWindow)
     window.camera = _manual_trace_camera()
