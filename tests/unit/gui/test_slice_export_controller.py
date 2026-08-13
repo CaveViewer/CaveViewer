@@ -82,11 +82,12 @@ def test_slice_export_controller_removes_private_staging_after_a_crashed_child(
         lambda output_dir, *, process_id: cleaned.append((output_dir, process_id)),
     )
 
-    assert controller.start(_request()) is None
+    request = _request()
+    assert controller.start(request) is None
     assert controller.poll() == ()
     assert controller.poll() == ()
     updates = controller.poll()
 
     assert isinstance(updates[-1], SliceExportFailed)
-    assert cleaned == [("/maps/output", 1234)]
+    assert cleaned == [(request.output_dir, 1234)]
     assert controller.state is SliceExportState.FAILED
