@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from caveviewer.core.map.cache_identity import (
     GUIDED_DIVE_CACHE_IDENTITY_KEY,
+    build_derived_guided_dive_cache_identity,
     build_guided_dive_cache_identity,
     guided_dive_cache_identity_from_manifest,
     parse_guided_dive_cache_identity,
@@ -81,3 +82,27 @@ def test_cache_identity_parser_rejects_unsupported_or_malformed_payloads():
             "cache_manifest_sha256": "b" * 64,
         }
     ) is None
+
+
+def test_derived_identity_is_stable_and_distinct_for_slice_selection(tmp_path):
+    source = tmp_path / "cave.obj"
+    source.write_bytes(b"v 0 0 0\n")
+    parent = build_guided_dive_cache_identity(source, _manifest())
+    derivative = {
+        "kind": "caveviewer.slice",
+        "schema_version": 1,
+        "bounds_min": [0.0, 0.0, 0.0],
+        "bounds_max": [1.0, 1.0, 1.0],
+    }
+
+    first = build_derived_guided_dive_cache_identity(parent, derivative, _manifest())
+    second = build_derived_guided_dive_cache_identity(parent, derivative, _manifest())
+    changed = build_derived_guided_dive_cache_identity(
+        parent,
+        {**derivative, "bounds_max": [2.0, 1.0, 1.0]},
+        _manifest(),
+    )
+
+    assert first == second
+    assert first.source_sha256 != parent.source_sha256
+    assert changed.source_sha256 != first.source_sha256

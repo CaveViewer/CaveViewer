@@ -108,10 +108,10 @@ notification for completion or failure while the splash screen is not focused.
 CaveViewer can record a clean flight through the cave. Recordings are currently
 encoded as MP4 files with `ffmpeg`.
 
-Use the `REC` button to arm recording. The minimap, controls, and control panel
-disappear immediately, a 3-to-0 countdown appears in the amber loading ring,
-and then recording begins. Press `Ctrl+R` (`Cmd+R` on macOS) to cancel the
-countdown or stop recording.
+Use `Ctrl+R` (`Cmd+R` on macOS) to arm recording. The
+minimap, controls, and control panel disappear immediately, a 3-to-0 countdown
+appears in the amber loading ring, and then recording begins. Press the same
+shortcut again to cancel the countdown or stop recording.
 
 Videos are saved to:
 
@@ -123,6 +123,24 @@ Frames are streamed directly to the video encoder while you fly. CaveViewer does
 not keep the recording in memory. Recordings are scaled to a 720-pixel maximum
 height by default to keep render readback and encoding costs lower. Set
 `CAVEVIEWER_RECORDING_MAX_HEIGHT=1080` to opt back into 1080p recording.
+
+
+## Saving a Cave Slice
+
+While viewing a precompiled cave map, press `Ctrl+C` (`Cmd+C` on macOS) to
+start a 3-2-1 slice countdown. Once it completes, fly through the passage you
+want to keep and press the shortcut again to finish and save the slice.
+CaveViewer clips that region into a new standalone map, shows save progress,
+then opens its folder in the system file explorer. There is no slice toolbar
+button.
+
+The new map is stored under the Preferences **Downloaded maps folder** location
+using the cave's name and a segment number, such as `Ginnie Springs - Segment
+1`. Later slices from that cave receive the next segment number. It includes
+its own chunks, manifest, and needed textures, so copying that whole folder to
+another computer is enough to view it there without the original map. Closing
+the viewer after slicing has started saves using the camera's final position as
+the slice endpoint and closes only after the export finishes.
 
 
 ## Importing and Streaming Preferences

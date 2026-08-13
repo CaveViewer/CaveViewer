@@ -24,7 +24,7 @@ def test_windows_reveals_package_with_explorer_selection(tmp_path, monkeypatch):
     adapter.reveal_downloaded_payload(str(payload))
 
     assert adapter.download_reveal_action_label() == "Show in Explorer"
-    assert launched == [["explorer", f"/select,{payload}"]]
+    assert launched == [["explorer", "/select,", str(payload)]]
 
 
 def test_windows_reveals_saved_file_with_explorer_selection(
@@ -42,7 +42,29 @@ def test_windows_reveals_saved_file_with_explorer_selection(
 
     windows.WindowsSplashPlatformAdapter().reveal_file(str(payload))
 
-    assert launched == [["explorer", f"/select,{payload}"]]
+    assert launched == [["explorer", "/select,", str(payload)]]
+
+
+def test_windows_reveal_keeps_explorer_selector_outside_a_whitespace_path(
+    tmp_path,
+    monkeypatch,
+):
+    payload = tmp_path / "Devils Eye" / "guided_dive_manual_trace.jsonl"
+    payload.parent.mkdir()
+    payload.write_text("trace", encoding="utf-8")
+    launched = []
+    monkeypatch.setattr(
+        windows.subprocess,
+        "Popen",
+        lambda command: launched.append(command),
+    )
+
+    windows.WindowsSplashPlatformAdapter().reveal_file(str(payload))
+
+    assert launched == [["explorer", "/select,", str(payload)]]
+    assert windows.subprocess.list2cmdline(launched[0]) == (
+        f'explorer /select, "{payload}"'
+    )
 
 
 def test_linux_opens_download_directory_without_launching_package(
