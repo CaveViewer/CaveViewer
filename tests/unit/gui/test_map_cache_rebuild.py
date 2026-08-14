@@ -90,7 +90,7 @@ def test_preflight_disables_rebuild_when_only_a_cache_remains(tmp_path):
     assert preflight.decision.reason_code == "map_cache_rebuild_source_unavailable"
 
 
-def test_preflight_disables_precompiled_cache_entry(tmp_path):
+def test_preflight_hides_precompiled_cache_entry(tmp_path):
     cache_dir = tmp_path / "precompiled"
     cache_dir.mkdir()
     (cache_dir / chunker.MANIFEST_NAME).write_text("{}", encoding="utf-8")
@@ -98,7 +98,8 @@ def test_preflight_disables_precompiled_cache_entry(tmp_path):
     preflight = map_cache_rebuild.probe_map_library_cache_rebuild(cache_dir)
 
     assert preflight.capability.status is CapabilityStatus.UNAVAILABLE
-    assert preflight.decision.state is FeatureState.DISABLED
+    assert preflight.decision.state is FeatureState.HIDDEN
+    assert not preflight.decision.is_visible
     assert preflight.decision.reason_code == "map_cache_rebuild_precompiled_map"
 
 

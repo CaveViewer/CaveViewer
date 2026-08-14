@@ -1553,10 +1553,50 @@ class MapLibraryPanel:
                 tags="cv_overflow_content",
             )
 
-    def _close_menu_if_active(self, menu) -> None:
-        """Close only the menu instance that installed a delayed callback."""
-        if self._active_menu is menu:
-            self.close_active_menu()
+    @staticmethod
+    def _menu_popover_position(
+        *,
+        button_x: int,
+        button_y: int,
+        button_width: int,
+        button_height: int,
+        root_width: int,
+        root_height: int,
+        menu_width: int,
+        menu_height: int,
+        margin: int,
+        gap: int,
+    ) -> tuple[int, int]:
+        """Return a root-local popover origin that remains inside the splash."""
+        margin = max(0, margin)
+        gap = max(0, gap)
+        root_width = max(1, root_width)
+        root_height = max(1, root_height)
+        menu_width = max(1, menu_width)
+        menu_height = max(1, menu_height)
+
+        max_x = max(margin, root_width - menu_width - margin)
+        x = min(
+            max(margin, button_x + button_width - menu_width),
+            max_x,
+        )
+        max_y = max(margin, root_height - menu_height - margin)
+        below_y = button_y + button_height + gap
+        if below_y <= max_y:
+            return x, below_y
+        return x, min(max(margin, button_y - menu_height - gap), max_y)
+
+    @staticmethod
+    def _menu_contains_widget(menu, widget) -> bool:
+        """Return whether a widget belongs to the current in-window popover."""
+        if widget is None:
+            return False
+        try:
+            menu_name = str(menu)
+            widget_name = str(widget)
+        except tk.TclError:
+            return False
+        return widget_name == menu_name or widget_name.startswith(f"{menu_name}.")
 
     def _menu_owns_keyboard_focus(self, menu) -> bool:
         """Return whether focus moved into the open menu rather than away."""
@@ -1566,22 +1606,14 @@ class MapLibraryPanel:
             return False
         if focused is None:
             return False
-        try:
-            focused_name = str(focused)
-            menu_name = str(menu)
-            return focused_name == menu_name or focused_name.startswith(
-                f"{menu_name}."
-            )
-        except tk.TclError:
-            return False
+        return self._menu_contains_widget(menu, focused)
 
     def _install_menu_dismissal_bindings(self, menu, opener) -> None:
-        """Attach temporary, menu-owned splash dismissal callbacks.
+        """Attach temporary splash callbacks for one in-window popover.
 
-        A Tk toplevel's bind tag participates in events for its child widgets,
-        so binding the splash root covers labels and canvases without a global
-        ``bind_all`` handler.  Each callback is scoped to this menu instance;
-        an old menu cannot close a newer replacement menu.
+        The callbacks remain scoped to this menu instance, so an old popover
+        cannot close a newer replacement menu.  They use the splash root's
+        bind tag rather than a global ``bind_all`` handler.
         """
 
         def dismiss_for_pointer(event, expected_menu=menu, expected_opener=opener):
@@ -1591,7 +1623,11 @@ class MapLibraryPanel:
             # toplevel bind tag.  Let that click finish instead of closing the
             # menu immediately; a click on a different overflow button first
             # closes this old menu and then opens its replacement normally.
-            if getattr(event, "widget", None) is expected_opener:
+            clicked_widget = getattr(event, "widget", None)
+            if (
+                clicked_widget is expected_opener
+                or self._menu_contains_widget(expected_menu, clicked_widget)
+            ):
                 return None
             self.close_active_menu()
             return None
@@ -1610,6 +1646,12 @@ class MapLibraryPanel:
                 close_if_focus_left()
             return None
 
+        def dismiss_for_escape(_event, expected_menu=menu):
+            if self._active_menu is not expected_menu:
+                return None
+            self.close_active_menu()
+            return "break"
+
         bindings: list[tuple[str, str]] = []
         try:
             pointer_id = self.root.bind(
@@ -1618,10 +1660,13 @@ class MapLibraryPanel:
                 add="+",
             )
             focus_id = self.root.bind("<FocusOut>", dismiss_for_focus, add="+")
+            escape_id = self.root.bind("<Escape>", dismiss_for_escape, add="+")
             if pointer_id:
                 bindings.append(("<ButtonPress-1>", pointer_id))
             if focus_id:
                 bindings.append(("<FocusOut>", focus_id))
+            if escape_id:
+                bindings.append(("<Escape>", escape_id))
         except (tk.TclError, AttributeError):
             for sequence, callback_id in bindings:
                 try:
@@ -1643,21 +1688,23 @@ class MapLibraryPanel:
             return
 
         style = self._style
-        menu = tk.Toplevel(self.root)
-        self._active_menu = menu
-        menu.withdraw()
-        menu.overrideredirect(True)
-        menu.transient(self.root)
-        menu.configure(bg=style.menu_border)
-
-        frame = tk.Frame(
-            menu,
+        try:
+            root_width = max(1, self.root.winfo_width())
+            root_height = max(1, self.root.winfo_height())
+        except (tk.TclError, AttributeError):
+            return
+        menu_margin = max(1, self._px(8))
+        menu_gap = max(1, self._px(4))
+        max_menu_width = max(1, root_width - (menu_margin * 2))
+        menu_text_wraplength = max(1, max_menu_width - self._px(24))
+        menu = tk.Frame(
+            self.root,
             bg=style.menu_bg,
             highlightthickness=1,
             highlightbackground=style.menu_border,
             highlightcolor=style.menu_border,
         )
-        frame.pack()
+        self._active_menu = menu
 
         first_item = [None]
         for menu_action in actions:
@@ -1668,7 +1715,7 @@ class MapLibraryPanel:
                 display_text = f"{item_text}\n{explanation}"
 
             item = tk.Label(
-                frame,
+                menu,
                 text=display_text,
                 font=style.body_font,
                 bg=style.menu_bg,
@@ -1679,6 +1726,7 @@ class MapLibraryPanel:
                 takefocus=enabled,
                 anchor="w",
                 justify="left",
+                wraplength=menu_text_wraplength,
             )
             if enabled:
 
@@ -1700,10 +1748,23 @@ class MapLibraryPanel:
                 first_item[0] = item
 
         try:
-            x = button.winfo_rootx()
-            y = button.winfo_rooty() + button.winfo_height() + self._px(4)
-            menu.geometry(f"+{x}+{y}")
-            menu.deiconify()
+            menu.update_idletasks()
+            menu_width = min(menu.winfo_reqwidth(), max_menu_width)
+            max_menu_height = max(1, root_height - (menu_margin * 2))
+            menu_height = min(menu.winfo_reqheight(), max_menu_height)
+            x, y = self._menu_popover_position(
+                button_x=button.winfo_rootx() - self.root.winfo_rootx(),
+                button_y=button.winfo_rooty() - self.root.winfo_rooty(),
+                button_width=button.winfo_width(),
+                button_height=button.winfo_height(),
+                root_width=root_width,
+                root_height=root_height,
+                menu_width=menu_width,
+                menu_height=menu_height,
+                margin=menu_margin,
+                gap=menu_gap,
+            )
+            menu.place(x=x, y=y, width=menu_width, height=menu_height)
             menu.lift()
             if first_item[0] is not None:
                 first_item[0].focus_set()
@@ -1711,14 +1772,6 @@ class MapLibraryPanel:
             self.close_active_menu()
             return
 
-        menu.bind("<Escape>", lambda _event: self.close_active_menu())
-        menu.bind(
-            "<FocusOut>",
-            lambda _event, target=menu: self.root.after(
-                80,
-                lambda: self._close_menu_if_active(target),
-            ),
-        )
         self._install_menu_dismissal_bindings(menu, button)
 
     def _create_overflow_button(self, parent, menu_actions_factory=None):

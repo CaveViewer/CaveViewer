@@ -1870,6 +1870,32 @@ def test_disabled_rebuild_exposes_explanation_and_failure_retains_cache():
     assert "existing cache was retained" in state.feedback[-1][0].lower()
 
 
+def test_precompiled_cache_omits_rebuild_from_recent_map_menu():
+    unavailable = CapabilityResult.unavailable(
+        reason_code="map_cache_rebuild_precompiled_map",
+    )
+
+    def precompiled_cache_preflight(_path):
+        return CacheRebuildPreflight(
+            capability=unavailable,
+            decision=decide_map_library_cache_rebuild(unavailable),
+        )
+
+    state = _workflow(
+        [],
+        cache_rebuild_preflight=precompiled_cache_preflight,
+    )
+    state.workflow.add_recent_row("/maps/Standalone slice")
+    _entry, _open_map, menu_factory = state.panel.recent_row
+
+    actions = menu_factory(SimpleNamespace(row_shell=object()))
+
+    assert [
+        action.label if isinstance(action, MapLibraryMenuAction) else action[0]
+        for action in actions
+    ] == ["Remove from this list"]
+
+
 def test_close_requests_cooperative_pause_for_active_rebuild():
     rebuild_controller = _FakeCacheRebuildController()
     state = _workflow(

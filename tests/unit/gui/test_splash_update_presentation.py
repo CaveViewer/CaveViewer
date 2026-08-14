@@ -856,6 +856,9 @@ def test_map_library_rows_use_subtle_overflow_menu_for_management():
     splash_source = inspect.getsource(splash_screen.show_splash_screen)
     style_source = inspect.getsource(splash_screen._map_library_panel_style)
     panel_source = inspect.getsource(map_library_panel.MapLibraryPanel)
+    row_menu_source = inspect.getsource(
+        map_library_panel.MapLibraryPanel._show_row_menu
+    )
     workflow_source = inspect.getsource(map_library_workflow.MapLibraryWorkflow)
     source = splash_source + style_source + panel_source + workflow_source
 
@@ -898,6 +901,10 @@ def test_map_library_rows_use_subtle_overflow_menu_for_management():
     assert 'button.pack(side="right", padx=(0, self._px(12))' in panel_source
     assert "padx=(0, self._px(8))" in panel_source
     assert "_install_menu_dismissal_bindings" in panel_source
+    assert "tk.Frame(" in row_menu_source
+    assert "menu.place(" in row_menu_source
+    assert "tk.Toplevel" not in row_menu_source
+    assert "menu.geometry" not in row_menu_source
     assert '"<ButtonPress-1>"' in panel_source
     assert '"<FocusOut>"' in panel_source
     assert ".bind_all(" not in panel_source
@@ -938,7 +945,40 @@ def test_map_library_menu_outside_click_binding_is_scoped_and_removed_on_close()
     assert root.unbound == [
         ("<ButtonPress-1>", "callback-1"),
         ("<FocusOut>", "callback-2"),
+        ("<Escape>", "callback-3"),
     ]
+
+
+def test_map_library_menu_popover_position_stays_inside_the_splash():
+    position = map_library_panel.MapLibraryPanel._menu_popover_position(
+        button_x=760,
+        button_y=450,
+        button_width=28,
+        button_height=28,
+        root_width=800,
+        root_height=600,
+        menu_width=240,
+        menu_height=96,
+        margin=8,
+        gap=4,
+    )
+
+    assert position == (548, 482)
+
+    position_above = map_library_panel.MapLibraryPanel._menu_popover_position(
+        button_x=760,
+        button_y=550,
+        button_width=28,
+        button_height=28,
+        root_width=800,
+        root_height=600,
+        menu_width=240,
+        menu_height=96,
+        margin=8,
+        gap=4,
+    )
+
+    assert position_above == (548, 450)
 
 
 def test_library_action_buttons_use_normalized_dimensions():
