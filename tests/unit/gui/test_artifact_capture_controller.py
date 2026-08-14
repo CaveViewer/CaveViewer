@@ -52,13 +52,20 @@ def test_exit_save_feedback_names_the_artifact_and_suppresses_file_reveals():
 
     video = controller.exit_saving_status(("Video",))
     trace = controller.exit_saving_status(("Dive trace",))
+    slice_status = controller.exit_saving_status(("Slice",))
     both = controller.exit_saving_status(("Video", "Dive trace"))
+    video_and_slice = controller.exit_saving_status(("Video", "Slice"))
     controller.discard_pending_reveals()
 
     assert video.message == "Finishing video"
     assert video.detail == "Saving the last frames. CaveViewer will close automatically."
     assert trace.message == "Finishing dive trace"
     assert trace.detail == "Saving the final trace. CaveViewer will close automatically."
+    assert slice_status.message == "Finishing slice"
+    assert slice_status.detail == "Saving the final slice. CaveViewer will close automatically."
     assert both.message == "Finishing captures"
     assert both.duration is None
+    assert video_and_slice.detail == (
+        "Saving the video and slice. CaveViewer will close automatically."
+    )
     assert controller.take_due_reveals(now=20.0) == ()

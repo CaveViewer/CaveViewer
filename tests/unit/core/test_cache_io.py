@@ -10,6 +10,7 @@ import pytest
 
 from caveviewer.core.chunking import builder as chunker
 from caveviewer.core.chunking import metadata as chunk_metadata
+from caveviewer.core.chunking.io import ChunkFileWriter, iter_chunk_file_groups
 
 
 CELL = (1, -2, 3)
@@ -109,3 +110,31 @@ def test_load_chunk_reads_valid_binary(tmp_path):
     assert data.cell == CELL
     assert list(data.groups) == ["rock"]
     assert data.groups["rock"].positions.shape == (3, 3)
+
+
+def test_streamed_chunk_groups_stay_within_requested_triangle_blocks(tmp_path):
+    positions = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [1.0, 0.0, 1.0],
+            [0.0, 1.0, 1.0],
+        ],
+        dtype=np.float32,
+    )
+    writer = ChunkFileWriter(str(tmp_path / chunker.CHUNKS_DIRNAME), CELL)
+    writer.write_group(
+        "rock",
+        positions,
+        np.zeros((6, 2), dtype=np.float32),
+        np.tile(np.array([[0.0, 0.0, 1.0]], dtype=np.float32), (6, 1)),
+    )
+    assert writer.finish() is not None
+
+    blocks = list(iter_chunk_file_groups(str(tmp_path), CELL, block_vertices=3))
+
+    assert [block.material_name for block in blocks] == ["rock", "rock"]
+    assert [len(block.positions) for block in blocks] == [3, 3]
+    assert all(len(block.positions) % 3 == 0 for block in blocks)

@@ -649,7 +649,7 @@ def test_manual_trace_map_change_cancels_a_pending_countdown():
         (select_presentation_profile(platform_name="darwin"), SimpleNamespace(command=True)),
     ],
 )
-def test_recording_hotkey_uses_platform_primary_modifier(
+def test_recording_hotkey_starts_or_stops_with_the_platform_primary_modifier(
     presentation_profile,
     primary_modifiers,
 ):
@@ -660,7 +660,7 @@ def test_recording_hotkey_uses_platform_primary_modifier(
     window._keys_down = set()
     window._key_resolve_cache = {}
     window._raw_command_modifier_down = lambda: False
-    window._recording_is_armed = lambda: True
+    window._recording_is_armed = lambda: False
     calls = []
     window._toggle_recording = lambda: calls.append("toggle")
 

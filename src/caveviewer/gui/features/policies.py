@@ -304,7 +304,11 @@ def decide_map_library_cache_rebuild(
     if capability.status is CapabilityStatus.UNAVAILABLE:
         state = (
             FeatureState.HIDDEN
-            if capability.reason_code == "map_cache_rebuild_no_generated_cache"
+            if capability.reason_code
+            in {
+                "map_cache_rebuild_no_generated_cache",
+                "map_cache_rebuild_precompiled_map",
+            }
             else FeatureState.DISABLED
         )
         return FeatureDecision(

@@ -229,25 +229,14 @@ def test_render_mode_buttons_reuse_geometry_until_state_or_layout_changes():
     assert buffer.write_count == 6
 
     buttons.render(
-        (1920, 1080),
-        500,
-        help_active=True,
-        color_active=True,
-        recording_armed=True,
-        right_inset=24,
-    )
-    assert buffer.write_count == 7
-
-    buttons.render(
         (1600, 900),
         420,
         help_active=True,
         color_active=True,
-        recording_armed=True,
         right_inset=20,
     )
-    assert buffer.write_count == 8
-    assert vertex_array.render_count == 9
+    assert buffer.write_count == 7
+    assert vertex_array.render_count == 8
 
 
 def test_render_mode_button_geometry_scale_reduces_fixed_button_size():
@@ -264,8 +253,8 @@ def test_render_mode_button_geometry_scale_reduces_fixed_button_size():
     assert y1 - y0 == pytest.approx(RenderModeButtons.BUTTON_HEIGHT * 0.86)
     assert buttons.total_stack_height(scale=0.86) == pytest.approx(
         (
-            7 * RenderModeButtons.BUTTON_HEIGHT
-            + 5 * RenderModeButtons.BUTTON_GAP
+            6 * RenderModeButtons.BUTTON_HEIGHT
+            + 4 * RenderModeButtons.BUTTON_GAP
             + RenderModeButtons.GROUP_GAP
         )
         * 0.86

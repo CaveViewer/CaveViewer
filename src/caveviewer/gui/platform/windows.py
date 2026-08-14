@@ -11,6 +11,18 @@ from .base import DialogLayoutPolicy, PreferencesDialogLayoutPolicy, SplashLayou
 from .default import DefaultSplashPlatformAdapter
 
 
+def _explorer_select_command(path: str) -> list[str]:
+    """Build Explorer arguments that preserve a whitespace-containing path.
+
+    Explorer recognizes ``/select,`` as a switch only when it remains separate
+    from the quoted target path.  Keeping them as two arguments lets
+    ``subprocess`` serialize a path such as ``C:\\Maps\\Devils Eye\\trace.jsonl``
+    as ``explorer /select, "C:\\Maps\\Devils Eye\\trace.jsonl"``.
+    """
+    normalized_path = os.path.normpath(os.path.abspath(path))
+    return ["explorer", "/select,", normalized_path]
+
+
 class WindowsSplashPlatformAdapter(DefaultSplashPlatformAdapter):
     """Windows package persistence and manual package-reveal integration."""
 
@@ -19,13 +31,11 @@ class WindowsSplashPlatformAdapter(DefaultSplashPlatformAdapter):
 
     def reveal_downloaded_payload(self, payload_path: str) -> None:
         # /select reveals the package without opening or executing it.
-        normalized_path = os.path.normpath(os.path.abspath(payload_path))
-        subprocess.Popen(["explorer", f"/select,{normalized_path}"])
+        subprocess.Popen(_explorer_select_command(payload_path))
 
     def reveal_file(self, path: str) -> None:
         """Reveal a saved user file in Explorer without opening the file."""
-        normalized_path = os.path.normpath(os.path.abspath(path))
-        subprocess.Popen(["explorer", f"/select,{normalized_path}"])
+        subprocess.Popen(_explorer_select_command(path))
 
     def font_candidates(self) -> list[str]:
         """Return Windows-specific font file paths in priority order."""

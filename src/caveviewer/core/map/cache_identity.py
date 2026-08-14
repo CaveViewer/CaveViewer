@@ -54,6 +54,37 @@ def build_guided_dive_cache_identity(
     )
 
 
+def build_derived_guided_dive_cache_identity(
+    parent_identity: GuidedDiveCacheIdentity,
+    derivative: Mapping[str, Any],
+    manifest: Mapping[str, Any],
+) -> GuidedDiveCacheIdentity:
+    """Build a distinct identity for a cache derived from another cache.
+
+    A standalone slice has no original OBJ/GLB to hash.  Its source digest is
+    therefore a canonical, domain-separated digest of the parent identity and
+    derivative selection, while its manifest digest retains the normal cache
+    identity semantics.  This keeps Guided Dive traces portable and prevents a
+    trace for a parent map from matching one of its slices.
+    """
+    if parse_guided_dive_cache_identity(parent_identity.payload()) is None:
+        raise ValueError("Derived Guided Dive identity requires a valid parent")
+    if not isinstance(derivative, Mapping):
+        raise TypeError("Derived Guided Dive identity requires mapping metadata")
+    return GuidedDiveCacheIdentity(
+        version=GUIDED_DIVE_CACHE_IDENTITY_VERSION,
+        source_sha256=_canonical_payload_sha256(
+            {
+                "kind": "caveviewer.derived-cache",
+                "version": 1,
+                "parent_identity": parent_identity.payload(),
+                "derivative": dict(derivative),
+            }
+        ),
+        cache_manifest_sha256=_canonical_manifest_sha256(manifest),
+    )
+
+
 def guided_dive_cache_identity_from_manifest(
     manifest: Mapping[str, Any] | None,
 ) -> GuidedDiveCacheIdentity | None:
@@ -93,6 +124,15 @@ def _canonical_manifest_sha256(manifest: Mapping[str, Any]) -> str:
     """Hash all cache metadata except the identity field being constructed."""
     payload = dict(manifest)
     payload.pop(GUIDED_DIVE_CACHE_IDENTITY_KEY, None)
+    return _canonical_payload_sha256(payload)
+
+
+def canonical_manifest_sha256(manifest: Mapping[str, Any]) -> str:
+    """Return the stable digest of cache metadata excluding its own identity."""
+    return _canonical_manifest_sha256(manifest)
+
+
+def _canonical_payload_sha256(payload: Mapping[str, Any]) -> str:
     encoder = json.JSONEncoder(
         allow_nan=False,
         ensure_ascii=True,

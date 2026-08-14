@@ -184,6 +184,27 @@ Non-user map-change and shutdown stops remain silent; failure feedback and
 native reveal are reserved for the user-visible workflow. Reveal is best-effort
 and cannot change the completed artifact result.
 
+`Ctrl+C` (`Cmd+C` on macOS) owns the separate cave-slice workflow. It first
+uses the same render-thread 3-2-1 countdown presentation as recording and
+manual tracing, then records the current camera position as a slice start
+anchor. A second shortcut press records the end anchor and starts a bounded
+child-process export; the normal viewer remains interactive while geometry and
+assets are written. The exporter clips render-cache triangles to a padded
+axis-aligned volume, stages a standalone precompiled-map directory, and
+atomically publishes it below the Preferences **Downloaded maps folder**
+location. The saved slice contains its own manifest, render chunks, referenced
+cache-local texture assets, and a small `.cvslice` source marker, so it can be
+copied to a machine that lacks the parent OBJ/GLB and still open through the
+normal precompiled-map path.
+It records additive parent/selection metadata and derives a distinct Guided
+Dive identity, but does not copy parent bookmarks, navigation certificates, or
+prior traces. On normal completion it uses the shared saving/success/reveal
+presentation; slice success reveals the new map directory rather than opening
+it. Closing during active slicing turns the current camera position into the
+end anchor, defers window teardown until publication reaches a terminal state,
+and then reveals a successfully published slice directory before closing.
+Closing during the pre-start countdown simply cancels that countdown.
+
 Recorded Dive is the separate trace-playback path. Opening a completed JSONL
 associates its bounded source basename, cache-manifest version, chunk size,
 triangle count, and versioned cache identity with the local map. Cache
@@ -272,6 +293,12 @@ private sibling lock directory for each cache target. A second cooperative GUI
 or CLI build fails closed rather than racing the target; normal completion,
 failure, or pause releases the lock while preserving any resumable staging
 checkpoint.
+
+`core.map.slicing` applies that same lock/staging discipline to derivative
+maps: it holds the parent cache lock while reading chunks, locks the new output
+target, validates texture paths remain cache-local, and rechecks the parent
+manifest identity before publication. Cancellation and failures remove only
+the private slice staging directory; neither can modify the parent cache.
 
 First-time imports launched from the viewer run in a spawned child process
 through `src/caveviewer/gui/import_process.py`. The viewer process owns OpenGL,

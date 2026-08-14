@@ -33,6 +33,7 @@ import moderngl_window as mglw
 from moderngl_window.context.base import KeyModifiers
 
 from caveviewer.core.chunking import builder as chunker
+from caveviewer.core.map import slicing as map_slicing
 from caveviewer.core.hardware import gpu_memory, memory_targets, system_memory
 from caveviewer.core.diagnostics.logging import get_logger
 from caveviewer.core.navigation.curvature import CURVATURE_PROFILE_METHOD
@@ -63,6 +64,13 @@ from caveviewer.gui.artifact_capture_controller import (
     ArtifactCaptureStatus,
 )
 from caveviewer.gui.manual_dive_trace_controller import ManualDiveTraceStateController
+from caveviewer.gui.slice_selection_controller import SliceAnchors, SliceSelectionController
+from caveviewer.gui.slice_export_controller import (
+    SliceExportCanceled,
+    SliceExportController,
+    SliceExportFailed,
+    SliceExportSucceeded,
+)
 from caveviewer.gui import recorded_dive
 from caveviewer.gui import render_upload
 from caveviewer.gui import view_culling
@@ -476,7 +484,18 @@ def _env_optional_mebibytes(name: str) -> int | None:
 
 
 def _map_initial_camera_position(manifest: Mapping[str, Any]) -> np.ndarray:
-    """Return the ordinary render-cache starting position for a map."""
+    """Return a slice entry point or the ordinary render-cache start."""
+    slice_metadata = manifest.get(map_slicing.SLICE_MANIFEST_KEY)
+    if isinstance(slice_metadata, Mapping):
+        try:
+            entry_position = np.asarray(
+                tuple(float(value) for value in slice_metadata["entry_position"]),
+                dtype=np.float64,
+            )
+        except (KeyError, TypeError, ValueError):
+            entry_position = np.empty(0, dtype=np.float64)
+        if entry_position.shape == (3,) and np.isfinite(entry_position).all():
+            return entry_position
     position = chunker.first_manifest_chunk_center(manifest.get("chunks"))
     if position is None:
         raise ValueError("map manifest does not contain a valid starting chunk")
@@ -657,6 +676,9 @@ class CaveViewerWindow(mglw.WindowConfig):
     RECORDING_COUNTDOWN_TITLE = "Prepare to record a dive"
     MANUAL_DIVE_TRACE_COUNTDOWN_START_NUMBER = 3
     MANUAL_DIVE_TRACE_COUNTDOWN_TITLE = "Prepare to plan a dive"
+    SLICE_COUNTDOWN_START_NUMBER = 3
+    SLICE_COUNTDOWN_TITLE = "Prepare to slice a cave"
+    SLICE_PADDING = map_slicing.DEFAULT_SLICE_PADDING
     DIVE_STATUS_PANEL_WIDTH_FRACTION = 0.52
     DIVE_STATUS_PANEL_MIN_WIDTH = 520.0
     DIVE_STATUS_PANEL_HEIGHT = 116.0
@@ -818,6 +840,12 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._close_after_capture_requested = False
         self._close_after_capture_status_presented = False
         self._close_after_capture_status_presented_at: float | None = None
+        self._slice_reveal_before_close = False
+        self._slice_reveal_output_path: str | None = None
+        self._slice_source_cache_dir: str | None = None
+        self._slice_storage_parent: str | None = None
+        self._slice_display_base: str | None = None
+        self._slice_root_cave_name: str | None = None
         self._startup_focus_requested = False
         self._upload_chunks_per_frame = _env_int("CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME", 1, 1, 16)
         self._upload_groups_per_frame = _env_int("CAVEVIEWER_UPLOAD_GROUPS_PER_FRAME", 1, 1, 64)
@@ -835,6 +863,8 @@ class CaveViewerWindow(mglw.WindowConfig):
         ) = None
         self._manual_dive_trace_writers: list[_PendingManualDiveTraceWriter] = []
         self._manual_dive_trace_controller = ManualDiveTraceStateController()
+        self._slice_selection_controller = SliceSelectionController()
+        self._slice_export_controller = SliceExportController()
         self._artifact_capture_presentation = ArtifactCapturePresentationController()
         self._pending_recorded_dive_trace = (
             CaveViewerWindow.cave_recorded_dive_trace
@@ -1228,6 +1258,41 @@ class CaveViewerWindow(mglw.WindowConfig):
             controller = ManualDiveTraceStateController()
             self.__dict__["_manual_dive_trace_controller"] = controller
         return controller
+
+    def _ensure_slice_selection_controller(self) -> SliceSelectionController:
+        controller = self.__dict__.get("_slice_selection_controller")
+        if controller is None:
+            controller = SliceSelectionController()
+            self.__dict__["_slice_selection_controller"] = controller
+        return controller
+
+    def _ensure_slice_export_controller(self) -> SliceExportController:
+        controller = self.__dict__.get("_slice_export_controller")
+        if controller is None:
+            controller = SliceExportController()
+            self.__dict__["_slice_export_controller"] = controller
+        return controller
+
+    def _slice_work_pending(self) -> bool:
+        """Return whether a countdown or child export needs a frame-time poll."""
+        selection = self.__dict__.get("_slice_selection_controller")
+        exporter = self.__dict__.get("_slice_export_controller")
+        return bool(
+            selection is not None and selection.countdown_active
+        ) or bool(exporter is not None and exporter.active)
+
+    def _slice_interaction_active(self) -> bool:
+        """Return whether slice selection owns the capture interaction surface."""
+        selection = self.__dict__.get("_slice_selection_controller")
+        exporter = self.__dict__.get("_slice_export_controller")
+        return bool(
+            selection is not None
+            and (
+                selection.countdown_active
+                or selection.selection_active
+                or selection.saving
+            )
+        ) or bool(exporter is not None and exporter.active)
 
     def _ensure_artifact_capture_presentation(
         self,
@@ -2107,7 +2172,7 @@ class CaveViewerWindow(mglw.WindowConfig):
 
     def _recording_is_armed(self) -> bool:
         return self._ensure_recording_controller().is_armed(
-            process_active=self._recording_session is not None
+            process_active=getattr(self, "_recording_session", None) is not None
         )
 
     def _ensure_recording_stop_state(self) -> None:
@@ -2133,6 +2198,11 @@ class CaveViewerWindow(mglw.WindowConfig):
             or getattr(self, "_manual_dive_trace_writers", None)
         ):
             artifacts.append("Dive trace")
+        if (
+            self._ensure_slice_selection_controller().selection_active
+            or self._ensure_slice_export_controller().active
+        ):
+            artifacts.append("Slice")
         return tuple(artifacts)
 
     def _exit_capture_finalization_active(self) -> bool:
@@ -2170,13 +2240,18 @@ class CaveViewerWindow(mglw.WindowConfig):
             self._stop_recording()
         if getattr(self, "_manual_dive_trace", None) is not None:
             self._stop_manual_dive_trace(reason="viewer_closed")
+        if self._ensure_slice_selection_controller().selection_active:
+            self._finish_active_slice(closing=True)
 
-        self._show_artifact_capture_status(
-            presentation.exit_saving_status(artifact_names)
-        )
+        remaining_artifact_names = self._exit_capture_artifacts()
+        if remaining_artifact_names:
+            self._show_artifact_capture_status(
+                presentation.exit_saving_status(remaining_artifact_names)
+            )
         _LOG.info(
             "Waiting for %s before closing the viewer.",
-            " and ".join(name.lower() for name in artifact_names),
+            " and ".join(name.lower() for name in remaining_artifact_names)
+            or "final capture cleanup",
         )
 
     def _complete_exit_capture_finalization_if_ready(
@@ -2208,6 +2283,12 @@ class CaveViewerWindow(mglw.WindowConfig):
                 return False
 
         self._close_after_capture_requested = False
+        if getattr(self, "_slice_reveal_before_close", False):
+            output_path = getattr(self, "_slice_reveal_output_path", None)
+            if output_path:
+                self._reveal_saved_output(output_path, output_kind="slice")
+            self._slice_reveal_before_close = False
+            self._slice_reveal_output_path = None
         self._complete_window_close()
         return True
 
@@ -2247,6 +2328,14 @@ class CaveViewerWindow(mglw.WindowConfig):
 
     def _start_recording_countdown(self) -> None:
         if not self._has_map_loaded:
+            return
+        if self._slice_interaction_active():
+            self._show_capture_status(
+                "Slice in progress",
+                "Finish or cancel the slice before recording.",
+                kind="info",
+                duration=3.0,
+            )
             return
         if self._recording_target_if_available() is None:
             return
@@ -2748,7 +2837,11 @@ class CaveViewerWindow(mglw.WindowConfig):
         self,
         *,
         now: float,
-        controller: RecordingStateController | ManualDiveTraceStateController,
+        controller: (
+            RecordingStateController
+            | ManualDiveTraceStateController
+            | SliceSelectionController
+        ),
         start_number: int,
         title: str,
         note: str,
@@ -3215,6 +3308,13 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._stop_manual_dive_trace(
             reason="viewer_closed" if final_shutdown else "map_changed"
         )
+        slice_selection = self._ensure_slice_selection_controller()
+        if slice_selection.countdown_active:
+            slice_selection.cancel_countdown()
+            self._clear_slice_context()
+        elif slice_selection.selection_active:
+            slice_selection.cancel_selection()
+            self._clear_slice_context()
         self._stop_recorded_dive(
             reason="viewer_closed" if final_shutdown else "map_changed"
         )
@@ -3391,6 +3491,19 @@ class CaveViewerWindow(mglw.WindowConfig):
         open a different map should never take down the map you already
         had open and were presumably still looking at.
         """
+        slice_selection = self._ensure_slice_selection_controller()
+        if (
+            slice_selection.countdown_active
+            or slice_selection.selection_active
+            or self._ensure_slice_export_controller().active
+        ):
+            self._show_capture_status(
+                "Slice in progress",
+                "Finish or cancel the slice before opening another map.",
+                kind="info",
+                duration=3.0,
+            )
+            return
         try:
             folder = pick_folder_dialog(
                 platform_runtime=getattr(self, "_platform_runtime", None)
@@ -5277,6 +5390,8 @@ class CaveViewerWindow(mglw.WindowConfig):
                 "iconified", _ICONIFIED_RENDER_POLL_INTERVAL_S
             ):
                 self._drain_recording_stop_results()
+                if self._slice_work_pending():
+                    self._update_slice_export()
                 if self._exit_capture_finalization_active():
                     self._update_manual_dive_trace()
                     self._complete_exit_capture_finalization_if_ready(
@@ -5296,6 +5411,8 @@ class CaveViewerWindow(mglw.WindowConfig):
 
         if self._exit_capture_finalization_active():
             self._update_manual_dive_trace()
+            if self._slice_work_pending():
+                self._update_slice_export()
             if self._complete_exit_capture_finalization_if_ready():
                 return
             # Do not continue navigation, streaming, or map interaction while
@@ -5395,6 +5512,8 @@ class CaveViewerWindow(mglw.WindowConfig):
         else:
             self._handle_manual_input_frame(dt, now=time.perf_counter())
         self._update_manual_dive_trace()
+        if self._slice_work_pending():
+            self._update_slice_export()
         input_ms = (time.perf_counter() - t_input) * 1000.0
 
         # Apply the render-distance control's current value before the
@@ -5684,13 +5803,23 @@ class CaveViewerWindow(mglw.WindowConfig):
                 note=self._countdown_cancel_note("T"),
             )
             overlay_ms = 0.0
+        elif self._ensure_slice_selection_controller().countdown_active:
+            now = time.perf_counter()
+            self._render_countdown_overlay(
+                now=now,
+                controller=self._ensure_slice_selection_controller(),
+                start_number=self.SLICE_COUNTDOWN_START_NUMBER,
+                title=self.SLICE_COUNTDOWN_TITLE,
+                note=self._countdown_cancel_note("C"),
+            )
+            overlay_ms = 0.0
         else:
             # Overlay HUD elements draw last, on top of the 3D scene, each with
             # their own depth-disabled 2D pass.
             t0 = time.perf_counter()
 
             # Whole right-side column -- brightness, global light, render
-            # distance, then the Mesh/Texture/Help/Color/Open/Rec buttons -- is
+            # distance, then the Mesh/Texture/Shade/Open/Help/Color buttons -- is
             # laid out as one group anchored to the bottom-right corner. See
             # _right_column_layout()'s docstring for why this is computed in
             # one place rather than each piece anchoring itself independently.
@@ -5711,7 +5840,6 @@ class CaveViewerWindow(mglw.WindowConfig):
             self.render_mode_buttons.render(self.wnd.size, buttons_top_y,
                               help_active=self.controls_overlay.is_manual_mode,
                               color_active=self.color_picker.is_active,
-                              recording_armed=self._recording_is_armed(),
                               right_inset=column["button_right_inset"])
 
             # Color picker panel draws on top of the regular HUD elements (it
@@ -5961,12 +6089,349 @@ class CaveViewerWindow(mglw.WindowConfig):
         except (AttributeError, TypeError, ValueError):
             return None
 
+    def _slice_camera_position(self) -> tuple[float, float, float] | None:
+        """Return the current camera position as a finite export anchor."""
+        camera = getattr(self, "camera", None)
+        position = getattr(camera, "position", None)
+        try:
+            values = tuple(float(value) for value in position)
+        except (TypeError, ValueError):
+            return None
+        if len(values) != 3 or not all(math.isfinite(value) for value in values):
+            return None
+        return values  # type: ignore[return-value]
+
+    def _slice_storage_directory(self) -> str:
+        """Resolve and preflight the user-configured app-managed map storage."""
+        from caveviewer.gui.preferences import load_preferences
+
+        configured = str(load_preferences()["map_library_dir"]).strip()
+        if not configured:
+            raise ValueError("The Preferences map-storage folder is not configured.")
+        directory = os.path.abspath(os.path.expanduser(configured))
+        os.makedirs(directory, exist_ok=True)
+        if not os.path.isdir(directory):
+            raise ValueError("The Preferences map-storage folder is unavailable.")
+        return directory
+
+    def _slice_cave_name(self) -> str:
+        """Return the original cave label used as the stable slice-name prefix."""
+        manifest = getattr(self, "manifest", None)
+        slice_metadata = (
+            manifest.get(map_slicing.SLICE_MANIFEST_KEY)
+            if isinstance(manifest, Mapping)
+            else None
+        )
+        root_cave_name = (
+            slice_metadata.get("root_cave_name")
+            if isinstance(slice_metadata, Mapping)
+            else None
+        )
+        if root_cave_name:
+            root_label = os.path.basename(str(root_cave_name).strip())
+            if root_label:
+                # This is already a display label, not a source filename.  In
+                # particular, preserve a legitimate cave-name suffix such as
+                # ".2" instead of treating it as a file extension.
+                return root_label
+        source_obj = manifest.get("source_obj") if isinstance(manifest, Mapping) else None
+        raw_name = str(source_obj or getattr(self, "map_root", "") or "Cave").strip()
+        return os.path.splitext(os.path.basename(raw_name))[0] or "Cave"
+
+    def _clear_slice_context(self) -> None:
+        self._slice_source_cache_dir = None
+        self._slice_storage_parent = None
+        self._slice_display_base = None
+        self._slice_root_cave_name = None
+
+    def _slice_unavailable(self, detail: str) -> None:
+        self._show_capture_status(
+            "Slice unavailable",
+            detail,
+            kind="error",
+            duration=self._ensure_artifact_capture_presentation().confirmation_seconds,
+        )
+
+    def _start_slice_countdown(self) -> bool:
+        """Preflight a Ctrl+C slice action and arm the shared capture countdown."""
+        if not self._has_map_loaded:
+            return False
+        selection = self._ensure_slice_selection_controller()
+        if (
+            selection.countdown_active
+            or selection.selection_active
+            or selection.saving
+            or self._ensure_slice_export_controller().active
+        ):
+            return False
+        if (
+            self._recording_is_armed()
+            or self._recording_stop_in_progress()
+            or getattr(self, "_manual_dive_trace", None) is not None
+            or self._ensure_manual_dive_trace_controller().countdown_active
+            or getattr(self, "_manual_dive_trace_writers", None)
+        ):
+            self._slice_unavailable(
+                "Finish the active recording or dive trace before slicing."
+            )
+            return False
+        source_cache_dir = getattr(self, "cache_dir", None)
+        if not source_cache_dir or not os.path.isdir(source_cache_dir):
+            self._slice_unavailable("This map has no readable precompiled cache.")
+            return False
+        try:
+            map_slicing.validate_slice_source(source_cache_dir)
+            storage_parent = self._slice_storage_directory()
+            root_cave_name = self._slice_cave_name()
+            display_name = map_slicing.next_slice_display_name(
+                storage_parent,
+                root_cave_name,
+            )
+        except Exception as exc:
+            self._slice_unavailable(str(exc))
+            return False
+
+        color_picker = getattr(self, "color_picker", None)
+        if color_picker is not None:
+            color_picker.hide()
+        controls_overlay = getattr(self, "controls_overlay", None)
+        if controls_overlay is not None and controls_overlay.is_manual_mode:
+            controls_overlay.hide_help()
+        if not selection.start_countdown(
+            now=time.perf_counter(),
+            start_number=self.SLICE_COUNTDOWN_START_NUMBER,
+        ):
+            return False
+        self._slice_source_cache_dir = str(source_cache_dir)
+        self._slice_storage_parent = storage_parent
+        self._slice_display_base = display_name
+        self._slice_root_cave_name = root_cave_name
+        _LOG.info(
+            "Slice countdown started. Press %s+C again to cancel.",
+            self._primary_shortcut_label(),
+        )
+        return True
+
+    def _start_slice_export(
+        self,
+        anchors: SliceAnchors,
+        *,
+        closing: bool = False,
+    ) -> bool:
+        """Build and launch a worker request after active slicing ends."""
+        source_cache_dir = getattr(self, "_slice_source_cache_dir", None)
+        storage_parent = getattr(self, "_slice_storage_parent", None)
+        if not source_cache_dir or not storage_parent:
+            self._ensure_slice_selection_controller().complete_export()
+            self._clear_slice_context()
+            self._slice_unavailable("The active slice no longer has a save location.")
+            return False
+        root_cave_name = (
+            getattr(self, "_slice_root_cave_name", None)
+            or self._slice_cave_name()
+        )
+        display_name = map_slicing.sanitize_slice_name(
+            getattr(self, "_slice_display_base", None)
+            or map_slicing.next_slice_display_name(storage_parent, root_cave_name)
+        )
+        try:
+            request = map_slicing.SliceExportRequest(
+                source_cache_dir=source_cache_dir,
+                output_dir=map_slicing.unique_slice_output_dir(
+                    storage_parent,
+                    display_name,
+                ),
+                bounds=map_slicing.SliceBounds.from_anchors(
+                    anchors.start,
+                    anchors.end,
+                    padding=self.SLICE_PADDING,
+                ),
+                entry_position=anchors.start,
+                display_name=display_name,
+                root_cave_name=root_cave_name,
+            )
+        except Exception as exc:
+            self._ensure_slice_selection_controller().complete_export()
+            self._clear_slice_context()
+            self._show_artifact_capture_status(
+                self._ensure_artifact_capture_presentation().failed_status(
+                    "Slice",
+                    str(exc),
+                )
+            )
+            return False
+
+        failure = self._ensure_slice_export_controller().start(request)
+        if failure is not None:
+            self._ensure_slice_selection_controller().complete_export()
+            self._clear_slice_context()
+            self._show_artifact_capture_status(
+                self._ensure_artifact_capture_presentation().failed_status(
+                    "Slice",
+                    failure.error,
+                )
+            )
+            return False
+        if not closing:
+            self._show_artifact_capture_status(
+                self._ensure_artifact_capture_presentation().saving_status("Slice")
+            )
+        _LOG.info("Started slice export to %s", request.output_dir)
+        return True
+
+    def _finish_active_slice(self, *, closing: bool = False) -> bool:
+        selection = self._ensure_slice_selection_controller()
+        position = self._slice_camera_position()
+        if position is None:
+            if closing:
+                selection.cancel_selection()
+                self._clear_slice_context()
+                self._show_artifact_capture_status(
+                    self._ensure_artifact_capture_presentation().failed_status(
+                        "Slice",
+                        "Could not read the final camera position.",
+                    )
+                )
+                return False
+            self._slice_unavailable("Could not read the current camera position.")
+            return False
+        anchors = selection.finish_selection(position)
+        if anchors is None:
+            if closing:
+                selection.cancel_selection()
+                self._clear_slice_context()
+                self._show_artifact_capture_status(
+                    self._ensure_artifact_capture_presentation().failed_status(
+                        "Slice",
+                        "Could not finalize the active slice.",
+                    )
+                )
+            return False
+        return self._start_slice_export(anchors, closing=closing)
+
+    def _toggle_slice(self) -> bool:
+        """Use Ctrl/Cmd+C to start/cancel a countdown or finish an active slice."""
+        selection = self._ensure_slice_selection_controller()
+        exporter = self._ensure_slice_export_controller()
+        if exporter.active or selection.saving:
+            self._show_artifact_capture_status(
+                self._ensure_artifact_capture_presentation().saving_status("Slice")
+            )
+            return True
+        if selection.countdown_active:
+            selection.cancel_countdown()
+            self._clear_slice_context()
+            self._show_artifact_capture_status(
+                self._ensure_artifact_capture_presentation().canceled_status("Slice"),
+                now=time.perf_counter(),
+            )
+            return True
+        if selection.selection_active:
+            return self._finish_active_slice()
+        return self._start_slice_countdown()
+
+    def _cancel_slice_interaction(self) -> bool:
+        """Honor Escape for a user-owned slice without canceling close finalization."""
+        if self._exit_capture_finalization_active():
+            return False
+        selection = self._ensure_slice_selection_controller()
+        if selection.countdown_active:
+            selection.cancel_countdown()
+            self._clear_slice_context()
+        elif selection.selection_active:
+            selection.cancel_selection()
+            self._clear_slice_context()
+        elif self._ensure_slice_export_controller().active:
+            if not self._ensure_slice_export_controller().request_cancel():
+                return False
+            self._show_capture_status(
+                "Canceling slice…",
+                "Finishing cleanup. Keep CaveViewer open.",
+                kind="info",
+                duration=None,
+            )
+            return True
+        else:
+            return False
+        self._show_artifact_capture_status(
+            self._ensure_artifact_capture_presentation().canceled_status("Slice"),
+            now=time.perf_counter(),
+        )
+        return True
+
+    def _update_slice_export(self, *, now: float | None = None) -> None:
+        """Advance countdown anchors and apply child export outcomes on the UI thread."""
+        current_time = time.perf_counter() if now is None else now
+        selection = self._ensure_slice_selection_controller()
+        if selection.countdown_ready(now=current_time):
+            position = self._slice_camera_position()
+            if position is None or not selection.begin_selection(position):
+                selection.complete_export()
+                self._clear_slice_context()
+                self._slice_unavailable("Could not read the current camera position.")
+
+        exporter = self._ensure_slice_export_controller()
+        for update in exporter.poll():
+            if isinstance(update, SliceExportSucceeded):
+                selection.complete_export()
+                self._clear_slice_context()
+                try:
+                    from caveviewer.gui.map_history import remember_recent_map_path
+
+                    remember_recent_map_path(update.output_dir)
+                except Exception:
+                    pass
+                if self._exit_capture_finalization_active():
+                    # Reveal only once exit finalization is ready to hand the
+                    # window back to the platform; some file managers would
+                    # otherwise focus the viewer again before it closes.
+                    self._slice_reveal_before_close = True
+                    self._slice_reveal_output_path = update.output_dir
+                else:
+                    self._show_artifact_capture_status(
+                        self._ensure_artifact_capture_presentation().saved_status(
+                            "Slice",
+                            update.output_dir,
+                            now=current_time,
+                            reveal=True,
+                        ),
+                        now=current_time,
+                    )
+            elif isinstance(update, SliceExportCanceled):
+                selection.complete_export()
+                self._clear_slice_context()
+                if not self._exit_capture_finalization_active():
+                    self._show_artifact_capture_status(
+                        self._ensure_artifact_capture_presentation().canceled_status(
+                            "Slice"
+                        ),
+                        now=current_time,
+                    )
+            elif isinstance(update, SliceExportFailed):
+                selection.complete_export()
+                self._clear_slice_context()
+                self._show_artifact_capture_status(
+                    self._ensure_artifact_capture_presentation().failed_status(
+                        "Slice",
+                        update.error,
+                    ),
+                    now=current_time,
+                )
+
     def _start_manual_dive_trace_countdown(self) -> bool:
         """Arm a visible countdown before collecting a manual dive trace."""
         if (
             not self._has_map_loaded
             or getattr(self, "_manual_dive_trace", None) is not None
         ):
+            return False
+        if self._slice_interaction_active():
+            self._show_capture_status(
+                "Slice in progress",
+                "Finish or cancel the slice before planning a dive.",
+                kind="info",
+                duration=3.0,
+            )
             return False
         controller = self._ensure_manual_dive_trace_controller()
         if controller.countdown_active:
@@ -6343,7 +6808,11 @@ class CaveViewerWindow(mglw.WindowConfig):
                 return
             if self._handle_manual_dive_trace_hotkey(key, modifiers):
                 return
+            if self._handle_slice_hotkey(key, modifiers):
+                return
             if self._handle_recording_hotkey(key, modifiers):
+                return
+            if self._handle_slice_escape_hotkey(key):
                 return
             if self._handle_reset_view_shortcut(key, modifiers):
                 return
@@ -6408,6 +6877,26 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._toggle_manual_dive_trace()
         return True
 
+    def _handle_slice_hotkey(self, key, modifiers: KeyModifiers) -> bool:
+        """Use Ctrl/Cmd+C to arm, cancel, or finish a portable cave slice."""
+        if not getattr(self, "_has_map_loaded", False):
+            return False
+        slice_key = self._resolve_key_optional(self.wnd.keys, "C")
+        if (
+            slice_key is None
+            or key != slice_key
+            or not self._primary_shortcut_is_down(modifiers)
+        ):
+            return False
+        return self._toggle_slice()
+
+    def _handle_slice_escape_hotkey(self, key) -> bool:
+        """Allow Escape to cancel a user-owned slice before publication."""
+        escape_key = self._resolve_key_optional(self.wnd.keys, "ESCAPE", "ESC")
+        if escape_key is None or key != escape_key:
+            return False
+        return self._cancel_slice_interaction()
+
     def _handle_recorded_dive_hotkey(
         self,
         key,
@@ -6423,8 +6912,8 @@ class CaveViewerWindow(mglw.WindowConfig):
         return self._toggle_recorded_dive_pause()
 
     def _handle_recording_hotkey(self, key, modifiers: KeyModifiers) -> bool:
-        """Use Ctrl/Cmd+R to cancel countdown or stop active recording."""
-        if not self._has_map_loaded or not self._recording_is_armed():
+        """Use Ctrl/Cmd+R to start, cancel, or stop recording."""
+        if not self._has_map_loaded:
             return False
         record_key = self._resolve_key_optional(self.wnd.keys, "R")
         if record_key is None or key != record_key:
@@ -6664,12 +7153,6 @@ class CaveViewerWindow(mglw.WindowConfig):
             if self.render_distance_stepper.on_mouse_press(x, y, render_distance_anchor_x, render_distance_anchor_y):
                 return
 
-            if self.render_mode_buttons.hit_test_record(
-                x, y, self.wnd.size, buttons_top_y, column["button_right_inset"]
-            ):
-                self._toggle_recording()
-                return
-
             if buttons_locked_for_loading:
                 if (
                     self.render_mode_buttons.hit_test_mesh(x, y, self.wnd.size, buttons_top_y, column["button_right_inset"])
@@ -6708,9 +7191,6 @@ class CaveViewerWindow(mglw.WindowConfig):
                 return
             elif clicked_button == "open":
                 self._handle_open_button_click()
-                return
-            elif clicked_button == "record":
-                self._toggle_recording()
                 return
             elif clicked_button is not None:
                 # "mesh" or "texture" -- already toggled internally by
@@ -6841,6 +7321,8 @@ class CaveViewerWindow(mglw.WindowConfig):
             return
         self._closing_requested = True
         self._close_after_capture_requested = False
+        self._slice_reveal_before_close = False
+        self._slice_reveal_output_path = None
 
         if hasattr(self, "wnd"):
             try:
@@ -6874,6 +7356,13 @@ class CaveViewerWindow(mglw.WindowConfig):
             # while the non-daemon writer is publishing the user's file.
             self._defer_backend_close_request()
             return
+
+        slice_selection = self._ensure_slice_selection_controller()
+        if slice_selection.countdown_active:
+            # Match recording/trace behavior: an armed countdown has not
+            # captured a user artifact, so closing simply disarms it.
+            slice_selection.cancel_countdown()
+            self._clear_slice_context()
 
         artifact_names = self._exit_capture_artifacts()
         if artifact_names:

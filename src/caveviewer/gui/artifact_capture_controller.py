@@ -67,10 +67,14 @@ class ArtifactCapturePresentationController:
         elif names == ("Dive trace",):
             message = "Finishing dive trace"
             detail = "Saving the final trace. CaveViewer will close automatically."
+        elif names == ("Slice",):
+            message = "Finishing slice"
+            detail = "Saving the final slice. CaveViewer will close automatically."
         else:
             message = "Finishing captures"
             detail = (
-                "Saving the video and dive trace. CaveViewer will close automatically."
+                f"Saving {_join_capture_names(names)}. "
+                "CaveViewer will close automatically."
             )
         return ArtifactCaptureStatus(
             message=message,
@@ -141,3 +145,15 @@ class ArtifactCapturePresentationController:
     def discard_pending_reveals(self) -> None:
         """Prevent delayed file-browser launches while the application exits."""
         self._pending_reveals.clear()
+
+
+def _join_capture_names(names: tuple[str, ...]) -> str:
+    """Return the lowercase, natural-language capture list used on exit."""
+    lowered = tuple(name.lower() for name in names)
+    if not lowered:
+        return "the capture files"
+    if len(lowered) == 1:
+        return f"the {lowered[0]}"
+    if len(lowered) == 2:
+        return f"the {lowered[0]} and {lowered[1]}"
+    return f"the {', '.join(lowered[:-1])}, and {lowered[-1]}"

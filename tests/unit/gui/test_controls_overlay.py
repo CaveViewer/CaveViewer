@@ -123,13 +123,13 @@ def test_fullscreen_begin_prompt_waits_for_visual_ready_signal():
     assert overlay.is_ready_to_begin is True
 
 
-def test_recording_help_copy_is_format_neutral():
+def test_recording_help_copy_is_shortcut_only_and_format_neutral():
     rows = _control_rows_for_profile(select_presentation_profile(platform_name="unsupported"))
 
-    assert rows["REC button"] == "Start recording countdown"
-    assert "MP4" not in rows["REC button"]
-    assert rows["Ctrl + R"] == "Stop or cancel recording"
-    assert rows["Ctrl + T"] == "Start/stop manual route trace"
+    assert "REC button" not in rows
+    assert rows["Ctrl + R"] == "Start/stop recording"
+    assert rows["Ctrl + T"] == "Start/stop manual trace"
+    assert rows["Ctrl + C"] == "Start/stop slice"
     assert rows["Space"] == "Pause/resume a recorded dive"
 
 
@@ -153,8 +153,9 @@ def test_control_help_copy_uses_profile_for_macos_shortcuts():
     assert rows["Cmd + O"] == "Switch to a different map"
     assert rows["Esc"] == "Close window"
     assert "Cmd + W" not in rows
-    assert rows["Cmd + R"] == "Stop or cancel recording"
-    assert rows["Cmd + T"] == "Start/stop manual route trace"
+    assert rows["Cmd + R"] == "Start/stop recording"
+    assert rows["Cmd + T"] == "Start/stop manual trace"
+    assert rows["Cmd + C"] == "Start/stop slice"
 
 
 def test_control_help_copy_uses_profile_for_control_shortcuts():
@@ -173,8 +174,9 @@ def test_control_help_copy_uses_profile_for_control_shortcuts():
     assert rows["Ctrl + O"] == "Switch to a different map"
     assert rows["Esc"] == "Close window"
     assert "Ctrl + W" not in rows
-    assert rows["Ctrl + R"] == "Stop or cancel recording"
-    assert rows["Ctrl + T"] == "Start/stop manual route trace"
+    assert rows["Ctrl + R"] == "Start/stop recording"
+    assert rows["Ctrl + T"] == "Start/stop manual trace"
+    assert rows["Ctrl + C"] == "Start/stop slice"
 
 
 def test_presentation_profiles_define_controls_overlay_layout_policy():
