@@ -54,6 +54,8 @@ from caveviewer.gui.cave_metadata_panel import (
     CaveMetadataPanel,
     CaveMetadataPanelStyle,
 )
+from caveviewer.gui.controls_catalog import keyboard_control_sections
+from caveviewer.gui.help_panel import HelpPanel, HelpPanelStyle
 from caveviewer.gui.map_library_controller import MapLibraryController
 from caveviewer.gui.map_history import load_recent_map_paths
 from caveviewer.gui.map_library_panel import (
@@ -433,6 +435,25 @@ def _cave_metadata_panel_style() -> CaveMetadataPanelStyle:
         body_strong_font=_TYPOGRAPHY.body_strong,
         body_font=_TYPOGRAPHY.body,
         small_font=_TYPOGRAPHY.supporting,
+    )
+
+
+def _help_panel_style() -> HelpPanelStyle:
+    """Return the splash-owned style tokens for the keyboard Help page."""
+    return HelpPanelStyle(
+        background_color=_BG_COLOR,
+        panel_color=_PANEL_COLOR,
+        border_color=_LIBRARY_PANEL_BORDER_COLOR,
+        title_color=_TITLE_COLOR,
+        section_color=_LIBRARY_METADATA_COLOR,
+        shortcut_color=_BUTTON_BG,
+        action_color=_SUBTITLE_COLOR,
+        note_color=_INSTRUCTION_COLOR,
+        heading_font=_TYPOGRAPHY.heading,
+        section_font=_TYPOGRAPHY.section,
+        shortcut_font=_TYPOGRAPHY.body_strong,
+        action_font=_TYPOGRAPHY.body,
+        note_font=_TYPOGRAPHY.supporting,
     )
 
 
@@ -981,6 +1002,7 @@ def show_splash_screen(
     right_frame.pack(side="left", fill="both", expand=True)
     map_library_surface = tk.Frame(right_frame, bg=_BG_COLOR)
     preferences_surface = tk.Frame(right_frame, bg=_BG_COLOR)
+    help_surface = tk.Frame(right_frame, bg=_BG_COLOR)
     about_surface = tk.Frame(right_frame, bg=_BG_COLOR)
     cave_metadata_surface = tk.Frame(right_frame, bg=_BG_COLOR)
 
@@ -1000,6 +1022,7 @@ def show_splash_screen(
     map_library_workflow_ref: list[MapLibraryWorkflow | None] = [None]
     map_library_panel_ref: list[MapLibraryPanel | None] = [None]
     preferences_panel_ref: list[PreferencesPanel | None] = [None]
+    help_panel_ref: list[HelpPanel | None] = [None]
     about_surface_initialized = [False]
     discard_preferences_dialog_ref: list[object | None] = [None]
     active_surface = ["map_library"]
@@ -1318,6 +1341,7 @@ def show_splash_screen(
         """Reveal the existing Map Library without rebuilding its catalog."""
         if active_surface[0] != "map_library":
             preferences_surface.pack_forget()
+            help_surface.pack_forget()
             about_surface.pack_forget()
             cave_metadata_surface.pack_forget()
             map_library_surface.pack(fill="both", expand=True)
@@ -1397,6 +1421,7 @@ def show_splash_screen(
         panel = _ensure_preferences_panel()
         if active_surface[0] != "preferences":
             map_library_surface.pack_forget()
+            help_surface.pack_forget()
             about_surface.pack_forget()
             cave_metadata_surface.pack_forget()
             preferences_surface.pack(fill="both", expand=True)
@@ -1406,6 +1431,35 @@ def show_splash_screen(
 
     def _on_preferences_click():
         _show_preferences_surface()
+
+    def _ensure_help_panel() -> HelpPanel:
+        panel = help_panel_ref[0]
+        if panel is not None:
+            return panel
+        panel = HelpPanel(
+            help_surface,
+            px=px,
+            style=_help_panel_style(),
+            sections=keyboard_control_sections(presentation_profile),
+        )
+        panel.create()
+        help_panel_ref[0] = panel
+        return panel
+
+    def _show_help_surface() -> None:
+        panel = _ensure_help_panel()
+        if active_surface[0] != "help":
+            map_library_surface.pack_forget()
+            preferences_surface.pack_forget()
+            about_surface.pack_forget()
+            cave_metadata_surface.pack_forget()
+            help_surface.pack(fill="both", expand=True)
+            active_surface[0] = "help"
+        _set_active_navigation("Help")
+        panel.focus_content()
+
+    def _on_help_click() -> None:
+        _request_leave_preferences(_show_help_surface)
 
     def _open_about_website(url: str) -> None:
         try:
@@ -1441,6 +1495,7 @@ def show_splash_screen(
         if active_surface[0] != "about":
             map_library_surface.pack_forget()
             preferences_surface.pack_forget()
+            help_surface.pack_forget()
             cave_metadata_surface.pack_forget()
             about_surface.pack(fill="both", expand=True)
             active_surface[0] = "about"
@@ -1557,6 +1612,8 @@ def show_splash_screen(
         _on_preferences_click,
     )
     navigation_items["Preferences"] = preferences_navigation_item
+    help_navigation_item = _create_navigation_item("Help", _on_help_click)
+    navigation_items["Help"] = help_navigation_item
     about_navigation_item = _create_navigation_item("About", _on_about_click)
     navigation_items["About"] = about_navigation_item
 
@@ -1626,6 +1683,7 @@ def show_splash_screen(
         if active_surface[0] != "cave_metadata":
             map_library_surface.pack_forget()
             preferences_surface.pack_forget()
+            help_surface.pack_forget()
             about_surface.pack_forget()
             cave_metadata_surface.pack(fill="both", expand=True)
             active_surface[0] = "cave_metadata"
@@ -1746,7 +1804,7 @@ def show_splash_screen(
             if panel is not None:
                 panel.apply()
             return "break"
-        if active_surface[0] == "about":
+        if active_surface[0] in {"about", "help"}:
             _show_map_library_surface()
             return "break"
         on_open_map_folder()
@@ -1756,7 +1814,7 @@ def show_splash_screen(
         if active_surface[0] == "preferences":
             _request_leave_preferences(_discard_preferences_and_show_map_library)
             return "break"
-        if active_surface[0] == "about":
+        if active_surface[0] in {"about", "help"}:
             _show_map_library_surface()
             return "break"
         on_close()

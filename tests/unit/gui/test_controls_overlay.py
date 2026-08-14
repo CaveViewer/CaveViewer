@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import inspect
+
 import pytest
 
 from caveviewer.gui import controls_overlay
@@ -131,6 +133,17 @@ def test_recording_help_copy_is_shortcut_only_and_format_neutral():
     assert rows["Ctrl + T"] == "Start/stop manual trace"
     assert rows["Ctrl + C"] == "Start/stop slice"
     assert rows["Space"] == "Pause/resume a recorded dive"
+    assert rows["Arrow keys"] == "Look around"
+    assert rows["Ctrl + Shift + P"] == "Pause active map import"
+
+
+def test_controls_overlay_uses_the_shared_keyboard_catalog():
+    source = inspect.getsource(controls_overlay._get_platform_control_sections)
+
+    assert "keyboard_control_sections(" in source
+    assert '"Start/stop recording"' not in source
+    assert '"Start/stop manual trace"' not in source
+    assert '"Start/stop slice"' not in source
 
 
 def _control_rows_for_profile(profile) -> dict[str, str]:

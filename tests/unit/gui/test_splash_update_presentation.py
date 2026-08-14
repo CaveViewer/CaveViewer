@@ -464,6 +464,7 @@ def test_splash_navigation_actions_are_keyboard_accessible_without_fallthrough()
     assert "panel.focus_content()" in source
     assert "map_library_surface = tk.Frame(right_frame, bg=_BG_COLOR)" in source
     assert "preferences_surface = tk.Frame(right_frame, bg=_BG_COLOR)" in source
+    assert "help_surface = tk.Frame(right_frame, bg=_BG_COLOR)" in source
     assert "about_surface = tk.Frame(right_frame, bg=_BG_COLOR)" in source
     assert "def _show_preferences_surface() -> None:" in source
     assert "preferences_surface_required_height" in source
@@ -471,11 +472,21 @@ def test_splash_navigation_actions_are_keyboard_accessible_without_fallthrough()
     assert "map_library_surface.pack_forget()" in source
     assert "preferences_surface.pack_forget()" in source
     assert "def _show_about_surface() -> None:" in source
+    assert "def _ensure_help_panel() -> HelpPanel:" in source
+    assert "def _show_help_surface() -> None:" in source
+    assert "_request_leave_preferences(_show_help_surface)" in source
     assert "PreferencesPanel(" in source
+    assert "HelpPanel(" in source
+    assert "keyboard_control_sections(presentation_profile)" in source
     assert "_build_themed_about_content(" in source
     assert "show_close=False" in source
     assert "def _request_leave_preferences" in source
     assert "_show_discard_preferences_dialog(" in source
+    assert source.index("help_navigation_item = _create_navigation_item") < source.index(
+        "about_navigation_item = _create_navigation_item"
+    )
+    assert 'navigation_items["Help"] = help_navigation_item' in source
+    assert 'active_surface[0] in {"about", "help"}' in source
     assert 'root.bind("<Return>", _handle_root_return)' in source
     assert 'root.bind("<Escape>", _cancel_preferences_or_close)' in source
     assert "_show_themed_about_dialog(" not in source
