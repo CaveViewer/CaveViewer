@@ -36,5 +36,3 @@ All notable changes to this project are documented in this file.
   pop-up windows.
 - Update messages are simpler: CaveViewer first confirms that an update is
   ready, then offers one clear link to show the downloaded update.
-
-
