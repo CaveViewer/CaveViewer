@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import tkinter as tk
+from tkinter import font as tkfont
 from dataclasses import dataclass
 from typing import Callable, Iterable
 
@@ -23,9 +24,95 @@ from caveviewer.gui.top_tab_strip import (
 )
 
 
+_CAPTURE_HELP_LAYOUT = (
+    (
+        "video",
+        "Video",
+        (
+            (
+                "recording-toggle",
+                "Start/stop capturing the current dive as a video.",
+            ),
+        ),
+    ),
+    (
+        "dive-trace",
+        "Dive Trace",
+        (
+            (
+                "manual-trace-toggle",
+                "Start/stop capturing the camera path as a dive trace.",
+            ),
+        ),
+    ),
+    (
+        "cave-slice",
+        "Cave Slice",
+        (
+            (
+                "slice-toggle",
+                "Start/stop capturing a cave segment as an independent map.",
+            ),
+            (
+                "slice-cancel",
+                "Cancel an active slice without saving it.",
+            ),
+        ),
+    ),
+)
+_KEYS_TAB_EXCLUDED_SECTION_IDS = frozenset(
+    {"capture", "map", "map-import", "recorded-dive"}
+)
+
+
+def key_help_sections(
+    sections: Iterable[KeyboardShortcutSection],
+) -> tuple[KeyboardShortcutSection, ...]:
+    """Return direct-navigation bindings that belong in the Help Keys tab."""
+    return tuple(
+        section
+        for section in sections
+        if section.id not in _KEYS_TAB_EXCLUDED_SECTION_IDS
+    )
+
+
+def capture_help_sections(
+    capture_section: KeyboardShortcutSection,
+) -> tuple[KeyboardShortcutSection, ...]:
+    """Return Capture-tab rows with artifact-specific user guidance.
+
+    Shortcuts come from the shared keyboard catalog so the displayed primary
+    modifier remains correct for the current platform.  The Help tab owns the
+    extra description of each saved artifact.
+    """
+    shortcuts_by_id = {
+        shortcut.id: shortcut for shortcut in capture_section.shortcuts
+    }
+    sections: list[KeyboardShortcutSection] = []
+    for section_id, title, rows in _CAPTURE_HELP_LAYOUT:
+        shortcuts = tuple(
+            KeyboardShortcut(
+                id=shortcut_id,
+                shortcut=shortcuts_by_id[shortcut_id].shortcut,
+                action=action,
+            )
+            for shortcut_id, action in rows
+            if shortcut_id in shortcuts_by_id
+        )
+        if shortcuts:
+            sections.append(
+                KeyboardShortcutSection(
+                    id=section_id,
+                    title=title,
+                    shortcuts=shortcuts,
+                )
+            )
+    return tuple(sections)
+
+
 @dataclass(frozen=True)
 class HelpPanelStyle:
-    """Theme and typography tokens owned by the splash Keys presentation."""
+    """Theme and typography tokens owned by the splash Help presentation."""
 
     background_color: str
     tab_active_color: str
@@ -44,7 +131,7 @@ class HelpPanelStyle:
 
 
 class HelpPanel:
-    """Own the embedded, scrollable Keys table on the Tk main thread."""
+    """Own the embedded, scrollable Help tables on the Tk main thread."""
 
     def __init__(
         self,
@@ -57,28 +144,39 @@ class HelpPanel:
         self.parent = parent
         self._px = px
         self._style = style
-        self._sections = tuple(sections)
+        source_sections = tuple(sections)
+        capture_section = next(
+            (section for section in source_sections if section.id == "capture"),
+            None,
+        )
+        self._tab_sections: dict[str, tuple[KeyboardShortcutSection, ...]] = {
+            "keys": key_help_sections(source_sections),
+        }
+        self._tabs = [TopTab("keys", "Keys")]
+        if capture_section is not None:
+            self._tab_sections["capture"] = capture_help_sections(capture_section)
+            self._tabs.append(TopTab("capture", "Capture"))
         self._shell = None
         self._content_canvas = None
-        self._content_frame = None
-        self._content_window = None
         self._scrollbar = None
         self._tab_strip = None
-        self._table_rows: list[object] = []
-        self._action_labels: list[object] = []
-        self._next_grid_row = 0
+        self._active_tab_key = None
+        self._section_font = None
+        self._keycap_font = None
+        self._action_font = None
+        self._content_height = 0
 
     def create(self) -> None:
-        """Build the single-tab Keys table inside the splash-owned surface."""
+        """Build the tabbed Help reference inside the splash-owned surface."""
         if self._shell is not None:
             return
 
         style = self._style
         surface = TopTabbedContentSurface(
             self.parent,
-            tabs=(TopTab("keys", "Keys"),),
+            tabs=tuple(self._tabs),
             active_key="keys",
-            on_selected=None,
+            on_selected=self._show_tab,
             px=self._px,
             tab_style=TopTabStripStyle(
                 background_color=style.background_color,
@@ -111,6 +209,9 @@ class HelpPanel:
         )
         canvas.grid(row=0, column=0, sticky="nsew")
         self._content_canvas = canvas
+        self._section_font = self._create_canvas_font(canvas, style.section_font)
+        self._keycap_font = self._create_canvas_font(canvas, style.keycap_font)
+        self._action_font = self._create_canvas_font(canvas, style.action_font)
 
         self._scrollbar = CanvasVerticalScrollbar(
             content_shell,
@@ -119,23 +220,11 @@ class HelpPanel:
             style=CanvasScrollbarStyle(background_color=style.background_color),
         )
         self._scrollbar.mount_grid(row=0, column=1, sticky="ns")
-
-        content = tk.Frame(
-            canvas,
-            bg=style.background_color,
-        )
-        content.grid_columnconfigure(0, weight=1)
-        self._content_frame = content
-        self._content_window = canvas.create_window((0, 0), window=content, anchor="nw")
-        content.bind("<Configure>", self._on_content_configure, add="+")
         canvas.bind("<Configure>", self._on_canvas_configure, add="+")
-
-        for section in self._sections:
-            self._create_section(content, section)
-        self._scrollbar.bind_mousewheel(content)
+        self._show_tab("keys")
 
     def focus_content(self) -> None:
-        """Give the visible Keys table a stable keyboard-focus target."""
+        """Give the visible Help table a stable keyboard-focus target."""
         canvas = self._content_canvas
         if canvas is None:
             return
@@ -144,146 +233,192 @@ class HelpPanel:
         except tk.TclError:
             pass
 
-    def _create_section(self, parent, section: KeyboardShortcutSection) -> None:
-        style = self._style
-        # Keep a single aligned sequence of section labels, quiet rows, and
-        # subtle horizontal dividers without wrapping the table in a card.
-        next_row = self._next_grid_row
-        tk.Label(
-            parent,
-            text=section.title.upper(),
-            font=style.section_font,
-            fg=style.section_color,
-            bg=style.background_color,
-            anchor="w",
-        ).grid(
-            row=next_row,
-            column=0,
-            sticky="ew",
-            pady=(self._px(7) if next_row else 0, self._px(7)),
-        )
-        self._next_grid_row = next_row + 1
-
-        for shortcut in section.shortcuts:
-            self._create_shortcut_row(parent, shortcut)
-
-    def _create_shortcut_row(self, parent, shortcut: KeyboardShortcut) -> None:
-        style = self._style
-        row = tk.Frame(
-            parent,
-            bg=style.background_color,
-        )
-        row.grid(row=self._next_grid_row, column=0, sticky="ew")
-        row.grid_columnconfigure(2, weight=1)
-        self._next_grid_row += 1
-        self._table_rows.append(row)
-
-        key_cell = tk.Frame(row, bg=style.background_color)
-        key_cell.grid(
-            row=0,
-            column=0,
-            sticky="w",
-            padx=(self._px(12), self._px(10)),
-            pady=self._px(7),
-        )
-        self._create_keycap_sequence(key_cell, shortcut.shortcut)
-        tk.Frame(row, bg=style.background_color, width=self._px(18)).grid(
-            row=0,
-            column=1,
-            sticky="ns",
-        )
-        action_label = tk.Label(
-            row,
-            text=shortcut.action,
-            font=style.action_font,
-            fg=style.action_color,
-            bg=style.background_color,
-            anchor="w",
-            justify="left",
-        )
-        action_label.grid(
-            row=0,
-            column=2,
-            sticky="ew",
-            padx=(self._px(14), self._px(12)),
-            pady=self._px(7),
-        )
-        self._action_labels.append(action_label)
-        tk.Frame(
-            parent,
-            bg=style.row_divider_color,
-            height=max(1, self._px(1)),
-        ).grid(row=self._next_grid_row, column=0, sticky="ew")
-        self._next_grid_row += 1
-
-    def _create_keycap_sequence(self, parent, shortcut: str) -> None:
-        style = self._style
-        for part in shortcut_keycap_parts(shortcut):
-            if part in {"+", "/"}:
-                tk.Label(
-                    parent,
-                    text=part,
-                    font=style.action_font,
-                    fg=style.section_color,
-                    bg=style.background_color,
-                ).pack(side="left", padx=self._px(4))
-                continue
-            tk.Label(
-                parent,
-                text=part,
-                font=style.keycap_font,
-                fg=style.keycap_text_color,
-                bg=style.keycap_background_color,
-                highlightthickness=1,
-                highlightbackground=style.keycap_border_color,
-                highlightcolor=style.keycap_border_color,
-                padx=self._px(6),
-                pady=self._px(2),
-            ).pack(side="left", padx=(0, self._px(5)))
-
-    def _on_content_configure(self, _event=None) -> None:
-        self._sync_scroll_region()
-
-    def _on_canvas_configure(self, event) -> None:
-        canvas = self._content_canvas
-        if canvas is None or self._content_window is None:
+    def _show_tab(self, key: str) -> None:
+        """Draw the selected Help table without rebuilding Tk widget trees."""
+        if key not in self._tab_sections:
             return
+        if key == self._active_tab_key:
+            return
+
+        self._active_tab_key = key
+        canvas = self._content_canvas
+        if canvas is None:
+            return
+        self._render_table(canvas.winfo_width())
         try:
-            canvas.itemconfigure(self._content_window, width=event.width)
+            canvas.yview_moveto(0)
         except tk.TclError:
             return
-        self._layout_table(event.width)
-        self._sync_scroll_region()
 
-    def _layout_table(self, content_width: int | float) -> None:
+    def _create_canvas_font(self, canvas, font_spec: tuple):
+        """Create one reusable measurement font for the static canvas table."""
         try:
-            available_width = max(1, int(float(content_width)))
-        except (TypeError, ValueError):
+            return tkfont.Font(root=canvas, font=font_spec)
+        except tk.TclError:
+            return None
+
+    def _canvas_font(self, font_role: str):
+        fallback = getattr(self._style, f"{font_role}_font")
+        return getattr(self, f"_{font_role}_font") or fallback
+
+    def _font_line_height(self, font_role: str) -> int:
+        font = self._canvas_font(font_role)
+        try:
+            return max(1, int(font.metrics("linespace")))
+        except (AttributeError, tk.TclError):
+            return max(1, self._px(14))
+
+    def _font_width(self, font_role: str, text: str) -> int:
+        font = self._canvas_font(font_role)
+        try:
+            return max(0, int(font.measure(text)))
+        except (AttributeError, tk.TclError):
+            return max(0, self._px(8) * len(text))
+
+    def _render_table(self, content_width: int | float) -> None:
+        """Render a compact Help tab as canvas items instead of Tk widgets."""
+        canvas = self._content_canvas
+        active_tab_key = self._active_tab_key
+        if canvas is None or active_tab_key is None:
             return
+        try:
+            width = max(self._px(320), int(float(content_width)))
+        except (TypeError, ValueError):
+            width = self._px(320)
+
+        canvas.delete("help-content")
+        y = 0
+        for section_index, section in enumerate(self._tab_sections[active_tab_key]):
+            if section_index:
+                y += self._px(7)
+            y = self._draw_section_heading(canvas, section, y)
+            for shortcut in section.shortcuts:
+                y = self._draw_shortcut_row(canvas, shortcut, y, width)
+
+        self._content_height = max(0, y)
+        try:
+            canvas.configure(scrollregion=(0, 0, width, self._content_height))
+        except tk.TclError:
+            return
+        scrollbar = self._scrollbar
+        if scrollbar is not None:
+            scrollbar.sync_overflow(self._content_height)
+
+    def _draw_section_heading(
+        self,
+        canvas,
+        section: KeyboardShortcutSection,
+        y: int,
+    ) -> int:
+        style = self._style
+        canvas.create_text(
+            0,
+            y,
+            text=section.title.upper(),
+            font=self._canvas_font("section"),
+            fill=style.section_color,
+            anchor="nw",
+            tags="help-content",
+        )
+        return y + self._font_line_height("section") + self._px(7)
+
+    def _draw_shortcut_row(
+        self,
+        canvas,
+        shortcut: KeyboardShortcut,
+        y: int,
+        content_width: int,
+    ) -> int:
+        style = self._style
         key_width = min(
             self._px(250),
-            max(self._px(170), int(available_width * 0.37)),
+            max(self._px(170), int(content_width * 0.37)),
         )
+        action_x = key_width + self._px(32)
         action_width = max(
             self._px(140),
-            available_width - key_width - self._px(42),
+            content_width - action_x - self._px(12),
         )
-        for row in self._table_rows:
-            row.grid_columnconfigure(0, minsize=key_width)
-        for label in self._action_labels:
-            label.configure(wraplength=action_width)
+        row_pad_y = self._px(7)
+        action_item = canvas.create_text(
+            action_x,
+            y + row_pad_y,
+            text=shortcut.action,
+            font=self._canvas_font("action"),
+            fill=style.action_color,
+            anchor="nw",
+            justify="left",
+            width=action_width,
+            tags="help-content",
+        )
+        action_bounds = canvas.bbox(action_item)
+        action_height = (
+            self._font_line_height("action")
+            if action_bounds is None
+            else max(1, action_bounds[3] - action_bounds[1])
+        )
+        keycap_height = self._keycap_height(shortcut.shortcut)
+        self._draw_keycap_sequence(
+            canvas,
+            x=self._px(12),
+            y=y + row_pad_y + max(0, (action_height - keycap_height) // 2),
+            shortcut=shortcut.shortcut,
+        )
+        row_bottom = y + row_pad_y * 2 + max(action_height, keycap_height)
+        canvas.create_line(
+            0,
+            row_bottom,
+            content_width,
+            row_bottom,
+            fill=style.row_divider_color,
+            width=max(1, self._px(1)),
+            tags="help-content",
+        )
+        return row_bottom + max(1, self._px(1))
 
-    def _sync_scroll_region(self) -> None:
-        canvas = self._content_canvas
-        scrollbar = self._scrollbar
-        if canvas is None or scrollbar is None:
-            return
-        try:
-            bounds = canvas.bbox("all")
-            if bounds is None:
-                return
-            canvas.configure(scrollregion=bounds)
-            content_height = max(0, int(bounds[3] - bounds[1]))
-            scrollbar.sync_overflow(content_height)
-        except tk.TclError:
-            return
+    def _keycap_height(self, shortcut: str) -> int:
+        if not shortcut_keycap_parts(shortcut):
+            return self._font_line_height("action")
+        return self._font_line_height("keycap") + self._px(4) + 2
+
+    def _draw_keycap_sequence(self, canvas, *, x: int, y: int, shortcut: str) -> None:
+        style = self._style
+        keycap_height = self._keycap_height(shortcut)
+        cursor = x
+        for part in shortcut_keycap_parts(shortcut):
+            if part in {"+", "/"}:
+                canvas.create_text(
+                    cursor,
+                    y + keycap_height / 2,
+                    text=part,
+                    font=self._canvas_font("action"),
+                    fill=style.section_color,
+                    anchor="w",
+                    tags="help-content",
+                )
+                cursor += self._font_width("action", part) + self._px(8)
+                continue
+            keycap_width = self._font_width("keycap", part) + self._px(12) + 2
+            canvas.create_rectangle(
+                cursor,
+                y,
+                cursor + keycap_width,
+                y + keycap_height,
+                fill=style.keycap_background_color,
+                outline=style.keycap_border_color,
+                width=1,
+                tags="help-content",
+            )
+            canvas.create_text(
+                cursor + self._px(6) + 1,
+                y + keycap_height / 2,
+                text=part,
+                font=self._canvas_font("keycap"),
+                fill=style.keycap_text_color,
+                anchor="w",
+                tags="help-content",
+            )
+            cursor += keycap_width + self._px(5)
+
+    def _on_canvas_configure(self, event) -> None:
+        self._render_table(event.width)

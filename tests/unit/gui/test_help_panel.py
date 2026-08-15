@@ -5,6 +5,8 @@ from __future__ import annotations
 import inspect
 
 from caveviewer.gui import help_panel
+from caveviewer.gui.controls_catalog import keyboard_control_sections
+from caveviewer.gui.platform.presentation import select_presentation_profile
 
 
 def test_help_panel_uses_the_shared_canvas_scrollbar():
@@ -13,31 +15,82 @@ def test_help_panel_uses_the_shared_canvas_scrollbar():
     assert "CanvasVerticalScrollbar(" in source
     assert "CanvasScrollbarStyle(" in source
     assert "tk.Scrollbar(" not in source
-    assert "self._scrollbar.bind_mousewheel(content)" in source
+    assert "canvas=canvas" in source
+    assert 'canvas.bind("<Configure>", self._on_canvas_configure' in source
 
 
 def test_help_panel_uses_a_compact_keys_table_without_redundant_labels():
     source = inspect.getsource(help_panel.HelpPanel)
 
     assert 'TopTab("keys", "Keys")' in source
+    assert 'TopTab("capture", "Capture")' in source
     assert "TopTabbedContentSurface(" in source
-    assert "def _create_keycap_sequence" in source
+    assert "def _draw_keycap_sequence" in source
     assert "shortcut_keycap_parts(shortcut)" in source
-    assert "column=2" in source
+    assert 'canvas.delete("help-content")' in source
     assert "Keyboard shortcuts" not in source
     assert "Controls are shown for this platform" not in source
     assert "help_section_column_count" not in source
 
 
+def test_capture_help_has_its_own_tab_with_artifact_specific_guidance():
+    source = inspect.getsource(help_panel.HelpPanel)
+
+    assert 'capture_section = next(' in source
+    assert 'self._tab_sections["capture"]' in source
+    assert "def _show_tab" in source
+
+
+def test_keys_help_omits_capture_map_import_and_recorded_dive_sections():
+    sections = keyboard_control_sections(
+        select_presentation_profile(platform_name="windows")
+    )
+
+    assert [section.id for section in help_panel.key_help_sections(sections)] == [
+        "movement",
+        "view",
+        "bookmarks",
+    ]
+
+
+def test_capture_help_preserves_platform_shortcuts_and_explains_artifacts():
+    source_sections = keyboard_control_sections(
+        select_presentation_profile(platform_name="darwin")
+    )
+    capture_source = next(
+        section for section in source_sections if section.id == "capture"
+    )
+    rows = {
+        shortcut.id: shortcut
+        for section in help_panel.capture_help_sections(capture_source)
+        for shortcut in section.shortcuts
+    }
+
+    assert rows["recording-toggle"].shortcut == "Cmd + R"
+    assert rows["recording-toggle"].action == (
+        "Start/stop capturing the current dive as a video."
+    )
+    assert rows["manual-trace-toggle"].shortcut == "Cmd + T"
+    assert rows["manual-trace-toggle"].action == (
+        "Start/stop capturing the camera path as a dive trace."
+    )
+    assert rows["slice-toggle"].shortcut == "Cmd + C"
+    assert rows["slice-toggle"].action == (
+        "Start/stop capturing a cave segment as an independent map."
+    )
+    assert rows["slice-cancel"].shortcut == "Escape"
+    assert rows["slice-cancel"].action == "Cancel an active slice without saving it."
+
+
 def test_help_panel_uses_a_quiet_table_without_card_borders():
     create_source = inspect.getsource(help_panel.HelpPanel.create)
-    row_source = inspect.getsource(help_panel.HelpPanel._create_shortcut_row)
+    row_source = inspect.getsource(help_panel.HelpPanel._draw_shortcut_row)
 
     assert 'text="Help"' not in create_source
     assert "TopTabbedContentSurface(" in create_source
     assert "highlightbackground" not in create_source
     assert "row_divider_color" in row_source
-    assert "highlightthickness" not in row_source
+    assert "canvas.create_line(" in row_source
 
 
 def test_help_panel_is_embedded_and_uses_the_shared_scroll_host():
@@ -45,5 +98,5 @@ def test_help_panel_is_embedded_and_uses_the_shared_scroll_host():
 
     assert "tk.Canvas(" in source
     assert "tk.Toplevel" not in source
-    assert "scrollbar.sync_overflow(content_height)" in source
+    assert "scrollbar.sync_overflow(self._content_height)" in source
     assert "def focus_content" in source
