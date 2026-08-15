@@ -29,6 +29,7 @@ manual handling only when a splash is visible.
 from __future__ import annotations
 
 import enum
+import math
 import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable
@@ -213,6 +214,7 @@ _ABOUT_WEBSITE_LINKS = (
     ("www.caveviewer.com", _CAVEVIEWER_WEBSITE_URL),
     ("www.bottomlineprojects.com", _BOTTOMLINE_PROJECTS_WEBSITE_URL),
 )
+_ABOUT_CREDITS_WRAP_LENGTH = 430
 _LIBRARY_PANEL_BORDER_COLOR = "#1e2028"
 _LIBRARY_METADATA_COLOR = "#5a5d68"
 _LIBRARY_METADATA_STATUS_COLOR = DARK_THEME.secondary_text
@@ -530,18 +532,18 @@ def _build_themed_about_content(
     tk.Label(
         content,
         text=_CREDITS_TEXT.strip(),
-        font=_TYPOGRAPHY.supporting,
+        font=_TYPOGRAPHY.body,
         fg=_SUBTITLE_COLOR,
         bg=_BG_COLOR,
         justify="center",
-        wraplength=px(350),
+        wraplength=px(_ABOUT_CREDITS_WRAP_LENGTH),
     ).pack(fill="x")
 
     for index, (label_text, website_url) in enumerate(_ABOUT_WEBSITE_LINKS):
         website_label = tk.Label(
             content,
             text=label_text,
-            font=_TYPOGRAPHY.supporting,
+            font=_TYPOGRAPHY.body,
             fg=_BUTTON_BG if on_open_website is not None else _SUBTITLE_COLOR,
             bg=_BG_COLOR,
             cursor="hand2" if on_open_website is not None else "arrow",
@@ -1487,10 +1489,132 @@ def show_splash_screen(
     def _focus_map_library() -> None:
         _request_leave_preferences(_show_map_library_surface)
 
+    def _create_navigation_icon(parent, icon_name: str):
+        """Create a small, scalable outline icon for one navigation row."""
+        size = px(28)
+        icon = tk.Canvas(
+            parent,
+            width=size,
+            height=size,
+            bg=_BG_COLOR,
+            borderwidth=0,
+            highlightthickness=0,
+            cursor="hand2",
+            takefocus=False,
+        )
+
+        def redraw(background: str, foreground: str) -> None:
+            icon.configure(bg=background)
+            icon.delete("navigation-icon")
+            stroke = max(1, px(1.6))
+            center = size / 2
+
+            def line(*points) -> None:
+                icon.create_line(
+                    *points,
+                    fill=foreground,
+                    width=stroke,
+                    capstyle="round",
+                    joinstyle="round",
+                    tags="navigation-icon",
+                )
+
+            if icon_name == "map":
+                line(
+                    px(3),
+                    px(6),
+                    px(10),
+                    px(3),
+                    px(18),
+                    px(6),
+                    px(25),
+                    px(3),
+                    px(25),
+                    px(22),
+                    px(18),
+                    px(25),
+                    px(10),
+                    px(22),
+                    px(3),
+                    px(25),
+                    px(3),
+                    px(6),
+                )
+                line(px(10), px(3), px(10), px(22))
+                line(px(18), px(6), px(18), px(25))
+            elif icon_name == "preferences":
+                points = []
+                for index in range(16):
+                    angle = math.radians(index * 22.5 - 90)
+                    radius = px(11 if index % 2 == 0 else 8)
+                    points.extend(
+                        (
+                            center + math.cos(angle) * radius,
+                            center + math.sin(angle) * radius,
+                        )
+                    )
+                icon.create_polygon(
+                    *points,
+                    outline=foreground,
+                    fill="",
+                    width=stroke,
+                    joinstyle="round",
+                    tags="navigation-icon",
+                )
+                icon.create_oval(
+                    center - px(3),
+                    center - px(3),
+                    center + px(3),
+                    center + px(3),
+                    outline=foreground,
+                    width=stroke,
+                    tags="navigation-icon",
+                )
+            elif icon_name == "help":
+                icon.create_oval(
+                    px(3),
+                    px(3),
+                    px(25),
+                    px(25),
+                    outline=foreground,
+                    width=stroke,
+                    tags="navigation-icon",
+                )
+                icon.create_text(
+                    center,
+                    center,
+                    text="?",
+                    font=_TYPOGRAPHY.body_strong,
+                    fill=foreground,
+                    tags="navigation-icon",
+                )
+            else:
+                icon.create_oval(
+                    px(3),
+                    px(3),
+                    px(25),
+                    px(25),
+                    outline=foreground,
+                    width=stroke,
+                    tags="navigation-icon",
+                )
+                icon.create_text(
+                    center,
+                    center,
+                    text="i",
+                    font=_TYPOGRAPHY.body_strong,
+                    fill=foreground,
+                    tags="navigation-icon",
+                )
+
+        icon._cv_set_appearance = redraw
+        return icon
+
     def _create_navigation_item(
         text: str,
         callback,
         *,
+        icon_name: str,
         selected: bool = False,
     ):
         """Create one keyboard-accessible action in the persistent nav rail."""
@@ -1501,6 +1625,8 @@ def show_splash_screen(
             width=px(3),
         )
         indicator.pack(side="left", fill="y")
+        icon = _create_navigation_icon(item_row, icon_name)
+        icon.pack(side="left", padx=(px(10), px(7)))
         item = tk.Label(
             item_row,
             text=text,
@@ -1508,7 +1634,7 @@ def show_splash_screen(
             fg=_TITLE_COLOR if selected else _SUBTITLE_COLOR,
             bg=_NAVIGATION_ACTIVE_BG if selected else _BG_COLOR,
             anchor="w",
-            padx=px(11),
+            padx=0,
             pady=px(9),
             cursor="hand2",
             takefocus=True,
@@ -1516,7 +1642,7 @@ def show_splash_screen(
             highlightbackground=_BG_COLOR,
             highlightcolor=_BUTTON_BORDER_COLOR,
         )
-        item.pack(side="left", fill="both", expand=True)
+        item.pack(side="left", fill="both", expand=True, padx=(0, px(11)))
         state = {
             "selected": selected,
             "hovered": False,
@@ -1550,6 +1676,10 @@ def show_splash_screen(
                 ),
                 highlightbackground=background,
             )
+            icon._cv_set_appearance(
+                background,
+                _TITLE_COLOR if state["selected"] or active else _SUBTITLE_COLOR,
+            )
 
         def set_selected(is_selected: bool) -> None:
             state["selected"] = is_selected
@@ -1572,10 +1702,14 @@ def show_splash_screen(
             refresh_visual()
 
         _bind_activation(item, callback)
+        _bind_activation(icon, callback)
         item.bind("<Enter>", on_enter)
         item.bind("<Leave>", on_leave)
         item.bind("<FocusIn>", on_focus_in)
         item.bind("<FocusOut>", on_focus_out)
+        icon.bind("<Enter>", on_enter)
+        icon.bind("<Leave>", on_leave)
+        refresh_visual()
         item_row.pack(fill="x", pady=(0, px(4)))
         item._cv_set_selected = set_selected
         return item
@@ -1584,17 +1718,27 @@ def show_splash_screen(
     map_library_navigation_item = _create_navigation_item(
         "Map Library",
         _focus_map_library,
+        icon_name="map",
         selected=True,
     )
     navigation_items["Map Library"] = map_library_navigation_item
     preferences_navigation_item = _create_navigation_item(
         "Preferences",
         _on_preferences_click,
+        icon_name="preferences",
     )
     navigation_items["Preferences"] = preferences_navigation_item
-    help_navigation_item = _create_navigation_item("Help", _on_help_click)
+    help_navigation_item = _create_navigation_item(
+        "Help",
+        _on_help_click,
+        icon_name="help",
+    )
     navigation_items["Help"] = help_navigation_item
-    about_navigation_item = _create_navigation_item("About", _on_about_click)
+    about_navigation_item = _create_navigation_item(
+        "About",
+        _on_about_click,
+        icon_name="about",
+    )
     navigation_items["About"] = about_navigation_item
 
     def _set_active_navigation(active_name: str) -> None:

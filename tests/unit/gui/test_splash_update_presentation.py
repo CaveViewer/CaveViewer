@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import ast
 import inspect
 import sys
+import textwrap
 from types import SimpleNamespace
 
 import pytest
@@ -444,9 +446,12 @@ def test_splash_navigation_actions_are_keyboard_accessible_without_fallthrough()
     source = inspect.getsource(splash_screen.show_splash_screen)
 
     assert "navigation_frame = tk.Frame(" in source
+    assert "def _create_navigation_icon(" in source
     assert "def _create_navigation_item(" in source
     assert "item_row = tk.Frame(navigation_frame, bg=_BG_COLOR)" in source
     assert "indicator = tk.Frame(" in source
+    assert "icon = _create_navigation_icon(item_row, icon_name)" in source
+    assert "_bind_activation(icon, callback)" in source
     assert "_NAVIGATION_ACTIVE_INDICATOR" in source
     assert "font=_TYPOGRAPHY.body_strong if selected else _TYPOGRAPHY.body" in source
     assert "takefocus=True" in source
@@ -456,8 +461,12 @@ def test_splash_navigation_actions_are_keyboard_accessible_without_fallthrough()
     assert "def _bind_activation(widget, callback) -> None:" in source
     assert "map_library_navigation_item = _create_navigation_item(" in source
     assert '"Map Library",' in source
+    assert 'icon_name="map"' in source
     assert '_create_navigation_item("Open Map", on_open_map_folder)' not in source
     assert "preferences_navigation_item = _create_navigation_item(" in source
+    assert 'icon_name="preferences"' in source
+    assert 'icon_name="help"' in source
+    assert 'icon_name="about"' in source
     assert "about_navigation_item = _create_navigation_item(" in source
     assert "open_map_folder=on_open_map_folder" in source
     assert "def _focus_map_library() -> None:" in source
@@ -503,6 +512,30 @@ def test_splash_navigation_actions_are_keyboard_accessible_without_fallthrough()
     assert "KNOWN_STANDARD_LIBRARY_MAPS" not in source
     assert "start_sample_download_worker(" not in source
     assert "show_sample_maps_dialog(" not in source
+
+
+def test_splash_navigation_keeps_asymmetric_label_padding_in_pack_geometry():
+    source = textwrap.dedent(inspect.getsource(splash_screen.show_splash_screen))
+    tree = ast.parse(source)
+    label_calls = [
+        call
+        for call in ast.walk(tree)
+        if isinstance(call, ast.Call)
+        and isinstance(call.func, ast.Attribute)
+        and isinstance(call.func.value, ast.Name)
+        and call.func.value.id == "tk"
+        and call.func.attr == "Label"
+    ]
+
+    assert label_calls
+    assert all(
+        not (
+            keyword.arg == "padx" and isinstance(keyword.value, ast.Tuple)
+        )
+        for call in label_calls
+        for keyword in call.keywords
+    )
+    assert 'item.pack(side="left", fill="both", expand=True, padx=(0, px(11)))' in source
 
 
 def test_splash_navigation_uses_a_quiet_rail_and_lower_app_status():
@@ -556,6 +589,20 @@ def test_themed_about_content_reuses_the_splash_identity_in_both_hosts():
     assert "www.bottomlineprojects.com" in inspect.getsource(splash_screen)
     assert "on_open_website: Callable[[str], None] | None = None" in content_source
     assert 'website_label.pack(pady=(px(12) if index == 0 else px(6), 0))' in content_source
+    credits_source = content_source[
+        content_source.index("text=_CREDITS_TEXT.strip()") : content_source.index(
+            "for index, (label_text, website_url)"
+        )
+    ]
+    websites_source = content_source[
+        content_source.index("for index, (label_text, website_url)") : content_source.index(
+            "close_button = content"
+        )
+    ]
+    assert "font=_TYPOGRAPHY.body" in credits_source
+    assert "wraplength=px(_ABOUT_CREDITS_WRAP_LENGTH)" in credits_source
+    assert "font=_TYPOGRAPHY.body" in websites_source
+    assert splash_screen._ABOUT_CREDITS_WRAP_LENGTH == 430
     assert "_open_about_website" in splash_source
     assert "on_open_website=_open_about_website" in splash_source
     assert "bg=_BG_COLOR" in content_source
