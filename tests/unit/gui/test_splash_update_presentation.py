@@ -632,12 +632,13 @@ def test_splash_map_library_uses_navigation_and_an_overflow_cue():
     assert "Available to download" not in source
     assert "font=self._style.section_font" in panel_source
     assert "font=self._style.small_font" not in section_source
-    assert "Scrollbar(" not in source
-    assert "Scroll to browse more maps ↓" in panel_source
-    assert "self._content_scrollbar" not in panel_source
-    assert "self._content_overflows" in panel_source
+    assert "tk.Scrollbar(" not in panel_source
+    assert "Scroll to browse more maps ↓" not in panel_source
+    assert "CanvasVerticalScrollbar(" in panel_source
+    assert "self._content_scrollbar" in panel_source
+    assert "self._content_overflows" not in panel_source
     assert "self.sync_scroll_region()" in panel_source
-    assert "self._content_canvas.yview_scroll" in panel_source
+    assert "self._content_scrollbar.sync_overflow(content_height)" in panel_source
     assert "self.bind_mousewheel_if_ready(self._rows_frame)" in panel_source
     assert "self.sync_after_row_change()" in panel_source
     assert "recent_map_paths = _load_library_recent_map_paths()" in splash_source
@@ -1002,59 +1003,16 @@ def test_library_action_buttons_use_normalized_dimensions():
     assert style.panel_border_color == splash_screen._LIBRARY_PANEL_BORDER_COLOR
 
 
-def test_map_library_scroll_hint_appears_only_when_rows_overflow():
-    class _FakeHint:
-        def __init__(self) -> None:
-            self.manager = ""
-            self.calls = []
-
-        def winfo_manager(self) -> str:
-            return self.manager
-
-        def grid(self) -> None:
-            self.manager = "grid"
-            self.calls.append("grid")
-
-        def grid_remove(self) -> None:
-            self.manager = ""
-            self.calls.append("grid_remove")
-
-    panel = object.__new__(map_library_panel.MapLibraryPanel)
-    panel._scroll_hint = _FakeHint()
-    panel._content_overflows = False
-    panel._widget_exists = lambda widget: widget is not None
-
-    panel._set_scroll_hint_visible(True)
-
-    assert panel._content_overflows is True
-    assert panel._scroll_hint.calls == ["grid"]
-
-    panel._set_scroll_hint_visible(True)
-    assert panel._scroll_hint.calls == ["grid"]
-
-    panel._set_scroll_hint_visible(False)
-    assert panel._content_overflows is False
-    assert panel._scroll_hint.calls == ["grid", "grid_remove"]
-
-
-def test_map_library_scroll_region_shows_guidance_only_for_overflow():
+def test_map_library_scroll_region_delegates_overflow_to_the_shared_rail():
     class _FakeCanvas:
         def __init__(self) -> None:
             self.height = 200
             self.configurations = []
-            self.moveto_calls = []
-
         def winfo_width(self) -> int:
             return 320
 
-        def winfo_height(self) -> int:
-            return self.height
-
         def configure(self, **options) -> None:
             self.configurations.append(options)
-
-        def yview_moveto(self, fraction: float) -> None:
-            self.moveto_calls.append(fraction)
 
     class _FakeRows:
         def __init__(self) -> None:
@@ -1063,46 +1021,47 @@ def test_map_library_scroll_region_shows_guidance_only_for_overflow():
         def winfo_reqheight(self) -> int:
             return self.height
 
+    class _FakeScrollbar:
+        def __init__(self) -> None:
+            self.content_heights = []
+
+        def sync_overflow(self, content_height: int) -> None:
+            self.content_heights.append(content_height)
+
     panel = object.__new__(map_library_panel.MapLibraryPanel)
     panel._content_canvas = _FakeCanvas()
     panel._rows_frame = _FakeRows()
-    overflow_states = []
-    panel._set_scroll_hint_visible = overflow_states.append
+    panel._content_scrollbar = _FakeScrollbar()
 
     panel.sync_scroll_region()
 
     assert panel._content_canvas.configurations == [
         {"scrollregion": (0, 0, 320, 320)}
     ]
-    assert overflow_states == [True]
-    assert panel._content_canvas.moveto_calls == []
+    assert panel._content_scrollbar.content_heights == [320]
 
     panel._rows_frame.height = 200
     panel.sync_scroll_region()
 
-    assert overflow_states == [True, False]
-    assert panel._content_canvas.moveto_calls == [0]
+    assert panel._content_scrollbar.content_heights == [320, 200]
 
 
-@pytest.mark.parametrize("delta", (-120, -1))
-def test_map_library_scrolls_only_when_rows_overflow(delta):
-    class _FakeCanvas:
+def test_map_library_binds_dynamic_rows_to_the_shared_scrollbar():
+    class _FakeScrollbar:
         def __init__(self) -> None:
-            self.scroll_calls = []
+            self.targets = []
 
-        def yview_scroll(self, amount, units) -> None:
-            self.scroll_calls.append((amount, units))
+        def bind_mousewheel(self, widget) -> None:
+            self.targets.append(widget)
 
     panel = object.__new__(map_library_panel.MapLibraryPanel)
-    panel._content_canvas = _FakeCanvas()
-    panel._content_overflows = False
+    panel._content_scrollbar = _FakeScrollbar()
+    panel._widget_exists = lambda widget: widget == "row"
 
-    assert panel._scroll_content(SimpleNamespace(delta=delta)) is None
-    assert panel._content_canvas.scroll_calls == []
+    panel.bind_mousewheel_if_ready("row")
+    panel.bind_mousewheel_if_ready("destroyed-row")
 
-    panel._content_overflows = True
-    assert panel._scroll_content(SimpleNamespace(delta=delta)) == "break"
-    assert panel._content_canvas.scroll_calls == [(1, "units")]
+    assert panel._content_scrollbar.targets == ["row"]
 
 
 def test_map_library_open_map_action_uses_the_existing_folder_callback(monkeypatch):

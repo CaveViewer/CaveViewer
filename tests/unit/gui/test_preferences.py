@@ -602,7 +602,6 @@ def test_preferences_panel_uses_extracted_settings_logic():
 
     assert preferences_dialog._NUMERIC_ENTRY_WIDTH == 8
     assert preferences_dialog._CONTROL_GAP_X == 10
-    assert preferences_dialog._TAB_GAP_X == 10
     assert preferences_dialog.PREFERENCE_FIELDS is settings.PREFERENCE_FIELDS
     assert (
         preferences_dialog.preference_placeholder_text
@@ -880,31 +879,36 @@ def test_preferences_panel_uses_compact_tabbed_pages():
     assert "self.page_canvas.yview_moveto(0)" in show_page_source
     assert "self.button_row.pack(" in source
     assert "self.page_scroll_shell.pack(side=\"top\", fill=\"both\", expand=True)" in source
+    assert "TopTabStrip(" in source
+    assert "on_selected=self._show_page" in source
+    assert "self.tab_strip.select(page_key, notify=False)" in show_page_source
+    assert "CanvasVerticalScrollbar(" in source
+    assert "self.page_scrollbar.bind_mousewheel(self.page_stack)" in source
+    assert "_draw_page_scrollbar_thumb" not in module_source
     assert "class PreferencesDialog" not in module_source
     assert "show_preferences_dialog" not in module_source
     assert "tk.Toplevel" not in module_source
     assert "resizable_vertical" not in module_source
 
 
-@pytest.mark.parametrize("delta", (-120, -1))
-def test_preferences_page_scrolls_for_windows_and_macos_wheel_deltas(delta):
+def test_preferences_page_uses_the_shared_canvas_scrollbar():
     from caveviewer.gui import preferences_dialog
 
-    class _FakeCanvas:
-        def __init__(self) -> None:
-            self.scroll_calls = []
+    source = inspect.getsource(preferences_dialog.PreferencesPanel)
 
-        def yview_scroll(self, amount, units) -> None:
-            self.scroll_calls.append((amount, units))
+    assert "CanvasScrollbarStyle(background_color=_BG_COLOR)" in source
+    assert "self.page_scrollbar.sync_overflow(content_height)" in source
+    assert "vertical_scroll_units" not in source
 
-    panel = preferences_dialog.PreferencesPanel.__new__(
-        preferences_dialog.PreferencesPanel
-    )
-    panel.page_canvas = _FakeCanvas()
-    panel.page_scrollbar = SimpleNamespace(winfo_manager=lambda: "pack")
 
-    assert panel._scroll_page_content(SimpleNamespace(delta=delta)) == "break"
-    assert panel.page_canvas.scroll_calls == [(1, "units")]
+def test_preferences_tabs_use_the_shared_underline_navigation_pattern():
+    from caveviewer.gui import preferences_dialog
+
+    source = inspect.getsource(preferences_dialog.PreferencesPanel)
+
+    assert "TopTabStripStyle(" in source
+    assert "TopTab(page_key, tab_label)" in source
+    assert "_new_page_tab" not in source
 
 
 def test_preferences_panel_tracks_and_discards_unsaved_values(valid_preferences):

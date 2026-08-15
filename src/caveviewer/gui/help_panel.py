@@ -11,7 +11,11 @@ from caveviewer.gui.controls_catalog import (
     KeyboardShortcutSection,
     shortcut_keycap_parts,
 )
-from caveviewer.gui.tk_scrolling import vertical_scroll_units
+from caveviewer.gui.scrollable_content import (
+    CanvasScrollbarStyle,
+    CanvasVerticalScrollbar,
+)
+from caveviewer.gui.top_tab_strip import TopTab, TopTabStrip, TopTabStripStyle
 
 
 @dataclass(frozen=True)
@@ -25,15 +29,13 @@ class HelpPanelStyle:
     group_background_color: str
     row_background_color: str
     tab_active_color: str
+    tab_focus_color: str
     section_color: str
     keycap_background_color: str
     keycap_border_color: str
     keycap_text_color: str
     action_color: str
     separator_color: str
-    scrollbar_thumb_color: str
-    scrollbar_active_color: str
-    scrollbar_trough_color: str
     tab_font: tuple
     section_font: tuple
     keycap_font: tuple
@@ -60,10 +62,10 @@ class HelpPanel:
         self._content_frame = None
         self._content_window = None
         self._scrollbar = None
+        self._tab_strip = None
         self._table_rows: list[object] = []
         self._action_labels: list[object] = []
         self._next_grid_row = 0
-        self._scrollbar_visible = False
 
     def create(self) -> None:
         """Build the single-tab Keys table inside the splash-owned surface."""
@@ -81,28 +83,22 @@ class HelpPanel:
         shell.pack(fill="both", expand=True, pady=self._px(14))
         self._shell = shell
 
-        tab_strip = tk.Frame(shell, bg=style.panel_color)
-        tab_strip.pack(fill="x", padx=self._px(14), pady=(self._px(8), 0))
-        tab = tk.Frame(tab_strip, bg=style.panel_color)
-        tab.pack(anchor="w")
-        tk.Label(
-            tab,
-            text="Keys",
-            font=style.tab_font,
-            fg=style.tab_active_color,
-            bg=style.panel_color,
-            anchor="w",
-        ).pack(anchor="w", padx=self._px(8))
-        tk.Frame(
-            tab,
-            bg=style.tab_active_color,
-            height=max(1, self._px(3)),
-        ).pack(fill="x", pady=(self._px(7), 0))
-        tk.Frame(
+        self._tab_strip = TopTabStrip(
             shell,
-            bg=style.separator_color,
-            height=max(1, self._px(1)),
-        ).pack(fill="x")
+            tabs=(TopTab("keys", "Keys"),),
+            active_key="keys",
+            on_selected=None,
+            px=self._px,
+            style=TopTabStripStyle(
+                background_color=style.panel_color,
+                baseline_color=style.separator_color,
+                active_color=style.tab_active_color,
+                inactive_color=style.section_color,
+                focus_color=style.tab_focus_color,
+                font=style.tab_font,
+            ),
+        )
+        self._tab_strip.pack(fill="x")
 
         content_shell = tk.Frame(shell, bg=style.background_color)
         content_shell.pack(
@@ -124,22 +120,13 @@ class HelpPanel:
         canvas.grid(row=0, column=0, sticky="nsew")
         self._content_canvas = canvas
 
-        scrollbar = tk.Scrollbar(
+        self._scrollbar = CanvasVerticalScrollbar(
             content_shell,
-            orient="vertical",
-            command=canvas.yview,
-            takefocus=True,
-            background=style.scrollbar_thumb_color,
-            activebackground=style.scrollbar_active_color,
-            troughcolor=style.scrollbar_trough_color,
-            borderwidth=0,
-            highlightthickness=0,
-            width=max(1, self._px(9)),
+            canvas=canvas,
+            px=self._px,
+            style=CanvasScrollbarStyle(background_color=style.background_color),
         )
-        scrollbar.grid(row=0, column=1, sticky="ns", padx=(self._px(6), 0))
-        scrollbar.grid_remove()
-        self._scrollbar = scrollbar
-        canvas.configure(yscrollcommand=self._on_canvas_yview)
+        self._scrollbar.mount_grid(row=0, column=1, sticky="ns")
 
         content = tk.Frame(
             canvas,
@@ -156,8 +143,7 @@ class HelpPanel:
 
         for section in self._sections:
             self._create_section(content, section)
-        self._bind_scroll_events(canvas)
-        self._bind_mousewheel(content)
+        self._scrollbar.bind_mousewheel(content)
 
     def focus_content(self) -> None:
         """Give the visible Keys table a stable keyboard-focus target."""
@@ -260,16 +246,6 @@ class HelpPanel:
                 pady=self._px(2),
             ).pack(side="left", padx=(0, self._px(5)))
 
-    def _on_canvas_yview(self, first: str, last: str) -> None:
-        scrollbar = self._scrollbar
-        if scrollbar is None:
-            return
-        try:
-            scrollbar.set(first, last)
-            self._set_scrollbar_visible(float(first) > 0.0 or float(last) < 1.0)
-        except (tk.TclError, ValueError):
-            return
-
     def _on_content_configure(self, _event=None) -> None:
         self._sync_scroll_region()
 
@@ -304,7 +280,8 @@ class HelpPanel:
 
     def _sync_scroll_region(self) -> None:
         canvas = self._content_canvas
-        if canvas is None:
+        scrollbar = self._scrollbar
+        if canvas is None or scrollbar is None:
             return
         try:
             bounds = canvas.bbox("all")
@@ -312,39 +289,6 @@ class HelpPanel:
                 return
             canvas.configure(scrollregion=bounds)
             content_height = max(0, int(bounds[3] - bounds[1]))
-            self._set_scrollbar_visible(content_height > canvas.winfo_height())
+            scrollbar.sync_overflow(content_height)
         except tk.TclError:
             return
-
-    def _set_scrollbar_visible(self, visible: bool) -> None:
-        scrollbar = self._scrollbar
-        if scrollbar is None or visible == self._scrollbar_visible:
-            return
-        self._scrollbar_visible = visible
-        if visible:
-            scrollbar.grid()
-        else:
-            scrollbar.grid_remove()
-
-    def _scroll_content(self, event):
-        canvas = self._content_canvas
-        if canvas is None:
-            return None
-        units = vertical_scroll_units(event)
-        if units is None:
-            return None
-        try:
-            canvas.yview_scroll(units, "units")
-        except tk.TclError:
-            return None
-        return "break"
-
-    def _bind_mousewheel(self, widget) -> None:
-        self._bind_scroll_events(widget)
-        for child in widget.winfo_children():
-            self._bind_mousewheel(child)
-
-    def _bind_scroll_events(self, widget) -> None:
-        widget.bind("<MouseWheel>", self._scroll_content, add="+")
-        widget.bind("<Button-4>", self._scroll_content, add="+")
-        widget.bind("<Button-5>", self._scroll_content, add="+")
