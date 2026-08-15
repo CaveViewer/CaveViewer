@@ -35,10 +35,14 @@ def test_help_panel_uses_a_compact_keys_table_without_redundant_labels():
 
 def test_capture_help_has_its_own_tab_with_artifact_specific_guidance():
     source = inspect.getsource(help_panel.HelpPanel)
+    row_source = inspect.getsource(help_panel.HelpPanel._draw_shortcut_row)
 
     assert 'capture_section = next(' in source
     assert 'self._tab_sections["capture"]' in source
     assert "def _show_tab" in source
+    assert 'primary_font_role = "overview" if detail else "action"' in row_source
+    assert 'font=self._canvas_font("detail")' in row_source
+    assert "fill=style.detail_color" in row_source
 
 
 def test_keys_help_omits_capture_map_import_and_recorded_dive_sections():
@@ -67,18 +71,23 @@ def test_capture_help_preserves_platform_shortcuts_and_explains_artifacts():
     }
 
     assert rows["recording-toggle"].shortcut == "Cmd + R"
-    assert rows["recording-toggle"].action == (
-        "Start/stop recording what you see while diving as an MP4 video."
+    assert rows["recording-toggle"].action == "Start/stop video recording"
+    assert rows["recording-toggle"].context_note == (
+        "Saves what you see while diving as an MP4 video. It is not a "
+        "replay route or map."
     )
     assert rows["manual-trace-toggle"].shortcut == "Cmd + T"
-    assert rows["manual-trace-toggle"].action == (
-        "Start/stop saving your camera path and timing as a dive trace "
-        "for replay or analysis."
+    assert rows["manual-trace-toggle"].action == "Start/stop manual trace"
+    assert rows["manual-trace-toggle"].context_note == (
+        "Saves your camera path and timing for replay or analysis. It "
+        "does not capture video or map geometry."
     )
     assert rows["slice-toggle"].shortcut == "Cmd + C"
-    assert rows["slice-toggle"].action == (
-        "Start/stop saving the selected cave section as a new, "
-        "independent CaveViewer map."
+    assert rows["slice-toggle"].action == "Start/stop cave slice"
+    assert rows["slice-toggle"].context_note == (
+        "Saves the selected cave section as an independent CaveViewer "
+        "map. It is precompiled and cannot be rebuilt because the source "
+        "model is not included."
     )
     assert "slice-cancel" not in rows
 

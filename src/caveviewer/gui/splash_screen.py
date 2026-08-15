@@ -189,6 +189,9 @@ _BORDER_COLOR = DARK_THEME.border
 _NAVIGATION_ACTIVE_BG = DARK_THEME.panel
 _NAVIGATION_HOVER_BG = DARK_THEME.entry_background
 _NAVIGATION_ACTIVE_INDICATOR = DARK_THEME.primary_button
+# Keep navigation entries distinct without making the rail read as a stack of
+# separate cards. This shared spacing also scales with the active display.
+_NAVIGATION_ITEM_GAP = 8
 _WINDOWS_SPLASH_LAYOUT = _SPLASH_LAYOUT_POLICY.windows_layout
 _LINUX_SPLASH_LAYOUT = _SPLASH_LAYOUT_POLICY.linux_layout
 _UI_FONT_FAMILY = _PRESENTATION_PROFILE.ui_font_family
@@ -451,12 +454,15 @@ def _help_panel_style() -> HelpPanelStyle:
         keycap_border_color=DARK_THEME.secondary_button_border,
         keycap_text_color=DARK_THEME.body_text,
         action_color=DARK_THEME.body_text,
+        detail_color=DARK_THEME.secondary_text,
         row_divider_color=_LIBRARY_PANEL_BORDER_COLOR,
         content_pad_x=_PRESENTATION_PROFILE.preferences_dialog_layout.body_pad_x,
         tab_font=_TYPOGRAPHY.body_strong,
         section_font=_TYPOGRAPHY.section,
         keycap_font=_TYPOGRAPHY.body_strong,
         action_font=_TYPOGRAPHY.body,
+        overview_font=_TYPOGRAPHY.body_strong,
+        detail_font=_TYPOGRAPHY.supporting,
     )
 
 
@@ -1710,7 +1716,7 @@ def show_splash_screen(
         icon.bind("<Enter>", on_enter)
         icon.bind("<Leave>", on_leave)
         refresh_visual()
-        item_row.pack(fill="x", pady=(0, px(4)))
+        item_row.pack(fill="x", pady=(0, px(_NAVIGATION_ITEM_GAP)))
         item._cv_set_selected = set_selected
         return item
 

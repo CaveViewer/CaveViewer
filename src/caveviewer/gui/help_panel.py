@@ -31,7 +31,9 @@ _CAPTURE_HELP_LAYOUT = (
         (
             (
                 "recording-toggle",
-                "Start/stop recording what you see while diving as an MP4 video.",
+                "Start/stop video recording",
+                "Saves what you see while diving as an MP4 video. It is not a "
+                "replay route or map.",
             ),
         ),
     ),
@@ -41,8 +43,9 @@ _CAPTURE_HELP_LAYOUT = (
         (
             (
                 "manual-trace-toggle",
-                "Start/stop saving your camera path and timing as a dive trace "
-                "for replay or analysis.",
+                "Start/stop manual trace",
+                "Saves your camera path and timing for replay or analysis. It "
+                "does not capture video or map geometry.",
             ),
         ),
     ),
@@ -52,8 +55,10 @@ _CAPTURE_HELP_LAYOUT = (
         (
             (
                 "slice-toggle",
-                "Start/stop saving the selected cave section as a new, "
-                "independent CaveViewer map.",
+                "Start/stop cave slice",
+                "Saves the selected cave section as an independent CaveViewer "
+                "map. It is precompiled and cannot be rebuilt because the source "
+                "model is not included.",
             ),
         ),
     ),
@@ -93,8 +98,9 @@ def capture_help_sections(
                 id=shortcut_id,
                 shortcut=shortcuts_by_id[shortcut_id].shortcut,
                 action=action,
+                context_note=context_note,
             )
-            for shortcut_id, action in rows
+            for shortcut_id, action, context_note in rows
             if shortcut_id in shortcuts_by_id
         )
         if shortcuts:
@@ -120,12 +126,15 @@ class HelpPanelStyle:
     keycap_border_color: str
     keycap_text_color: str
     action_color: str
+    detail_color: str
     row_divider_color: str
     content_pad_x: int
     tab_font: tuple
     section_font: tuple
     keycap_font: tuple
     action_font: tuple
+    overview_font: tuple
+    detail_font: tuple
 
 
 class HelpPanel:
@@ -162,6 +171,8 @@ class HelpPanel:
         self._section_font = None
         self._keycap_font = None
         self._action_font = None
+        self._overview_font = None
+        self._detail_font = None
         self._content_height = 0
 
     def create(self) -> None:
@@ -210,6 +221,8 @@ class HelpPanel:
         self._section_font = self._create_canvas_font(canvas, style.section_font)
         self._keycap_font = self._create_canvas_font(canvas, style.keycap_font)
         self._action_font = self._create_canvas_font(canvas, style.action_font)
+        self._overview_font = self._create_canvas_font(canvas, style.overview_font)
+        self._detail_font = self._create_canvas_font(canvas, style.detail_font)
 
         self._scrollbar = CanvasVerticalScrollbar(
             content_shell,
@@ -338,11 +351,13 @@ class HelpPanel:
             content_width - action_x - self._px(12),
         )
         row_pad_y = self._px(7)
+        detail = shortcut.context_note
+        primary_font_role = "overview" if detail else "action"
         action_item = canvas.create_text(
             action_x,
             y + row_pad_y,
             text=shortcut.action,
-            font=self._canvas_font("action"),
+            font=self._canvas_font(primary_font_role),
             fill=style.action_color,
             anchor="nw",
             justify="left",
@@ -351,18 +366,39 @@ class HelpPanel:
         )
         action_bounds = canvas.bbox(action_item)
         action_height = (
-            self._font_line_height("action")
+            self._font_line_height(primary_font_role)
             if action_bounds is None
             else max(1, action_bounds[3] - action_bounds[1])
         )
+        content_height = action_height
+        if detail:
+            detail_gap = self._px(3)
+            detail_item = canvas.create_text(
+                action_x,
+                y + row_pad_y + action_height + detail_gap,
+                text=detail,
+                font=self._canvas_font("detail"),
+                fill=style.detail_color,
+                anchor="nw",
+                justify="left",
+                width=action_width,
+                tags="help-content",
+            )
+            detail_bounds = canvas.bbox(detail_item)
+            detail_height = (
+                self._font_line_height("detail")
+                if detail_bounds is None
+                else max(1, detail_bounds[3] - detail_bounds[1])
+            )
+            content_height += detail_gap + detail_height
         keycap_height = self._keycap_height(shortcut.shortcut)
         self._draw_keycap_sequence(
             canvas,
             x=self._px(12),
-            y=y + row_pad_y + max(0, (action_height - keycap_height) // 2),
+            y=y + row_pad_y + max(0, (content_height - keycap_height) // 2),
             shortcut=shortcut.shortcut,
         )
-        row_bottom = y + row_pad_y * 2 + max(action_height, keycap_height)
+        row_bottom = y + row_pad_y * 2 + max(content_height, keycap_height)
         canvas.create_line(
             0,
             row_bottom,

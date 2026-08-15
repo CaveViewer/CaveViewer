@@ -538,6 +538,13 @@ def test_splash_navigation_keeps_asymmetric_label_padding_in_pack_geometry():
     assert 'item.pack(side="left", fill="both", expand=True, padx=(0, px(11)))' in source
 
 
+def test_splash_navigation_uses_consistent_row_spacing():
+    source = inspect.getsource(splash_screen.show_splash_screen)
+
+    assert splash_screen._NAVIGATION_ITEM_GAP == 8
+    assert 'item_row.pack(fill="x", pady=(0, px(_NAVIGATION_ITEM_GAP)))' in source
+
+
 def test_splash_navigation_uses_a_quiet_rail_and_lower_app_status():
     source = inspect.getsource(splash_screen.show_splash_screen)
     update_source = inspect.getsource(splash_screen._update_presentation)
