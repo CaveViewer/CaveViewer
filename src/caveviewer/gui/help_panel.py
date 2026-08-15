@@ -31,7 +31,7 @@ _CAPTURE_HELP_LAYOUT = (
         (
             (
                 "recording-toggle",
-                "Start/stop capturing the current dive as a video.",
+                "Start/stop recording what you see while diving as an MP4 video.",
             ),
         ),
     ),
@@ -41,7 +41,8 @@ _CAPTURE_HELP_LAYOUT = (
         (
             (
                 "manual-trace-toggle",
-                "Start/stop capturing the camera path as a dive trace.",
+                "Start/stop saving your camera path and timing as a dive trace "
+                "for replay or analysis.",
             ),
         ),
     ),
@@ -51,11 +52,8 @@ _CAPTURE_HELP_LAYOUT = (
         (
             (
                 "slice-toggle",
-                "Start/stop capturing a cave segment as an independent map.",
-            ),
-            (
-                "slice-cancel",
-                "Cancel an active slice without saving it.",
+                "Start/stop saving the selected cave section as a new, "
+                "independent CaveViewer map.",
             ),
         ),
     ),

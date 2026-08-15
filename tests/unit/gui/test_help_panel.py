@@ -68,18 +68,19 @@ def test_capture_help_preserves_platform_shortcuts_and_explains_artifacts():
 
     assert rows["recording-toggle"].shortcut == "Cmd + R"
     assert rows["recording-toggle"].action == (
-        "Start/stop capturing the current dive as a video."
+        "Start/stop recording what you see while diving as an MP4 video."
     )
     assert rows["manual-trace-toggle"].shortcut == "Cmd + T"
     assert rows["manual-trace-toggle"].action == (
-        "Start/stop capturing the camera path as a dive trace."
+        "Start/stop saving your camera path and timing as a dive trace "
+        "for replay or analysis."
     )
     assert rows["slice-toggle"].shortcut == "Cmd + C"
     assert rows["slice-toggle"].action == (
-        "Start/stop capturing a cave segment as an independent map."
+        "Start/stop saving the selected cave section as a new, "
+        "independent CaveViewer map."
     )
-    assert rows["slice-cancel"].shortcut == "Escape"
-    assert rows["slice-cancel"].action == "Cancel an active slice without saving it."
+    assert "slice-cancel" not in rows
 
 
 def test_help_panel_uses_a_quiet_table_without_card_borders():
