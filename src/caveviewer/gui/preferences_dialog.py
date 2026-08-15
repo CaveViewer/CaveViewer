@@ -25,10 +25,10 @@ from caveviewer.gui.preferences_form import (
 from caveviewer.gui.features import FeatureState
 from caveviewer.gui.dialog_style import (
     DIALOG_BODY_PAD_Y,
-    DIALOG_PANEL_BORDER,
     create_dialog_action_button,
     set_dialog_action_button,
 )
+from caveviewer.gui.dpi_utils import tk_display_scale
 from caveviewer.gui.platform import (
     DesktopServiceError,
     DesktopServices,
@@ -42,7 +42,16 @@ from caveviewer.gui.platform.presentation import (
     PresentationProfile,
     get_presentation_profile,
 )
-from caveviewer.gui.tk_scrolling import vertical_scroll_units
+from caveviewer.gui.scrollable_content import (
+    CanvasScrollbarStyle,
+    CanvasVerticalScrollbar,
+)
+from caveviewer.gui.top_tab_strip import (
+    TopTab,
+    TopTabbedContentSurface,
+    TopTabbedContentSurfaceStyle,
+    TopTabStripStyle,
+)
 from caveviewer.gui.tk_theme import DARK_THEME
 from caveviewer.gui.tk_typography import TkTypography, create_tk_typography
 
@@ -62,17 +71,72 @@ _NUMERIC_ENTRY_WIDTH = 8
 _PLACEHOLDER_COLOR = DARK_THEME.placeholder_text
 _INLINE_FEEDBACK_PAD_X = 10
 _CONTROL_GAP_X = 10
-_TAB_GAP_X = 10
-_SCROLLBAR_WIDTH = 14
-_SCROLL_THUMB_WIDTH = 5
-_SCROLL_THUMB_MIN_HEIGHT = 36
-_SCROLL_THUMB_COLOR = DARK_THEME.secondary_button_border
-_SCROLL_THUMB_ACTIVE_COLOR = DARK_THEME.entry_focus_border
 _PREFERENCE_PAGES = (
     ("streaming", "Streaming"),
     ("parsing", "Import"),
     ("storage", "Storage"),
 )
+_PREFERENCE_FIELD_GROUPS = {
+    "streaming": (
+        (
+            "Memory",
+            (
+                "memory_target_percent",
+                "gpu_memory_target_percent",
+                "gpu_memory_gb",
+            ),
+        ),
+        ("Loading", ("io_workers", "io_reserved_cpus")),
+        (
+            "Uploads",
+            (
+                "upload_chunks_per_frame",
+                "upload_groups_per_frame",
+                "upload_time_budget_ms",
+            ),
+        ),
+    ),
+    "parsing": (
+        (
+            "Import",
+            (
+                "chunk_size_meters",
+                "max_upload_group_mb",
+                "obj_scan_throttle_ms",
+                "obj_import_batch_thousands",
+            ),
+        ),
+        (
+            "Cache building",
+            ("chunk_build_workers", "chunk_build_reserved_cpus"),
+        ),
+    ),
+    "storage": (
+        ("Locations", ("recording_dir", "map_library_dir")),
+    ),
+}
+def _preference_field_groups(
+    section_key: str,
+) -> tuple[tuple[str, tuple[PreferenceSpec, ...]], ...]:
+    """Return ordered visual groups without making validation depend on them."""
+    section_fields = tuple(
+        field for field in PREFERENCE_FIELDS if field.section == section_key
+    )
+    by_key = {field.key: field for field in section_fields}
+    groups: list[tuple[str, tuple[PreferenceSpec, ...]]] = []
+    for title, keys in _PREFERENCE_FIELD_GROUPS.get(section_key, ()):
+        fields = tuple(
+            by_key.pop(key)
+            for key in keys
+            if key in by_key
+        )
+        if fields:
+            groups.append((title, fields))
+
+    remaining = tuple(field for field in section_fields if field.key in by_key)
+    if remaining:
+        groups.append(("Other", remaining))
+    return tuple(groups)
 
 
 class PreferencesPanel:
@@ -162,17 +226,13 @@ class PreferencesPanel:
         self.rendering_state = False
         self.rendered_invalid_key: str | None = None
         self.apply_button = None
-        self.tab_bar = None
+        self.tab_strip = None
         self.page_scroll_shell = None
         self.page_canvas = None
         self.page_canvas_window = None
         self.page_scrollbar = None
-        self.page_scrollbar_thumb = None
-        self.page_scrollbar_fraction = (0.0, 1.0)
-        self.page_scroll_drag_offset = 0.0
         self.page_stack = None
         self.pages: dict[str, tk.Frame] = {}
-        self.page_buttons: dict[str, tk.Label] = {}
         self.field_page_keys: dict[str, str] = {}
         self.active_page_key: str | None = None
         self.feedback_frame = None
@@ -302,32 +362,40 @@ class PreferencesPanel:
         )
 
     def _render_section(self, parent, section_key: str) -> None:
-        section = tk.Frame(
-            parent,
-            bg=_BG_COLOR,
-        )
+        """Render one tab as spaced field groups on a continuous surface."""
+        section = tk.Frame(parent, bg=_BG_COLOR)
+        # The form owns the full content surface. This leaves a stable
+        # right-aligned control column and enough width for one-line hints.
         section.pack(fill="x")
+        groups = _preference_field_groups(section_key)
 
-        group = tk.Frame(
-            section,
-            bg=_PANEL_COLOR,
-            padx=0,
-            pady=0,
-            highlightthickness=1,
-            highlightbackground=DIALOG_PANEL_BORDER,
-            highlightcolor=DIALOG_PANEL_BORDER,
-        )
-        group.pack(fill="x")
+        for index, (title, fields) in enumerate(groups):
+            group = tk.Frame(section, bg=_BG_COLOR)
+            group.pack(
+                fill="x",
+                pady=(
+                    0,
+                    self._layout_policy.row_pad_y if index < len(groups) - 1 else 0,
+                ),
+            )
+            tk.Label(
+                group,
+                text=title.upper(),
+                font=self.section_font,
+                fg=_INSTRUCTION_COLOR,
+                bg=_BG_COLOR,
+                anchor="w",
+            ).pack(
+                anchor="w",
+                pady=(
+                    0 if index == 0 else self._layout_policy.row_pad_y,
+                    max(4, self._layout_policy.row_pad_y // 2),
+                ),
+            )
+            for field in fields:
+                self._render_field(group, field)
 
-        fields = [
-            field
-            for field in PREFERENCE_FIELDS
-            if field.section == section_key
-        ]
-        for index, field in enumerate(fields):
-            self._render_field(group, field, last=index == len(fields) - 1)
-
-    def _render_field(self, section, field: PreferenceSpec, *, last: bool) -> None:
+    def _render_field(self, section, field: PreferenceSpec) -> None:
         key = field.key
         value_type = field.value_type
         self.field_page_keys[key] = field.section
@@ -337,14 +405,13 @@ class PreferencesPanel:
         }
         row = tk.Frame(
             section,
-            bg=_PANEL_COLOR,
-            padx=self._layout_policy.row_pad_x,
-            pady=self._layout_policy.row_pad_y,
+            bg=_BG_COLOR,
         )
-        row.pack(fill="x")
+        row.pack(fill="x", pady=(0, self._form_row_gap()))
         row.grid_columnconfigure(0, weight=1)
+        row.grid_columnconfigure(1, weight=0)
 
-        text_column = tk.Frame(row, bg=_PANEL_COLOR)
+        text_column = tk.Frame(row, bg=_BG_COLOR)
         text_column.grid(
             row=0,
             column=0,
@@ -355,7 +422,7 @@ class PreferencesPanel:
             text=field.label,
             font=self.body_font,
             fg=_SUBTITLE_COLOR,
-            bg=_PANEL_COLOR,
+            bg=_BG_COLOR,
             anchor="w",
         ).pack(anchor="w")
 
@@ -385,13 +452,22 @@ class PreferencesPanel:
             )
         self.field_display_vars[key] = entry_var
 
-        entry_parent = tk.Frame(row, bg=_PANEL_COLOR)
-        entry_parent.grid(
-            row=1,
-            column=0,
-            sticky="ew" if compact_path else "w",
-            pady=(self._layout_policy.control_row_top_pad_y, 0),
-        )
+        entry_parent = tk.Frame(row, bg=_BG_COLOR)
+        if compact_path:
+            entry_parent.grid(
+                row=1,
+                column=0,
+                columnspan=2,
+                sticky="ew",
+                pady=(self._layout_policy.control_row_top_pad_y, 0),
+            )
+        else:
+            entry_parent.grid(
+                row=0,
+                column=1,
+                sticky="e",
+                padx=(self._layout_policy.row_pad_x, 0),
+            )
         entry_parent.grid_columnconfigure(0, weight=1)
         if compact_path:
             entry_parent.grid_columnconfigure(1, weight=0)
@@ -497,7 +573,7 @@ class PreferencesPanel:
             text=field.hint,
             font=self.small_font,
             fg=_INSTRUCTION_COLOR,
-            bg=_PANEL_COLOR,
+            bg=_BG_COLOR,
             justify="left",
             anchor="w",
             wraplength=(
@@ -511,10 +587,6 @@ class PreferencesPanel:
                 lambda event, label=hint_label: self._resize_hint(event, label),
                 add="+",
             )
-
-        if not last:
-            separator = tk.Frame(section, bg=DARK_THEME.entry_border, height=1)
-            separator.pack(fill="x")
 
     @staticmethod
     def _resize_hint(event, label) -> None:
@@ -554,31 +626,6 @@ class PreferencesPanel:
         if selection:
             var.set(selection.path)
 
-    def _new_page_tab(self, parent, page_key: str, label: str) -> tk.Label:
-        tab = tk.Label(
-            parent,
-            text=label,
-            font=self.body_font,
-            bg=_BG_COLOR,
-            fg=_INSTRUCTION_COLOR,
-            padx=self._layout_policy.tab_pad_x,
-            pady=self._layout_policy.tab_pad_y,
-            cursor="hand2",
-            takefocus=True,
-            highlightthickness=self._layout_policy.tab_highlight_thickness,
-            highlightbackground=_BG_COLOR,
-            highlightcolor=DARK_THEME.entry_focus_border,
-        )
-
-        def _invoke(_event=None, key=page_key):
-            self._show_page(key)
-            return "break"
-
-        tab.bind("<Button-1>", _invoke)
-        tab.bind("<Return>", _invoke)
-        tab.bind("<space>", _invoke)
-        return tab
-
     def _sync_feedback_to_current_state(self) -> None:
         if (
             getattr(self, "error_label", None) is None
@@ -594,12 +641,17 @@ class PreferencesPanel:
             self.rendered_state.message_kind,
         )
 
-    def _bind_page_mousewheel(self, widget) -> None:
-        widget.bind("<MouseWheel>", self._scroll_page_content, add="+")
-        widget.bind("<Button-4>", self._scroll_page_content, add="+")
-        widget.bind("<Button-5>", self._scroll_page_content, add="+")
-        for child in widget.winfo_children():
-            self._bind_page_mousewheel(child)
+    def _surface_px(self, value: int | float) -> int:
+        """Scale shared surface controls to the active splash display."""
+        scale = tk_display_scale(
+            self.dialog,
+            presentation_profile=self.presentation_profile,
+        )
+        return max(1, int(round(float(value) * scale)))
+
+    def _form_row_gap(self) -> int:
+        """Return a display-scaled gap between adjacent preference rows."""
+        return self._surface_px(self._layout_policy.row_pad_y + 6)
 
     def _sync_page_scrollbar(self) -> None:
         if (
@@ -616,121 +668,13 @@ class PreferencesPanel:
             else self.page_stack.winfo_reqheight()
         )
         self.page_canvas.configure(scrollregion=(0, 0, width, content_height))
-        visible_height = self.page_canvas.winfo_height()
-        if content_height > visible_height + 1:
-            if not self.page_scrollbar.winfo_manager():
-                self.page_scrollbar.pack(side="right", fill="y")
-        else:
-            if self.page_scrollbar.winfo_manager():
-                self.page_scrollbar.pack_forget()
-            self.page_canvas.yview_moveto(0)
+        self.page_scrollbar.sync_overflow(content_height)
 
     def _resize_page_canvas_window(self, event) -> None:
         if self.page_canvas is None or self.page_canvas_window is None:
             return
         self.page_canvas.itemconfigure(self.page_canvas_window, width=event.width)
         self._sync_page_scrollbar()
-
-    def _draw_page_scrollbar_thumb(self) -> None:
-        if self.page_scrollbar is None:
-            return
-        height = max(1, self.page_scrollbar.winfo_height())
-        first, last = self.page_scrollbar_fraction
-        visible_fraction = max(0.0, min(1.0, last - first))
-        if visible_fraction >= 1.0:
-            if self.page_scrollbar_thumb is not None:
-                self.page_scrollbar.delete(self.page_scrollbar_thumb)
-                self.page_scrollbar_thumb = None
-            return
-
-        thumb_height = max(
-            _SCROLL_THUMB_MIN_HEIGHT,
-            int(round(height * visible_fraction)),
-        )
-        travel = max(1, height - thumb_height)
-        y0 = int(round(max(0.0, min(1.0, first)) * travel))
-        y1 = min(height, y0 + thumb_height)
-        x = _SCROLLBAR_WIDTH // 2
-        if self.page_scrollbar_thumb is None:
-            self.page_scrollbar_thumb = self.page_scrollbar.create_line(
-                x,
-                y0,
-                x,
-                y1,
-                fill=_SCROLL_THUMB_COLOR,
-                width=_SCROLL_THUMB_WIDTH,
-                capstyle="round",
-            )
-        else:
-            self.page_scrollbar.coords(self.page_scrollbar_thumb, x, y0, x, y1)
-
-    def _set_page_scrollbar(self, first: str, last: str) -> None:
-        self.page_scrollbar_fraction = (float(first), float(last))
-        self._draw_page_scrollbar_thumb()
-
-    def _scroll_page_content(self, event):
-        if (
-            self.page_canvas is None
-            or self.page_scrollbar is None
-            or not self.page_scrollbar.winfo_manager()
-        ):
-            return None
-        units = vertical_scroll_units(event)
-        if units is not None:
-            self.page_canvas.yview_scroll(units, "units")
-        return "break"
-
-    def _start_page_scrollbar_drag(self, event):
-        if self.page_canvas is None or self.page_scrollbar is None:
-            return "break"
-        first, last = self.page_scrollbar_fraction
-        height = max(1, self.page_scrollbar.winfo_height())
-        visible_fraction = max(0.0, min(1.0, last - first))
-        thumb_height = max(
-            _SCROLL_THUMB_MIN_HEIGHT,
-            int(round(height * visible_fraction)),
-        )
-        travel = max(1, height - thumb_height)
-        thumb_top = int(round(first * travel))
-        thumb_bottom = thumb_top + thumb_height
-        if thumb_top <= event.y <= thumb_bottom:
-            self.page_scroll_drag_offset = event.y - thumb_top
-        else:
-            self.page_scroll_drag_offset = thumb_height / 2
-            self._drag_page_scrollbar(event)
-        if self.page_scrollbar_thumb is not None:
-            self.page_scrollbar.itemconfigure(
-                self.page_scrollbar_thumb,
-                fill=_SCROLL_THUMB_ACTIVE_COLOR,
-            )
-        return "break"
-
-    def _drag_page_scrollbar(self, event):
-        if self.page_canvas is None or self.page_scrollbar is None:
-            return "break"
-        first, last = self.page_scrollbar_fraction
-        height = max(1, self.page_scrollbar.winfo_height())
-        visible_fraction = max(0.0, min(1.0, last - first))
-        thumb_height = max(
-            _SCROLL_THUMB_MIN_HEIGHT,
-            int(round(height * visible_fraction)),
-        )
-        travel = max(1, height - thumb_height)
-        thumb_top = max(0, min(travel, event.y - self.page_scroll_drag_offset))
-        self.page_canvas.yview_moveto(thumb_top / travel)
-        return "break"
-
-    def _end_page_scrollbar_drag(self, _event):
-        if self.page_scrollbar is not None and self.page_scrollbar_thumb is not None:
-            self.page_scrollbar.itemconfigure(
-                self.page_scrollbar_thumb,
-                fill=_SCROLL_THUMB_COLOR,
-            )
-        return "break"
-
-    def _resize_page_scrollbar(self, _event) -> None:
-        self._draw_page_scrollbar_thumb()
-
 
     def _show_page(self, page_key: str) -> None:
         page = self.pages.get(page_key)
@@ -740,45 +684,42 @@ class PreferencesPanel:
         for key, candidate_page in self.pages.items():
             if key == page_key:
                 candidate_page.tkraise()
-        for key, tab in self.page_buttons.items():
-            active = key == page_key
-            tab.config(
-                bg=_PANEL_COLOR if active else _BG_COLOR,
-                fg=_TITLE_COLOR if active else _INSTRUCTION_COLOR,
-                highlightbackground=(
-                    DARK_THEME.entry_border if active else _BG_COLOR
-                ),
-                highlightcolor=(
-                    DARK_THEME.entry_focus_border
-                    if active
-                    else _BG_COLOR
-                ),
-            )
+        if self.tab_strip is not None:
+            self.tab_strip.select(page_key, notify=False)
         self._sync_feedback_to_current_state()
         if self.page_canvas is not None:
             self.page_canvas.yview_moveto(0)
         self.dialog.after_idle(self._sync_page_scrollbar)
 
     def _build(self) -> None:
-        body = tk.Frame(
+        surface = TopTabbedContentSurface(
             self.container,
-            bg=_BG_COLOR,
-            padx=self._layout_policy.body_pad_x,
-            pady=DIALOG_BODY_PAD_Y,
+            tabs=tuple(
+                TopTab(page_key, tab_label)
+                for page_key, tab_label in _PREFERENCE_PAGES
+            ),
+            active_key=_PREFERENCE_PAGES[0][0],
+            on_selected=self._show_page,
+            px=self._surface_px,
+            tab_style=TopTabStripStyle(
+                background_color=_BG_COLOR,
+                baseline_color=DARK_THEME.entry_border,
+                active_color=_BUTTON_BG,
+                inactive_color=_INSTRUCTION_COLOR,
+                focus_color=DARK_THEME.entry_focus_border,
+                font=self.action_font,
+            ),
+            style=TopTabbedContentSurfaceStyle(
+                background_color=_BG_COLOR,
+                content_pad_x=self._layout_policy.body_pad_x,
+                content_bottom_pad_y=DIALOG_BODY_PAD_Y,
+            ),
         )
-        body.pack(fill="both", expand=True)
+        surface.pack(fill="both", expand=True)
+        self.tab_strip = surface.tab_strip
+        body = surface.content
 
-        self.tab_bar = tk.Frame(body, bg=_BG_COLOR)
-        self.tab_bar.pack(
-            fill="x",
-            pady=(0, self._layout_policy.tab_bottom_pad_y),
-        )
-        for page_key, tab_label in _PREFERENCE_PAGES:
-            tab = self._new_page_tab(self.tab_bar, page_key, tab_label)
-            tab.pack(side="left", padx=(0, _TAB_GAP_X))
-            self.page_buttons[page_key] = tab
-
-        self.button_row = tk.Frame(body, bg=_BG_COLOR)
+        self.button_row = tk.Frame(body, bg=_PANEL_COLOR)
         # Pack the action row before the page stack so a height-limited
         # Windows dialog shrinks form content first instead of clipping
         # Apply/Cancel off the bottom edge.
@@ -808,14 +749,14 @@ class PreferencesPanel:
         self.apply_button.pack(side="right")
         cancel_button.pack(side="right", padx=(0, 8))
 
-        self.feedback_frame = tk.Frame(self.button_row, bg=_BG_COLOR)
+        self.feedback_frame = tk.Frame(self.button_row, bg=_PANEL_COLOR)
         self.feedback_frame.pack(side="left", fill="x", expand=True)
         self.error_label = tk.Label(
             self.feedback_frame,
             text="",
             font=self.small_font,
             fg=DARK_THEME.error_text,
-            bg=_BG_COLOR,
+            bg=_PANEL_COLOR,
             anchor="w",
             justify="left",
             wraplength=self._layout_policy.notice_wrap_length,
@@ -836,23 +777,22 @@ class PreferencesPanel:
 
         self.page_scroll_shell = tk.Frame(body, bg=_BG_COLOR)
         self.page_scroll_shell.pack(side="top", fill="both", expand=True)
+        self.page_scroll_shell.grid_rowconfigure(0, weight=1)
+        self.page_scroll_shell.grid_columnconfigure(0, weight=1)
         self.page_canvas = tk.Canvas(
             self.page_scroll_shell,
             bg=_BG_COLOR,
             borderwidth=0,
             highlightthickness=0,
-            yscrollcommand=lambda *_args: None,
         )
-        self.page_scrollbar = tk.Canvas(
+        self.page_canvas.grid(row=0, column=0, sticky="nsew")
+        self.page_scrollbar = CanvasVerticalScrollbar(
             self.page_scroll_shell,
-            bg=_BG_COLOR,
-            borderwidth=0,
-            highlightthickness=0,
-            width=_SCROLLBAR_WIDTH,
-            cursor="sb_v_double_arrow",
+            canvas=self.page_canvas,
+            px=self._surface_px,
+            style=CanvasScrollbarStyle(background_color=_BG_COLOR),
         )
-        self.page_canvas.configure(yscrollcommand=self._set_page_scrollbar)
-        self.page_canvas.pack(side="left", fill="both", expand=True)
+        self.page_scrollbar.mount_grid(row=0, column=1, sticky="ns")
 
         self.page_stack = tk.Frame(self.page_canvas, bg=_BG_COLOR)
         self.page_canvas_window = self.page_canvas.create_window(
@@ -885,22 +825,7 @@ class PreferencesPanel:
             add="+",
         )
         self.page_canvas.bind("<Configure>", self._resize_page_canvas_window, add="+")
-        self.page_canvas.bind("<MouseWheel>", self._scroll_page_content, add="+")
-        self.page_canvas.bind("<Button-4>", self._scroll_page_content, add="+")
-        self.page_canvas.bind("<Button-5>", self._scroll_page_content, add="+")
-        self.page_scrollbar.bind("<Configure>", self._resize_page_scrollbar, add="+")
-        self.page_scrollbar.bind(
-            "<ButtonPress-1>",
-            self._start_page_scrollbar_drag,
-            add="+",
-        )
-        self.page_scrollbar.bind("<B1-Motion>", self._drag_page_scrollbar, add="+")
-        self.page_scrollbar.bind(
-            "<ButtonRelease-1>",
-            self._end_page_scrollbar_drag,
-            add="+",
-        )
-        self._bind_page_mousewheel(self.page_stack)
+        self.page_scrollbar.bind_mousewheel(self.page_stack)
         self._show_page(_PREFERENCE_PAGES[0][0])
         self._sync_page_scrollbar()
 

@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-import json
+import ast
 import inspect
+import json
 import logging
 import os
 import sys
+import textwrap
 from dataclasses import FrozenInstanceError
 from pathlib import Path
 from types import SimpleNamespace
@@ -602,7 +604,6 @@ def test_preferences_panel_uses_extracted_settings_logic():
 
     assert preferences_dialog._NUMERIC_ENTRY_WIDTH == 8
     assert preferences_dialog._CONTROL_GAP_X == 10
-    assert preferences_dialog._TAB_GAP_X == 10
     assert preferences_dialog.PREFERENCE_FIELDS is settings.PREFERENCE_FIELDS
     assert (
         preferences_dialog.preference_placeholder_text
@@ -880,31 +881,114 @@ def test_preferences_panel_uses_compact_tabbed_pages():
     assert "self.page_canvas.yview_moveto(0)" in show_page_source
     assert "self.button_row.pack(" in source
     assert "self.page_scroll_shell.pack(side=\"top\", fill=\"both\", expand=True)" in source
+    assert "TopTabbedContentSurface(" in source
+    assert "on_selected=self._show_page" in source
+    assert "self.tab_strip.select(page_key, notify=False)" in show_page_source
+    assert "CanvasVerticalScrollbar(" in source
+    assert "self.page_scrollbar.bind_mousewheel(self.page_stack)" in source
+    assert "_draw_page_scrollbar_thumb" not in module_source
     assert "class PreferencesDialog" not in module_source
     assert "show_preferences_dialog" not in module_source
     assert "tk.Toplevel" not in module_source
     assert "resizable_vertical" not in module_source
 
 
-@pytest.mark.parametrize("delta", (-120, -1))
-def test_preferences_page_scrolls_for_windows_and_macos_wheel_deltas(delta):
+def test_preferences_visual_groups_cover_each_schema_field_once():
+    """Presentation-only grouping must not hide or duplicate a setting."""
     from caveviewer.gui import preferences_dialog
 
-    class _FakeCanvas:
-        def __init__(self) -> None:
-            self.scroll_calls = []
+    grouped_fields = [
+        field
+        for page_key, _page_label in preferences_dialog._PREFERENCE_PAGES
+        for _group_title, fields in preferences_dialog._preference_field_groups(
+            page_key
+        )
+        for field in fields
+    ]
 
-        def yview_scroll(self, amount, units) -> None:
-            self.scroll_calls.append((amount, units))
+    assert grouped_fields == list(preferences_dialog.PREFERENCE_FIELDS)
 
-    panel = preferences_dialog.PreferencesPanel.__new__(
-        preferences_dialog.PreferencesPanel
+
+def test_preferences_panel_uses_sidebar_context_and_full_width_forms():
+    """The selected splash navigation item already identifies Preferences."""
+    from caveviewer.gui import preferences_dialog
+
+    build_source = inspect.getsource(preferences_dialog.PreferencesPanel._build)
+    section_source = inspect.getsource(
+        preferences_dialog.PreferencesPanel._render_section
     )
-    panel.page_canvas = _FakeCanvas()
-    panel.page_scrollbar = SimpleNamespace(winfo_manager=lambda: "pack")
 
-    assert panel._scroll_page_content(SimpleNamespace(delta=delta)) == "break"
-    assert panel.page_canvas.scroll_calls == [(1, "units")]
+    assert 'text="Preferences"' not in build_source
+    assert 'section.pack(fill="x")' in section_source
+
+
+def test_preferences_panel_aligns_entry_controls_without_inline_units():
+    from caveviewer.gui import preferences_dialog
+
+    render_field_source = inspect.getsource(
+        preferences_dialog.PreferencesPanel._render_field
+    )
+    panel_source = inspect.getsource(preferences_dialog.PreferencesPanel)
+
+    assert "self._form_row_gap()" in render_field_source
+    assert "_inline_unit_text" not in panel_source
+
+
+def test_preferences_panel_uses_the_shared_tabbed_content_surface():
+    from caveviewer.gui import preferences_dialog
+
+    build_source = inspect.getsource(preferences_dialog.PreferencesPanel._build)
+    panel_source = inspect.getsource(preferences_dialog.PreferencesPanel)
+
+    assert "TopTabbedContentSurface(" in build_source
+    assert "TopTabbedContentSurfaceStyle(" in build_source
+    assert "_tab_to_content_gap" not in panel_source
+
+
+def test_preferences_panel_does_not_pass_tuple_padding_to_tk_frames():
+    """Tk Frame accepts one screen distance; asymmetric margins belong to pack."""
+    from caveviewer.gui import preferences_dialog
+
+    source = textwrap.dedent(inspect.getsource(preferences_dialog.PreferencesPanel))
+    tree = ast.parse(source)
+    frame_calls = [
+        call
+        for call in ast.walk(tree)
+        if isinstance(call, ast.Call)
+        and isinstance(call.func, ast.Attribute)
+        and isinstance(call.func.value, ast.Name)
+        and call.func.value.id == "tk"
+        and call.func.attr == "Frame"
+    ]
+
+    assert frame_calls
+    assert all(
+        not (
+            keyword.arg == "pady" and isinstance(keyword.value, ast.Tuple)
+        )
+        for call in frame_calls
+        for keyword in call.keywords
+    )
+
+
+def test_preferences_page_uses_the_shared_canvas_scrollbar():
+    from caveviewer.gui import preferences_dialog
+
+    source = inspect.getsource(preferences_dialog.PreferencesPanel)
+
+    assert "CanvasScrollbarStyle(background_color=_BG_COLOR)" in source
+    assert "self.page_scrollbar.sync_overflow(content_height)" in source
+    assert "vertical_scroll_units" not in source
+
+
+def test_preferences_tabs_use_the_shared_underline_navigation_pattern():
+    from caveviewer.gui import preferences_dialog
+
+    source = inspect.getsource(preferences_dialog.PreferencesPanel)
+
+    assert "TopTabStripStyle(" in source
+    assert "TopTab(page_key, tab_label)" in source
+    assert "_new_page_tab" not in source
 
 
 def test_preferences_panel_tracks_and_discards_unsaved_values(valid_preferences):

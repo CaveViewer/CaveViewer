@@ -29,6 +29,7 @@ manual handling only when a splash is visible.
 from __future__ import annotations
 
 import enum
+import math
 import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable
@@ -54,6 +55,8 @@ from caveviewer.gui.cave_metadata_panel import (
     CaveMetadataPanel,
     CaveMetadataPanelStyle,
 )
+from caveviewer.gui.controls_catalog import keyboard_control_sections
+from caveviewer.gui.help_panel import HelpPanel, HelpPanelStyle
 from caveviewer.gui.map_library_controller import MapLibraryController
 from caveviewer.gui.map_history import load_recent_map_paths
 from caveviewer.gui.map_library_panel import (
@@ -186,6 +189,9 @@ _BORDER_COLOR = DARK_THEME.border
 _NAVIGATION_ACTIVE_BG = DARK_THEME.panel
 _NAVIGATION_HOVER_BG = DARK_THEME.entry_background
 _NAVIGATION_ACTIVE_INDICATOR = DARK_THEME.primary_button
+# Keep navigation entries distinct without making the rail read as a stack of
+# separate cards. This shared spacing also scales with the active display.
+_NAVIGATION_ITEM_GAP = 8
 _WINDOWS_SPLASH_LAYOUT = _SPLASH_LAYOUT_POLICY.windows_layout
 _LINUX_SPLASH_LAYOUT = _SPLASH_LAYOUT_POLICY.linux_layout
 _UI_FONT_FAMILY = _PRESENTATION_PROFILE.ui_font_family
@@ -211,6 +217,7 @@ _ABOUT_WEBSITE_LINKS = (
     ("www.caveviewer.com", _CAVEVIEWER_WEBSITE_URL),
     ("www.bottomlineprojects.com", _BOTTOMLINE_PROJECTS_WEBSITE_URL),
 )
+_ABOUT_CREDITS_WRAP_LENGTH = 430
 _LIBRARY_PANEL_BORDER_COLOR = "#1e2028"
 _LIBRARY_METADATA_COLOR = "#5a5d68"
 _LIBRARY_METADATA_STATUS_COLOR = DARK_THEME.secondary_text
@@ -436,6 +443,29 @@ def _cave_metadata_panel_style() -> CaveMetadataPanelStyle:
     )
 
 
+def _help_panel_style() -> HelpPanelStyle:
+    """Return the splash-owned style tokens for the quiet Keys table."""
+    return HelpPanelStyle(
+        background_color=_BG_COLOR,
+        tab_active_color=_BUTTON_BG,
+        tab_focus_color=DARK_THEME.entry_focus_border,
+        section_color=DARK_THEME.secondary_text,
+        keycap_background_color=DARK_THEME.entry_background,
+        keycap_border_color=DARK_THEME.secondary_button_border,
+        keycap_text_color=DARK_THEME.body_text,
+        action_color=DARK_THEME.body_text,
+        detail_color=DARK_THEME.secondary_text,
+        row_divider_color=_LIBRARY_PANEL_BORDER_COLOR,
+        content_pad_x=_PRESENTATION_PROFILE.preferences_dialog_layout.body_pad_x,
+        tab_font=_TYPOGRAPHY.body_strong,
+        section_font=_TYPOGRAPHY.section,
+        keycap_font=_TYPOGRAPHY.body_strong,
+        action_font=_TYPOGRAPHY.body,
+        overview_font=_TYPOGRAPHY.body_strong,
+        detail_font=_TYPOGRAPHY.supporting,
+    )
+
+
 def _build_themed_about_content(
     parent,
     *,
@@ -508,18 +538,18 @@ def _build_themed_about_content(
     tk.Label(
         content,
         text=_CREDITS_TEXT.strip(),
-        font=_TYPOGRAPHY.supporting,
+        font=_TYPOGRAPHY.body,
         fg=_SUBTITLE_COLOR,
         bg=_BG_COLOR,
         justify="center",
-        wraplength=px(350),
+        wraplength=px(_ABOUT_CREDITS_WRAP_LENGTH),
     ).pack(fill="x")
 
     for index, (label_text, website_url) in enumerate(_ABOUT_WEBSITE_LINKS):
         website_label = tk.Label(
             content,
             text=label_text,
-            font=_TYPOGRAPHY.supporting,
+            font=_TYPOGRAPHY.body,
             fg=_BUTTON_BG if on_open_website is not None else _SUBTITLE_COLOR,
             bg=_BG_COLOR,
             cursor="hand2" if on_open_website is not None else "arrow",
@@ -981,6 +1011,7 @@ def show_splash_screen(
     right_frame.pack(side="left", fill="both", expand=True)
     map_library_surface = tk.Frame(right_frame, bg=_BG_COLOR)
     preferences_surface = tk.Frame(right_frame, bg=_BG_COLOR)
+    help_surface = tk.Frame(right_frame, bg=_BG_COLOR)
     about_surface = tk.Frame(right_frame, bg=_BG_COLOR)
     cave_metadata_surface = tk.Frame(right_frame, bg=_BG_COLOR)
 
@@ -1000,6 +1031,7 @@ def show_splash_screen(
     map_library_workflow_ref: list[MapLibraryWorkflow | None] = [None]
     map_library_panel_ref: list[MapLibraryPanel | None] = [None]
     preferences_panel_ref: list[PreferencesPanel | None] = [None]
+    help_panel_ref: list[HelpPanel | None] = [None]
     about_surface_initialized = [False]
     discard_preferences_dialog_ref: list[object | None] = [None]
     active_surface = ["map_library"]
@@ -1318,6 +1350,7 @@ def show_splash_screen(
         """Reveal the existing Map Library without rebuilding its catalog."""
         if active_surface[0] != "map_library":
             preferences_surface.pack_forget()
+            help_surface.pack_forget()
             about_surface.pack_forget()
             cave_metadata_surface.pack_forget()
             map_library_surface.pack(fill="both", expand=True)
@@ -1360,29 +1393,8 @@ def show_splash_screen(
         if panel is not None:
             return panel
 
-        shell = tk.Frame(
-            preferences_surface,
-            bg=_BG_COLOR,
-            highlightthickness=1,
-            highlightbackground=_LIBRARY_PANEL_BORDER_COLOR,
-            highlightcolor=_LIBRARY_PANEL_BORDER_COLOR,
-        )
-        shell.pack(fill="both", expand=True, pady=px(14))
-        heading = tk.Frame(shell, bg=_PANEL_COLOR)
-        heading.pack(fill="x")
-        tk.Label(
-            heading,
-            text="Preferences",
-            font=_TYPOGRAPHY.heading,
-            fg=_TITLE_COLOR,
-            bg=_PANEL_COLOR,
-            anchor="w",
-        ).pack(fill="x", padx=px(20), pady=(px(13), px(11)))
-        panel_host = tk.Frame(shell, bg=_BG_COLOR)
-        panel_host.pack(fill="both", expand=True)
-
         panel = PreferencesPanel(
-            panel_host,
+            preferences_surface,
             ui_font_family=_UI_FONT_FAMILY,
             desktop_services=desktop_services,
             platform_runtime=platform_runtime,
@@ -1397,6 +1409,7 @@ def show_splash_screen(
         panel = _ensure_preferences_panel()
         if active_surface[0] != "preferences":
             map_library_surface.pack_forget()
+            help_surface.pack_forget()
             about_surface.pack_forget()
             cave_metadata_surface.pack_forget()
             preferences_surface.pack(fill="both", expand=True)
@@ -1406,6 +1419,35 @@ def show_splash_screen(
 
     def _on_preferences_click():
         _show_preferences_surface()
+
+    def _ensure_help_panel() -> HelpPanel:
+        panel = help_panel_ref[0]
+        if panel is not None:
+            return panel
+        panel = HelpPanel(
+            help_surface,
+            px=px,
+            style=_help_panel_style(),
+            sections=keyboard_control_sections(presentation_profile),
+        )
+        panel.create()
+        help_panel_ref[0] = panel
+        return panel
+
+    def _show_help_surface() -> None:
+        panel = _ensure_help_panel()
+        if active_surface[0] != "help":
+            map_library_surface.pack_forget()
+            preferences_surface.pack_forget()
+            about_surface.pack_forget()
+            cave_metadata_surface.pack_forget()
+            help_surface.pack(fill="both", expand=True)
+            active_surface[0] = "help"
+        _set_active_navigation("Help")
+        panel.focus_content()
+
+    def _on_help_click() -> None:
+        _request_leave_preferences(_show_help_surface)
 
     def _open_about_website(url: str) -> None:
         try:
@@ -1441,6 +1483,7 @@ def show_splash_screen(
         if active_surface[0] != "about":
             map_library_surface.pack_forget()
             preferences_surface.pack_forget()
+            help_surface.pack_forget()
             cave_metadata_surface.pack_forget()
             about_surface.pack(fill="both", expand=True)
             active_surface[0] = "about"
@@ -1452,10 +1495,132 @@ def show_splash_screen(
     def _focus_map_library() -> None:
         _request_leave_preferences(_show_map_library_surface)
 
+    def _create_navigation_icon(parent, icon_name: str):
+        """Create a small, scalable outline icon for one navigation row."""
+        size = px(28)
+        icon = tk.Canvas(
+            parent,
+            width=size,
+            height=size,
+            bg=_BG_COLOR,
+            borderwidth=0,
+            highlightthickness=0,
+            cursor="hand2",
+            takefocus=False,
+        )
+
+        def redraw(background: str, foreground: str) -> None:
+            icon.configure(bg=background)
+            icon.delete("navigation-icon")
+            stroke = max(1, px(1.6))
+            center = size / 2
+
+            def line(*points) -> None:
+                icon.create_line(
+                    *points,
+                    fill=foreground,
+                    width=stroke,
+                    capstyle="round",
+                    joinstyle="round",
+                    tags="navigation-icon",
+                )
+
+            if icon_name == "map":
+                line(
+                    px(3),
+                    px(6),
+                    px(10),
+                    px(3),
+                    px(18),
+                    px(6),
+                    px(25),
+                    px(3),
+                    px(25),
+                    px(22),
+                    px(18),
+                    px(25),
+                    px(10),
+                    px(22),
+                    px(3),
+                    px(25),
+                    px(3),
+                    px(6),
+                )
+                line(px(10), px(3), px(10), px(22))
+                line(px(18), px(6), px(18), px(25))
+            elif icon_name == "preferences":
+                points = []
+                for index in range(16):
+                    angle = math.radians(index * 22.5 - 90)
+                    radius = px(11 if index % 2 == 0 else 8)
+                    points.extend(
+                        (
+                            center + math.cos(angle) * radius,
+                            center + math.sin(angle) * radius,
+                        )
+                    )
+                icon.create_polygon(
+                    *points,
+                    outline=foreground,
+                    fill="",
+                    width=stroke,
+                    joinstyle="round",
+                    tags="navigation-icon",
+                )
+                icon.create_oval(
+                    center - px(3),
+                    center - px(3),
+                    center + px(3),
+                    center + px(3),
+                    outline=foreground,
+                    width=stroke,
+                    tags="navigation-icon",
+                )
+            elif icon_name == "help":
+                icon.create_oval(
+                    px(3),
+                    px(3),
+                    px(25),
+                    px(25),
+                    outline=foreground,
+                    width=stroke,
+                    tags="navigation-icon",
+                )
+                icon.create_text(
+                    center,
+                    center,
+                    text="?",
+                    font=_TYPOGRAPHY.body_strong,
+                    fill=foreground,
+                    tags="navigation-icon",
+                )
+            else:
+                icon.create_oval(
+                    px(3),
+                    px(3),
+                    px(25),
+                    px(25),
+                    outline=foreground,
+                    width=stroke,
+                    tags="navigation-icon",
+                )
+                icon.create_text(
+                    center,
+                    center,
+                    text="i",
+                    font=_TYPOGRAPHY.body_strong,
+                    fill=foreground,
+                    tags="navigation-icon",
+                )
+
+        icon._cv_set_appearance = redraw
+        return icon
+
     def _create_navigation_item(
         text: str,
         callback,
         *,
+        icon_name: str,
         selected: bool = False,
     ):
         """Create one keyboard-accessible action in the persistent nav rail."""
@@ -1466,6 +1631,8 @@ def show_splash_screen(
             width=px(3),
         )
         indicator.pack(side="left", fill="y")
+        icon = _create_navigation_icon(item_row, icon_name)
+        icon.pack(side="left", padx=(px(10), px(7)))
         item = tk.Label(
             item_row,
             text=text,
@@ -1473,7 +1640,7 @@ def show_splash_screen(
             fg=_TITLE_COLOR if selected else _SUBTITLE_COLOR,
             bg=_NAVIGATION_ACTIVE_BG if selected else _BG_COLOR,
             anchor="w",
-            padx=px(11),
+            padx=0,
             pady=px(9),
             cursor="hand2",
             takefocus=True,
@@ -1481,7 +1648,7 @@ def show_splash_screen(
             highlightbackground=_BG_COLOR,
             highlightcolor=_BUTTON_BORDER_COLOR,
         )
-        item.pack(side="left", fill="both", expand=True)
+        item.pack(side="left", fill="both", expand=True, padx=(0, px(11)))
         state = {
             "selected": selected,
             "hovered": False,
@@ -1515,6 +1682,10 @@ def show_splash_screen(
                 ),
                 highlightbackground=background,
             )
+            icon._cv_set_appearance(
+                background,
+                _TITLE_COLOR if state["selected"] or active else _SUBTITLE_COLOR,
+            )
 
         def set_selected(is_selected: bool) -> None:
             state["selected"] = is_selected
@@ -1537,11 +1708,15 @@ def show_splash_screen(
             refresh_visual()
 
         _bind_activation(item, callback)
+        _bind_activation(icon, callback)
         item.bind("<Enter>", on_enter)
         item.bind("<Leave>", on_leave)
         item.bind("<FocusIn>", on_focus_in)
         item.bind("<FocusOut>", on_focus_out)
-        item_row.pack(fill="x", pady=(0, px(4)))
+        icon.bind("<Enter>", on_enter)
+        icon.bind("<Leave>", on_leave)
+        refresh_visual()
+        item_row.pack(fill="x", pady=(0, px(_NAVIGATION_ITEM_GAP)))
         item._cv_set_selected = set_selected
         return item
 
@@ -1549,15 +1724,27 @@ def show_splash_screen(
     map_library_navigation_item = _create_navigation_item(
         "Map Library",
         _focus_map_library,
+        icon_name="map",
         selected=True,
     )
     navigation_items["Map Library"] = map_library_navigation_item
     preferences_navigation_item = _create_navigation_item(
         "Preferences",
         _on_preferences_click,
+        icon_name="preferences",
     )
     navigation_items["Preferences"] = preferences_navigation_item
-    about_navigation_item = _create_navigation_item("About", _on_about_click)
+    help_navigation_item = _create_navigation_item(
+        "Help",
+        _on_help_click,
+        icon_name="help",
+    )
+    navigation_items["Help"] = help_navigation_item
+    about_navigation_item = _create_navigation_item(
+        "About",
+        _on_about_click,
+        icon_name="about",
+    )
     navigation_items["About"] = about_navigation_item
 
     def _set_active_navigation(active_name: str) -> None:
@@ -1626,6 +1813,7 @@ def show_splash_screen(
         if active_surface[0] != "cave_metadata":
             map_library_surface.pack_forget()
             preferences_surface.pack_forget()
+            help_surface.pack_forget()
             about_surface.pack_forget()
             cave_metadata_surface.pack(fill="both", expand=True)
             active_surface[0] = "cave_metadata"
@@ -1746,7 +1934,7 @@ def show_splash_screen(
             if panel is not None:
                 panel.apply()
             return "break"
-        if active_surface[0] == "about":
+        if active_surface[0] in {"about", "help"}:
             _show_map_library_surface()
             return "break"
         on_open_map_folder()
@@ -1756,7 +1944,7 @@ def show_splash_screen(
         if active_surface[0] == "preferences":
             _request_leave_preferences(_discard_preferences_and_show_map_library)
             return "break"
-        if active_surface[0] == "about":
+        if active_surface[0] in {"about", "help"}:
             _show_map_library_surface()
             return "break"
         on_close()

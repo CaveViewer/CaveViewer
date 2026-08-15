@@ -25,6 +25,10 @@ import moderngl
 import numpy as np
 
 from caveviewer.gui import bitmap_font
+from caveviewer.gui.controls_catalog import (
+    keyboard_control_sections,
+    shortcut_keycap_parts,
+)
 from caveviewer.gui.platform.presentation import (
     PresentationProfile,
     get_presentation_profile,
@@ -87,75 +91,52 @@ def _fullscreen_layout_scale(window_size: tuple[int, int]) -> float:
     return max(1.0, min(_FULLSCREEN_LAYOUT_SCALE_MAX, size_scale))
 
 
-def _modifier_display_label(modifier_name: str) -> str:
-    """Return the label used for modifier names in OpenGL help text."""
-    normalized = str(modifier_name or "").strip().lower()
-    if normalized == "command":
-        return "Cmd"
-    if normalized == "control":
-        return "Ctrl"
-    return modifier_name
-
-
 def _get_platform_control_sections(
     presentation_profile: PresentationProfile | None = None,
 ) -> list[tuple[str, list[tuple[str, str]]]]:
-    """Generate platform-specific control sections for display."""
+    """Compose overlay controls from shared keyboard and local visual rows."""
     presentation_profile = presentation_profile or get_presentation_profile()
-    bookmark_modifier = presentation_profile.bookmark_save_modifier
-    bookmark_modifier_label = _modifier_display_label(bookmark_modifier)
-    primary_shortcut_label = presentation_profile.primary_shortcut_modifier_label
     look_button = presentation_profile.mouse_look_button_name
+    rows_by_section = {
+        section.id: [
+            (shortcut.shortcut, shortcut.action)
+            for shortcut in section.shortcuts
+        ]
+        for section in keyboard_control_sections(presentation_profile)
+    }
 
-    movement = [
-        ("W A S D", "Move / strafe"),
-        ("E", "Move up"),
-        ("Q", "Move down"),
-        ("Shift", "Speed boost"),
-        ("-", "Decrease fly speed"),
-        ("=", "Increase fly speed"),
-        ("Scroll", "Adjust fly speed"),
-    ]
+    def catalog_rows(*section_ids: str) -> list[tuple[str, str]]:
+        return [
+            row
+            for section_id in section_ids
+            for row in rows_by_section[section_id]
+        ]
 
-    look = []
+    visual_look_rows = []
     if look_button == "right":
-        look.append(("Right click + mouse", "Look around"))
-        look.append(("Option + left click + mouse", "Look around (alternative)"))
+        visual_look_rows.append(("Right click + mouse", "Look around"))
+        visual_look_rows.append(
+            ("Option + left click + mouse", "Look around (alternative)")
+        )
     else:  # left
-        look.append(("Left click + mouse", "Look around"))
+        visual_look_rows.append(("Left click + mouse", "Look around"))
 
-    look.extend([
-        ("J L I K", "Look around"),
-        ("Z X", "Barrel roll"),
-        (f"{primary_shortcut_label} + 0", "Reset view (level horizon)"),
-    ])
-
-    navigation = []
-    navigation.append(
-        (f"{bookmark_modifier_label} + 1..9", "Save camera bookmark slot")
+    movement = catalog_rows("movement")
+    movement.append(("Scroll", "Adjust fly speed"))
+    look = [*visual_look_rows, *catalog_rows("view")]
+    navigate = catalog_rows("bookmarks", "map", "recorded-dive")
+    navigate.extend(
+        [
+            ("Minimap click", "Jump to that spot"),
+            ("Open button", "Switch to a different map"),
+        ]
     )
-
-    navigation.extend([
-        ("1..9", "Recall camera bookmark slot"),
-        ("Del + 1..9", "Delete bookmark slot"),
-        ("Space", "Pause/resume a recorded dive"),
-        ("Minimap click", "Jump to that spot"),
-        (f"{primary_shortcut_label} + O", "Switch to a different map"),
-        ("Open button", "Switch to a different map"),
-        ("Esc", "Close window"),
-    ])
-
-    recording = [
-        (f"{primary_shortcut_label} + R", "Start/stop recording"),
-        (f"{primary_shortcut_label} + T", "Start/stop manual trace"),
-        (f"{primary_shortcut_label} + C", "Start/stop slice"),
-    ]
-
+    capture = catalog_rows("capture", "map-import")
     return [
         ("Move", movement),
         ("Look", look),
-        ("Navigate", navigation),
-        ("Record", recording),
+        ("Navigate", navigate),
+        ("Capture", capture),
     ]
 
 
@@ -797,17 +778,7 @@ class ControlsOverlay:
             y += section_gap
 
     def _keycap_parts(self, label: str) -> list[str]:
-        if " + " in label:
-            parts = []
-            tokens = label.split(" + ")
-            for i, token in enumerate(tokens):
-                if i:
-                    parts.append("+")
-                parts.append(token)
-            return parts
-        if label in {"W A S D", "J L I K", "Z X"}:
-            return label.split()
-        return [label]
+        return list(shortcut_keycap_parts(label))
 
     def _measure_keycap_sequence(self, label, key_size, key_pad_x):
         total_w = 0.0

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import ast
 import inspect
 import sys
+import textwrap
 from types import SimpleNamespace
 
 import pytest
@@ -444,9 +446,12 @@ def test_splash_navigation_actions_are_keyboard_accessible_without_fallthrough()
     source = inspect.getsource(splash_screen.show_splash_screen)
 
     assert "navigation_frame = tk.Frame(" in source
+    assert "def _create_navigation_icon(" in source
     assert "def _create_navigation_item(" in source
     assert "item_row = tk.Frame(navigation_frame, bg=_BG_COLOR)" in source
     assert "indicator = tk.Frame(" in source
+    assert "icon = _create_navigation_icon(item_row, icon_name)" in source
+    assert "_bind_activation(icon, callback)" in source
     assert "_NAVIGATION_ACTIVE_INDICATOR" in source
     assert "font=_TYPOGRAPHY.body_strong if selected else _TYPOGRAPHY.body" in source
     assert "takefocus=True" in source
@@ -456,14 +461,19 @@ def test_splash_navigation_actions_are_keyboard_accessible_without_fallthrough()
     assert "def _bind_activation(widget, callback) -> None:" in source
     assert "map_library_navigation_item = _create_navigation_item(" in source
     assert '"Map Library",' in source
+    assert 'icon_name="map"' in source
     assert '_create_navigation_item("Open Map", on_open_map_folder)' not in source
     assert "preferences_navigation_item = _create_navigation_item(" in source
+    assert 'icon_name="preferences"' in source
+    assert 'icon_name="help"' in source
+    assert 'icon_name="about"' in source
     assert "about_navigation_item = _create_navigation_item(" in source
     assert "open_map_folder=on_open_map_folder" in source
     assert "def _focus_map_library() -> None:" in source
     assert "panel.focus_content()" in source
     assert "map_library_surface = tk.Frame(right_frame, bg=_BG_COLOR)" in source
     assert "preferences_surface = tk.Frame(right_frame, bg=_BG_COLOR)" in source
+    assert "help_surface = tk.Frame(right_frame, bg=_BG_COLOR)" in source
     assert "about_surface = tk.Frame(right_frame, bg=_BG_COLOR)" in source
     assert "def _show_preferences_surface() -> None:" in source
     assert "preferences_surface_required_height" in source
@@ -471,11 +481,21 @@ def test_splash_navigation_actions_are_keyboard_accessible_without_fallthrough()
     assert "map_library_surface.pack_forget()" in source
     assert "preferences_surface.pack_forget()" in source
     assert "def _show_about_surface() -> None:" in source
+    assert "def _ensure_help_panel() -> HelpPanel:" in source
+    assert "def _show_help_surface() -> None:" in source
+    assert "_request_leave_preferences(_show_help_surface)" in source
     assert "PreferencesPanel(" in source
+    assert "HelpPanel(" in source
+    assert "keyboard_control_sections(presentation_profile)" in source
     assert "_build_themed_about_content(" in source
     assert "show_close=False" in source
     assert "def _request_leave_preferences" in source
     assert "_show_discard_preferences_dialog(" in source
+    assert source.index("help_navigation_item = _create_navigation_item") < source.index(
+        "about_navigation_item = _create_navigation_item"
+    )
+    assert 'navigation_items["Help"] = help_navigation_item' in source
+    assert 'active_surface[0] in {"about", "help"}' in source
     assert 'root.bind("<Return>", _handle_root_return)' in source
     assert 'root.bind("<Escape>", _cancel_preferences_or_close)' in source
     assert "_show_themed_about_dialog(" not in source
@@ -492,6 +512,37 @@ def test_splash_navigation_actions_are_keyboard_accessible_without_fallthrough()
     assert "KNOWN_STANDARD_LIBRARY_MAPS" not in source
     assert "start_sample_download_worker(" not in source
     assert "show_sample_maps_dialog(" not in source
+
+
+def test_splash_navigation_keeps_asymmetric_label_padding_in_pack_geometry():
+    source = textwrap.dedent(inspect.getsource(splash_screen.show_splash_screen))
+    tree = ast.parse(source)
+    label_calls = [
+        call
+        for call in ast.walk(tree)
+        if isinstance(call, ast.Call)
+        and isinstance(call.func, ast.Attribute)
+        and isinstance(call.func.value, ast.Name)
+        and call.func.value.id == "tk"
+        and call.func.attr == "Label"
+    ]
+
+    assert label_calls
+    assert all(
+        not (
+            keyword.arg == "padx" and isinstance(keyword.value, ast.Tuple)
+        )
+        for call in label_calls
+        for keyword in call.keywords
+    )
+    assert 'item.pack(side="left", fill="both", expand=True, padx=(0, px(11)))' in source
+
+
+def test_splash_navigation_uses_consistent_row_spacing():
+    source = inspect.getsource(splash_screen.show_splash_screen)
+
+    assert splash_screen._NAVIGATION_ITEM_GAP == 8
+    assert 'item_row.pack(fill="x", pady=(0, px(_NAVIGATION_ITEM_GAP)))' in source
 
 
 def test_splash_navigation_uses_a_quiet_rail_and_lower_app_status():
@@ -545,6 +596,20 @@ def test_themed_about_content_reuses_the_splash_identity_in_both_hosts():
     assert "www.bottomlineprojects.com" in inspect.getsource(splash_screen)
     assert "on_open_website: Callable[[str], None] | None = None" in content_source
     assert 'website_label.pack(pady=(px(12) if index == 0 else px(6), 0))' in content_source
+    credits_source = content_source[
+        content_source.index("text=_CREDITS_TEXT.strip()") : content_source.index(
+            "for index, (label_text, website_url)"
+        )
+    ]
+    websites_source = content_source[
+        content_source.index("for index, (label_text, website_url)") : content_source.index(
+            "close_button = content"
+        )
+    ]
+    assert "font=_TYPOGRAPHY.body" in credits_source
+    assert "wraplength=px(_ABOUT_CREDITS_WRAP_LENGTH)" in credits_source
+    assert "font=_TYPOGRAPHY.body" in websites_source
+    assert splash_screen._ABOUT_CREDITS_WRAP_LENGTH == 430
     assert "_open_about_website" in splash_source
     assert "on_open_website=_open_about_website" in splash_source
     assert "bg=_BG_COLOR" in content_source
@@ -621,12 +686,13 @@ def test_splash_map_library_uses_navigation_and_an_overflow_cue():
     assert "Available to download" not in source
     assert "font=self._style.section_font" in panel_source
     assert "font=self._style.small_font" not in section_source
-    assert "Scrollbar(" not in source
-    assert "Scroll to browse more maps ↓" in panel_source
-    assert "self._content_scrollbar" not in panel_source
-    assert "self._content_overflows" in panel_source
+    assert "tk.Scrollbar(" not in panel_source
+    assert "Scroll to browse more maps ↓" not in panel_source
+    assert "CanvasVerticalScrollbar(" in panel_source
+    assert "self._content_scrollbar" in panel_source
+    assert "self._content_overflows" not in panel_source
     assert "self.sync_scroll_region()" in panel_source
-    assert "self._content_canvas.yview_scroll" in panel_source
+    assert "self._content_scrollbar.sync_overflow(content_height)" in panel_source
     assert "self.bind_mousewheel_if_ready(self._rows_frame)" in panel_source
     assert "self.sync_after_row_change()" in panel_source
     assert "recent_map_paths = _load_library_recent_map_paths()" in splash_source
@@ -991,59 +1057,16 @@ def test_library_action_buttons_use_normalized_dimensions():
     assert style.panel_border_color == splash_screen._LIBRARY_PANEL_BORDER_COLOR
 
 
-def test_map_library_scroll_hint_appears_only_when_rows_overflow():
-    class _FakeHint:
-        def __init__(self) -> None:
-            self.manager = ""
-            self.calls = []
-
-        def winfo_manager(self) -> str:
-            return self.manager
-
-        def grid(self) -> None:
-            self.manager = "grid"
-            self.calls.append("grid")
-
-        def grid_remove(self) -> None:
-            self.manager = ""
-            self.calls.append("grid_remove")
-
-    panel = object.__new__(map_library_panel.MapLibraryPanel)
-    panel._scroll_hint = _FakeHint()
-    panel._content_overflows = False
-    panel._widget_exists = lambda widget: widget is not None
-
-    panel._set_scroll_hint_visible(True)
-
-    assert panel._content_overflows is True
-    assert panel._scroll_hint.calls == ["grid"]
-
-    panel._set_scroll_hint_visible(True)
-    assert panel._scroll_hint.calls == ["grid"]
-
-    panel._set_scroll_hint_visible(False)
-    assert panel._content_overflows is False
-    assert panel._scroll_hint.calls == ["grid", "grid_remove"]
-
-
-def test_map_library_scroll_region_shows_guidance_only_for_overflow():
+def test_map_library_scroll_region_delegates_overflow_to_the_shared_rail():
     class _FakeCanvas:
         def __init__(self) -> None:
             self.height = 200
             self.configurations = []
-            self.moveto_calls = []
-
         def winfo_width(self) -> int:
             return 320
 
-        def winfo_height(self) -> int:
-            return self.height
-
         def configure(self, **options) -> None:
             self.configurations.append(options)
-
-        def yview_moveto(self, fraction: float) -> None:
-            self.moveto_calls.append(fraction)
 
     class _FakeRows:
         def __init__(self) -> None:
@@ -1052,46 +1075,47 @@ def test_map_library_scroll_region_shows_guidance_only_for_overflow():
         def winfo_reqheight(self) -> int:
             return self.height
 
+    class _FakeScrollbar:
+        def __init__(self) -> None:
+            self.content_heights = []
+
+        def sync_overflow(self, content_height: int) -> None:
+            self.content_heights.append(content_height)
+
     panel = object.__new__(map_library_panel.MapLibraryPanel)
     panel._content_canvas = _FakeCanvas()
     panel._rows_frame = _FakeRows()
-    overflow_states = []
-    panel._set_scroll_hint_visible = overflow_states.append
+    panel._content_scrollbar = _FakeScrollbar()
 
     panel.sync_scroll_region()
 
     assert panel._content_canvas.configurations == [
         {"scrollregion": (0, 0, 320, 320)}
     ]
-    assert overflow_states == [True]
-    assert panel._content_canvas.moveto_calls == []
+    assert panel._content_scrollbar.content_heights == [320]
 
     panel._rows_frame.height = 200
     panel.sync_scroll_region()
 
-    assert overflow_states == [True, False]
-    assert panel._content_canvas.moveto_calls == [0]
+    assert panel._content_scrollbar.content_heights == [320, 200]
 
 
-@pytest.mark.parametrize("delta", (-120, -1))
-def test_map_library_scrolls_only_when_rows_overflow(delta):
-    class _FakeCanvas:
+def test_map_library_binds_dynamic_rows_to_the_shared_scrollbar():
+    class _FakeScrollbar:
         def __init__(self) -> None:
-            self.scroll_calls = []
+            self.targets = []
 
-        def yview_scroll(self, amount, units) -> None:
-            self.scroll_calls.append((amount, units))
+        def bind_mousewheel(self, widget) -> None:
+            self.targets.append(widget)
 
     panel = object.__new__(map_library_panel.MapLibraryPanel)
-    panel._content_canvas = _FakeCanvas()
-    panel._content_overflows = False
+    panel._content_scrollbar = _FakeScrollbar()
+    panel._widget_exists = lambda widget: widget == "row"
 
-    assert panel._scroll_content(SimpleNamespace(delta=delta)) is None
-    assert panel._content_canvas.scroll_calls == []
+    panel.bind_mousewheel_if_ready("row")
+    panel.bind_mousewheel_if_ready("destroyed-row")
 
-    panel._content_overflows = True
-    assert panel._scroll_content(SimpleNamespace(delta=delta)) == "break"
-    assert panel._content_canvas.scroll_calls == [(1, "units")]
+    assert panel._content_scrollbar.targets == ["row"]
 
 
 def test_map_library_open_map_action_uses_the_existing_folder_callback(monkeypatch):

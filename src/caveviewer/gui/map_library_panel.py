@@ -6,7 +6,10 @@ import tkinter as tk
 from dataclasses import dataclass
 from typing import Callable, Iterable
 
-from caveviewer.gui.tk_scrolling import vertical_scroll_units
+from caveviewer.gui.scrollable_content import (
+    CanvasScrollbarStyle,
+    CanvasVerticalScrollbar,
+)
 
 
 @dataclass(frozen=True)
@@ -159,8 +162,7 @@ class MapLibraryPanel:
         self._rows_frame = None
         self._content_canvas = None
         self._rows_window = None
-        self._scroll_hint = None
-        self._content_overflows = False
+        self._content_scrollbar = None
         self._active_menu = None
         self._active_menu_root_bindings: list[tuple[str, str]] = []
 
@@ -201,21 +203,8 @@ class MapLibraryPanel:
             padx=self._px(12),
             pady=(0, self._px(4)),
         )
-        self._scroll_hint = tk.Label(
-            panel,
-            text="Scroll to browse more maps ↓",
-            font=style.supporting_font,
-            fg=style.metadata_color,
-            bg=style.panel_color,
-            anchor="center",
-        )
-        self._scroll_hint.grid(
-            row=scroll_row + 1,
-            column=0,
-            sticky="ew",
-            pady=(0, self._px(10)),
-        )
-        self._scroll_hint.grid_remove()
+        scroll_shell.grid_rowconfigure(0, weight=1)
+        scroll_shell.grid_columnconfigure(0, weight=1)
 
         self._content_canvas = tk.Canvas(
             scroll_shell,
@@ -223,7 +212,14 @@ class MapLibraryPanel:
             borderwidth=0,
             highlightthickness=0,
         )
-        self._content_canvas.pack(side="left", fill="both", expand=True)
+        self._content_canvas.grid(row=0, column=0, sticky="nsew")
+        self._content_scrollbar = CanvasVerticalScrollbar(
+            scroll_shell,
+            canvas=self._content_canvas,
+            px=self._px,
+            style=CanvasScrollbarStyle(background_color=style.panel_color),
+        )
+        self._content_scrollbar.mount_grid(row=0, column=1, sticky="ns")
 
         self._rows_frame = tk.Frame(self._content_canvas, bg=style.panel_color)
         self._rows_window = self._content_canvas.create_window(
@@ -237,9 +233,6 @@ class MapLibraryPanel:
             self._resize_canvas_window,
             add="+",
         )
-        self._content_canvas.bind("<MouseWheel>", self._scroll_content, add="+")
-        self._content_canvas.bind("<Button-4>", self._scroll_content, add="+")
-        self._content_canvas.bind("<Button-5>", self._scroll_content, add="+")
 
         self._recent_section = self._create_section(
             self._rows_frame,
@@ -255,7 +248,7 @@ class MapLibraryPanel:
 
     def finish_population(self) -> None:
         """Bind mousewheel events after rows exist and schedule scroll sync."""
-        if self._rows_frame is None:
+        if self._rows_frame is None or self._content_scrollbar is None:
             return
         self.bind_mousewheel_if_ready(self._rows_frame)
         self.root.after_idle(self.sync_scroll_region)
@@ -593,45 +586,32 @@ class MapLibraryPanel:
 
     def bind_mousewheel_if_ready(self, widget) -> None:
         """Bind recursive mousewheel handlers when panel scrolling is ready."""
-        if self._widget_exists(widget):
-            self._bind_mousewheel(widget)
+        scrollbar = self._content_scrollbar
+        if self._widget_exists(widget) and scrollbar is not None:
+            scrollbar.bind_mousewheel(widget)
 
     def sync_scroll_region(self) -> None:
-        """Synchronize the scroll region and its overflow guidance."""
-        if self._content_canvas is None or self._rows_frame is None:
+        """Synchronize the scroll region and its shared overflow rail."""
+        if (
+            self._content_canvas is None
+            or self._rows_frame is None
+            or self._content_scrollbar is None
+        ):
             return
         width = max(1, self._content_canvas.winfo_width())
         content_height = self._rows_frame.winfo_reqheight()
         self._content_canvas.configure(scrollregion=(0, 0, width, content_height))
-        visible_height = self._content_canvas.winfo_height()
-        content_overflows = content_height > visible_height + 1
-        self._set_scroll_hint_visible(content_overflows)
-        if not content_overflows:
-            self._content_canvas.yview_moveto(0)
-
-    def _set_scroll_hint_visible(self, visible: bool) -> None:
-        """Show a quiet scroll cue only while rows extend below the viewport."""
-        self._content_overflows = bool(visible)
-        hint = self._scroll_hint
-        if not self._widget_exists(hint):
-            return
-        try:
-            mapped = bool(hint.winfo_manager())
-        except tk.TclError:
-            return
-        if visible and not mapped:
-            hint.grid()
-        elif not visible and mapped:
-            hint.grid_remove()
+        self._content_scrollbar.sync_overflow(content_height)
 
     def focus_content(self) -> None:
         """Return the library to its beginning and give it keyboard focus."""
         self.close_active_menu()
         canvas = self._content_canvas
-        if not self._widget_exists(canvas):
+        scrollbar = self._content_scrollbar
+        if not self._widget_exists(canvas) or scrollbar is None:
             return
         try:
-            canvas.yview_moveto(0)
+            scrollbar.reset_to_top()
             canvas.focus_set()
         except tk.TclError:
             return
@@ -1836,18 +1816,3 @@ class MapLibraryPanel:
             return
         self._content_canvas.itemconfigure(self._rows_window, width=event.width)
         self.sync_scroll_region()
-
-    def _scroll_content(self, event):
-        if self._content_canvas is None or not self._content_overflows:
-            return None
-        units = vertical_scroll_units(event)
-        if units is not None:
-            self._content_canvas.yview_scroll(units, "units")
-        return "break"
-
-    def _bind_mousewheel(self, widget) -> None:
-        widget.bind("<MouseWheel>", self._scroll_content, add="+")
-        widget.bind("<Button-4>", self._scroll_content, add="+")
-        widget.bind("<Button-5>", self._scroll_content, add="+")
-        for child in widget.winfo_children():
-            self._bind_mousewheel(child)
