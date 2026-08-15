@@ -2,6 +2,17 @@
 
 All notable changes to this project are documented in this file.
 
+## Release 1.0.78
+
+- Added a new Help area in the main window with an easy-to-scan reference for
+  keyboard shortcuts and capture features.
+- You can now save an interesting section of a cave as its own CaveViewer map,
+  ready to open independently or share with another CaveViewer user.
+- Video recording, manual dive traces, and cave slices now use consistent
+  keyboard shortcuts and clearer start/stop feedback.
+- Refined the main-window layout with clearer navigation and more consistent
+  tabs and scrolling in Help and Preferences.
+
 ## Release 1.0.77
 
 - Map imports, video recording, and dive tracing now use clearer, more
@@ -25,20 +36,3 @@ All notable changes to this project are documented in this file.
   pop-up windows.
 - Update messages are simpler: CaveViewer first confirms that an update is
   ready, then offers one clear link to show the downloaded update.
-
-## Release 1.0.74
-
-- Made the Your Recent Maps and CaveViewer Maps groups independently
-  collapsible while keeping both open by default.
-- Rebuild a map cache directly from Map Library without opening the map. The
-  previous cache stays usable until its replacement succeeds, and background
-  completion or failure can be reported through desktop notifications.
-- Made first-time OBJ imports easier to recover: they can pause at a safe
-  checkpoint and resume when the same map is opened again.
-- Made very large map imports more dependable with protected background work,
-  clearer progress, and earlier warnings when memory or disk space is too low.
-- Reduced stutters and out-of-memory failures on lower-memory systems through
-  smarter chunking, streaming, texture handling, and GPU memory budgeting.
-- Polished the experience across Windows, macOS, and Linux with clearer
-  startup and Map Library feedback, better DPI scaling, and safer signed
-  updates.
