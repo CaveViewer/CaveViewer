@@ -1,34 +1,10 @@
-"""Exercise deterministic layout policy for the splash Help presentation."""
+"""Exercise deterministic presentation policy for the splash Keys table."""
 
 from __future__ import annotations
 
 import inspect
 
 from caveviewer.gui import help_panel
-
-
-def test_help_panel_uses_two_sections_only_when_the_content_is_wide_enough():
-    assert (
-        help_panel.help_section_column_count(
-            639,
-            two_column_min_width=640,
-        )
-        == 1
-    )
-    assert (
-        help_panel.help_section_column_count(
-            640,
-            two_column_min_width=640,
-        )
-        == 2
-    )
-    assert (
-        help_panel.help_section_column_count(
-            "not-a-width",
-            two_column_min_width=640,
-        )
-        == 1
-    )
 
 
 def test_help_panel_scrollbar_is_shown_only_for_overflowing_content():
@@ -53,6 +29,18 @@ def test_help_panel_scrollbar_is_shown_only_for_overflowing_content():
     panel._set_scrollbar_visible(False)
 
     assert scrollbar.calls == ["grid", "grid_remove"]
+
+
+def test_help_panel_uses_a_compact_keys_table_without_redundant_labels():
+    source = inspect.getsource(help_panel.HelpPanel)
+
+    assert 'text="Keys"' in source
+    assert "def _create_keycap_sequence" in source
+    assert "shortcut_keycap_parts(shortcut)" in source
+    assert "column=2" in source
+    assert "Keyboard shortcuts" not in source
+    assert "Controls are shown for this platform" not in source
+    assert "help_section_column_count" not in source
 
 
 def test_help_panel_is_embedded_and_uses_the_shared_scroll_normalizer():

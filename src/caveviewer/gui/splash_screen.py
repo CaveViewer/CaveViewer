@@ -439,21 +439,28 @@ def _cave_metadata_panel_style() -> CaveMetadataPanelStyle:
 
 
 def _help_panel_style() -> HelpPanelStyle:
-    """Return the splash-owned style tokens for the keyboard Help page."""
+    """Return the splash-owned style tokens for the compact Keys table."""
     return HelpPanelStyle(
         background_color=_BG_COLOR,
         panel_color=_PANEL_COLOR,
         border_color=_LIBRARY_PANEL_BORDER_COLOR,
-        title_color=_TITLE_COLOR,
-        section_color=_LIBRARY_METADATA_COLOR,
-        shortcut_color=_BUTTON_BG,
-        action_color=_SUBTITLE_COLOR,
-        note_color=_INSTRUCTION_COLOR,
-        heading_font=_TYPOGRAPHY.heading,
+        table_border_color=DARK_THEME.entry_border,
+        group_background_color=DARK_THEME.entry_background,
+        row_background_color=_BG_COLOR,
+        tab_active_color=_BUTTON_BG,
+        section_color=DARK_THEME.secondary_text,
+        keycap_background_color=DARK_THEME.entry_background,
+        keycap_border_color=DARK_THEME.secondary_button_border,
+        keycap_text_color=DARK_THEME.body_text,
+        action_color=DARK_THEME.body_text,
+        separator_color=DARK_THEME.entry_border,
+        scrollbar_thumb_color=DARK_THEME.secondary_button,
+        scrollbar_active_color=DARK_THEME.secondary_button_hover,
+        scrollbar_trough_color=DARK_THEME.background,
+        tab_font=_TYPOGRAPHY.body_strong,
         section_font=_TYPOGRAPHY.section,
-        shortcut_font=_TYPOGRAPHY.body_strong,
+        keycap_font=_TYPOGRAPHY.body_strong,
         action_font=_TYPOGRAPHY.body,
-        note_font=_TYPOGRAPHY.supporting,
     )
 
 

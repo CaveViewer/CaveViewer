@@ -129,12 +129,14 @@ def test_recording_help_copy_is_shortcut_only_and_format_neutral():
     rows = _control_rows_for_profile(select_presentation_profile(platform_name="unsupported"))
 
     assert "REC button" not in rows
+    assert rows["W A S D"] == "Move forward, left, backward, and right"
     assert rows["Ctrl + R"] == "Start/stop recording"
     assert rows["Ctrl + T"] == "Start/stop manual trace"
     assert rows["Ctrl + C"] == "Start/stop slice"
-    assert rows["Space"] == "Pause/resume a recorded dive"
-    assert rows["Arrow keys"] == "Look around"
-    assert rows["Ctrl + Shift + P"] == "Pause active map import"
+    assert rows["Escape"] == "Cancel active slice"
+    assert rows["Space"] == "Pause/resume Recorded Dive"
+    assert rows["Arrow keys"] == "Look left, right, up, and down"
+    assert rows["Ctrl + Shift + P"] == "Pause active import"
 
 
 def test_controls_overlay_uses_the_shared_keyboard_catalog():
@@ -162,9 +164,9 @@ def test_control_help_copy_uses_profile_for_macos_shortcuts():
     assert rows["Right click + mouse"] == "Look around"
     assert rows["Option + left click + mouse"] == "Look around (alternative)"
     assert rows["Cmd + 0"] == "Reset view (level horizon)"
-    assert rows["Cmd + 1..9"] == "Save camera bookmark slot"
-    assert rows["Cmd + O"] == "Switch to a different map"
-    assert rows["Esc"] == "Close window"
+    assert rows["Cmd + 1–9"] == "Save camera bookmark"
+    assert rows["Cmd + O"] == "Open another map"
+    assert rows["Escape"] == "Cancel active slice"
     assert "Cmd + W" not in rows
     assert rows["Cmd + R"] == "Start/stop recording"
     assert rows["Cmd + T"] == "Start/stop manual trace"
@@ -182,10 +184,10 @@ def test_control_help_copy_uses_profile_for_control_shortcuts():
     assert rows["Left click + mouse"] == "Look around"
     assert "Right click + mouse" not in rows
     assert rows["Ctrl + 0"] == "Reset view (level horizon)"
-    assert rows["Ctrl + 1..9"] == "Save camera bookmark slot"
+    assert rows["Ctrl + 1–9"] == "Save camera bookmark"
     assert "Ctrl + A" not in rows
-    assert rows["Ctrl + O"] == "Switch to a different map"
-    assert rows["Esc"] == "Close window"
+    assert rows["Ctrl + O"] == "Open another map"
+    assert rows["Escape"] == "Cancel active slice"
     assert "Ctrl + W" not in rows
     assert rows["Ctrl + R"] == "Start/stop recording"
     assert rows["Ctrl + T"] == "Start/stop manual trace"

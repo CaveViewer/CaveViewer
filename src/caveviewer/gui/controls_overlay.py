@@ -25,7 +25,10 @@ import moderngl
 import numpy as np
 
 from caveviewer.gui import bitmap_font
-from caveviewer.gui.controls_catalog import keyboard_control_sections
+from caveviewer.gui.controls_catalog import (
+    keyboard_control_sections,
+    shortcut_keycap_parts,
+)
 from caveviewer.gui.platform.presentation import (
     PresentationProfile,
     get_presentation_profile,
@@ -94,16 +97,20 @@ def _get_platform_control_sections(
     """Compose overlay controls from shared keyboard and local visual rows."""
     presentation_profile = presentation_profile or get_presentation_profile()
     look_button = presentation_profile.mouse_look_button_name
-    sections = [
-        (
-            section.title,
-            [(shortcut.shortcut, shortcut.action) for shortcut in section.shortcuts],
-        )
-        for section in keyboard_control_sections(
-            presentation_profile,
-            include_main_window=False,
-        )
-    ]
+    rows_by_section = {
+        section.id: [
+            (shortcut.shortcut, shortcut.action)
+            for shortcut in section.shortcuts
+        ]
+        for section in keyboard_control_sections(presentation_profile)
+    }
+
+    def catalog_rows(*section_ids: str) -> list[tuple[str, str]]:
+        return [
+            row
+            for section_id in section_ids
+            for row in rows_by_section[section_id]
+        ]
 
     visual_look_rows = []
     if look_button == "right":
@@ -114,19 +121,23 @@ def _get_platform_control_sections(
     else:  # left
         visual_look_rows.append(("Left click + mouse", "Look around"))
 
-    for title, rows in sections:
-        if title == "Move":
-            rows.append(("Scroll", "Adjust fly speed"))
-        elif title == "Look":
-            rows[0:0] = visual_look_rows
-        elif title == "Navigate":
-            rows.extend(
-                [
-                    ("Minimap click", "Jump to that spot"),
-                    ("Open button", "Switch to a different map"),
-                ]
-            )
-    return sections
+    movement = catalog_rows("movement")
+    movement.append(("Scroll", "Adjust fly speed"))
+    look = [*visual_look_rows, *catalog_rows("view")]
+    navigate = catalog_rows("bookmarks", "map", "recorded-dive")
+    navigate.extend(
+        [
+            ("Minimap click", "Jump to that spot"),
+            ("Open button", "Switch to a different map"),
+        ]
+    )
+    capture = catalog_rows("capture", "map-import")
+    return [
+        ("Move", movement),
+        ("Look", look),
+        ("Navigate", navigate),
+        ("Capture", capture),
+    ]
 
 
 def _get_platform_control_rows() -> list[tuple[str, str]]:
@@ -767,17 +778,7 @@ class ControlsOverlay:
             y += section_gap
 
     def _keycap_parts(self, label: str) -> list[str]:
-        if " + " in label:
-            parts = []
-            tokens = label.split(" + ")
-            for i, token in enumerate(tokens):
-                if i:
-                    parts.append("+")
-                parts.append(token)
-            return parts
-        if label in {"W A S D", "J L I K", "Z X"}:
-            return label.split()
-        return [label]
+        return list(shortcut_keycap_parts(label))
 
     def _measure_keycap_sequence(self, label, key_size, key_pad_x):
         total_w = 0.0

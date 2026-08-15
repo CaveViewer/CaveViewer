@@ -1,39 +1,38 @@
-"""Exercise the shared, platform-aware keyboard-control catalog."""
+"""Exercise the shared, platform-aware catalog of direct viewer keys."""
 
 from __future__ import annotations
 
-from caveviewer.gui.controls_catalog import keyboard_control_sections
+from caveviewer.gui.controls_catalog import (
+    keyboard_control_sections,
+    shortcut_keycap_parts,
+)
 from caveviewer.gui.platform.presentation import select_presentation_profile
 
 
-def _shortcut_rows(profile, *, include_main_window: bool = True):
+def _shortcut_rows(profile):
     return {
         shortcut.id: shortcut
-        for section in keyboard_control_sections(
-            profile,
-            include_main_window=include_main_window,
-        )
+        for section in keyboard_control_sections(profile)
         for shortcut in section.shortcuts
     }
 
 
-def test_keyboard_catalog_covers_each_supported_command_once():
+def test_keyboard_catalog_covers_each_direct_viewer_binding_once():
     profile = select_presentation_profile(platform_name="unsupported")
     sections = keyboard_control_sections(profile)
     rows = _shortcut_rows(profile)
+    sections_by_id = {section.id: section for section in sections}
 
     assert [section.id for section in sections] == [
-        "main-window",
-        "move",
-        "look",
-        "navigate",
+        "movement",
+        "view",
+        "bookmarks",
+        "map",
+        "map-import",
+        "recorded-dive",
         "capture",
     ]
     assert set(rows) == {
-        "main-window-focus",
-        "main-window-activate",
-        "main-window-open-local-map",
-        "main-window-back-or-close",
         "move-strafe",
         "move-vertical",
         "move-speed-boost",
@@ -46,21 +45,28 @@ def test_keyboard_catalog_covers_each_supported_command_once():
         "bookmark-save",
         "bookmark-recall",
         "bookmark-delete",
+        "bookmark-delete-control-shift",
         "map-open",
+        "import-pause",
         "recorded-dive-space",
-        "viewer-escape",
         "recording-toggle",
         "manual-trace-toggle",
         "slice-toggle",
-        "import-pause",
+        "slice-cancel",
     }
+    assert sections_by_id["map-import"].title == "Map Import"
+    assert [
+        shortcut.id for shortcut in sections_by_id["map-import"].shortcuts
+    ] == ["import-pause"]
 
 
-def test_keyboard_catalog_uses_control_labels_and_capture_standard():
+def test_keyboard_catalog_uses_direct_control_bindings_and_capture_standard():
     rows = _shortcut_rows(select_presentation_profile(platform_name="windows"))
 
+    assert rows["move-strafe"].action == "Move forward, left, backward, and right"
     assert rows["view-reset"].shortcut == "Ctrl + 0"
-    assert rows["bookmark-save"].shortcut == "Ctrl + 1..9"
+    assert rows["bookmark-save"].shortcut == "Ctrl + 1–9"
+    assert rows["bookmark-delete-control-shift"].shortcut == "Ctrl + Shift + 1–9"
     assert rows["map-open"].shortcut == "Ctrl + O"
     assert rows["recording-toggle"].shortcut == "Ctrl + R"
     assert rows["recording-toggle"].action == "Start/stop recording"
@@ -68,7 +74,8 @@ def test_keyboard_catalog_uses_control_labels_and_capture_standard():
     assert rows["manual-trace-toggle"].action == "Start/stop manual trace"
     assert rows["slice-toggle"].shortcut == "Ctrl + C"
     assert rows["slice-toggle"].action == "Start/stop slice"
-    assert "finishes and saves" in rows["slice-toggle"].context_note
+    assert rows["slice-cancel"].shortcut == "Escape"
+    assert rows["slice-cancel"].action == "Cancel active slice"
     assert rows["import-pause"].shortcut == "Ctrl + Shift + P"
     assert rows["look-arrows"].shortcut == "Arrow keys"
 
@@ -77,8 +84,8 @@ def test_keyboard_catalog_uses_command_labels_and_bookmark_fallback_on_macos():
     rows = _shortcut_rows(select_presentation_profile(platform_name="darwin"))
 
     assert rows["view-reset"].shortcut == "Cmd + 0"
-    assert rows["bookmark-save"].shortcut == "Cmd + 1..9"
-    assert "Shift + digit" in rows["bookmark-save"].context_note
+    assert rows["bookmark-save"].shortcut == "Cmd + 1–9"
+    assert rows["bookmark-save-shift-fallback"].shortcut == "Shift + 1–9"
     assert rows["map-open"].shortcut == "Cmd + O"
     assert rows["recording-toggle"].shortcut == "Cmd + R"
     assert rows["manual-trace-toggle"].shortcut == "Cmd + T"
@@ -86,12 +93,25 @@ def test_keyboard_catalog_uses_command_labels_and_bookmark_fallback_on_macos():
     assert rows["import-pause"].shortcut == "Cmd + Shift + P"
 
 
-def test_viewer_catalog_omits_main_window_only_shortcuts():
-    rows = _shortcut_rows(
-        select_presentation_profile(platform_name="unsupported"),
-        include_main_window=False,
-    )
+def test_keyboard_catalog_excludes_contextual_splash_navigation_shortcuts():
+    rows = _shortcut_rows(select_presentation_profile(platform_name="unsupported"))
+    rendered_shortcuts = {shortcut.shortcut for shortcut in rows.values()}
+    actions = {shortcut.action for shortcut in rows.values()}
 
-    assert "main-window-focus" not in rows
-    assert "recording-toggle" in rows
-    assert "import-pause" in rows
+    assert "Ctrl + W" not in rendered_shortcuts
+    assert "Return" not in rendered_shortcuts
+    assert "Tab / Shift + Tab" not in rendered_shortcuts
+    assert "Return, cancel, or close" not in actions
+
+
+def test_keycap_parts_keep_compound_shortcuts_readable():
+    assert shortcut_keycap_parts("W A S D") == ("W", "A", "S", "D")
+    assert shortcut_keycap_parts("E / Q") == ("E", "/", "Q")
+    assert shortcut_keycap_parts("Ctrl + Shift + P") == (
+        "Ctrl",
+        "+",
+        "Shift",
+        "+",
+        "P",
+    )
+    assert shortcut_keycap_parts("Arrow keys") == ("Arrow keys",)
