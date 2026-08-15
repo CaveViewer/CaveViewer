@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import inspect
+
 import pytest
 
 from caveviewer.gui.top_tab_strip import (
+    TABBED_CONTENT_TOP_GAP,
     TopTab,
+    TopTabbedContentSurface,
+    TopTabbedContentSurfaceStyle,
     TopTabStrip,
     TopTabStripStyle,
     next_tab_key,
@@ -62,3 +67,17 @@ def test_tab_strip_selects_the_active_label_and_notifies_its_owner():
     assert strip._tab_labels["streaming"].configurations[-1] == {"fg": "#a9abb8"}
     assert strip._indicators["storage"].configurations[-1] == {"bg": "#f0ad22"}
     assert strip._indicators["streaming"].configurations[-1] == {"bg": "#101018"}
+
+
+def test_tabbed_content_surface_defines_one_standard_content_gap():
+    style = TopTabbedContentSurfaceStyle(
+        background_color="#101018",
+        content_pad_x=32,
+    )
+    source = inspect.getsource(TopTabbedContentSurface)
+
+    assert TABBED_CONTENT_TOP_GAP == 26
+    assert style.content_bottom_pad_y == 0
+    assert "horizontal_inset=0" in source
+    assert "top_inset=0" in source
+    assert "TABBED_CONTENT_TOP_GAP" in source

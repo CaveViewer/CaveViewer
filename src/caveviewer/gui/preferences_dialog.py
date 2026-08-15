@@ -25,7 +25,6 @@ from caveviewer.gui.preferences_form import (
 from caveviewer.gui.features import FeatureState
 from caveviewer.gui.dialog_style import (
     DIALOG_BODY_PAD_Y,
-    DIALOG_PANEL_BORDER,
     create_dialog_action_button,
     set_dialog_action_button,
 )
@@ -47,7 +46,12 @@ from caveviewer.gui.scrollable_content import (
     CanvasScrollbarStyle,
     CanvasVerticalScrollbar,
 )
-from caveviewer.gui.top_tab_strip import TopTab, TopTabStrip, TopTabStripStyle
+from caveviewer.gui.top_tab_strip import (
+    TopTab,
+    TopTabbedContentSurface,
+    TopTabbedContentSurfaceStyle,
+    TopTabStripStyle,
+)
 from caveviewer.gui.tk_theme import DARK_THEME
 from caveviewer.gui.tk_typography import TkTypography, create_tk_typography
 
@@ -72,6 +76,67 @@ _PREFERENCE_PAGES = (
     ("parsing", "Import"),
     ("storage", "Storage"),
 )
+_PREFERENCE_FIELD_GROUPS = {
+    "streaming": (
+        (
+            "Memory",
+            (
+                "memory_target_percent",
+                "gpu_memory_target_percent",
+                "gpu_memory_gb",
+            ),
+        ),
+        ("Loading", ("io_workers", "io_reserved_cpus")),
+        (
+            "Uploads",
+            (
+                "upload_chunks_per_frame",
+                "upload_groups_per_frame",
+                "upload_time_budget_ms",
+            ),
+        ),
+    ),
+    "parsing": (
+        (
+            "Import",
+            (
+                "chunk_size_meters",
+                "max_upload_group_mb",
+                "obj_scan_throttle_ms",
+                "obj_import_batch_thousands",
+            ),
+        ),
+        (
+            "Cache building",
+            ("chunk_build_workers", "chunk_build_reserved_cpus"),
+        ),
+    ),
+    "storage": (
+        ("Locations", ("recording_dir", "map_library_dir")),
+    ),
+}
+def _preference_field_groups(
+    section_key: str,
+) -> tuple[tuple[str, tuple[PreferenceSpec, ...]], ...]:
+    """Return ordered visual groups without making validation depend on them."""
+    section_fields = tuple(
+        field for field in PREFERENCE_FIELDS if field.section == section_key
+    )
+    by_key = {field.key: field for field in section_fields}
+    groups: list[tuple[str, tuple[PreferenceSpec, ...]]] = []
+    for title, keys in _PREFERENCE_FIELD_GROUPS.get(section_key, ()):
+        fields = tuple(
+            by_key.pop(key)
+            for key in keys
+            if key in by_key
+        )
+        if fields:
+            groups.append((title, fields))
+
+    remaining = tuple(field for field in section_fields if field.key in by_key)
+    if remaining:
+        groups.append(("Other", remaining))
+    return tuple(groups)
 
 
 class PreferencesPanel:
@@ -297,32 +362,40 @@ class PreferencesPanel:
         )
 
     def _render_section(self, parent, section_key: str) -> None:
-        section = tk.Frame(
-            parent,
-            bg=_BG_COLOR,
-        )
+        """Render one tab as spaced field groups on a continuous surface."""
+        section = tk.Frame(parent, bg=_BG_COLOR)
+        # The form owns the full content surface. This leaves a stable
+        # right-aligned control column and enough width for one-line hints.
         section.pack(fill="x")
+        groups = _preference_field_groups(section_key)
 
-        group = tk.Frame(
-            section,
-            bg=_PANEL_COLOR,
-            padx=0,
-            pady=0,
-            highlightthickness=1,
-            highlightbackground=DIALOG_PANEL_BORDER,
-            highlightcolor=DIALOG_PANEL_BORDER,
-        )
-        group.pack(fill="x")
+        for index, (title, fields) in enumerate(groups):
+            group = tk.Frame(section, bg=_BG_COLOR)
+            group.pack(
+                fill="x",
+                pady=(
+                    0,
+                    self._layout_policy.row_pad_y if index < len(groups) - 1 else 0,
+                ),
+            )
+            tk.Label(
+                group,
+                text=title.upper(),
+                font=self.section_font,
+                fg=_INSTRUCTION_COLOR,
+                bg=_BG_COLOR,
+                anchor="w",
+            ).pack(
+                anchor="w",
+                pady=(
+                    0 if index == 0 else self._layout_policy.row_pad_y,
+                    max(4, self._layout_policy.row_pad_y // 2),
+                ),
+            )
+            for field in fields:
+                self._render_field(group, field)
 
-        fields = [
-            field
-            for field in PREFERENCE_FIELDS
-            if field.section == section_key
-        ]
-        for index, field in enumerate(fields):
-            self._render_field(group, field, last=index == len(fields) - 1)
-
-    def _render_field(self, section, field: PreferenceSpec, *, last: bool) -> None:
+    def _render_field(self, section, field: PreferenceSpec) -> None:
         key = field.key
         value_type = field.value_type
         self.field_page_keys[key] = field.section
@@ -332,14 +405,13 @@ class PreferencesPanel:
         }
         row = tk.Frame(
             section,
-            bg=_PANEL_COLOR,
-            padx=self._layout_policy.row_pad_x,
-            pady=self._layout_policy.row_pad_y,
+            bg=_BG_COLOR,
         )
-        row.pack(fill="x")
+        row.pack(fill="x", pady=(0, self._form_row_gap()))
         row.grid_columnconfigure(0, weight=1)
+        row.grid_columnconfigure(1, weight=0)
 
-        text_column = tk.Frame(row, bg=_PANEL_COLOR)
+        text_column = tk.Frame(row, bg=_BG_COLOR)
         text_column.grid(
             row=0,
             column=0,
@@ -350,7 +422,7 @@ class PreferencesPanel:
             text=field.label,
             font=self.body_font,
             fg=_SUBTITLE_COLOR,
-            bg=_PANEL_COLOR,
+            bg=_BG_COLOR,
             anchor="w",
         ).pack(anchor="w")
 
@@ -380,13 +452,22 @@ class PreferencesPanel:
             )
         self.field_display_vars[key] = entry_var
 
-        entry_parent = tk.Frame(row, bg=_PANEL_COLOR)
-        entry_parent.grid(
-            row=1,
-            column=0,
-            sticky="ew" if compact_path else "w",
-            pady=(self._layout_policy.control_row_top_pad_y, 0),
-        )
+        entry_parent = tk.Frame(row, bg=_BG_COLOR)
+        if compact_path:
+            entry_parent.grid(
+                row=1,
+                column=0,
+                columnspan=2,
+                sticky="ew",
+                pady=(self._layout_policy.control_row_top_pad_y, 0),
+            )
+        else:
+            entry_parent.grid(
+                row=0,
+                column=1,
+                sticky="e",
+                padx=(self._layout_policy.row_pad_x, 0),
+            )
         entry_parent.grid_columnconfigure(0, weight=1)
         if compact_path:
             entry_parent.grid_columnconfigure(1, weight=0)
@@ -492,7 +573,7 @@ class PreferencesPanel:
             text=field.hint,
             font=self.small_font,
             fg=_INSTRUCTION_COLOR,
-            bg=_PANEL_COLOR,
+            bg=_BG_COLOR,
             justify="left",
             anchor="w",
             wraplength=(
@@ -506,10 +587,6 @@ class PreferencesPanel:
                 lambda event, label=hint_label: self._resize_hint(event, label),
                 add="+",
             )
-
-        if not last:
-            separator = tk.Frame(section, bg=DARK_THEME.entry_border, height=1)
-            separator.pack(fill="x")
 
     @staticmethod
     def _resize_hint(event, label) -> None:
@@ -572,6 +649,10 @@ class PreferencesPanel:
         )
         return max(1, int(round(float(value) * scale)))
 
+    def _form_row_gap(self) -> int:
+        """Return a display-scaled gap between adjacent preference rows."""
+        return self._surface_px(self._layout_policy.row_pad_y + 6)
+
     def _sync_page_scrollbar(self) -> None:
         if (
             self.page_canvas is None
@@ -611,16 +692,8 @@ class PreferencesPanel:
         self.dialog.after_idle(self._sync_page_scrollbar)
 
     def _build(self) -> None:
-        body = tk.Frame(
+        surface = TopTabbedContentSurface(
             self.container,
-            bg=_BG_COLOR,
-            padx=self._layout_policy.body_pad_x,
-            pady=DIALOG_BODY_PAD_Y,
-        )
-        body.pack(fill="both", expand=True)
-
-        self.tab_strip = TopTabStrip(
-            body,
             tabs=tuple(
                 TopTab(page_key, tab_label)
                 for page_key, tab_label in _PREFERENCE_PAGES
@@ -628,7 +701,7 @@ class PreferencesPanel:
             active_key=_PREFERENCE_PAGES[0][0],
             on_selected=self._show_page,
             px=self._surface_px,
-            style=TopTabStripStyle(
+            tab_style=TopTabStripStyle(
                 background_color=_BG_COLOR,
                 baseline_color=DARK_THEME.entry_border,
                 active_color=_BUTTON_BG,
@@ -636,13 +709,17 @@ class PreferencesPanel:
                 focus_color=DARK_THEME.entry_focus_border,
                 font=self.action_font,
             ),
+            style=TopTabbedContentSurfaceStyle(
+                background_color=_BG_COLOR,
+                content_pad_x=self._layout_policy.body_pad_x,
+                content_bottom_pad_y=DIALOG_BODY_PAD_Y,
+            ),
         )
-        self.tab_strip.pack(
-            fill="x",
-            pady=(0, self._layout_policy.tab_bottom_pad_y),
-        )
+        surface.pack(fill="both", expand=True)
+        self.tab_strip = surface.tab_strip
+        body = surface.content
 
-        self.button_row = tk.Frame(body, bg=_BG_COLOR)
+        self.button_row = tk.Frame(body, bg=_PANEL_COLOR)
         # Pack the action row before the page stack so a height-limited
         # Windows dialog shrinks form content first instead of clipping
         # Apply/Cancel off the bottom edge.
@@ -672,14 +749,14 @@ class PreferencesPanel:
         self.apply_button.pack(side="right")
         cancel_button.pack(side="right", padx=(0, 8))
 
-        self.feedback_frame = tk.Frame(self.button_row, bg=_BG_COLOR)
+        self.feedback_frame = tk.Frame(self.button_row, bg=_PANEL_COLOR)
         self.feedback_frame.pack(side="left", fill="x", expand=True)
         self.error_label = tk.Label(
             self.feedback_frame,
             text="",
             font=self.small_font,
             fg=DARK_THEME.error_text,
-            bg=_BG_COLOR,
+            bg=_PANEL_COLOR,
             anchor="w",
             justify="left",
             wraplength=self._layout_policy.notice_wrap_length,

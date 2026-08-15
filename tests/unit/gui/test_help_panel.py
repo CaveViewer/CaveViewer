@@ -20,13 +20,24 @@ def test_help_panel_uses_a_compact_keys_table_without_redundant_labels():
     source = inspect.getsource(help_panel.HelpPanel)
 
     assert 'TopTab("keys", "Keys")' in source
-    assert "TopTabStrip(" in source
+    assert "TopTabbedContentSurface(" in source
     assert "def _create_keycap_sequence" in source
     assert "shortcut_keycap_parts(shortcut)" in source
     assert "column=2" in source
     assert "Keyboard shortcuts" not in source
     assert "Controls are shown for this platform" not in source
     assert "help_section_column_count" not in source
+
+
+def test_help_panel_uses_a_quiet_table_without_card_borders():
+    create_source = inspect.getsource(help_panel.HelpPanel.create)
+    row_source = inspect.getsource(help_panel.HelpPanel._create_shortcut_row)
+
+    assert 'text="Help"' not in create_source
+    assert "TopTabbedContentSurface(" in create_source
+    assert "highlightbackground" not in create_source
+    assert "row_divider_color" in row_source
+    assert "highlightthickness" not in row_source
 
 
 def test_help_panel_is_embedded_and_uses_the_shared_scroll_host():

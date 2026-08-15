@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import tkinter as tk
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Callable, Iterable
+
+
+TABBED_CONTENT_TOP_GAP = 26
 
 
 @dataclass(frozen=True)
@@ -32,6 +35,15 @@ class TopTabStripStyle:
     tab_gap: int = 10
     underline_height: int = 3
     focus_highlight_thickness: int = 1
+
+
+@dataclass(frozen=True)
+class TopTabbedContentSurfaceStyle:
+    """Shared layout tokens for content shown beneath an underline tab strip."""
+
+    background_color: str
+    content_pad_x: int
+    content_bottom_pad_y: int = 0
 
 
 def next_tab_key(tabs: tuple[TopTab, ...], current_key: str, offset: int) -> str:
@@ -189,3 +201,58 @@ class TopTabStrip:
             self._tab_labels[key].focus_set()
         except tk.TclError:
             return
+
+
+class TopTabbedContentSurface:
+    """Provide a standard tab baseline and content gap for splash panels.
+
+    Every consumer gets the same inset, zero extra tab-top space, and the
+    standard gap before the first content group.  Callers own only the
+    content placed inside :attr:`content`.
+    """
+
+    def __init__(
+        self,
+        parent,
+        *,
+        tabs: Iterable[TopTab],
+        active_key: str,
+        on_selected: Callable[[str], None] | None,
+        px: Callable[[int | float], int],
+        tab_style: TopTabStripStyle,
+        style: TopTabbedContentSurfaceStyle,
+    ) -> None:
+        self._px = px
+        self._style = style
+        self.widget = tk.Frame(parent, bg=style.background_color)
+
+        tab_host = tk.Frame(self.widget, bg=style.background_color)
+        tab_host.pack(fill="x", padx=self._px(style.content_pad_x))
+        self.tab_strip = TopTabStrip(
+            tab_host,
+            tabs=tabs,
+            active_key=active_key,
+            on_selected=on_selected,
+            px=px,
+            style=replace(
+                tab_style,
+                horizontal_inset=0,
+                top_inset=0,
+            ),
+        )
+        self.tab_strip.pack(fill="x")
+
+        self.content = tk.Frame(self.widget, bg=style.background_color)
+        self.content.pack(
+            fill="both",
+            expand=True,
+            padx=self._px(style.content_pad_x),
+            pady=(
+                self._px(TABBED_CONTENT_TOP_GAP),
+                self._px(style.content_bottom_pad_y),
+            ),
+        )
+
+    def pack(self, **pack_options) -> None:
+        """Pack the full tabbed surface into its owner."""
+        self.widget.pack(**pack_options)

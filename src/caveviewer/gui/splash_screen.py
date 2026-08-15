@@ -439,14 +439,9 @@ def _cave_metadata_panel_style() -> CaveMetadataPanelStyle:
 
 
 def _help_panel_style() -> HelpPanelStyle:
-    """Return the splash-owned style tokens for the compact Keys table."""
+    """Return the splash-owned style tokens for the quiet Keys table."""
     return HelpPanelStyle(
         background_color=_BG_COLOR,
-        panel_color=_PANEL_COLOR,
-        border_color=_LIBRARY_PANEL_BORDER_COLOR,
-        table_border_color=DARK_THEME.entry_border,
-        group_background_color=DARK_THEME.entry_background,
-        row_background_color=_BG_COLOR,
         tab_active_color=_BUTTON_BG,
         tab_focus_color=DARK_THEME.entry_focus_border,
         section_color=DARK_THEME.secondary_text,
@@ -454,7 +449,8 @@ def _help_panel_style() -> HelpPanelStyle:
         keycap_border_color=DARK_THEME.secondary_button_border,
         keycap_text_color=DARK_THEME.body_text,
         action_color=DARK_THEME.body_text,
-        separator_color=DARK_THEME.entry_border,
+        row_divider_color=_LIBRARY_PANEL_BORDER_COLOR,
+        content_pad_x=_PRESENTATION_PROFILE.preferences_dialog_layout.body_pad_x,
         tab_font=_TYPOGRAPHY.body_strong,
         section_font=_TYPOGRAPHY.section,
         keycap_font=_TYPOGRAPHY.body_strong,
@@ -1389,29 +1385,8 @@ def show_splash_screen(
         if panel is not None:
             return panel
 
-        shell = tk.Frame(
-            preferences_surface,
-            bg=_BG_COLOR,
-            highlightthickness=1,
-            highlightbackground=_LIBRARY_PANEL_BORDER_COLOR,
-            highlightcolor=_LIBRARY_PANEL_BORDER_COLOR,
-        )
-        shell.pack(fill="both", expand=True, pady=px(14))
-        heading = tk.Frame(shell, bg=_PANEL_COLOR)
-        heading.pack(fill="x")
-        tk.Label(
-            heading,
-            text="Preferences",
-            font=_TYPOGRAPHY.heading,
-            fg=_TITLE_COLOR,
-            bg=_PANEL_COLOR,
-            anchor="w",
-        ).pack(fill="x", padx=px(20), pady=(px(13), px(11)))
-        panel_host = tk.Frame(shell, bg=_BG_COLOR)
-        panel_host.pack(fill="both", expand=True)
-
         panel = PreferencesPanel(
-            panel_host,
+            preferences_surface,
             ui_font_family=_UI_FONT_FAMILY,
             desktop_services=desktop_services,
             platform_runtime=platform_runtime,

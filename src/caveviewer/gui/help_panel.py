@@ -15,7 +15,12 @@ from caveviewer.gui.scrollable_content import (
     CanvasScrollbarStyle,
     CanvasVerticalScrollbar,
 )
-from caveviewer.gui.top_tab_strip import TopTab, TopTabStrip, TopTabStripStyle
+from caveviewer.gui.top_tab_strip import (
+    TopTab,
+    TopTabbedContentSurface,
+    TopTabbedContentSurfaceStyle,
+    TopTabStripStyle,
+)
 
 
 @dataclass(frozen=True)
@@ -23,11 +28,6 @@ class HelpPanelStyle:
     """Theme and typography tokens owned by the splash Keys presentation."""
 
     background_color: str
-    panel_color: str
-    border_color: str
-    table_border_color: str
-    group_background_color: str
-    row_background_color: str
     tab_active_color: str
     tab_focus_color: str
     section_color: str
@@ -35,7 +35,8 @@ class HelpPanelStyle:
     keycap_border_color: str
     keycap_text_color: str
     action_color: str
-    separator_color: str
+    row_divider_color: str
+    content_pad_x: int
     tab_font: tuple
     section_font: tuple
     keycap_font: tuple
@@ -73,40 +74,31 @@ class HelpPanel:
             return
 
         style = self._style
-        shell = tk.Frame(
+        surface = TopTabbedContentSurface(
             self.parent,
-            bg=style.panel_color,
-            highlightthickness=1,
-            highlightbackground=style.border_color,
-            highlightcolor=style.border_color,
-        )
-        shell.pack(fill="both", expand=True, pady=self._px(14))
-        self._shell = shell
-
-        self._tab_strip = TopTabStrip(
-            shell,
             tabs=(TopTab("keys", "Keys"),),
             active_key="keys",
             on_selected=None,
             px=self._px,
-            style=TopTabStripStyle(
-                background_color=style.panel_color,
-                baseline_color=style.separator_color,
+            tab_style=TopTabStripStyle(
+                background_color=style.background_color,
+                baseline_color=style.row_divider_color,
                 active_color=style.tab_active_color,
                 inactive_color=style.section_color,
                 focus_color=style.tab_focus_color,
                 font=style.tab_font,
             ),
+            style=TopTabbedContentSurfaceStyle(
+                background_color=style.background_color,
+                content_pad_x=style.content_pad_x,
+                content_bottom_pad_y=14,
+            ),
         )
-        self._tab_strip.pack(fill="x")
+        surface.pack(fill="both", expand=True)
+        self._shell = surface.widget
+        self._tab_strip = surface.tab_strip
 
-        content_shell = tk.Frame(shell, bg=style.background_color)
-        content_shell.pack(
-            fill="both",
-            expand=True,
-            padx=self._px(14),
-            pady=(self._px(14), self._px(14)),
-        )
+        content_shell = surface.content
         content_shell.grid_rowconfigure(0, weight=1)
         content_shell.grid_columnconfigure(0, weight=1)
 
@@ -130,10 +122,7 @@ class HelpPanel:
 
         content = tk.Frame(
             canvas,
-            bg=style.table_border_color,
-            highlightthickness=1,
-            highlightbackground=style.table_border_color,
-            highlightcolor=style.table_border_color,
+            bg=style.background_color,
         )
         content.grid_columnconfigure(0, weight=1)
         self._content_frame = content
@@ -157,19 +146,22 @@ class HelpPanel:
 
     def _create_section(self, parent, section: KeyboardShortcutSection) -> None:
         style = self._style
-        # ``_next_grid_row`` keeps one aligned sequence of dividers and rows
-        # instead of independently sized cards.
+        # Keep a single aligned sequence of section labels, quiet rows, and
+        # subtle horizontal dividers without wrapping the table in a card.
         next_row = self._next_grid_row
         tk.Label(
             parent,
             text=section.title.upper(),
             font=style.section_font,
             fg=style.section_color,
-            bg=style.group_background_color,
+            bg=style.background_color,
             anchor="w",
-            padx=self._px(12),
-            pady=self._px(7),
-        ).grid(row=next_row, column=0, sticky="ew")
+        ).grid(
+            row=next_row,
+            column=0,
+            sticky="ew",
+            pady=(self._px(7) if next_row else 0, self._px(7)),
+        )
         self._next_grid_row = next_row + 1
 
         for shortcut in section.shortcuts:
@@ -179,17 +171,14 @@ class HelpPanel:
         style = self._style
         row = tk.Frame(
             parent,
-            bg=style.row_background_color,
-            highlightthickness=1,
-            highlightbackground=style.table_border_color,
-            highlightcolor=style.table_border_color,
+            bg=style.background_color,
         )
         row.grid(row=self._next_grid_row, column=0, sticky="ew")
         row.grid_columnconfigure(2, weight=1)
         self._next_grid_row += 1
         self._table_rows.append(row)
 
-        key_cell = tk.Frame(row, bg=style.row_background_color)
+        key_cell = tk.Frame(row, bg=style.background_color)
         key_cell.grid(
             row=0,
             column=0,
@@ -198,7 +187,7 @@ class HelpPanel:
             pady=self._px(7),
         )
         self._create_keycap_sequence(key_cell, shortcut.shortcut)
-        tk.Frame(row, bg=style.separator_color, width=max(1, self._px(1))).grid(
+        tk.Frame(row, bg=style.background_color, width=self._px(18)).grid(
             row=0,
             column=1,
             sticky="ns",
@@ -208,7 +197,7 @@ class HelpPanel:
             text=shortcut.action,
             font=style.action_font,
             fg=style.action_color,
-            bg=style.row_background_color,
+            bg=style.background_color,
             anchor="w",
             justify="left",
         )
@@ -220,6 +209,12 @@ class HelpPanel:
             pady=self._px(7),
         )
         self._action_labels.append(action_label)
+        tk.Frame(
+            parent,
+            bg=style.row_divider_color,
+            height=max(1, self._px(1)),
+        ).grid(row=self._next_grid_row, column=0, sticky="ew")
+        self._next_grid_row += 1
 
     def _create_keycap_sequence(self, parent, shortcut: str) -> None:
         style = self._style
@@ -230,7 +225,7 @@ class HelpPanel:
                     text=part,
                     font=style.action_font,
                     fg=style.section_color,
-                    bg=style.row_background_color,
+                    bg=style.background_color,
                 ).pack(side="left", padx=self._px(4))
                 continue
             tk.Label(
