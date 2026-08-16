@@ -63,20 +63,45 @@ _CAPTURE_HELP_LAYOUT = (
         ),
     ),
 )
-_KEYS_TAB_EXCLUDED_SECTION_IDS = frozenset(
-    {"capture", "map", "map-import", "recorded-dive"}
+_KEY_HELP_LAYOUT = (
+    ("move", "Move", ("movement",)),
+    ("look", "Look", ("view",)),
+    ("navigate", "Navigate", ("bookmarks", "map", "recorded-dive")),
 )
+# Keep this supported chord out of the compact Help reference until its
+# long-term bookmark-delete interaction is decided.
+_KEY_HELP_EXCLUDED_SHORTCUT_IDS = frozenset({"bookmark-delete-control-shift"})
 
 
 def key_help_sections(
     sections: Iterable[KeyboardShortcutSection],
 ) -> tuple[KeyboardShortcutSection, ...]:
-    """Return direct-navigation bindings that belong in the Help Keys tab."""
-    return tuple(
-        section
-        for section in sections
-        if section.id not in _KEYS_TAB_EXCLUDED_SECTION_IDS
-    )
+    """Return Keys-tab shortcuts grouped like the in-view controls overlay.
+
+    Capture has its own artifact-focused tab below. Map-import controls remain
+    out of this compact navigation reference for the same reason.
+    """
+    sections_by_id = {section.id: section for section in sections}
+    grouped_sections: list[KeyboardShortcutSection] = []
+    for section_id, title, source_section_ids in _KEY_HELP_LAYOUT:
+        shortcuts: list[KeyboardShortcut] = []
+        for source_section_id in source_section_ids:
+            source_section = sections_by_id.get(source_section_id)
+            if source_section is not None:
+                shortcuts.extend(
+                    shortcut
+                    for shortcut in source_section.shortcuts
+                    if shortcut.id not in _KEY_HELP_EXCLUDED_SHORTCUT_IDS
+                )
+        if shortcuts:
+            grouped_sections.append(
+                KeyboardShortcutSection(
+                    id=section_id,
+                    title=title,
+                    shortcuts=tuple(shortcuts),
+                )
+            )
+    return tuple(grouped_sections)
 
 
 def capture_help_sections(

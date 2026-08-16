@@ -45,15 +45,37 @@ def test_capture_help_has_its_own_tab_with_artifact_specific_guidance():
     assert "fill=style.detail_color" in row_source
 
 
-def test_keys_help_omits_capture_map_import_and_recorded_dive_sections():
+def test_keys_help_groups_shortcuts_as_move_look_and_navigate():
     sections = keyboard_control_sections(
         select_presentation_profile(platform_name="windows")
     )
 
-    assert [section.id for section in help_panel.key_help_sections(sections)] == [
-        "movement",
-        "view",
-        "bookmarks",
+    key_sections = help_panel.key_help_sections(sections)
+
+    assert [(section.id, section.title) for section in key_sections] == [
+        ("move", "Move"),
+        ("look", "Look"),
+        ("navigate", "Navigate"),
+    ]
+    assert [shortcut.id for shortcut in key_sections[0].shortcuts] == [
+        "move-strafe",
+        "move-vertical",
+        "move-speed-boost",
+        "move-speed-decrease",
+        "move-speed-increase",
+    ]
+    assert [shortcut.id for shortcut in key_sections[1].shortcuts] == [
+        "look-arrows",
+        "look-jlik",
+        "look-roll",
+        "view-reset",
+    ]
+    assert [shortcut.id for shortcut in key_sections[2].shortcuts] == [
+        "bookmark-save",
+        "bookmark-recall",
+        "bookmark-delete",
+        "map-open",
+        "recorded-dive-space",
     ]
 
 
