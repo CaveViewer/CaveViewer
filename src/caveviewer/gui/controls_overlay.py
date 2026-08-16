@@ -26,6 +26,7 @@ import numpy as np
 
 from caveviewer.gui import bitmap_font
 from caveviewer.gui.controls_catalog import (
+    is_help_shortcut_visible,
     keyboard_control_sections,
     shortcut_keycap_parts,
 )
@@ -101,6 +102,7 @@ def _get_platform_control_sections(
         section.id: [
             (shortcut.shortcut, shortcut.action)
             for shortcut in section.shortcuts
+            if is_help_shortcut_visible(shortcut)
         ]
         for section in keyboard_control_sections(presentation_profile)
     }

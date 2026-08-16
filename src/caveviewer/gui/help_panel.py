@@ -10,6 +10,7 @@ from typing import Callable, Iterable
 from caveviewer.gui.controls_catalog import (
     KeyboardShortcut,
     KeyboardShortcutSection,
+    is_help_shortcut_visible,
     shortcut_keycap_parts,
 )
 from caveviewer.gui.scrollable_content import (
@@ -68,9 +69,6 @@ _KEY_HELP_LAYOUT = (
     ("look", "Look", ("view",)),
     ("navigate", "Navigate", ("bookmarks", "map", "recorded-dive")),
 )
-# Keep this supported chord out of the compact Help reference until its
-# long-term bookmark-delete interaction is decided.
-_KEY_HELP_EXCLUDED_SHORTCUT_IDS = frozenset({"bookmark-delete-control-shift"})
 
 
 def key_help_sections(
@@ -91,7 +89,7 @@ def key_help_sections(
                 shortcuts.extend(
                     shortcut
                     for shortcut in source_section.shortcuts
-                    if shortcut.id not in _KEY_HELP_EXCLUDED_SHORTCUT_IDS
+                    if is_help_shortcut_visible(shortcut)
                 )
         if shortcuts:
             grouped_sections.append(

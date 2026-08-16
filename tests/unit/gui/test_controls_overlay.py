@@ -137,6 +137,7 @@ def test_recording_help_copy_is_shortcut_only_and_format_neutral():
     assert rows["Space"] == "Pause/resume Recorded Dive"
     assert rows["Arrow keys"] == "Look left, right, up, and down"
     assert rows["Ctrl + Shift + P"] == "Pause active import"
+    assert "Ctrl + Shift + 1–9" not in rows
 
 
 def test_controls_overlay_uses_the_shared_keyboard_catalog():
