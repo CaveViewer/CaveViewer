@@ -29,7 +29,15 @@ class KeyboardShortcutSection:
     shortcuts: tuple[KeyboardShortcut, ...]
 
 
+# This chord remains available in the viewer, but is intentionally omitted
+# from both Help presentations while its long-term interaction is decided.
+_HELP_HIDDEN_SHORTCUT_IDS = frozenset({"bookmark-delete-control-shift"})
 _SPACED_KEY_GROUPS = frozenset({"W A S D", "J L I K", "Z X"})
+
+
+def is_help_shortcut_visible(shortcut: KeyboardShortcut) -> bool:
+    """Return whether a supported shortcut belongs in either Help UI."""
+    return shortcut.id not in _HELP_HIDDEN_SHORTCUT_IDS
 
 
 def _modifier_display_label(modifier_name: str) -> str:
