@@ -16,11 +16,11 @@ from __future__ import annotations
 
 import json
 import re
-import urllib.request
 import urllib.error
+import urllib.request
 from urllib.parse import urlparse
 from dataclasses import dataclass
-from typing import Callable, Optional
+from typing import Callable, Optional, TypeAlias
 
 from caveviewer.core.diagnostics.logging import get_logger
 from caveviewer.gui.download_transport import download_file
@@ -43,17 +43,45 @@ _RELEASE_VERSION_PATTERN = re.compile(r"v?\d+(?:\.\d+)+\Z", re.IGNORECASE)
 _SHA256_PATTERN = re.compile(r"[0-9a-f]{64}\Z", re.IGNORECASE)
 
 
-@dataclass
-class UpdateCheckResult:
-    update_available: bool
+@dataclass(frozen=True, slots=True)
+class UpdateArtifact:
+    """A complete package candidate validated from a newer manifest."""
+
+    version: str
+    download_url: str
+    size_bytes: int
+    sha256: str
+    package_kind: str
+
+
+@dataclass(frozen=True, slots=True)
+class UpdateAvailable:
+    """A newer update with its non-optional validated download artifact."""
+
     current_version: str
-    latest_version: Optional[str] = None
-    download_url: Optional[str] = None
-    download_size_bytes: Optional[int] = None
-    download_sha256: Optional[str] = None
-    package_kind: Optional[str] = None
-    release_notes: Optional[str] = None
-    error: Optional[str] = None
+    artifact: UpdateArtifact
+
+
+@dataclass(frozen=True, slots=True)
+class UpdateNotAvailable:
+    """A successfully checked manifest that does not advertise a newer version."""
+
+    current_version: str
+    latest_version: str
+
+
+@dataclass(frozen=True, slots=True)
+class UpdateCheckFailed:
+    """A safe failure while fetching, parsing, or verifying update metadata."""
+
+    current_version: str
+    error: str
+
+
+UpdateCheckOutcome: TypeAlias = UpdateAvailable | UpdateNotAvailable | UpdateCheckFailed
+_ManifestParseOutcome: TypeAlias = (
+    UpdateArtifact | UpdateNotAvailable | UpdateCheckFailed
+)
 
 
 def _parse_version(version_str: str) -> tuple:
@@ -124,12 +152,103 @@ def _first_non_empty_str(data: dict, keys: tuple[str, ...]) -> str:
     return ""
 
 
+def _parse_update_manifest(
+    current_version: str,
+    data: dict,
+    *,
+    update_target: UpdateTarget,
+    package_kind_for_url: Callable[[str], str],
+) -> _ManifestParseOutcome:
+    """Parse one decoded manifest without fetching its signature.
+
+    The return value deliberately cannot represent an incomplete available
+    update: a newer manifest either becomes a complete ``UpdateArtifact`` or
+    a safe ``UpdateCheckFailed``.  The caller verifies the raw manifest bytes
+    before it exposes that artifact through ``UpdateAvailable``.
+    """
+    latest_tag = str(
+        data.get("latest_version") or data.get("version") or ""
+    ).strip()
+
+    if not latest_tag:
+        return UpdateCheckFailed(
+            current_version=current_version,
+            error="Update manifest is missing required field: latest_version.",
+        )
+    if not _is_release_version(latest_tag):
+        return UpdateCheckFailed(
+            current_version=current_version,
+            error="Update manifest has an invalid latest_version.",
+        )
+
+    download_url = _first_non_empty_str(
+        data,
+        update_target.manifest_schema.download_url_keys,
+    )
+    if not download_url:
+        return UpdateCheckFailed(
+            current_version=current_version,
+            error=update_target.manifest_schema.missing_download_url_message,
+        )
+
+    package_kind = package_kind_for_url(download_url)
+    allowed_package_kinds = update_target.manifest_schema.allowed_package_kinds
+    if allowed_package_kinds is not None and package_kind not in allowed_package_kinds:
+        return UpdateCheckFailed(
+            current_version=current_version,
+            error=(
+                f"Update manifest payload type '{package_kind}' is not valid for "
+                f"channel '{update_target.install_channel}'."
+            ),
+        )
+
+    if _parse_version(latest_tag) <= _parse_version(current_version):
+        return UpdateNotAvailable(
+            current_version=current_version,
+            latest_version=latest_tag,
+        )
+
+    if not _is_https_url(download_url):
+        return UpdateCheckFailed(
+            current_version=current_version,
+            error="Update manifest download URL must use HTTPS.",
+        )
+
+    download_size_bytes = _first_positive_int(
+        data,
+        update_target.manifest_schema.download_size_keys,
+    )
+    if download_size_bytes is None:
+        return UpdateCheckFailed(
+            current_version=current_version,
+            error="Update manifest download size must be a positive integer.",
+        )
+
+    download_sha256 = _first_valid_sha256(
+        data,
+        update_target.manifest_schema.download_sha256_keys,
+    )
+    if not download_sha256:
+        return UpdateCheckFailed(
+            current_version=current_version,
+            error="Update manifest SHA-256 must be a 64-character hexadecimal digest.",
+        )
+
+    return UpdateArtifact(
+        version=latest_tag,
+        download_url=download_url,
+        size_bytes=download_size_bytes,
+        sha256=download_sha256,
+        package_kind=package_kind,
+    )
+
+
 def check_for_update_target(
     current_version: str,
     *,
     update_target: UpdateTarget,
     tls_trust_adapter: TlsTrustAdapter,
-) -> UpdateCheckResult:
+) -> UpdateCheckOutcome:
     """Check one process-owned, typed update target.
 
     The runtime supplies both the immutable target and its focused TLS adapter,
@@ -167,7 +286,7 @@ def _check_for_update_target(
     fetch_url_bytes: Callable[[str, dict[str, str], int], bytes],
     verify_manifest_signature: Callable[[bytes], bool],
     package_kind_for_url: Callable[[str], str],
-) -> UpdateCheckResult:
+) -> UpdateCheckOutcome:
     """Perform a manifest check using only a typed configured target."""
     resolved_channel = update_target.install_channel
 
@@ -199,162 +318,81 @@ def _check_for_update_target(
                 "Update manifest not found (HTTP 404). Check CAVEVIEWER_UPDATE_MANIFEST_URL "
                 f"or the platform-specific manifest for {resolved_channel} in your repository."
             )
-            return UpdateCheckResult(update_available=False, current_version=current_version, error=error_msg)
+            return UpdateCheckFailed(
+                current_version=current_version,
+                error=error_msg,
+            )
         else:
             error_msg = f"Update manifest server returned an error (HTTP {e.code})."
-            return UpdateCheckResult(update_available=False, current_version=current_version, error=error_msg)
+            return UpdateCheckFailed(
+                current_version=current_version,
+                error=error_msg,
+            )
     except urllib.error.URLError as e:
         _LOG.error("Update manifest fetch failed: %s", e)
-        return UpdateCheckResult(
-            update_available=False, current_version=current_version,
-            error="Couldn't reach the update manifest URL -- check your internet connection."
+        return UpdateCheckFailed(
+            current_version=current_version,
+            error="Couldn't reach the update manifest URL -- check your internet connection.",
         )
     except OSError as e:
         _LOG.error("Update manifest SSL/network setup failed: %s", e)
-        return UpdateCheckResult(
-            update_available=False, current_version=current_version,
-            error="Couldn't reach the update manifest URL -- check your internet connection."
+        return UpdateCheckFailed(
+            current_version=current_version,
+            error="Couldn't reach the update manifest URL -- check your internet connection.",
         )
     except (json.JSONDecodeError, KeyError, TypeError) as e:
         _LOG.error("Update manifest parsing failed: %s", e)
-        return UpdateCheckResult(
-            update_available=False, current_version=current_version,
-            error=f"Got an unexpected update manifest format: {e}"
+        return UpdateCheckFailed(
+            current_version=current_version,
+            error=f"Got an unexpected update manifest format: {e}",
         )
 
-    _LOG.info("Update manifest parsed: latest_version=%r, channel=%s", data.get("latest_version") or data.get("version"), resolved_channel)
-
-    latest_tag = str(data.get("latest_version") or data.get("version") or "").strip()
-    release_notes = str(data.get("release_notes") or data.get("notes") or "")
-
-    download_url = _first_non_empty_str(
-        data,
-        update_target.manifest_schema.download_url_keys,
-    )
-    download_size_bytes = _first_positive_int(
-        data,
-        update_target.manifest_schema.download_size_keys,
-    )
-    download_sha256 = _first_valid_sha256(
-        data,
-        update_target.manifest_schema.download_sha256_keys,
-    )
-    package_kind = package_kind_for_url(download_url)
     _LOG.info(
-        "Update manifest package details: package_kind=%s, size=%s, sha256_present=%s",
-        package_kind,
-        download_size_bytes,
-        bool(download_sha256),
+        "Update manifest parsed: latest_version=%r, channel=%s",
+        data.get("latest_version") or data.get("version"),
+        resolved_channel,
     )
-
-    if not latest_tag:
-        _LOG.error("Update manifest rejected: missing required field latest_version.")
-        return UpdateCheckResult(
-            update_available=False,
-            current_version=current_version,
-            error="Update manifest is missing required field: latest_version."
-        )
-
-    if not _is_release_version(latest_tag):
-        _LOG.error("Update manifest rejected: invalid latest_version=%r.", latest_tag)
-        return UpdateCheckResult(
-            update_available=False,
-            current_version=current_version,
-            error="Update manifest has an invalid latest_version.",
-        )
-
-    if not download_url:
-        _LOG.error("Update manifest rejected: missing download URL for channel %r.", resolved_channel)
-        return UpdateCheckResult(
-            update_available=False,
-            current_version=current_version,
-            latest_version=latest_tag,
-            error=update_target.manifest_schema.missing_download_url_message,
-        )
-
-    allowed_package_kinds = update_target.manifest_schema.allowed_package_kinds
-    if allowed_package_kinds is not None and package_kind not in allowed_package_kinds:
-        _LOG.error(
-            "Update manifest rejected: package_kind=%r is not allowed for channel=%r.",
-            package_kind,
-            resolved_channel,
-        )
-        return UpdateCheckResult(
-            update_available=False,
-            current_version=current_version,
-            latest_version=latest_tag,
-            error=(
-                f"Update manifest payload type '{package_kind}' is not valid for "
-                f"channel '{resolved_channel}'."
-            ),
-        )
-
-    is_newer = _parse_version(latest_tag) > _parse_version(current_version)
-    _LOG.info(
-        "Update check complete: update_available=%s, current_version=%s, latest_version=%s",
-        is_newer,
+    parsed_manifest = _parse_update_manifest(
         current_version,
-        latest_tag,
+        data,
+        update_target=update_target,
+        package_kind_for_url=package_kind_for_url,
     )
+    if isinstance(parsed_manifest, UpdateCheckFailed):
+        _LOG.error("Update manifest rejected: %s", parsed_manifest.error)
+        return parsed_manifest
 
-    if not is_newer:
+    if isinstance(parsed_manifest, UpdateNotAvailable):
         _LOG.info(
             "No update available: current_version=%s, latest_version=%s, manifest_url=%s",
             current_version,
-            latest_tag,
+            parsed_manifest.latest_version,
             update_target.manifest_url,
         )
-        return UpdateCheckResult(
-            update_available=False,
-            current_version=current_version,
-            latest_version=latest_tag,
-            release_notes=release_notes.strip(),
-        )
+        return parsed_manifest
 
-    if not _is_https_url(download_url):
-        _LOG.error("Update manifest rejected: payload URL is not HTTPS.")
-        return UpdateCheckResult(
-            update_available=False,
-            current_version=current_version,
-            latest_version=latest_tag,
-            error="Update manifest download URL must use HTTPS.",
-        )
-
-    if download_size_bytes is None:
-        _LOG.error("Update manifest rejected: missing or invalid payload size.")
-        return UpdateCheckResult(
-            update_available=False,
-            current_version=current_version,
-            latest_version=latest_tag,
-            error="Update manifest download size must be a positive integer.",
-        )
-
-    if not download_sha256:
-        _LOG.error("Update manifest rejected: missing or invalid SHA-256.")
-        return UpdateCheckResult(
-            update_available=False,
-            current_version=current_version,
-            latest_version=latest_tag,
-            error="Update manifest SHA-256 must be a 64-character hexadecimal digest.",
-        )
-
+    artifact = parsed_manifest
+    _LOG.info(
+        "Update manifest package details: package_kind=%s, size=%s, sha256_present=%s",
+        artifact.package_kind,
+        artifact.size_bytes,
+        bool(artifact.sha256),
+    )
+    _LOG.info(
+        "Update check complete: update_available=%s, current_version=%s, latest_version=%s",
+        True,
+        current_version,
+        artifact.version,
+    )
     if not verify_manifest_signature(manifest_bytes):
-        return UpdateCheckResult(
-            update_available=False,
+        return UpdateCheckFailed(
             current_version=current_version,
-            latest_version=latest_tag,
             error="Update manifest signature could not be verified.",
         )
 
-    return UpdateCheckResult(
-        update_available=True,
+    return UpdateAvailable(
         current_version=current_version,
-        latest_version=latest_tag,
-        download_url=download_url,
-        download_size_bytes=download_size_bytes,
-        download_sha256=download_sha256,
-        package_kind=package_kind,
-        release_notes=release_notes.strip(),
+        artifact=artifact,
     )
 
 

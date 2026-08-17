@@ -59,6 +59,11 @@ def _set_manifest(monkeypatch, data):
     return payload, calls
 
 
+def _assert_failed(result):
+    assert isinstance(result, update_checker.UpdateCheckFailed)
+    return result
+
+
 @pytest.mark.parametrize(
     ("text", "expected"),
     [
@@ -86,6 +91,46 @@ def test_manifest_value_helpers_use_first_valid_alias():
     assert update_checker._first_non_empty_str(data, ("old", "new")) == "value"
     assert update_checker._first_positive_int(data, ("bad_size", "size")) == 42
     assert update_checker._first_valid_sha256(data, ("bad_sha", "sha")) == "a" * 64
+
+
+def test_manifest_parser_returns_a_complete_artifact_for_a_newer_update(
+    update_target,
+):
+    parsed = update_checker._parse_update_manifest(
+        "1.0.0",
+        {
+            "latest_version": "2.0.0",
+            "windows_app_url": "https://updates.example/CaveViewer.zip",
+            "windows_app_size": 123,
+            "windows_app_sha256": "A" * 64,
+        },
+        update_target=update_target,
+        package_kind_for_url=lambda _url: "zip",
+    )
+
+    assert isinstance(parsed, update_checker.UpdateArtifact)
+    assert parsed.version == "2.0.0"
+    assert parsed.download_url == "https://updates.example/CaveViewer.zip"
+    assert parsed.size_bytes == 123
+    assert parsed.sha256 == "a" * 64
+    assert parsed.package_kind == "zip"
+
+
+def test_manifest_parser_returns_up_to_date_without_an_artifact(update_target):
+    parsed = update_checker._parse_update_manifest(
+        "1.0.0",
+        {
+            "latest_version": "1.0.0",
+            "windows_app_url": "https://updates.example/CaveViewer.zip",
+        },
+        update_target=update_target,
+        package_kind_for_url=lambda _url: "zip",
+    )
+
+    assert isinstance(parsed, update_checker.UpdateNotAvailable)
+    assert parsed.current_version == "1.0.0"
+    assert parsed.latest_version == "1.0.0"
+    assert not hasattr(parsed, "artifact")
 
 
 @pytest.mark.parametrize(
@@ -220,8 +265,8 @@ def test_update_check_handles_manifest_http_errors(
         tls_trust_adapter=tls_trust_adapter,
     )
 
-    assert not result.update_available
-    assert str(code) in (result.error or "")
+    failure = _assert_failed(result)
+    assert str(code) in failure.error
 
 
 def test_update_check_handles_network_error(
@@ -243,8 +288,8 @@ def test_update_check_handles_network_error(
         tls_trust_adapter=tls_trust_adapter,
     )
 
-    assert not result.update_available
-    assert "Couldn't reach" in (result.error or "")
+    failure = _assert_failed(result)
+    assert "Couldn't reach" in failure.error
 
 
 def test_update_check_handles_tls_context_error(
@@ -264,8 +309,8 @@ def test_update_check_handles_tls_context_error(
         tls_trust_adapter=tls_trust_adapter,
     )
 
-    assert not result.update_available
-    assert "Couldn't reach" in (result.error or "")
+    failure = _assert_failed(result)
+    assert "Couldn't reach" in failure.error
 
 
 def test_update_check_handles_invalid_json(
@@ -285,8 +330,8 @@ def test_update_check_handles_invalid_json(
         tls_trust_adapter=tls_trust_adapter,
     )
 
-    assert not result.update_available
-    assert "unexpected update manifest format" in (result.error or "")
+    failure = _assert_failed(result)
+    assert "unexpected update manifest format" in failure.error
 
 
 def test_update_check_rejects_non_object_manifest(
@@ -302,8 +347,8 @@ def test_update_check_rejects_non_object_manifest(
         tls_trust_adapter=tls_trust_adapter,
     )
 
-    assert not result.update_available
-    assert "JSON object" in (result.error or "")
+    failure = _assert_failed(result)
+    assert "JSON object" in failure.error
 
 
 def test_update_check_rejects_wrong_payload_type(
@@ -322,8 +367,8 @@ def test_update_check_rejects_wrong_payload_type(
         tls_trust_adapter=tls_trust_adapter,
     )
 
-    assert not result.update_available
-    assert "not valid" in (result.error or "")
+    failure = _assert_failed(result)
+    assert "not valid" in failure.error
 
 
 def test_update_check_rejects_missing_version(
@@ -339,8 +384,8 @@ def test_update_check_rejects_missing_version(
         tls_trust_adapter=tls_trust_adapter,
     )
 
-    assert not result.update_available
-    assert "latest_version" in (result.error or "")
+    failure = _assert_failed(result)
+    assert "latest_version" in failure.error
 
 
 def test_update_check_rejects_invalid_version(
@@ -359,8 +404,8 @@ def test_update_check_rejects_invalid_version(
         tls_trust_adapter=tls_trust_adapter,
     )
 
-    assert not result.update_available
-    assert "invalid latest_version" in (result.error or "")
+    failure = _assert_failed(result)
+    assert "invalid latest_version" in failure.error
 
 
 def test_update_check_rejects_missing_download_url(
@@ -376,8 +421,8 @@ def test_update_check_rejects_missing_download_url(
         tls_trust_adapter=tls_trust_adapter,
     )
 
-    assert not result.update_available
-    assert "Missing update download URL" in (result.error or "")
+    failure = _assert_failed(result)
+    assert "Missing update download URL" in failure.error
 
 
 def test_current_version_does_not_require_signature(
@@ -409,9 +454,10 @@ def test_current_version_does_not_require_signature(
             tls_trust_adapter=tls_trust_adapter,
         )
 
-    assert not result.update_available
+    assert isinstance(result, update_checker.UpdateNotAvailable)
     assert result.latest_version == "1.0.0"
-    assert result.release_notes == "Already current"
+    assert not hasattr(result, "artifact")
+    assert not hasattr(result, "release_notes")
     assert calls == [
         (
             update_target.manifest_url,
@@ -452,11 +498,11 @@ def test_newer_update_requires_valid_signature(
         tls_trust_adapter=tls_trust_adapter,
     )
 
-    assert not result.update_available
-    assert "signature" in (result.error or "")
+    failure = _assert_failed(result)
+    assert "signature" in failure.error
 
 
-def test_newer_signed_update_returns_download_metadata(
+def test_newer_signed_update_returns_validated_artifact(
     monkeypatch,
     update_target,
     tls_trust_adapter,
@@ -483,13 +529,14 @@ def test_newer_signed_update_returns_download_metadata(
         tls_trust_adapter=tls_trust_adapter,
     )
 
-    assert result.update_available
-    assert result.latest_version == "v2.1.0"
-    assert result.download_url == "https://x/update.zip"
-    assert result.download_size_bytes == 123
-    assert result.download_sha256 == "a" * 64
-    assert result.package_kind == "zip"
-    assert result.release_notes == "New release"
+    assert isinstance(result, update_checker.UpdateAvailable)
+    assert result.current_version == "1.9.0"
+    assert result.artifact.version == "v2.1.0"
+    assert result.artifact.download_url == "https://x/update.zip"
+    assert result.artifact.size_bytes == 123
+    assert result.artifact.sha256 == "a" * 64
+    assert result.artifact.package_kind == "zip"
+    assert not hasattr(result, "release_notes")
 
 
 @pytest.mark.parametrize(
@@ -533,8 +580,8 @@ def test_newer_update_rejects_incomplete_artifact_contract_before_signature(
         tls_trust_adapter=tls_trust_adapter,
     )
 
-    assert not result.update_available
-    assert expected_error in (result.error or "")
+    failure = _assert_failed(result)
+    assert expected_error in failure.error
 
 
 @pytest.mark.parametrize("code", [404, 500])
