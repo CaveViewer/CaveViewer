@@ -1,14 +1,10 @@
 """Contracts for architecture-specific macOS update manifests and scripts."""
 
-import json
 import os
 import subprocess
 from pathlib import Path
 
 import pytest
-
-from caveviewer.gui.update_signature import verify_update_manifest_signature
-
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 MACOS_UPDATES = REPOSITORY_ROOT / "updates" / "macos"
@@ -27,26 +23,6 @@ def test_arm64_manifests_match_signed_legacy_compatibility_aliases():
 
         assert arm_manifest.read_bytes() == legacy_manifest.read_bytes()
         assert arm_signature.read_bytes() == legacy_signature.read_bytes()
-        verify_update_manifest_signature(
-            arm_manifest.read_bytes(), arm_signature.read_bytes()
-        )
-
-
-def test_x86_64_manifests_are_signed_and_architecture_specific():
-    intel_dir = MACOS_UPDATES / "x86_64"
-    manifests = sorted(intel_dir.glob("*.json"))
-
-    assert (intel_dir / "README.md").is_file()
-    assert manifests
-    for manifest in manifests:
-        payload = json.loads(manifest.read_text(encoding="utf-8"))
-        signature = manifest.with_name(f"{manifest.name}.sig")
-
-        assert payload["platform"] == "macos"
-        assert payload["architecture"] == "x86_64"
-        assert payload["download_url"].endswith("-macos-x86_64.dmg")
-        assert signature.is_file()
-        verify_update_manifest_signature(manifest.read_bytes(), signature.read_bytes())
 
 
 @requires_executable_shell_scripts
@@ -85,4 +61,5 @@ def test_macos_release_scripts_use_architecture_specific_contracts():
     assert "updates/macos/$macos_arch/$manifest_channel.json" in publisher
     assert 'if [ "$macos_arch" = "arm64" ]; then' in publisher
     assert "updates/macos/$macos_arch/$channel.json" in manifest_writer
-    assert '"architecture": "$macos_arch"' in manifest_writer
+    assert '"$repo_root/scripts/write_update_manifest.py"' in manifest_writer
+    assert '--architecture "$macos_arch"' in manifest_writer

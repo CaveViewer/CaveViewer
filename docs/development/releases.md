@@ -65,10 +65,22 @@ byte-for-byte identical to the ARM64 files. `.gitattributes` forces every
 update JSON file to use LF line endings so Git cannot rewrite signed manifest
 bytes during a Windows checkout or commit.
 
+`scripts/write_update_manifest.py` is the sole manifest serializer. Before a
+manifest can be signed, it canonicalizes the numeric version, reads the built
+artifact, and writes its positive byte size and lowercase 64-character
+SHA-256. The payload URL must be HTTPS and match the selected platform package
+type (Windows ZIP, Linux AppImage, or macOS DMG). Platform shell wrappers only
+choose the manifest path and delegate to this writer; do not add another
+heredoc-based JSON serializer. Its canonical signed representation uses
+lexicographic JSON key order, two-space indentation, and a final LF newline.
+Release notes may contain quotes, backslashes, Unicode, and newlines.
+
 The application checks architecture-specific manifests from the selected
 branch and channel; it does not derive updates from GitHub's “latest release”
-metadata. It verifies a newer manifest's Ed25519 signature before offering its
-artifact, then verifies the artifact size and SHA-256 while downloading.
+metadata. For a newer release it requires the signed manifest to have a
+numeric dotted version, HTTPS allowed-package URL, positive integer byte size,
+and complete SHA-256 before offering its artifact. It then verifies the
+artifact size and SHA-256 while downloading.
 
 Linux packages install the stable application ID
 `io.github.caveviewer.caveviewer`. The desktop filename, AppStream ID,

@@ -15,8 +15,10 @@ the app's core offline-first design.
 from __future__ import annotations
 
 import json
+import re
 import urllib.request
 import urllib.error
+from urllib.parse import urlparse
 from dataclasses import dataclass
 from typing import Callable, Optional
 
@@ -37,6 +39,8 @@ from caveviewer.gui.update_signature import (
 
 _REQUEST_TIMEOUT_SECONDS = 8
 _LOG = get_logger("UpdateChecker")
+_RELEASE_VERSION_PATTERN = re.compile(r"v?\d+(?:\.\d+)+\Z", re.IGNORECASE)
+_SHA256_PATTERN = re.compile(r"[0-9a-f]{64}\Z", re.IGNORECASE)
 
 
 @dataclass
@@ -75,11 +79,38 @@ def _parse_version(version_str: str) -> tuple:
     return tuple(parts) if parts else (0,)
 
 
-def _parse_optional_int(value) -> Optional[int]:
+def _is_release_version(value: str) -> bool:
+    """Return whether a manifest version is a numeric dotted release version."""
+    return bool(_RELEASE_VERSION_PATTERN.fullmatch(value.strip()))
+
+
+def _first_positive_int(data: dict, keys: tuple[str, ...]) -> Optional[int]:
+    """Read the first strictly positive JSON integer from supported aliases."""
+    for key in keys:
+        value = data.get(key)
+        if type(value) is int and value > 0:
+            return value
+    return None
+
+
+def _first_valid_sha256(data: dict, keys: tuple[str, ...]) -> str:
+    """Read and canonicalize the first complete SHA-256 digest alias."""
+    for key in keys:
+        value = data.get(key)
+        if value is None:
+            continue
+        digest = str(value).strip()
+        if _SHA256_PATTERN.fullmatch(digest):
+            return digest.lower()
+    return ""
+
+
+def _is_https_url(value: str) -> bool:
     try:
-        return int(value) if value is not None else None
-    except (TypeError, ValueError):
-        return None
+        parsed = urlparse(value)
+    except ValueError:
+        return False
+    return parsed.scheme.lower() == "https" and bool(parsed.netloc)
 
 
 def _first_non_empty_str(data: dict, keys: tuple[str, ...]) -> str:
@@ -91,14 +122,6 @@ def _first_non_empty_str(data: dict, keys: tuple[str, ...]) -> str:
         if text:
             return text
     return ""
-
-
-def _first_optional_int(data: dict, keys: tuple[str, ...]) -> Optional[int]:
-    for key in keys:
-        value = _parse_optional_int(data.get(key))
-        if value is not None:
-            return value
-    return None
 
 
 def check_for_update_target(
@@ -167,6 +190,8 @@ def _check_for_update_target(
         )
         _LOG.info("Downloaded update manifest: bytes=%d", len(manifest_bytes))
         data = json.loads(manifest_bytes.decode("utf-8"))
+        if not isinstance(data, dict):
+            raise TypeError("the manifest root must be a JSON object")
     except urllib.error.HTTPError as e:
         _LOG.error("Update manifest fetch failed with HTTP %s.", e.code)
         if e.code == 404:
@@ -206,14 +231,14 @@ def _check_for_update_target(
         data,
         update_target.manifest_schema.download_url_keys,
     )
-    download_size_bytes = _first_optional_int(
+    download_size_bytes = _first_positive_int(
         data,
         update_target.manifest_schema.download_size_keys,
     )
-    download_sha256 = _first_non_empty_str(
+    download_sha256 = _first_valid_sha256(
         data,
         update_target.manifest_schema.download_sha256_keys,
-    ).lower()
+    )
     package_kind = package_kind_for_url(download_url)
     _LOG.info(
         "Update manifest package details: package_kind=%s, size=%s, sha256_present=%s",
@@ -228,6 +253,14 @@ def _check_for_update_target(
             update_available=False,
             current_version=current_version,
             error="Update manifest is missing required field: latest_version."
+        )
+
+    if not _is_release_version(latest_tag):
+        _LOG.error("Update manifest rejected: invalid latest_version=%r.", latest_tag)
+        return UpdateCheckResult(
+            update_available=False,
+            current_version=current_version,
+            error="Update manifest has an invalid latest_version.",
         )
 
     if not download_url:
@@ -278,6 +311,33 @@ def _check_for_update_target(
             release_notes=release_notes.strip(),
         )
 
+    if not _is_https_url(download_url):
+        _LOG.error("Update manifest rejected: payload URL is not HTTPS.")
+        return UpdateCheckResult(
+            update_available=False,
+            current_version=current_version,
+            latest_version=latest_tag,
+            error="Update manifest download URL must use HTTPS.",
+        )
+
+    if download_size_bytes is None:
+        _LOG.error("Update manifest rejected: missing or invalid payload size.")
+        return UpdateCheckResult(
+            update_available=False,
+            current_version=current_version,
+            latest_version=latest_tag,
+            error="Update manifest download size must be a positive integer.",
+        )
+
+    if not download_sha256:
+        _LOG.error("Update manifest rejected: missing or invalid SHA-256.")
+        return UpdateCheckResult(
+            update_available=False,
+            current_version=current_version,
+            latest_version=latest_tag,
+            error="Update manifest SHA-256 must be a 64-character hexadecimal digest.",
+        )
+
     if not verify_manifest_signature(manifest_bytes):
         return UpdateCheckResult(
             update_available=False,
@@ -292,7 +352,7 @@ def _check_for_update_target(
         latest_version=latest_tag,
         download_url=download_url,
         download_size_bytes=download_size_bytes,
-        download_sha256=download_sha256 or None,
+        download_sha256=download_sha256,
         package_kind=package_kind,
         release_notes=release_notes.strip(),
     )

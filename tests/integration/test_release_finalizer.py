@@ -39,6 +39,7 @@ def _copy_release_files(destination: Path) -> None:
         "scripts/macos/architecture.sh",
         "scripts/macos/update_manifest.sh",
         "scripts/sign_update_manifest.py",
+        "scripts/write_update_manifest.py",
         "scripts/windows/update_manifest.sh",
         "packaging/linux/io.github.caveviewer.caveviewer.metainfo.xml",
         "src/caveviewer/version.py",
@@ -128,6 +129,7 @@ def test_finalizer_publishes_all_assets_and_pushes_one_signed_metadata_commit(
     gh_log = tmp_path / "gh.log"
     private_key_path = tmp_path / "release-key.pem"
     version = "9.9.9"
+    release_notes = 'Parallel "release" notes\nSecond line'
 
     working_repository.mkdir()
     _copy_release_files(working_repository)
@@ -183,7 +185,8 @@ def test_finalizer_publishes_all_assets_and_pushes_one_signed_metadata_commit(
         finalizer,
         "--platforms=all",
         f"--version={version}",
-        "--notes=Parallel release",
+        "--notes",
+        release_notes,
         f"--artifacts-dir={artifacts_dir}",
         "--target-branch=main",
         f"--expected-source-sha={source_sha}",
@@ -235,9 +238,11 @@ def test_finalizer_publishes_all_assets_and_pushes_one_signed_metadata_commit(
 
         manifest = working_repository / manifest_path
         manifest_payload = json.loads(manifest.read_text(encoding="utf-8"))
+        assert manifest_payload["release_notes"] == release_notes
         assert manifest_payload["download_url"].startswith(
             f"https://github.com/example/CaveViewer/releases/download/v{version}/"
         )
+        assert b"\r\n" not in manifest.read_bytes()
         signature = base64.b64decode(
             manifest.with_name(f"{manifest.name}.sig").read_text(encoding="ascii").strip(),
             validate=True,

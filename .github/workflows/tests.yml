@@ -209,14 +209,22 @@ jobs:
               manifest = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
               if manifest.get("latest_version") != current_version:
                   raise SystemExit(f"Manifest version does not match APP_VERSION: {manifest_path}")
+              if not re.fullmatch(r"\d+(?:\.\d+)+", current_version):
+                  raise SystemExit(f"Manifest version is not numeric and dotted: {manifest_path}")
               download_url = manifest.get("download_url")
-              if not isinstance(download_url, str) or f"/releases/download/v{current_version}/" not in download_url:
-                  raise SystemExit(f"Manifest download URL is not for the current release: {manifest_path}")
+              if (
+                  not isinstance(download_url, str)
+                  or not download_url.startswith("https://")
+                  or f"/releases/download/v{current_version}/" not in download_url
+              ):
+                  raise SystemExit(f"Manifest download URL is not HTTPS or not for the current release: {manifest_path}")
               if not isinstance(manifest.get("download_size_bytes"), int) or manifest["download_size_bytes"] <= 0:
                   raise SystemExit(f"Manifest has an invalid download size: {manifest_path}")
               sha256 = manifest.get("sha256")
               if not isinstance(sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", sha256):
                   raise SystemExit(f"Manifest has an invalid SHA-256: {manifest_path}")
+              if not isinstance(manifest.get("release_notes"), str):
+                  raise SystemExit(f"Manifest release notes must be a string: {manifest_path}")
               try:
                   signature = base64.b64decode(
                       Path(signature_path).read_text(encoding="ascii").strip(), validate=True

@@ -633,6 +633,9 @@ def test_essential_workflow_reuses_validation_for_release_metadata_only_prs():
     assert "version.py changes more than APP_VERSION; run the source suites." in workflow
     assert "AppStream metadata changes more than one prepended release entry." in workflow
     assert "Manifest changed without its signature:" in workflow
+    assert 're.fullmatch(r"\\d+(?:\\.\\d+)+", current_version)' in workflow
+    assert 'download_url.startswith("https://")' in workflow
+    assert "Manifest release notes must be a string:" in workflow
     assert "openssl pkeyutl -verify -pubin" in workflow
 
     for job_name, next_job_name in (

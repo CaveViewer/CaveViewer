@@ -73,19 +73,33 @@ def test_parse_version(text, expected):
     assert update_checker._parse_version(text) == expected
 
 
-@pytest.mark.parametrize(
-    ("value", "expected"),
-    [(None, None), ("12", 12), (5, 5), ("bad", None), (object(), None)],
-)
-def test_parse_optional_int(value, expected):
-    assert update_checker._parse_optional_int(value) == expected
-
-
 def test_manifest_value_helpers_use_first_valid_alias():
-    data = {"old": " ", "new": " value ", "bad_size": "x", "size": "42"}
+    data = {
+        "old": " ",
+        "new": " value ",
+        "bad_size": "42",
+        "size": 42,
+        "bad_sha": "not-a-digest",
+        "sha": "A" * 64,
+    }
 
     assert update_checker._first_non_empty_str(data, ("old", "new")) == "value"
-    assert update_checker._first_optional_int(data, ("bad_size", "size")) == 42
+    assert update_checker._first_positive_int(data, ("bad_size", "size")) == 42
+    assert update_checker._first_valid_sha256(data, ("bad_sha", "sha")) == "a" * 64
+
+
+@pytest.mark.parametrize(
+    ("version", "expected"),
+    [
+        ("1.0.0", True),
+        ("v1.0.0", True),
+        ("1", False),
+        ("1.0.0-rc1", False),
+        ("not-a-version", False),
+    ],
+)
+def test_release_version_validation(version, expected):
+    assert update_checker._is_release_version(version) is expected
 
 
 def test_fetch_url_bytes_uses_headers_timeout_and_tls_context(monkeypatch):
@@ -275,6 +289,23 @@ def test_update_check_handles_invalid_json(
     assert "unexpected update manifest format" in (result.error or "")
 
 
+def test_update_check_rejects_non_object_manifest(
+    monkeypatch,
+    update_target,
+    tls_trust_adapter,
+):
+    _set_manifest(monkeypatch, ["not", "a", "manifest"])
+
+    result = update_checker.check_for_update_target(
+        "1.0.0",
+        update_target=update_target,
+        tls_trust_adapter=tls_trust_adapter,
+    )
+
+    assert not result.update_available
+    assert "JSON object" in (result.error or "")
+
+
 def test_update_check_rejects_wrong_payload_type(
     monkeypatch,
     update_target,
@@ -310,6 +341,26 @@ def test_update_check_rejects_missing_version(
 
     assert not result.update_available
     assert "latest_version" in (result.error or "")
+
+
+def test_update_check_rejects_invalid_version(
+    monkeypatch,
+    update_target,
+    tls_trust_adapter,
+):
+    _set_manifest(
+        monkeypatch,
+        {"latest_version": "2.0.0-rc1", "windows_app_url": "https://x/update.zip"},
+    )
+
+    result = update_checker.check_for_update_target(
+        "1.0.0",
+        update_target=update_target,
+        tls_trust_adapter=tls_trust_adapter,
+    )
+
+    assert not result.update_available
+    assert "invalid latest_version" in (result.error or "")
 
 
 def test_update_check_rejects_missing_download_url(
@@ -382,7 +433,12 @@ def test_newer_update_requires_valid_signature(
 ):
     _set_manifest(
         monkeypatch,
-        {"latest_version": "2.0.0", "windows_app_url": "https://x/update.zip"},
+        {
+            "latest_version": "2.0.0",
+            "windows_app_url": "https://x/update.zip",
+            "windows_app_size": 123,
+            "windows_app_sha256": "a" * 64,
+        },
     )
     monkeypatch.setattr(
         update_checker,
@@ -410,8 +466,8 @@ def test_newer_signed_update_returns_download_metadata(
         {
             "version": "v2.1.0",
             "windows_app_url": "https://x/update.zip",
-            "windows_app_size": "123",
-            "windows_app_sha256": "ABCDEF",
+            "windows_app_size": 123,
+            "windows_app_sha256": "A" * 64,
             "notes": " New release ",
         },
     )
@@ -431,9 +487,54 @@ def test_newer_signed_update_returns_download_metadata(
     assert result.latest_version == "v2.1.0"
     assert result.download_url == "https://x/update.zip"
     assert result.download_size_bytes == 123
-    assert result.download_sha256 == "abcdef"
+    assert result.download_sha256 == "a" * 64
     assert result.package_kind == "zip"
     assert result.release_notes == "New release"
+
+
+@pytest.mark.parametrize(
+    ("manifest_fields", "expected_error"),
+    [
+        ({"windows_app_url": "http://x/update.zip"}, "must use HTTPS"),
+        ({"windows_app_url": "https://[invalid/update.zip"}, "must use HTTPS"),
+        ({"windows_app_size": 0}, "positive integer"),
+        ({"windows_app_size": -1}, "positive integer"),
+        ({"windows_app_size": "123"}, "positive integer"),
+        ({"windows_app_sha256": ""}, "64-character hexadecimal"),
+        ({"windows_app_sha256": "a" * 63}, "64-character hexadecimal"),
+    ],
+)
+def test_newer_update_rejects_incomplete_artifact_contract_before_signature(
+    monkeypatch,
+    update_target,
+    tls_trust_adapter,
+    manifest_fields,
+    expected_error,
+):
+    manifest = {
+        "latest_version": "2.0.0",
+        "windows_app_url": "https://x/update.zip",
+        "windows_app_size": 123,
+        "windows_app_sha256": "a" * 64,
+    }
+    manifest.update(manifest_fields)
+    _set_manifest(monkeypatch, manifest)
+    monkeypatch.setattr(
+        update_checker,
+        "_verify_manifest_signature_required_with_target",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("must not verify an invalid artifact contract")
+        ),
+    )
+
+    result = update_checker.check_for_update_target(
+        "1.0.0",
+        update_target=update_target,
+        tls_trust_adapter=tls_trust_adapter,
+    )
+
+    assert not result.update_available
+    assert expected_error in (result.error or "")
 
 
 @pytest.mark.parametrize("code", [404, 500])
