@@ -64,12 +64,14 @@ secondary link, not the primary action of the active panel. Keep this block
 left-aligned, without a card or divider. The more detailed transparent app
 mark remains for the larger About presentation.
 
-For an available update, the subsection is simply **Download update**. Reserve
+For an available update, the subsection is **Update to &lt;version&gt;**. Reserve
 progress, verification, failure, and completed-download messages for the
-states that follow the user's action. A completed download uses one label:
-show **Update ready** for three seconds, then replace it with the amber
-**Show update** link. The link reveals the already verified package; it does
-not install or execute it.
+states that follow the user's action; active transfer and verification expose a
+compact **Cancel** link. A completed download uses one label: show **Update
+ready** for three seconds, then replace it with the amber platform-native
+reveal link: **Show in Finder**, **Show in Explorer**, or **Open Download
+Folder**. The link reveals the already verified package; it does not install or
+execute it.
 
 ## Viewer controls
 

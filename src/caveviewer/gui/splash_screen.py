@@ -925,7 +925,7 @@ def _update_presentation(snapshot: UpdateSnapshot) -> _UpdatePresentation:
             )
         return _UpdatePresentation(
             status_text="Update ready",
-            action_text="Show update",
+            action_text=snapshot.reveal_action_label,
             action=_UpdateAction.REVEAL,
             action_replaces_status_after_delay=True,
         )

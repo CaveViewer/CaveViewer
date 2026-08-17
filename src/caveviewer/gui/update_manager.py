@@ -98,6 +98,7 @@ class UpdateSnapshot:
     downloaded_bytes: int = 0
     total_bytes: int | None = None
     payload_path: str | None = None
+    reveal_action_label: str = "Show update"
     error: str | None = None
     automatic_update: FeatureDecision | None = None
     update_package_reveal: FeatureDecision | None = None
@@ -190,6 +191,7 @@ class UpdateManager:
                 downloaded_bytes=self._downloaded_bytes,
                 total_bytes=self._total_bytes,
                 payload_path=self._payload_path,
+                reveal_action_label=self.reveal_action_label,
                 error=self._error,
                 automatic_update=self._automatic_update_decision,
                 update_package_reveal=self._update_package_reveal_decision,

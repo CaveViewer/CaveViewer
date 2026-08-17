@@ -374,14 +374,19 @@ IDLE -> CHECKING -> {UP_TO_DATE, AVAILABLE, IDLE on check error}
 AVAILABLE -> DOWNLOADING -> VERIFYING -> READY
                 |              |
                 +--------------+-> FAILED -> DOWNLOADING (retry)
+(DOWNLOADING or VERIFYING) -- cancel request --> worker cleanup --> AVAILABLE
 any non-SHUTDOWN state -> SHUTDOWN
 ```
 
 The splash polls immutable manager snapshots and maps the visible states to
-`Download update`, `Downloading… <percentage>%`, `Verifying…`,
-`Update ready`, and `Download failed` with a separate `Retry` action. A ready
-update remains a single footer label: after three seconds, `Update ready`
-becomes the `Show update` link that reveals the already verified package.
+`Update to <version>`, `Downloading… <percentage>%` with `Cancel`,
+`Verifying…` with `Cancel`, `Update ready`, and `Download failed` with a
+separate `Retry` action. A ready update remains a single footer label: after
+three seconds, `Update ready` becomes the focused platform action that reveals
+the already verified package: `Show in Finder` on macOS, `Show in Explorer` on
+Windows, or `Open Download Folder` on Linux. A cancellation request only
+signals the manager worker; it cleans staging output and returns to the
+available update without affecting an already verified package.
 While a splash window is visible, it is the foreground update surface and
 suppresses duplicate desktop notifications for update progress or completion.
 If a download finishes after that surface closes, desktop notifications remain
