@@ -87,7 +87,6 @@ fi
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../.." && pwd)"
-source "$repo_root/scripts/common/artifacts.sh"
 case "$channel" in
   stable|prerelease) ;;
   *)
@@ -97,30 +96,20 @@ case "$channel" in
 esac
 manifest_path="$repo_root/updates/windows/$channel.json"
 
-windows_zip_size_bytes="null"
-windows_zip_sha256_value=""
-
-if [ -n "$windows_zip_file" ]; then
-  if [ ! -f "$windows_zip_file" ]; then
-    echo "Error: Windows zip file not found: $windows_zip_file"
-    exit 1
-  fi
-  windows_zip_size_bytes="$(cv_size_bytes "$windows_zip_file")"
-  windows_zip_sha256_value="$(cv_sha256 "$windows_zip_file")"
+if command -v python3 >/dev/null 2>&1; then
+  manifest_python="python3"
+elif command -v python >/dev/null 2>&1; then
+  manifest_python="python"
+else
+  echo "Error: Python 3 is required to write an update manifest." >&2
+  exit 1
 fi
 
-mkdir -p "$(dirname "$manifest_path")"
-cat > "$manifest_path" <<EOF
-{
-  "latest_version": "$version",
-  "download_url": "$windows_zip_url",
-  "download_size_bytes": $windows_zip_size_bytes,
-  "download_url_windows_zip": "$windows_zip_url",
-  "download_size_bytes_windows_zip": $windows_zip_size_bytes,
-  "release_notes": "$release_notes",
-  "sha256": "$windows_zip_sha256_value",
-  "sha256_windows_zip": "$windows_zip_sha256_value"
-}
-EOF
-
-echo "Wrote manifest: $manifest_path"
+"$manifest_python" "$repo_root/scripts/write_update_manifest.py" \
+  --target windows \
+  --version "$version" \
+  --download-url "$windows_zip_url" \
+  --artifact-file "$windows_zip_file" \
+  --notes "$release_notes" \
+  --channel "$channel" \
+  --output "$manifest_path"

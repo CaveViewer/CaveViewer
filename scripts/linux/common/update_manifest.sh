@@ -87,7 +87,6 @@ fi
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../../.." && pwd)"
-source "$repo_root/scripts/common/artifacts.sh"
 
 linux_update_arch="${CAVEVIEWER_LINUX_UPDATE_ARCH:-}"
 case "$linux_update_arch" in
@@ -117,30 +116,20 @@ esac
 
 manifest_path="$repo_root/updates/linux/$manifest_arch_dir/$channel.json"
 
-appimage_size_bytes="null"
-appimage_sha256_value=""
-
-if [ -n "$appimage_file" ]; then
-  if [ ! -f "$appimage_file" ]; then
-    echo "Error: AppImage file not found: $appimage_file"
-    exit 1
-  fi
-  appimage_size_bytes="$(cv_size_bytes "$appimage_file")"
-  appimage_sha256_value="$(cv_sha256 "$appimage_file")"
+if command -v python3 >/dev/null 2>&1; then
+  manifest_python="python3"
+elif command -v python >/dev/null 2>&1; then
+  manifest_python="python"
+else
+  echo "Error: Python 3 is required to write an update manifest." >&2
+  exit 1
 fi
 
-mkdir -p "$(dirname "$manifest_path")"
-cat > "$manifest_path" <<EOF
-{
-  "latest_version": "$version",
-  "download_url": "$appimage_url",
-  "download_size_bytes": $appimage_size_bytes,
-  "download_url_linux_appimage": "$appimage_url",
-  "download_size_bytes_linux_appimage": $appimage_size_bytes,
-  "release_notes": "$release_notes",
-  "sha256": "$appimage_sha256_value",
-  "sha256_linux_appimage": "$appimage_sha256_value"
-}
-EOF
-
-echo "Wrote manifest: $manifest_path"
+"$manifest_python" "$repo_root/scripts/write_update_manifest.py" \
+  --target linux \
+  --version "$version" \
+  --download-url "$appimage_url" \
+  --artifact-file "$appimage_file" \
+  --notes "$release_notes" \
+  --channel "$channel" \
+  --output "$manifest_path"

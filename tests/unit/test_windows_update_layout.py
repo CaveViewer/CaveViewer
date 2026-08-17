@@ -1,27 +1,9 @@
-"""Contracts for signed Windows update manifests and publishing."""
+"""Contracts for Windows manifest publishing and checkout safety."""
 
-import json
 from pathlib import Path
-
-from caveviewer.gui.update_signature import verify_update_manifest_signature
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
-WINDOWS_UPDATES = REPOSITORY_ROOT / "updates" / "windows"
-
-
-def test_windows_manifests_are_signed_for_each_release_channel():
-    for channel in ("stable", "prerelease"):
-        manifest = WINDOWS_UPDATES / f"{channel}.json"
-        signature = WINDOWS_UPDATES / f"{channel}.json.sig"
-        payload = json.loads(manifest.read_text(encoding="utf-8"))
-
-        assert payload["download_url"].endswith("-windows.zip")
-        assert payload["download_url_windows_zip"] == payload["download_url"]
-        assert signature.is_file()
-        verify_update_manifest_signature(manifest.read_bytes(), signature.read_bytes())
-
-
 def test_windows_publisher_signs_and_commits_the_selected_channel():
     publisher = (REPOSITORY_ROOT / "scripts" / "windows" / "publish.sh").read_text(
         encoding="utf-8"

@@ -95,7 +95,6 @@ fi
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../.." && pwd)"
-source "$repo_root/scripts/common/artifacts.sh"
 source "$script_dir/architecture.sh"
 macos_arch="$(cv_resolve_macos_arch "$macos_arch")"
 case "$channel" in
@@ -107,32 +106,21 @@ case "$channel" in
 esac
 manifest_path="$repo_root/updates/macos/$macos_arch/$channel.json"
 
-macos_dmg_size_bytes="null"
-macos_dmg_sha256_value=""
-
-if [ -n "$macos_dmg_file" ]; then
-  if [ ! -f "$macos_dmg_file" ]; then
-    echo "Error: macOS DMG file not found: $macos_dmg_file"
-    exit 1
-  fi
-  macos_dmg_size_bytes="$(cv_size_bytes "$macos_dmg_file")"
-  macos_dmg_sha256_value="$(cv_sha256 "$macos_dmg_file")"
+if command -v python3 >/dev/null 2>&1; then
+  manifest_python="python3"
+elif command -v python >/dev/null 2>&1; then
+  manifest_python="python"
+else
+  echo "Error: Python 3 is required to write an update manifest." >&2
+  exit 1
 fi
 
-mkdir -p "$(dirname "$manifest_path")"
-cat > "$manifest_path" <<EOF
-{
-  "latest_version": "$version",
-  "platform": "macos",
-  "architecture": "$macos_arch",
-  "download_url": "$macos_dmg_url",
-  "download_size_bytes": $macos_dmg_size_bytes,
-  "download_url_macosx_dmg": "$macos_dmg_url",
-  "download_size_bytes_macosx_dmg": $macos_dmg_size_bytes,
-  "release_notes": "$release_notes",
-  "sha256": "$macos_dmg_sha256_value",
-  "sha256_macosx_dmg": "$macos_dmg_sha256_value"
-}
-EOF
-
-echo "Wrote manifest: $manifest_path"
+"$manifest_python" "$repo_root/scripts/write_update_manifest.py" \
+  --target macos \
+  --architecture "$macos_arch" \
+  --version "$version" \
+  --download-url "$macos_dmg_url" \
+  --artifact-file "$macos_dmg_file" \
+  --notes "$release_notes" \
+  --channel "$channel" \
+  --output "$manifest_path"
