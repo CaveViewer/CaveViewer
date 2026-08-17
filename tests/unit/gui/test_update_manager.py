@@ -18,7 +18,12 @@ from caveviewer.core.capabilities import (
 from caveviewer.gui.download_transport import DownloadCancelled
 from caveviewer.gui.features import FeatureState
 from caveviewer.gui import update_manager
-from caveviewer.gui.update_checker import UpdateCheckResult
+from caveviewer.gui.update_checker import (
+    UpdateArtifact,
+    UpdateAvailable,
+    UpdateCheckFailed,
+    UpdateNotAvailable,
+)
 from caveviewer.gui.platform.probes.updates import select_update_profile
 from caveviewer.gui.platform.runtime import create_platform_runtime
 from caveviewer.gui.update_manager import UpdateManager, UpdateState
@@ -135,15 +140,16 @@ class FakeLogger:
         self.warning_messages.append(self._format(message, args))
 
 
-def _available_result():
-    return UpdateCheckResult(
-        update_available=True,
+def _available_outcome():
+    return UpdateAvailable(
         current_version="1.0.63",
-        latest_version="1.0.64",
-        download_url="https://example.invalid/CaveViewer-1.0.64.zip",
-        download_size_bytes=7,
-        download_sha256="expected",
-        package_kind="zip",
+        artifact=UpdateArtifact(
+            version="1.0.64",
+            download_url="https://example.invalid/CaveViewer-1.0.64.zip",
+            size_bytes=7,
+            sha256="a" * 64,
+            package_kind="zip",
+        ),
     )
 
 
@@ -161,7 +167,7 @@ def _checked_manager(tmp_path, download_update, *, desktop_services=None):
     manager = UpdateManager(
         "1.0.63",
         platform_runtime=_runtime(adapter, services),
-        check_for_update=lambda *_args, **_kwargs: _available_result(),
+        check_for_update=lambda *_args, **_kwargs: _available_outcome(),
         download_update=download_update,
         temp_root=str(tmp_path),
     )
@@ -183,7 +189,7 @@ def test_check_transitions_through_checking_to_available(tmp_path):
     def check_for_update(*_args, **_kwargs):
         check_started.set()
         assert release_check.wait(1)
-        return _available_result()
+        return _available_outcome()
 
     adapter = FakePlatformAdapter(tmp_path / "Downloads")
     manager = UpdateManager(
@@ -202,6 +208,8 @@ def test_check_transitions_through_checking_to_available(tmp_path):
         snapshot = manager.snapshot()
         assert snapshot.state == UpdateState.AVAILABLE
         assert snapshot.available_version == "1.0.64"
+        assert isinstance(manager._available_update, UpdateAvailable)
+        assert manager._available_update.artifact.sha256 == "a" * 64
     finally:
         manager.shutdown()
 
@@ -211,8 +219,7 @@ def test_up_to_date_result_is_checked_only_once_per_process(tmp_path):
 
     def check_for_update(current_version, **_kwargs):
         checks.append(current_version)
-        return UpdateCheckResult(
-            update_available=False,
+        return UpdateNotAvailable(
             current_version=current_version,
             latest_version=current_version,
         )
@@ -228,9 +235,59 @@ def test_up_to_date_result_is_checked_only_once_per_process(tmp_path):
         assert manager.check_for_updates()
         assert manager.wait_for_background_task(1)
         assert manager.snapshot().state == UpdateState.UP_TO_DATE
+        assert manager.snapshot().available_version is None
+        assert manager._available_update is None
+        assert not manager.start_download()
 
         assert not manager.check_for_updates()
         assert checks == ["1.0.63"]
+    finally:
+        manager.shutdown()
+
+
+def test_failed_check_does_not_expose_a_download_action(tmp_path):
+    adapter = FakePlatformAdapter(tmp_path / "Downloads")
+    manager = UpdateManager(
+        "1.0.63",
+        platform_runtime=_runtime(adapter, FakeDesktopServices()),
+        check_for_update=lambda current_version, **_kwargs: UpdateCheckFailed(
+            current_version=current_version,
+            error="Update manifest signature could not be verified.",
+        ),
+        temp_root=str(tmp_path),
+    )
+    try:
+        assert manager.check_for_updates()
+        assert manager.wait_for_background_task(1)
+
+        snapshot = manager.snapshot()
+        assert snapshot.state is UpdateState.IDLE
+        assert snapshot.available_version is None
+        assert snapshot.error == "Update manifest signature could not be verified."
+        assert manager._available_update is None
+        assert not manager.start_download()
+    finally:
+        manager.shutdown()
+
+
+def test_bare_artifact_is_not_an_available_check_outcome(tmp_path):
+    adapter = FakePlatformAdapter(tmp_path / "Downloads")
+    manager = UpdateManager(
+        "1.0.63",
+        platform_runtime=_runtime(adapter, FakeDesktopServices()),
+        check_for_update=lambda *_args, **_kwargs: _available_outcome().artifact,
+        temp_root=str(tmp_path),
+    )
+    try:
+        assert manager.check_for_updates()
+        assert manager.wait_for_background_task(1)
+
+        snapshot = manager.snapshot()
+        assert snapshot.state is UpdateState.IDLE
+        assert snapshot.available_version is None
+        assert snapshot.error == "Update check returned an invalid outcome."
+        assert manager._available_update is None
+        assert not manager.start_download()
     finally:
         manager.shutdown()
 
@@ -250,7 +307,7 @@ def test_download_reports_progress_verifies_persists_and_cleans_temp_dir(tmp_pat
         phase_cb,
         **_kwargs,
     ):
-        assert expected_sha256 == "expected"
+        assert expected_sha256 == "a" * 64
         assert not cancel_cb()
         Path(destination).write_bytes(b"payload")
         progress_cb(4, 8)
@@ -278,7 +335,7 @@ def test_download_reports_progress_verifies_persists_and_cleans_temp_dir(tmp_pat
         assert len(adapter.persisted_payloads) == 1
         temporary_payload_path, download_url = adapter.persisted_payloads[0]
         assert Path(temporary_payload_path).name == "update_payload.bin"
-        assert download_url == _available_result().download_url
+        assert download_url == _available_outcome().artifact.download_url
         assert not list(tmp_path.glob("caveviewer_update_*"))
 
         assert manager.reveal_download(automatic=True)
@@ -660,7 +717,7 @@ def test_runtime_storage_adapter_owns_verified_package_persistence(tmp_path):
     manager = UpdateManager(
         "1.0.63",
         platform_runtime=runtime,
-        check_for_update=lambda *_args, **_kwargs: _available_result(),
+        check_for_update=lambda *_args, **_kwargs: _available_outcome(),
         download_update=download_update,
         temp_root=str(tmp_path),
     )
@@ -677,7 +734,7 @@ def test_runtime_storage_adapter_owns_verified_package_persistence(tmp_path):
         assert len(storage_adapter.persisted_payloads) == 1
         temporary_payload_path, download_url = storage_adapter.persisted_payloads[0]
         assert Path(temporary_payload_path).name == "update_payload.bin"
-        assert download_url == _available_result().download_url
+        assert download_url == _available_outcome().artifact.download_url
         assert platform_adapter.persisted_payloads == []
         assert not list(tmp_path.glob("caveviewer_update_*"))
     finally:
@@ -703,7 +760,7 @@ def test_storage_adapter_failure_is_an_ordinary_update_workflow_failure(tmp_path
     manager = UpdateManager(
         "1.0.63",
         platform_runtime=runtime,
-        check_for_update=lambda *_args, **_kwargs: _available_result(),
+        check_for_update=lambda *_args, **_kwargs: _available_outcome(),
         download_update=download_update,
         temp_root=str(tmp_path),
     )
@@ -788,7 +845,7 @@ def test_disabled_runtime_gate_starts_no_update_workers_or_downloads(tmp_path):
 
         with manager._lock:
             manager._state = UpdateState.AVAILABLE
-            manager._result = _available_result()
+            manager._available_update = _available_outcome()
         assert not manager.start_download()
         assert downloads == []
     finally:
@@ -808,8 +865,7 @@ def test_runtime_target_is_passed_to_the_default_update_client(
 
     def check_for_update(current_version, **kwargs):
         calls.append((current_version, kwargs))
-        return UpdateCheckResult(
-            update_available=False,
+        return UpdateNotAvailable(
             current_version=current_version,
             latest_version=current_version,
         )
@@ -872,7 +928,7 @@ def test_runtime_tls_adapter_is_passed_to_default_update_download(
     manager = UpdateManager(
         "1.0.63",
         platform_runtime=runtime,
-        check_for_update=lambda *_args, **_kwargs: _available_result(),
+        check_for_update=lambda *_args, **_kwargs: _available_outcome(),
         temp_root=str(tmp_path),
     )
     try:

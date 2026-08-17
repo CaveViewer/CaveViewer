@@ -30,7 +30,13 @@ from caveviewer.gui.platform.desktop_inhibition import (
     release_desktop_inhibitor,
 )
 from caveviewer.gui.platform.runtime import PlatformRuntime
-from caveviewer.gui.update_checker import UpdateCheckResult
+from caveviewer.gui.update_checker import (
+    UpdateArtifact,
+    UpdateAvailable,
+    UpdateCheckFailed,
+    UpdateCheckOutcome,
+    UpdateNotAvailable,
+)
 from caveviewer.version import APP_NAME
 
 
@@ -112,7 +118,7 @@ class UpdateManager:
         current_version: str,
         *,
         platform_runtime: PlatformRuntime,
-        check_for_update: Callable[..., UpdateCheckResult] | None = None,
+        check_for_update: Callable[..., UpdateCheckOutcome] | None = None,
         download_update: Callable[..., None] | None = None,
         temp_root: str | None = None,
     ):
@@ -140,7 +146,7 @@ class UpdateManager:
 
         self._lock = threading.RLock()
         self._state = UpdateState.IDLE
-        self._result: UpdateCheckResult | None = None
+        self._available_update: UpdateAvailable | None = None
         self._downloaded_bytes = 0
         self._total_bytes: int | None = None
         self._payload_path: str | None = None
@@ -172,7 +178,9 @@ class UpdateManager:
     def snapshot(self) -> UpdateSnapshot:
         with self._lock:
             available_version = (
-                self._result.latest_version if self._result is not None else None
+                self._available_update.artifact.version
+                if self._available_update is not None
+                else None
             )
             return UpdateSnapshot(
                 state=self._state,
@@ -223,6 +231,7 @@ class UpdateManager:
             if self._state != UpdateState.IDLE:
                 return False
             self._transition_locked(UpdateState.CHECKING)
+            self._available_update = None
             self._error = None
             done_event = threading.Event()
             worker = threading.Thread(
@@ -252,11 +261,11 @@ class UpdateManager:
             return True
 
     def _run_check(self, done_event: threading.Event) -> None:
-        result: UpdateCheckResult | None = None
+        outcome: UpdateCheckOutcome | None = None
         unexpected_error: Exception | None = None
         try:
             assert self._update_target is not None
-            result = self._check_for_update(
+            outcome = self._check_for_update(
                 self._current_version,
                 update_target=self._update_target,
                 tls_trust_adapter=self._platform_runtime.tls_trust_adapter,
@@ -268,25 +277,31 @@ class UpdateManager:
         with self._lock:
             if self._state != UpdateState.SHUTDOWN:
                 if unexpected_error is not None:
+                    self._available_update = None
                     self._error = str(unexpected_error)
                     self._transition_locked(UpdateState.IDLE)
-                elif result is None:
+                elif outcome is None:
+                    self._available_update = None
                     self._error = "Update check returned no result."
                     self._transition_locked(UpdateState.IDLE)
-                elif result.error:
+                elif isinstance(outcome, UpdateCheckFailed):
                     # Automatic checks remain quiet on ordinary network errors;
                     # returning to IDLE permits a later splash to try again.
-                    self._result = result
-                    self._error = result.error
+                    self._available_update = None
+                    self._error = outcome.error
                     self._transition_locked(UpdateState.IDLE)
-                elif result.update_available:
-                    self._result = result
+                elif isinstance(outcome, UpdateAvailable):
+                    self._available_update = outcome
                     self._error = None
                     self._transition_locked(UpdateState.AVAILABLE)
-                else:
-                    self._result = result
+                elif isinstance(outcome, UpdateNotAvailable):
+                    self._available_update = None
                     self._error = None
                     self._transition_locked(UpdateState.UP_TO_DATE)
+                else:
+                    self._available_update = None
+                    self._error = "Update check returned an invalid outcome."
+                    self._transition_locked(UpdateState.IDLE)
             done_event.set()
 
     def start_download(self) -> bool:
@@ -300,13 +315,18 @@ class UpdateManager:
                 return False
             if self._state not in {UpdateState.AVAILABLE, UpdateState.FAILED}:
                 return False
-            if self._result is None or not self._result.download_url:
+            available_update = self._available_update
+            if available_update is None:
+                _LOG.error(
+                    "Update state %s has no validated update artifact.",
+                    self._state.value,
+                )
                 return False
 
-            result = self._result
+            artifact = available_update.artifact
             self._transition_locked(UpdateState.DOWNLOADING)
             self._downloaded_bytes = 0
-            self._total_bytes = result.download_size_bytes
+            self._total_bytes = artifact.size_bytes
             self._payload_path = None
             self._error = None
             self._automatic_reveal_done = False
@@ -315,7 +335,7 @@ class UpdateManager:
             done_event = threading.Event()
             worker = threading.Thread(
                 target=self._run_download,
-                args=(result, cancel_event, done_event),
+                args=(artifact, cancel_event, done_event),
                 name="caveviewer-update-download",
                 # A partial file must reach its finally block before process exit.
                 daemon=False,
@@ -380,7 +400,7 @@ class UpdateManager:
 
     def _run_download(
         self,
-        result: UpdateCheckResult,
+        artifact: UpdateArtifact,
         cancel_event: threading.Event,
         done_event: threading.Event,
     ) -> None:
@@ -406,13 +426,9 @@ class UpdateManager:
                     self._transition_locked(UpdateState.VERIFYING)
 
         try:
-            if result.latest_version:
-                download_body = f"Downloading version {result.latest_version}"
-            else:
-                download_body = "Downloading the available update"
             self._notify_download(
                 "Update Download Started",
-                download_body,
+                f"Downloading version {artifact.version}",
             )
             inhibitor = self._inhibit_update_download()
             download_dir = tempfile.mkdtemp(
@@ -422,7 +438,7 @@ class UpdateManager:
             payload_path = os.path.join(download_dir, "update_payload.bin")
             assert self._update_target is not None
             download_kwargs = {
-                "expected_sha256": result.download_sha256,
+                "expected_sha256": artifact.sha256,
                 "progress_cb": on_progress,
                 "cancel_cb": cancel_event.is_set,
                 "phase_cb": on_phase,
@@ -430,8 +446,8 @@ class UpdateManager:
                 "tls_trust_adapter": self._platform_runtime.tls_trust_adapter,
             }
             self._download_update(
-                result.download_url,
-                result.download_size_bytes,
+                artifact.download_url,
+                artifact.size_bytes,
                 payload_path,
                 **download_kwargs,
             )
@@ -440,7 +456,7 @@ class UpdateManager:
             final_payload_path = (
                 self._update_package_storage_adapter.persist_verified_package(
                     payload_path,
-                    result.download_url,
+                    artifact.download_url,
                 )
             )
             next_state = UpdateState.READY

@@ -828,6 +828,14 @@ opening a map neither cancels a download nor introduces update UI into the
 viewer. Only process shutdown cancels an unfinished download and waits for its
 temporary files to be removed.
 
+The update checker returns one immutable outcome: `UpdateAvailable`,
+`UpdateNotAvailable`, or `UpdateCheckFailed`. Only `UpdateAvailable` contains
+an `UpdateArtifact`, whose version, HTTPS URL, package kind, positive size, and
+SHA-256 were validated before signature verification. `UpdateManager` stores
+that available outcome only for the download/retry workflow and passes its
+non-optional artifact to the worker. Release notes remain a published manifest
+field but are not carried through the manager or splash without a designed UI.
+
 Verified packages are persisted to the user's Downloads folder. Platform
 adapters only reveal them for manual handling: Finder mounts macOS DMGs
 read-only and reveals the `.app`, Explorer selects the Windows payload, and
