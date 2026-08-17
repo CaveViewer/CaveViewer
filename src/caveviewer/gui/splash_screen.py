@@ -859,8 +859,11 @@ def _update_presentation(snapshot: UpdateSnapshot) -> _UpdatePresentation:
     ):
         return _UpdatePresentation(status_text=snapshot.automatic_update.explanation)
     if snapshot.state == UpdateState.AVAILABLE:
+        action_text = "Update to"
+        if snapshot.available_version:
+            action_text = f"{action_text} {snapshot.available_version}"
         return _UpdatePresentation(
-            action_text="Download update",
+            action_text=action_text,
             action=_UpdateAction.DOWNLOAD,
         )
     if snapshot.state == UpdateState.DOWNLOADING:

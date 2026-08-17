@@ -53,11 +53,11 @@ def test_map_library_cave_details_stay_in_the_splash_content_area():
         (
             UpdateSnapshot(
                 state=UpdateState.AVAILABLE,
-                current_version="1.0.63",
-                available_version="v1.0.64",
+                current_version="1.0.77",
+                available_version="1.0.78",
             ),
             "",
-            "Download update",
+            "Update to 1.0.78",
             splash_screen._UpdateAction.DOWNLOAD,
             None,
             False,
@@ -562,7 +562,8 @@ def test_splash_navigation_uses_a_quiet_rail_and_lower_app_status():
     assert "update_cluster = tk.Frame(app_status_frame, bg=_BG_COLOR)" in source
     assert "def _set_update_cluster_visible(visible: bool)" in source
     assert "def _layout_update_cluster(presentation: _UpdatePresentation)" in source
-    assert 'action_text="Download update"' in update_source
+    assert 'action_text = "Update to"' in update_source
+    assert 'action_text = f"{action_text} {snapshot.available_version}"' in update_source
     assert 'action_text="Show update"' in update_source
     assert "action_replaces_status_after_delay=True" in update_source
     assert "_UPDATE_READY_ACTION_DELAY_MS = 3_000" in inspect.getsource(
