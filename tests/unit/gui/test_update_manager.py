@@ -542,6 +542,173 @@ def test_failed_download_can_retry_without_retaining_partial_files(tmp_path):
         manager.shutdown()
 
 
+def test_cancel_download_reuses_worker_cleanup_and_permits_retry(tmp_path):
+    download_started = threading.Event()
+    release_download = threading.Event()
+    attempts = 0
+
+    def download_update(
+        _url,
+        _expected_size,
+        destination,
+        *,
+        cancel_cb,
+        phase_cb,
+        **_kwargs,
+    ):
+        nonlocal attempts
+        attempts += 1
+        Path(destination).write_bytes(b"partial" if attempts == 1 else b"payload")
+        if attempts == 1:
+            download_started.set()
+            assert release_download.wait(1)
+            assert cancel_cb()
+            raise DownloadCancelled("cancelled")
+        phase_cb("verifying")
+
+    desktop_services = FakeDesktopServices()
+    manager, adapter = _checked_manager(
+        tmp_path,
+        download_update,
+        desktop_services=desktop_services,
+    )
+    try:
+        assert manager.start_download()
+        assert download_started.wait(1)
+        assert manager.snapshot().state is UpdateState.DOWNLOADING
+        assert list(tmp_path.glob("caveviewer_update_*"))
+
+        assert manager.cancel_download()
+        assert not manager.cancel_download()
+        # The requesting thread only signals the worker; cleanup and the
+        # AVAILABLE transition happen after the worker leaves its boundary.
+        assert manager.snapshot().state is UpdateState.DOWNLOADING
+        assert list(tmp_path.glob("caveviewer_update_*"))
+        assert adapter.persisted_payloads == []
+
+        release_download.set()
+        assert manager.wait_for_background_task(1)
+
+        snapshot = manager.snapshot()
+        assert snapshot.state is UpdateState.AVAILABLE
+        assert snapshot.available_version == "1.0.64"
+        assert snapshot.payload_path is None
+        assert snapshot.error is None
+        assert not list(tmp_path.glob("caveviewer_update_*"))
+        assert ("withdraw", "caveviewer.update-download") in desktop_services.calls
+        assert ("close_inhibitor",) in desktop_services.calls
+
+        assert manager.start_download()
+        assert manager.wait_for_background_task(1)
+        assert manager.snapshot().state is UpdateState.READY
+        assert attempts == 2
+    finally:
+        manager.shutdown()
+
+
+def test_cancel_during_verification_prevents_package_persistence(tmp_path):
+    verification_started = threading.Event()
+    release_verification = threading.Event()
+
+    def download_update(
+        _url,
+        _expected_size,
+        destination,
+        *,
+        cancel_cb,
+        phase_cb,
+        **_kwargs,
+    ):
+        Path(destination).write_bytes(b"verified staging payload")
+        phase_cb("verifying")
+        verification_started.set()
+        assert release_verification.wait(1)
+        # Return normally after the cancellation signal to exercise the
+        # manager's pre-persistence check rather than transport behavior.
+        assert cancel_cb()
+
+    desktop_services = FakeDesktopServices()
+    manager, adapter = _checked_manager(
+        tmp_path,
+        download_update,
+        desktop_services=desktop_services,
+    )
+    try:
+        assert manager.start_download()
+        assert verification_started.wait(1)
+        assert manager.snapshot().state is UpdateState.VERIFYING
+
+        assert manager.cancel_download()
+        assert manager.snapshot().state is UpdateState.VERIFYING
+        assert adapter.persisted_payloads == []
+        assert list(tmp_path.glob("caveviewer_update_*"))
+
+        release_verification.set()
+        assert manager.wait_for_background_task(1)
+
+        snapshot = manager.snapshot()
+        assert snapshot.state is UpdateState.AVAILABLE
+        assert snapshot.payload_path is None
+        assert adapter.persisted_payloads == []
+        assert not list(tmp_path.glob("caveviewer_update_*"))
+        assert not (tmp_path / "Downloads").exists()
+        assert ("withdraw", "caveviewer.update-download") in desktop_services.calls
+        assert ("close_inhibitor",) in desktop_services.calls
+    finally:
+        manager.shutdown()
+
+
+@pytest.mark.parametrize(
+    "state",
+    (
+        UpdateState.IDLE,
+        UpdateState.CHECKING,
+        UpdateState.UP_TO_DATE,
+        UpdateState.AVAILABLE,
+        UpdateState.READY,
+        UpdateState.FAILED,
+        UpdateState.SHUTDOWN,
+    ),
+)
+def test_cancel_download_rejects_nonactive_states(tmp_path, state):
+    adapter = FakePlatformAdapter(tmp_path / "Downloads")
+    manager = UpdateManager(
+        "1.0.63",
+        platform_runtime=_runtime(adapter, FakeDesktopServices()),
+        temp_root=str(tmp_path),
+    )
+    try:
+        with manager._lock:
+            manager._state = state
+
+        assert not manager.cancel_download()
+    finally:
+        manager.shutdown()
+
+
+def test_cancel_download_preserves_an_already_verified_package(tmp_path):
+    payload_path = tmp_path / "Downloads" / "CaveViewer-1.0.64.zip"
+    payload_path.parent.mkdir()
+    payload_path.write_bytes(b"verified package")
+    adapter = FakePlatformAdapter(tmp_path / "Downloads")
+    manager = UpdateManager(
+        "1.0.63",
+        platform_runtime=_runtime(adapter, FakeDesktopServices()),
+        temp_root=str(tmp_path),
+    )
+    try:
+        with manager._lock:
+            manager._state = UpdateState.READY
+            manager._payload_path = str(payload_path)
+
+        assert not manager.cancel_download()
+        assert manager.snapshot().state is UpdateState.READY
+        assert manager.snapshot().payload_path == str(payload_path)
+        assert payload_path.read_bytes() == b"verified package"
+    finally:
+        manager.shutdown()
+
+
 def test_shutdown_waits_for_download_cancellation_and_partial_cleanup(tmp_path):
     download_started = threading.Event()
     release_download = threading.Event()

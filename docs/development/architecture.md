@@ -818,6 +818,7 @@ IDLE -> CHECKING -> {UP_TO_DATE, AVAILABLE, IDLE on check error}
 AVAILABLE -> DOWNLOADING -> VERIFYING -> READY
                 |              |
                 +--------------+-> FAILED -> DOWNLOADING (retry)
+(DOWNLOADING or VERIFYING) -- cancel request --> worker cleanup --> AVAILABLE
 any non-SHUTDOWN state -> SHUTDOWN
 ```
 
@@ -825,7 +826,13 @@ Network, verification, and staging-file work runs in manager-owned workers.
 The splash polls immutable snapshots and performs widget updates on the Tk
 thread. The viewer and `core.streaming.world` have no update dependency, so
 opening a map neither cancels a download nor introduces update UI into the
-viewer. Only process shutdown cancels an unfinished download and waits for its
+viewer. A visible splash can request cancellation only while the manager is
+downloading or verifying. That request sets the worker's cancellation event;
+the Tk thread neither removes files nor changes update state. The worker
+honors the request during transfer or hashing, checks it again before package
+persistence begins, then removes staging files and returns to `AVAILABLE`.
+Previously verified packages remain intact. Closing a splash still does not
+cancel a download; process shutdown also requests cancellation and waits for
 temporary files to be removed.
 
 The update checker returns one immutable outcome: `UpdateAvailable`,

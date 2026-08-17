@@ -155,6 +155,7 @@ class UpdateManager:
         self._foreground_update_surface_active = False
 
         self._cancel_event: threading.Event | None = None
+        self._persistence_started = False
         self._worker: threading.Thread | None = None
         self._worker_kind: str | None = None
         self._task_done = threading.Event()
@@ -330,6 +331,7 @@ class UpdateManager:
             self._payload_path = None
             self._error = None
             self._automatic_reveal_done = False
+            self._persistence_started = False
 
             cancel_event = threading.Event()
             done_event = threading.Event()
@@ -355,6 +357,28 @@ class UpdateManager:
                 done_event.set()
                 _LOG.warning("Could not start update download worker: %s", exc)
                 return False
+            return True
+
+    def cancel_download(self) -> bool:
+        """Request cooperative cancellation before package persistence begins.
+
+        The worker owns state publication and cleanup, so this method only
+        signals its event.  Acquiring the lifecycle lock makes cancellation
+        race safely with the hand-off from verification to Downloads.
+        """
+        with self._lock:
+            if self._state not in {UpdateState.DOWNLOADING, UpdateState.VERIFYING}:
+                return False
+            cancel_event = self._cancel_event
+            if (
+                self._worker_kind != "download"
+                or cancel_event is None
+                or cancel_event.is_set()
+                or self._persistence_started
+            ):
+                return False
+            cancel_event.set()
+            _LOG.info("Update download cancellation requested.")
             return True
 
     def _notify_download(
@@ -451,8 +475,13 @@ class UpdateManager:
                 payload_path,
                 **download_kwargs,
             )
-            if cancel_event.is_set():
-                raise DownloadCancelled("Download cancelled")
+            # Cancellation and promotion are mutually exclusive: if a
+            # cancellation request obtains the lifecycle lock first, the
+            # verified staging payload is never copied into Downloads.
+            with self._lock:
+                if cancel_event.is_set():
+                    raise DownloadCancelled("Download cancelled")
+                self._persistence_started = True
             final_payload_path = (
                 self._update_package_storage_adapter.persist_verified_package(
                     payload_path,
@@ -496,6 +525,7 @@ class UpdateManager:
                     )
 
         with self._lock:
+            self._persistence_started = False
             if self._state != UpdateState.SHUTDOWN:
                 self._payload_path = final_payload_path
                 self._error = error

@@ -836,6 +836,7 @@ def _set_tk_window_icon(window) -> None:
 class _UpdateAction(enum.Enum):
     DOWNLOAD = "download"
     RETRY = "retry"
+    CANCEL = "cancel"
     REVEAL = "reveal"
 
 
@@ -849,6 +850,38 @@ class _UpdatePresentation:
     progress_visible: bool = False
     progress_fraction: float = 0.0
     error: bool = False
+
+
+def _invoke_update_action(update_manager: UpdateManager, action: _UpdateAction) -> None:
+    """Route a compact splash action to the process-owned update manager."""
+    if action in {_UpdateAction.DOWNLOAD, _UpdateAction.RETRY}:
+        update_manager.start_download()
+    elif action == _UpdateAction.CANCEL:
+        update_manager.cancel_download()
+    elif action == _UpdateAction.REVEAL:
+        update_manager.reveal_download()
+
+
+def _bind_update_label_action(
+    label,
+    update_manager: UpdateManager,
+    action: _UpdateAction | None,
+) -> None:
+    """Bind pointer and keyboard activation for an optional update action."""
+    for sequence in ("<Button-1>", "<Return>", "<space>"):
+        label.unbind(sequence)
+    enabled = action is not None
+    label.config(cursor="hand2" if enabled else "arrow", takefocus=enabled)
+    if not enabled:
+        return
+
+    def invoke(_event=None):
+        _invoke_update_action(update_manager, action)
+        return "break"
+
+    label.bind("<Button-1>", invoke)
+    label.bind("<Return>", invoke)
+    label.bind("<space>", invoke)
 
 
 def _update_presentation(snapshot: UpdateSnapshot) -> _UpdatePresentation:
@@ -869,12 +902,16 @@ def _update_presentation(snapshot: UpdateSnapshot) -> _UpdatePresentation:
     if snapshot.state == UpdateState.DOWNLOADING:
         return _UpdatePresentation(
             status_text=f"Downloading… {snapshot.progress_percent}%",
+            action_text="Cancel",
+            action=_UpdateAction.CANCEL,
             progress_visible=True,
             progress_fraction=snapshot.progress_percent / 100.0,
         )
     if snapshot.state == UpdateState.VERIFYING:
         return _UpdatePresentation(
             status_text="Verifying…",
+            action_text="Cancel",
+            action=_UpdateAction.CANCEL,
             progress_visible=True,
             progress_fraction=1.0,
         )
@@ -1151,28 +1188,6 @@ def show_splash_screen(
             4,
         )
 
-    def _invoke_update_action(action: _UpdateAction) -> None:
-        if action in {_UpdateAction.DOWNLOAD, _UpdateAction.RETRY}:
-            update_manager.start_download()
-        elif action == _UpdateAction.REVEAL:
-            update_manager.reveal_download()
-
-    def _bind_label_action(label, action: _UpdateAction | None) -> None:
-        for sequence in ("<Button-1>", "<Return>", "<space>"):
-            label.unbind(sequence)
-        enabled = action is not None
-        label.config(cursor="hand2" if enabled else "arrow", takefocus=enabled)
-        if not enabled:
-            return
-
-        def invoke(_event=None):
-            _invoke_update_action(action)
-            return "break"
-
-        label.bind("<Button-1>", invoke)
-        label.bind("<Return>", invoke)
-        label.bind("<space>", invoke)
-
     def _show_delayed_update_action(presentation: _UpdatePresentation) -> None:
         """Replace the completion status with its single follow-up action."""
         if last_update_presentation[0] != presentation:
@@ -1182,7 +1197,7 @@ def show_splash_screen(
             show_delayed_action=True,
         )
         update_label.config(text=label_text, fg=label_color)
-        _bind_label_action(update_label, label_action)
+        _bind_update_label_action(update_label, update_manager, label_action)
 
     def _apply_update_presentation(presentation: _UpdatePresentation) -> None:
         label_text, label_color, label_action = _update_status_label(presentation)
@@ -1191,8 +1206,12 @@ def show_splash_screen(
             fg=label_color,
         )
         update_action_label.config(text=presentation.action_text)
-        _bind_label_action(update_label, label_action)
-        _bind_label_action(update_action_label, presentation.action)
+        _bind_update_label_action(update_label, update_manager, label_action)
+        _bind_update_label_action(
+            update_action_label,
+            update_manager,
+            presentation.action,
+        )
         _layout_update_cluster(presentation)
         _set_progress(presentation.progress_fraction)
         if presentation.action_replaces_status_after_delay:

@@ -71,8 +71,8 @@ def test_map_library_cave_details_stay_in_the_splash_content_area():
                 total_bytes=100,
             ),
             "Downloading… 42%",
-            "",
-            None,
+            "Cancel",
+            splash_screen._UpdateAction.CANCEL,
             None,
             False,
         ),
@@ -83,8 +83,8 @@ def test_map_library_cave_details_stay_in_the_splash_content_area():
                 available_version="1.0.64",
             ),
             "Verifying…",
-            "",
-            None,
+            "Cancel",
+            splash_screen._UpdateAction.CANCEL,
             None,
             False,
         ),
@@ -151,6 +151,55 @@ def test_non_actionable_update_states_remain_quiet(state):
     )
 
     assert presentation == splash_screen._UpdatePresentation()
+
+
+class _FakeUpdateActionLabel:
+    def __init__(self):
+        self.bindings = {}
+        self.options = {}
+        self.unbound = []
+
+    def unbind(self, sequence):
+        self.unbound.append(sequence)
+        self.bindings.pop(sequence, None)
+
+    def config(self, **options):
+        self.options.update(options)
+
+    def bind(self, sequence, callback):
+        self.bindings[sequence] = callback
+
+
+class _FakeUpdateActionManager:
+    def __init__(self):
+        self.calls = []
+
+    def start_download(self):
+        self.calls.append("start")
+
+    def cancel_download(self):
+        self.calls.append("cancel")
+
+    def reveal_download(self):
+        self.calls.append("reveal")
+
+
+@pytest.mark.parametrize("sequence", ("<Button-1>", "<Return>", "<space>"))
+def test_cancel_update_action_accepts_pointer_and_keyboard_activation(sequence):
+    label = _FakeUpdateActionLabel()
+    manager = _FakeUpdateActionManager()
+
+    splash_screen._bind_update_label_action(
+        label,
+        manager,
+        splash_screen._UpdateAction.CANCEL,
+    )
+
+    assert label.options == {"cursor": "hand2", "takefocus": True}
+    assert label.unbound == ["<Button-1>", "<Return>", "<space>"]
+    assert set(label.bindings) == {"<Button-1>", "<Return>", "<space>"}
+    assert label.bindings[sequence]() == "break"
+    assert manager.calls == ["cancel"]
 
 
 def test_disabled_update_gate_shows_its_safe_explanation_without_an_action():
@@ -444,6 +493,7 @@ def test_splash_linux_fonts_do_not_multiply_the_tk_default_font(monkeypatch):
 
 def test_splash_navigation_actions_are_keyboard_accessible_without_fallthrough():
     source = inspect.getsource(splash_screen.show_splash_screen)
+    update_action_source = inspect.getsource(splash_screen._bind_update_label_action)
 
     assert "navigation_frame = tk.Frame(" in source
     assert "def _create_navigation_icon(" in source
@@ -455,8 +505,8 @@ def test_splash_navigation_actions_are_keyboard_accessible_without_fallthrough()
     assert "_NAVIGATION_ACTIVE_INDICATOR" in source
     assert "font=_TYPOGRAPHY.body_strong if selected else _TYPOGRAPHY.body" in source
     assert "takefocus=True" in source
-    assert 'label.bind("<Return>", invoke)' in source
-    assert 'label.bind("<space>", invoke)' in source
+    assert 'label.bind("<Return>", invoke)' in update_action_source
+    assert 'label.bind("<space>", invoke)' in update_action_source
     assert "def _invoke_and_break(callback):" in source
     assert "def _bind_activation(widget, callback) -> None:" in source
     assert "map_library_navigation_item = _create_navigation_item(" in source
