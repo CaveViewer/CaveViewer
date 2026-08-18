@@ -1,9 +1,8 @@
-"""macOS UI integration and verified-package reveal behavior."""
+"""macOS UI integration and saved-file reveal behavior."""
 
 from __future__ import annotations
 
 import os
-import plistlib
 import subprocess
 
 from caveviewer.core.diagnostics.logging import get_logger
@@ -21,74 +20,8 @@ _LOG = get_logger("CaveViewer")
 
 
 class MacOSSplashPlatformAdapter(DefaultSplashPlatformAdapter):
-    def __init__(self):
-        # Reuse an existing mount for repeated "Show in Finder" actions rather
-        # than attaching the same DMG once per click.
-        self._mounted_payloads: dict[str, tuple[str, str]] = {}
-
     def ui_font_family(self) -> str:
         return "Helvetica Neue"
-
-    def download_reveal_action_label(self) -> str:
-        return "Show in Finder"
-
-    def reveal_downloaded_payload(self, payload_path: str) -> None:
-        payload_path = os.path.abspath(payload_path)
-        if not payload_path.lower().endswith(".dmg"):
-            subprocess.Popen(["open", "-R", payload_path])
-            return
-
-        cached = self._mounted_payloads.get(payload_path)
-        if cached is not None:
-            mountpoint, reveal_path = cached
-            if os.path.exists(mountpoint) and os.path.exists(reveal_path):
-                self._reveal_in_finder(mountpoint, reveal_path)
-                return
-            self._mounted_payloads.pop(payload_path, None)
-
-        completed = subprocess.run(
-            [
-                "hdiutil",
-                "attach",
-                payload_path,
-                "-nobrowse",
-                "-readonly",
-                "-plist",
-            ],
-            check=True,
-            capture_output=True,
-        )
-        attach_result = plistlib.loads(completed.stdout)
-        mountpoint = next(
-            (
-                entity.get("mount-point")
-                for entity in attach_result.get("system-entities", ())
-                if entity.get("mount-point")
-            ),
-            None,
-        )
-        if not mountpoint:
-            raise RuntimeError(f"Mounted DMG did not report a mount point: {payload_path}")
-
-        app_path = None
-        for root_dir, dir_names, _ in os.walk(mountpoint):
-            for dir_name in dir_names:
-                if dir_name.endswith(".app"):
-                    app_path = os.path.join(root_dir, dir_name)
-                    break
-            if app_path:
-                break
-
-        reveal_path = app_path or mountpoint
-        self._mounted_payloads[payload_path] = (mountpoint, reveal_path)
-        self._reveal_in_finder(mountpoint, reveal_path)
-
-    @staticmethod
-    def _reveal_in_finder(mountpoint: str, reveal_path: str) -> None:
-        if reveal_path != mountpoint:
-            subprocess.Popen(["open", "-R", reveal_path])
-        else:
-            subprocess.Popen(["open", mountpoint])
 
     def reveal_file(self, path: str) -> None:
         """Reveal a saved user file in Finder without opening the file."""

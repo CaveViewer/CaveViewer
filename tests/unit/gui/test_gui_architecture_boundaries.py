@@ -14,6 +14,7 @@ GUI_FEATURES_ROOT = GUI_ROOT / "features"
 FEATURE_POLICY_MODULE = GUI_FEATURES_ROOT / "policies.py"
 PLATFORM_RUNTIME_MODULE = GUI_PLATFORM_ROOT / "runtime.py"
 SPLASH_PLATFORM_ADAPTER_MODULE = GUI_PLATFORM_ROOT / "base.py"
+UPDATE_PACKAGE_REVEAL_MODULE = GUI_PLATFORM_ROOT / "update_package_reveal.py"
 UPDATE_PACKAGE_STORAGE_MODULE = GUI_PLATFORM_ROOT / "update_package_storage.py"
 UPDATE_MANAGER_MODULE = GUI_ROOT / "update_manager.py"
 STANDARD_LIBRARY_MAPS_MODULE = GUI_ROOT / "standard_library_maps.py"
@@ -471,6 +472,59 @@ def test_update_package_storage_does_not_depend_on_the_broad_splash_adapter():
                 "SplashPlatformAdapter still owns persist_downloaded_payload",
             )
         )
+
+    assert not violations, _format_violations(violations)
+
+
+def test_update_package_reveal_does_not_depend_on_the_broad_splash_adapter():
+    """Keep verified-package reveal behind its focused adapter contract."""
+    reveal_module = _parse_module(UPDATE_PACKAGE_REVEAL_MODULE)
+    legacy_methods = {
+        "download_reveal_action_label",
+        "reveal_downloaded_payload",
+    }
+    violations: list[Violation] = []
+
+    for node in ast.walk(reveal_module):
+        if isinstance(node, ast.ImportFrom) and any(
+            alias.name == "SplashPlatformAdapter" for alias in node.names
+        ):
+            violations.append(
+                Violation(
+                    UPDATE_PACKAGE_REVEAL_MODULE,
+                    node.lineno,
+                    "imports SplashPlatformAdapter",
+                )
+            )
+        elif isinstance(node, ast.Name) and node.id == "SplashPlatformAdapter":
+            violations.append(
+                Violation(
+                    UPDATE_PACKAGE_REVEAL_MODULE,
+                    node.lineno,
+                    "references SplashPlatformAdapter",
+                )
+            )
+        elif isinstance(node, ast.Attribute) and node.attr in legacy_methods:
+            violations.append(
+                Violation(
+                    UPDATE_PACKAGE_REVEAL_MODULE,
+                    node.lineno,
+                    f"delegates to {node.attr}",
+                )
+            )
+
+    for path in sorted(GUI_PLATFORM_ROOT.rglob("*.py")):
+        if path == UPDATE_PACKAGE_REVEAL_MODULE:
+            continue
+        for node in ast.walk(_parse_module(path)):
+            if isinstance(node, ast.FunctionDef) and node.name in legacy_methods:
+                violations.append(
+                    Violation(
+                        path,
+                        node.lineno,
+                        f"retains legacy update method {node.name}",
+                    )
+                )
 
     assert not violations, _format_violations(violations)
 

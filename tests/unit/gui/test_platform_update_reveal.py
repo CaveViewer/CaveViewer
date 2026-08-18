@@ -1,4 +1,4 @@
-"""Verify that platform adapters reveal packages without executing them."""
+"""Verify focused package reveal and separate saved-file reveal behavior."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from caveviewer.gui.platform import default, linux, macos, windows
+from caveviewer.gui.platform import update_package_reveal
 
 
 def test_windows_reveals_package_with_explorer_selection(tmp_path, monkeypatch):
@@ -15,15 +16,15 @@ def test_windows_reveals_package_with_explorer_selection(tmp_path, monkeypatch):
     payload.write_bytes(b"package")
     launched = []
     monkeypatch.setattr(
-        windows.subprocess,
+        update_package_reveal.subprocess,
         "Popen",
         lambda command: launched.append(command),
     )
 
-    adapter = windows.WindowsSplashPlatformAdapter()
-    adapter.reveal_downloaded_payload(str(payload))
+    adapter = update_package_reveal.WindowsUpdatePackageRevealAdapter()
+    adapter.reveal_verified_package(str(payload))
 
-    assert adapter.download_reveal_action_label() == "Show in Explorer"
+    assert adapter.reveal_action_label() == "Show in Explorer"
     assert launched == [["explorer", "/select,", str(payload)]]
 
 
@@ -67,9 +68,7 @@ def test_windows_reveal_keeps_explorer_selector_outside_a_whitespace_path(
     )
 
 
-def test_linux_opens_download_directory_without_launching_package(
-    tmp_path, monkeypatch
-):
+def test_linux_opens_download_directory_without_launching_package(tmp_path):
     payload = tmp_path / "CaveViewer.AppImage"
     payload.write_bytes(b"package")
     revealed = []
@@ -78,12 +77,12 @@ def test_linux_opens_download_directory_without_launching_package(
         def reveal_path(self, path, *, parent=None):
             revealed.append((path, parent))
 
-    adapter = linux.LinuxSplashPlatformAdapter(
+    adapter = update_package_reveal.LinuxUpdatePackageRevealAdapter(
         desktop_services=FakeDesktopServices()
     )
-    adapter.reveal_downloaded_payload(str(payload))
+    adapter.reveal_verified_package(str(payload))
 
-    assert adapter.download_reveal_action_label() == "Open Download Folder"
+    assert adapter.reveal_action_label() == "Open Download Folder"
     assert revealed == [(str(payload), None)]
 
 
@@ -123,18 +122,18 @@ def test_macos_mounts_dmg_read_only_and_reuses_mount_for_finder(
             )
         )
 
-    monkeypatch.setattr(macos.subprocess, "run", attach)
+    monkeypatch.setattr(update_package_reveal.subprocess, "run", attach)
     monkeypatch.setattr(
-        macos.subprocess,
+        update_package_reveal.subprocess,
         "Popen",
         lambda command: finder_calls.append(command),
     )
 
-    adapter = macos.MacOSSplashPlatformAdapter()
-    adapter.reveal_downloaded_payload(str(payload))
-    adapter.reveal_downloaded_payload(str(payload))
+    adapter = update_package_reveal.MacOSUpdatePackageRevealAdapter()
+    adapter.reveal_verified_package(str(payload))
+    adapter.reveal_verified_package(str(payload))
 
-    assert adapter.download_reveal_action_label() == "Show in Finder"
+    assert adapter.reveal_action_label() == "Show in Finder"
     assert attach_calls == [
         (
             [
@@ -161,12 +160,14 @@ def test_macos_reveals_non_dmg_package_without_executing_it(
     payload.write_bytes(b"package")
     finder_calls = []
     monkeypatch.setattr(
-        macos.subprocess,
+        update_package_reveal.subprocess,
         "Popen",
         lambda command: finder_calls.append(command),
     )
 
-    macos.MacOSSplashPlatformAdapter().reveal_downloaded_payload(str(payload))
+    update_package_reveal.MacOSUpdatePackageRevealAdapter().reveal_verified_package(
+        str(payload)
+    )
 
     assert finder_calls == [["open", "-R", str(payload)]]
 
@@ -186,14 +187,16 @@ def test_macos_reveals_saved_file_without_mounting(tmp_path, monkeypatch):
     assert finder_calls == [["open", "-R", str(payload)]]
 
 
-def test_default_adapter_fails_safely_on_unsupported_platform(tmp_path):
+def test_unsupported_package_reveal_fails_safely_without_affecting_saved_files(
+    tmp_path,
+):
     payload = tmp_path / "CaveViewer.bin"
     payload.write_bytes(b"package")
+    adapter = update_package_reveal.UnsupportedUpdatePackageRevealAdapter()
 
+    assert adapter.reveal_route() is None
     with pytest.raises(RuntimeError, match="unsupported"):
-        default.DefaultSplashPlatformAdapter().reveal_downloaded_payload(
-            str(payload)
-        )
+        adapter.reveal_verified_package(str(payload))
 
     with pytest.raises(RuntimeError, match="unsupported"):
         default.DefaultSplashPlatformAdapter().reveal_file(str(payload))

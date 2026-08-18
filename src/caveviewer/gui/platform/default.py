@@ -20,15 +20,6 @@ class DefaultSplashPlatformAdapter(SplashPlatformAdapter):
         # No platform-specific About menu integration outside macOS.
         return None
 
-    def download_reveal_action_label(self) -> str:
-        return "Open Download Folder"
-
-    def reveal_downloaded_payload(self, payload_path: str) -> None:
-        raise RuntimeError(
-            f"Revealing downloaded packages is unsupported on this platform: "
-            f"{payload_path}"
-        )
-
     def reveal_file(self, path: str) -> None:
         raise RuntimeError(
             f"Revealing files is unsupported on this platform: {path}"

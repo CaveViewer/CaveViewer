@@ -1,4 +1,4 @@
-"""Test static capability routes for non-executing update-package reveal."""
+"""Test static capability routes for focused non-executing package reveal."""
 
 from __future__ import annotations
 
@@ -13,33 +13,35 @@ from caveviewer.gui.platform.update_package_reveal import (
 )
 
 
-class FakePlatformAdapter:
-    def __init__(self):
+class FakeDesktopServices:
+    def __init__(self) -> None:
         self.revealed_paths = []
 
-    def download_reveal_action_label(self):
-        return "Show Test Package"
-
-    def reveal_downloaded_payload(self, payload_path):
-        self.revealed_paths.append(payload_path)
+    def reveal_path(self, path, *, parent=None) -> None:
+        self.revealed_paths.append((path, parent))
 
 
 @pytest.mark.parametrize(
-    ("platform_name", "expected_route"),
+    ("platform_name", "expected_route", "expected_label"),
     [
-        ("darwin", UpdatePackageRevealRoute.FINDER),
-        ("win32", UpdatePackageRevealRoute.EXPLORER),
-        ("linux", UpdatePackageRevealRoute.DESKTOP_SERVICE),
+        ("darwin", UpdatePackageRevealRoute.FINDER, "Show in Finder"),
+        ("win32", UpdatePackageRevealRoute.EXPLORER, "Show in Explorer"),
+        (
+            "linux",
+            UpdatePackageRevealRoute.DESKTOP_SERVICE,
+            "Open Download Folder",
+        ),
     ],
 )
 def test_composed_reveal_adapter_declares_static_route_without_action(
     platform_name,
     expected_route,
+    expected_label,
 ):
-    platform_adapter = FakePlatformAdapter()
+    desktop_services = FakeDesktopServices()
     reveal_adapter = create_update_package_reveal_adapter(
-        platform_adapter,
         platform_name=platform_name,
+        desktop_services=desktop_services,
     )
 
     capability = probe_update_package_reveal(reveal_adapter)
@@ -47,20 +49,13 @@ def test_composed_reveal_adapter_declares_static_route_without_action(
     assert capability.status is CapabilityStatus.AVAILABLE
     assert capability.value is expected_route
     assert capability.evidence == {"route": expected_route.value}
-    assert platform_adapter.revealed_paths == []
-    assert reveal_adapter.reveal_action_label() == "Show Test Package"
-
-    reveal_adapter.reveal_verified_package("/downloads/CaveViewer.package")
-
-    assert platform_adapter.revealed_paths == ["/downloads/CaveViewer.package"]
+    assert reveal_adapter.reveal_action_label() == expected_label
+    assert desktop_services.revealed_paths == []
 
 
 def test_unknown_platform_has_no_update_package_reveal_route():
     capability = probe_update_package_reveal(
-        create_update_package_reveal_adapter(
-            FakePlatformAdapter(),
-            platform_name="freebsd",
-        )
+        create_update_package_reveal_adapter(platform_name="freebsd")
     )
 
     assert capability.status is CapabilityStatus.UNAVAILABLE
