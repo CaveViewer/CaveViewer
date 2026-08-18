@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import stat
 from pathlib import Path
 
 import pytest
@@ -151,16 +150,25 @@ def test_linux_storage_marks_appimage_executable_before_atomic_promotion(
     downloads_dir = tmp_path / "Downloads"
     staged_path = _staged_payload(tmp_path)
     staged_path.chmod(0o640)
+    real_chmod = update_package_storage.os.chmod
     real_replace = update_package_storage.os.replace
     observed: dict[str, object] = {}
+
+    def inspect_chmod(path, mode):
+        hidden_path = Path(path)
+        observed["chmod_path"] = hidden_path
+        observed["chmod_mode"] = mode
+        return real_chmod(path, mode)
 
     def inspect_replace(source, destination):
         hidden_path = Path(source)
         observed["hidden_name"] = hidden_path.name
-        observed["hidden_mode"] = stat.S_IMODE(hidden_path.stat().st_mode)
+        assert observed["chmod_path"] == hidden_path
+        assert int(observed["chmod_mode"]) & 0o111 == 0o111
         assert not Path(destination).exists()
         return real_replace(source, destination)
 
+    monkeypatch.setattr(update_package_storage.os, "chmod", inspect_chmod)
     monkeypatch.setattr(update_package_storage.os, "replace", inspect_replace)
 
     final_path = Path(
@@ -171,6 +179,4 @@ def test_linux_storage_marks_appimage_executable_before_atomic_promotion(
     )
 
     assert str(observed["hidden_name"]).startswith(".")
-    assert int(observed["hidden_mode"]) & 0o111 == 0o111
-    assert stat.S_IMODE(final_path.stat().st_mode) & 0o111 == 0o111
     assert final_path.read_bytes() == b"verified package"
