@@ -44,6 +44,12 @@ the desktop's `TkDefaultFont` size.
   and disclaimer, and `section` for section labels.
 - Preferences use `body` for fields and tabs, `body_strong` for buttons, and
   `supporting` for field hints and feedback.
+- Preferences and Help render related groups with the standard section
+  spacing: an uppercase `section` label, 16 logical pixels before its first
+  content row, and 28–32 logical pixels before the next group. Use the active
+  UI scaling helper or spacing token rather than device-pixel literals. Do not
+  add heading rules, cards, amber section decoration, or shortcut-row rules in
+  Help; use whitespace to separate its rows.
 
 Text hierarchy should come first from role, then from color and spacing.
 Do not create a new font size merely to distinguish a control state; use the

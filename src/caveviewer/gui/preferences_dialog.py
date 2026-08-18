@@ -22,6 +22,7 @@ from caveviewer.gui.preferences_form import (
     PreferencesFormState,
     MessageKind,
 )
+from caveviewer.gui.section_spacing import STANDARD_CONTENT_SECTION_SPACING
 from caveviewer.gui.features import FeatureState
 from caveviewer.gui.dialog_style import (
     DIALOG_BODY_PAD_Y,
@@ -137,6 +138,49 @@ def _preference_field_groups(
     if remaining:
         groups.append(("Other", remaining))
     return tuple(groups)
+
+
+class PreferenceSectionContainer:
+    """Render the standard whitespace grouping around one Preferences group."""
+
+    def __init__(
+        self,
+        parent,
+        *,
+        title: str,
+        font: tuple,
+        px: Callable[[int | float], int],
+    ) -> None:
+        self._px = px
+        self.widget = tk.Frame(parent, bg=_BG_COLOR)
+        tk.Label(
+            self.widget,
+            text=title.upper(),
+            font=font,
+            fg=_SUBTITLE_COLOR,
+            bg=_BG_COLOR,
+            anchor="w",
+        ).pack(anchor="w")
+        self.content = tk.Frame(self.widget, bg=_BG_COLOR)
+        self.content.pack(
+            fill="x",
+            pady=(
+                self._px(STANDARD_CONTENT_SECTION_SPACING.heading_to_content_y),
+                0,
+            ),
+        )
+
+    def pack(self, *, first: bool) -> None:
+        """Place this group with the standard preceding-section separation."""
+        self.widget.pack(
+            fill="x",
+            pady=(
+                0
+                if first
+                else self._px(STANDARD_CONTENT_SECTION_SPACING.between_sections_y),
+                0,
+            ),
+        )
 
 
 class PreferencesPanel:
@@ -362,7 +406,7 @@ class PreferencesPanel:
         )
 
     def _render_section(self, parent, section_key: str) -> None:
-        """Render one tab as spaced field groups on a continuous surface."""
+        """Render every tab group through the standard section container."""
         section = tk.Frame(parent, bg=_BG_COLOR)
         # The form owns the full content surface. This leaves a stable
         # right-aligned control column and enough width for one-line hints.
@@ -370,32 +414,31 @@ class PreferencesPanel:
         groups = _preference_field_groups(section_key)
 
         for index, (title, fields) in enumerate(groups):
-            group = tk.Frame(section, bg=_BG_COLOR)
-            group.pack(
-                fill="x",
-                pady=(
-                    0,
-                    self._layout_policy.row_pad_y if index < len(groups) - 1 else 0,
-                ),
-            )
-            tk.Label(
-                group,
-                text=title.upper(),
+            group = PreferenceSectionContainer(
+                section,
+                title=title,
                 font=self.section_font,
-                fg=_INSTRUCTION_COLOR,
-                bg=_BG_COLOR,
-                anchor="w",
-            ).pack(
-                anchor="w",
-                pady=(
-                    0 if index == 0 else self._layout_policy.row_pad_y,
-                    max(4, self._layout_policy.row_pad_y // 2),
-                ),
+                px=self._surface_px,
             )
-            for field in fields:
-                self._render_field(group, field)
+            group.pack(first=index == 0)
+            for field_index, field in enumerate(fields):
+                self._render_field(
+                    group.content,
+                    field,
+                    bottom_pad_y=(
+                        self._form_row_gap()
+                        if field_index < len(fields) - 1
+                        else 0
+                    ),
+                )
 
-    def _render_field(self, section, field: PreferenceSpec) -> None:
+    def _render_field(
+        self,
+        section,
+        field: PreferenceSpec,
+        *,
+        bottom_pad_y: int | None = None,
+    ) -> None:
         key = field.key
         value_type = field.value_type
         self.field_page_keys[key] = field.section
@@ -407,7 +450,13 @@ class PreferencesPanel:
             section,
             bg=_BG_COLOR,
         )
-        row.pack(fill="x", pady=(0, self._form_row_gap()))
+        row.pack(
+            fill="x",
+            pady=(
+                0,
+                self._form_row_gap() if bottom_pad_y is None else bottom_pad_y,
+            ),
+        )
         row.grid_columnconfigure(0, weight=1)
         row.grid_columnconfigure(1, weight=0)
 

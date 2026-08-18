@@ -909,6 +909,27 @@ def test_preferences_visual_groups_cover_each_schema_field_once():
     assert grouped_fields == list(preferences_dialog.PREFERENCE_FIELDS)
 
 
+def test_preferences_groups_use_the_standard_section_container():
+    from caveviewer.gui import preferences_dialog
+    from caveviewer.gui.section_spacing import STANDARD_CONTENT_SECTION_SPACING
+
+    container_source = inspect.getsource(
+        preferences_dialog.PreferenceSectionContainer
+    )
+    render_section_source = inspect.getsource(
+        preferences_dialog.PreferencesPanel._render_section
+    )
+
+    assert STANDARD_CONTENT_SECTION_SPACING.heading_to_content_y == 16
+    assert STANDARD_CONTENT_SECTION_SPACING.between_sections_y == 32
+    assert "text=title.upper()" in container_source
+    assert "DARK_THEME.entry_border" not in container_source
+    assert "STANDARD_CONTENT_SECTION_SPACING.heading_to_content_y" in container_source
+    assert "STANDARD_CONTENT_SECTION_SPACING.between_sections_y" in container_source
+    assert "PreferenceSectionContainer(" in render_section_source
+    assert "group.content" in render_section_source
+
+
 def test_preferences_panel_uses_sidebar_context_and_full_width_forms():
     """The selected splash navigation item already identifies Preferences."""
     from caveviewer.gui import preferences_dialog
