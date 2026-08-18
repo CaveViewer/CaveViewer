@@ -94,9 +94,10 @@ def test_map_library_cave_details_stay_in_the_splash_content_area():
                 current_version="1.0.63",
                 available_version="1.0.64",
                 payload_path="/downloads/CaveViewer.dmg",
+                reveal_action_label="Show in Finder",
             ),
             "Update ready",
-            "Show update",
+            "Show in Finder",
             splash_screen._UpdateAction.REVEAL,
             None,
             True,
@@ -242,13 +243,14 @@ def test_disabled_update_package_reveal_gate_hides_ready_action():
     )
 
 
-def test_ready_update_uses_one_label_that_becomes_a_reveal_action():
+def test_ready_update_uses_the_snapshot_label_as_the_reveal_action():
     presentation = splash_screen._update_presentation(
         UpdateSnapshot(
             state=UpdateState.READY,
             current_version="1.0.63",
             available_version="1.0.64",
             payload_path="/downloads/CaveViewer.AppImage",
+            reveal_action_label="Open Download Folder",
         )
     )
 
@@ -261,7 +263,7 @@ def test_ready_update_uses_one_label_that_becomes_a_reveal_action():
         presentation,
         show_delayed_action=True,
     ) == (
-        "Show update",
+        "Open Download Folder",
         splash_screen._BUTTON_BG,
         splash_screen._UpdateAction.REVEAL,
     )
@@ -614,7 +616,7 @@ def test_splash_navigation_uses_a_quiet_rail_and_lower_app_status():
     assert "def _layout_update_cluster(presentation: _UpdatePresentation)" in source
     assert 'action_text = "Update to"' in update_source
     assert 'action_text = f"{action_text} {snapshot.available_version}"' in update_source
-    assert 'action_text="Show update"' in update_source
+    assert "action_text=snapshot.reveal_action_label" in update_source
     assert "action_replaces_status_after_delay=True" in update_source
     assert "_UPDATE_READY_ACTION_DELAY_MS = 3_000" in inspect.getsource(
         splash_screen

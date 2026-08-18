@@ -842,6 +842,9 @@ SHA-256 were validated before signature verification. `UpdateManager` stores
 that available outcome only for the download/retry workflow and passes its
 non-optional artifact to the worker. Release notes remain a published manifest
 field but are not carried through the manager or splash without a designed UI.
+The immutable update snapshot also carries the focused adapter's static reveal
+label, so the splash can render the platform-native READY action without
+consulting a broad platform adapter.
 
 Verified packages are persisted to the user's Downloads folder. Platform
 adapters only reveal them for manual handling: Finder mounts macOS DMGs

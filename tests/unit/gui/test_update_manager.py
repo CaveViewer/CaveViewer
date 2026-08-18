@@ -857,6 +857,7 @@ def test_runtime_package_reveal_adapter_controls_label_and_action(tmp_path):
             manager._payload_path = str(payload_path)
 
         assert manager.reveal_action_label == "Show Verified Test Package"
+        assert manager.snapshot().reveal_action_label == "Show Verified Test Package"
         assert manager.update_package_reveal_decision.state is FeatureState.ENABLED
         assert manager.reveal_download()
         assert reveal_adapter.revealed_paths == [str(payload_path)]
