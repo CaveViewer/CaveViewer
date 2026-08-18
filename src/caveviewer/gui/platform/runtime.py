@@ -449,7 +449,7 @@ def create_platform_runtime(
     )
     resolved_update_package_storage_adapter = (
         update_package_storage_adapter
-        or create_update_package_storage_adapter(resolved_platform_adapter)
+        or create_update_package_storage_adapter(platform_name=resolved_platform_name)
     )
     resolved_saved_artifact_reveal_adapter = (
         saved_artifact_reveal_adapter

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 import plistlib
-import shutil
 import subprocess
 
 from caveviewer.core.diagnostics.logging import get_logger
@@ -29,29 +28,6 @@ class MacOSSplashPlatformAdapter(DefaultSplashPlatformAdapter):
 
     def ui_font_family(self) -> str:
         return "Helvetica Neue"
-
-    def persist_downloaded_payload(self, temp_payload_path: str, download_url: str | None) -> str:
-        downloads_dir = os.path.join(os.path.expanduser("~"), "Downloads")
-        os.makedirs(downloads_dir, exist_ok=True)
-
-        url_basename = ""
-        if download_url:
-            url_basename = os.path.basename(download_url.split("?", 1)[0]).strip()
-        if not url_basename.lower().endswith(".dmg"):
-            url_basename = "CaveViewer-latest.dmg"
-
-        final_path = os.path.join(downloads_dir, url_basename)
-        if os.path.exists(final_path):
-            base, ext = os.path.splitext(final_path)
-            suffix = 1
-            candidate = f"{base}-{suffix}{ext}"
-            while os.path.exists(candidate):
-                suffix += 1
-                candidate = f"{base}-{suffix}{ext}"
-            final_path = candidate
-
-        shutil.move(temp_payload_path, final_path)
-        return final_path
 
     def download_reveal_action_label(self) -> str:
         return "Show in Finder"

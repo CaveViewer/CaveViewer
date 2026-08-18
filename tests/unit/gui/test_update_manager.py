@@ -26,6 +26,9 @@ from caveviewer.gui.update_checker import (
 )
 from caveviewer.gui.platform.probes.updates import select_update_profile
 from caveviewer.gui.platform.runtime import create_platform_runtime
+from caveviewer.gui.platform.update_package_storage import (
+    DefaultUpdatePackageStorageAdapter,
+)
 from caveviewer.gui.update_manager import UpdateManager, UpdateState
 
 
@@ -33,14 +36,6 @@ class FakePlatformAdapter:
     def __init__(self, downloads_dir: Path):
         self.downloads_dir = downloads_dir
         self.revealed_paths = []
-        self.persisted_payloads = []
-
-    def persist_downloaded_payload(self, temp_payload_path, download_url):
-        self.persisted_payloads.append((temp_payload_path, download_url))
-        self.downloads_dir.mkdir(exist_ok=True)
-        destination = self.downloads_dir / Path(download_url).name
-        Path(temp_payload_path).replace(destination)
-        return str(destination)
 
     def download_reveal_action_label(self):
         return "Show Test Package"
@@ -157,6 +152,9 @@ def _runtime(adapter, desktop_services):
     return create_platform_runtime(
         platform_adapter=adapter,
         desktop_services=desktop_services,
+        update_package_storage_adapter=DefaultUpdatePackageStorageAdapter(
+            adapter.downloads_dir
+        ),
         environment={},
     )
 
@@ -332,10 +330,8 @@ def test_download_reports_progress_verifies_persists_and_cleans_temp_dir(tmp_pat
         assert snapshot.state == UpdateState.READY
         assert snapshot.payload_path is not None
         assert Path(snapshot.payload_path).read_bytes() == b"payload"
-        assert len(adapter.persisted_payloads) == 1
-        temporary_payload_path, download_url = adapter.persisted_payloads[0]
-        assert Path(temporary_payload_path).name == "update_payload.bin"
-        assert download_url == _available_outcome().artifact.download_url
+        assert Path(snapshot.payload_path).name == "CaveViewer-1.0.64.zip"
+        assert Path(snapshot.payload_path).parent == tmp_path / "Downloads"
         assert not list(tmp_path.glob("caveviewer_update_*"))
 
         assert manager.reveal_download(automatic=True)
@@ -584,7 +580,7 @@ def test_cancel_download_reuses_worker_cleanup_and_permits_retry(tmp_path):
         # AVAILABLE transition happen after the worker leaves its boundary.
         assert manager.snapshot().state is UpdateState.DOWNLOADING
         assert list(tmp_path.glob("caveviewer_update_*"))
-        assert adapter.persisted_payloads == []
+        assert not (tmp_path / "Downloads").exists()
 
         release_download.set()
         assert manager.wait_for_background_task(1)
@@ -640,7 +636,7 @@ def test_cancel_during_verification_prevents_package_persistence(tmp_path):
 
         assert manager.cancel_download()
         assert manager.snapshot().state is UpdateState.VERIFYING
-        assert adapter.persisted_payloads == []
+        assert not (tmp_path / "Downloads").exists()
         assert list(tmp_path.glob("caveviewer_update_*"))
 
         release_verification.set()
@@ -649,7 +645,6 @@ def test_cancel_during_verification_prevents_package_persistence(tmp_path):
         snapshot = manager.snapshot()
         assert snapshot.state is UpdateState.AVAILABLE
         assert snapshot.payload_path is None
-        assert adapter.persisted_payloads == []
         assert not list(tmp_path.glob("caveviewer_update_*"))
         assert not (tmp_path / "Downloads").exists()
         assert ("withdraw", "caveviewer.update-download") in desktop_services.calls
@@ -903,7 +898,6 @@ def test_runtime_storage_adapter_owns_verified_package_persistence(tmp_path):
         temporary_payload_path, download_url = storage_adapter.persisted_payloads[0]
         assert Path(temporary_payload_path).name == "update_payload.bin"
         assert download_url == _available_outcome().artifact.download_url
-        assert platform_adapter.persisted_payloads == []
         assert not list(tmp_path.glob("caveviewer_update_*"))
     finally:
         manager.shutdown()
@@ -942,7 +936,6 @@ def test_storage_adapter_failure_is_an_ordinary_update_workflow_failure(tmp_path
         assert snapshot.state is UpdateState.FAILED
         assert snapshot.error == "downloads directory is unavailable"
         assert len(storage_adapter.persisted_payloads) == 1
-        assert platform_adapter.persisted_payloads == []
         assert not list(tmp_path.glob("caveviewer_update_*"))
     finally:
         manager.shutdown()

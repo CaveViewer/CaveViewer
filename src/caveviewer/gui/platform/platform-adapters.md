@@ -476,9 +476,10 @@ assert profile.mouse_look_button_name == "right"
 **How**:
 - `runtime.update_profile.install_channel` identifies the current package channel
 - `UpdatePackageStorageAdapter.persist_verified_package()` promotes a verified
-  temporary package into platform-specific user-visible storage
-- `persist_downloaded_payload()` remains the compatibility implementation until
-  storage behavior moves behind that focused adapter
+  temporary package into platform-specific user-visible storage. Its direct
+  platform adapters preserve Downloads naming, collision suffixes, macOS DMG
+  fallback naming, and Linux AppImage permissions. They copy through a hidden
+  sibling in Downloads and atomically publish only the completed package.
 - `UpdatePackageRevealAdapter.reveal_action_label()` exposes the platform-native
   reveal label through the focused boundary. `UpdateManager` copies that static
   value into its immutable snapshot, and the compact splash renders it after

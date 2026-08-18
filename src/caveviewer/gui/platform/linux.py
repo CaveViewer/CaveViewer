@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import subprocess
 
 from .base import PreferencesDialogLayoutPolicy, SplashLayoutPolicy
@@ -11,20 +10,13 @@ from .default import DefaultSplashPlatformAdapter
 
 
 class LinuxSplashPlatformAdapter(DefaultSplashPlatformAdapter):
-    """Linux package persistence and manual package-reveal integration."""
+    """Linux manual package-reveal integration."""
 
     def __init__(self, *, desktop_services: DesktopServices | None = None) -> None:
         self._desktop_services = desktop_services or get_desktop_services()
 
     def ui_font_family(self) -> str:
         return "sans-serif"
-
-    def persist_downloaded_payload(self, temp_payload_path: str, download_url: str | None) -> str:
-        final_path = super().persist_downloaded_payload(temp_payload_path, download_url)
-        if final_path.lower().endswith(".appimage"):
-            current_mode = os.stat(final_path).st_mode
-            os.chmod(final_path, current_mode | 0o111)
-        return final_path
 
     def download_reveal_action_label(self) -> str:
         return "Open Download Folder"

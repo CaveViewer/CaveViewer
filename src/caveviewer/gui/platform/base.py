@@ -65,9 +65,6 @@ class SplashPlatformAdapter(Protocol):
     def install_about_handler(self, root: Any, program_name: str, version: str) -> None:
         ...
 
-    def persist_downloaded_payload(self, temp_payload_path: str, download_url: str | None) -> str:
-        ...
-
     def download_reveal_action_label(self) -> str:
         ...
 
