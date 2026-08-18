@@ -397,8 +397,9 @@ later splash presents its current state. Closing the whole app moves the
 manager to `SHUTDOWN`, cancels any active transfer, waits for its worker, and
 removes the temporary staging directory.
 
-A verified package is moved to `~/Downloads` and is never executed or
-installed. A visible splash makes one automatic reveal attempt and retains a
+A verified package is atomically promoted to `~/Downloads` through a hidden
+temporary sibling and is never executed or installed. A visible splash makes
+one automatic reveal attempt and retains a
 manual platform action: macOS mounts a DMG read-only and shows its `.app` in
 Finder, Windows selects the package in Explorer, and Linux asks the desktop
 portal to reveal it, with `xdg-open` as a fallback. Completion while a map is

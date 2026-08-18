@@ -548,10 +548,12 @@ not a feature gate. Checksum verification has already completed when
 a user-visible local destination can change at any time. The adapter promotes
 the temporary verified payload and returns its final path; a storage exception
 is an ordinary update-workflow failure and still runs the normal temporary-file
-cleanup. The current compatibility facade delegates to the established native
-adapter behavior, preserving macOS DMG naming, Windows/default Downloads
-handling, and Linux AppImage permissions until those implementations move
-behind the narrow contract.
+cleanup. Its direct platform implementations preserve macOS DMG naming,
+Windows/default Downloads handling, and Linux AppImage permissions. To avoid
+publishing a partial cross-filesystem copy, they copy into a hidden temporary
+file in Downloads, flush and close it, then atomically rename it to the chosen
+non-conflicting final path. A failed promotion removes only that hidden file
+and never exposes a final package path.
 
 Saved-artifact reveal is another focused action, not a feature gate. A video
 encoder or trace writer has already reported success when `CaveViewerWindow`

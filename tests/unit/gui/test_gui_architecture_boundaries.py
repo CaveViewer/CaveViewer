@@ -13,6 +13,8 @@ GUI_PLATFORM_ROOT = GUI_ROOT / "platform"
 GUI_FEATURES_ROOT = GUI_ROOT / "features"
 FEATURE_POLICY_MODULE = GUI_FEATURES_ROOT / "policies.py"
 PLATFORM_RUNTIME_MODULE = GUI_PLATFORM_ROOT / "runtime.py"
+SPLASH_PLATFORM_ADAPTER_MODULE = GUI_PLATFORM_ROOT / "base.py"
+UPDATE_PACKAGE_STORAGE_MODULE = GUI_PLATFORM_ROOT / "update_package_storage.py"
 UPDATE_MANAGER_MODULE = GUI_ROOT / "update_manager.py"
 STANDARD_LIBRARY_MAPS_MODULE = GUI_ROOT / "standard_library_maps.py"
 APP_MODULE = "caveviewer.app"
@@ -416,6 +418,59 @@ def test_standard_library_maps_do_not_import_update_compatibility_api():
                     "imports caveviewer.gui.update_checker",
                 )
             )
+
+    assert not violations, _format_violations(violations)
+
+
+def test_update_package_storage_does_not_depend_on_the_broad_splash_adapter():
+    """Keep verified-package promotion behind its focused storage contract."""
+    storage_module = _parse_module(UPDATE_PACKAGE_STORAGE_MODULE)
+    splash_adapter_module = _parse_module(SPLASH_PLATFORM_ADAPTER_MODULE)
+    violations: list[Violation] = []
+
+    for node in ast.walk(storage_module):
+        if isinstance(node, ast.ImportFrom) and any(
+            alias.name == "SplashPlatformAdapter" for alias in node.names
+        ):
+            violations.append(
+                Violation(
+                    UPDATE_PACKAGE_STORAGE_MODULE,
+                    node.lineno,
+                    "imports SplashPlatformAdapter",
+                )
+            )
+        elif isinstance(node, ast.Name) and node.id == "SplashPlatformAdapter":
+            violations.append(
+                Violation(
+                    UPDATE_PACKAGE_STORAGE_MODULE,
+                    node.lineno,
+                    "references SplashPlatformAdapter",
+                )
+            )
+        elif (
+            isinstance(node, ast.Attribute)
+            and node.attr == "persist_downloaded_payload"
+        ):
+            violations.append(
+                Violation(
+                    UPDATE_PACKAGE_STORAGE_MODULE,
+                    node.lineno,
+                    "delegates to persist_downloaded_payload",
+                )
+            )
+
+    if _class_method(
+        splash_adapter_module,
+        "SplashPlatformAdapter",
+        "persist_downloaded_payload",
+    ) is not None:
+        violations.append(
+            Violation(
+                SPLASH_PLATFORM_ADAPTER_MODULE,
+                1,
+                "SplashPlatformAdapter still owns persist_downloaded_payload",
+            )
+        )
 
     assert not violations, _format_violations(violations)
 
