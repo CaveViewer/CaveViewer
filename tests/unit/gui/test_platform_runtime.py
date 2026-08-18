@@ -31,6 +31,9 @@ from caveviewer.gui.platform.linux import LinuxSplashPlatformAdapter
 from caveviewer.gui.platform.probes.recording import VideoRecordingTarget
 from caveviewer.gui.platform.probes.updates import select_update_profile
 from caveviewer.gui.platform.runtime import create_platform_runtime
+from caveviewer.gui.platform.update_package_reveal import (
+    LinuxUpdatePackageRevealAdapter,
+)
 
 
 class FakePlatformAdapter:
@@ -255,6 +258,35 @@ def test_runtime_disables_unsupported_update_package_reveal_routes():
         == "update_package_reveal_route_unsupported"
     )
     assert runtime.update_package_reveal_decision.state is FeatureState.DISABLED
+
+
+def test_runtime_composes_linux_package_reveal_with_its_desktop_service():
+    class FakeDesktopServices:
+        def __init__(self) -> None:
+            self.revealed_paths = []
+
+        def reveal_path(self, path, *, parent=None) -> None:
+            self.revealed_paths.append((path, parent))
+
+    desktop_services = FakeDesktopServices()
+    runtime = create_platform_runtime(
+        platform_adapter=FakePlatformAdapter(),
+        desktop_services=desktop_services,
+        environment={},
+        platform_name="linux",
+        machine="x86_64",
+    )
+
+    assert isinstance(
+        runtime.update_package_reveal_adapter,
+        LinuxUpdatePackageRevealAdapter,
+    )
+    runtime.update_package_reveal_adapter.reveal_verified_package(
+        "/downloads/CaveViewer.AppImage"
+    )
+    assert desktop_services.revealed_paths == [
+        ("/downloads/CaveViewer.AppImage", None)
+    ]
 
 
 def test_runtime_fails_closed_when_static_update_configuration_cannot_be_probed(

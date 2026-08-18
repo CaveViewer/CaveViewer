@@ -540,7 +540,7 @@ DMG, launching a file manager, or contacting D-Bus. The pure policy stores the
 resulting static decision, and `UpdateManager` checks it again immediately
 before revealing the verified payload. The action remains non-executing:
 macOS's existing read-only DMG mount/reveal path, Windows Explorer selection,
-and Linux desktop-service fallback are preserved behind the focused facade.
+and Linux desktop-service fallback are implemented by direct focused adapters.
 
 Verified update-package storage uses a similarly focused adapter, but it is
 not a feature gate. Checksum verification has already completed when

@@ -10,19 +10,13 @@ from .default import DefaultSplashPlatformAdapter
 
 
 class LinuxSplashPlatformAdapter(DefaultSplashPlatformAdapter):
-    """Linux manual package-reveal integration."""
+    """Linux GUI integration and saved-file reveal behavior."""
 
     def __init__(self, *, desktop_services: DesktopServices | None = None) -> None:
         self._desktop_services = desktop_services or get_desktop_services()
 
     def ui_font_family(self) -> str:
         return "sans-serif"
-
-    def download_reveal_action_label(self) -> str:
-        return "Open Download Folder"
-
-    def reveal_downloaded_payload(self, payload_path: str) -> None:
-        self._desktop_services.reveal_path(payload_path)
 
     def reveal_file(self, path: str) -> None:
         """Reveal a saved user file through portal-backed desktop services."""

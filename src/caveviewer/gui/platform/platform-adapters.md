@@ -151,19 +151,18 @@ verified update package reveal
 
 The route declaration has no native side effects. `UpdateManager` checks the
 decision again before revealing a verified payload, and the splash omits the
-reveal action when it is disabled. `PlatformUpdatePackageRevealAdapter` is a
-temporary narrow facade over the existing broad adapter methods, deliberately
-preserving macOS read-only DMG mounting, Windows Explorer selection, and the
-Linux desktop-service fallback.
+reveal action when it is disabled. Direct focused adapters preserve macOS
+read-only DMG mounting, Windows Explorer selection, and the Linux
+desktop-service fallback without depending on the broad splash adapter.
 
 Verified package persistence has its own focused
 `UpdatePackageStorageAdapter`. It is invoked only after checksum verification,
 so it has no process-static capability probe or feature gate: a user-visible
-storage location can become unavailable while the app is running. Its current
-compatibility facade delegates to the broad adapter's established naming,
-collision, macOS DMG, and Linux AppImage behavior. A persistence exception is
-an ordinary update-workflow failure, after which `UpdateManager` performs its
-normal temporary-file cleanup.
+storage location can become unavailable while the app is running. Its direct
+adapters preserve established naming, collision, macOS DMG, and Linux
+AppImage behavior. A persistence exception is an ordinary update-workflow
+failure, after which `UpdateManager` performs its normal temporary-file
+cleanup.
 
 Saved-artifact reveal is a focused post-save `SavedArtifactRevealAdapter`. It
 runs only after a video encoder or trace writer reports success for a
@@ -250,11 +249,11 @@ platform actions. `PresentationProfile` owns static GUI choices and
 adapter-based presentation calls are a local compatibility path only.
 Automatic-update policy and manifest parsing have moved to `UpdateProfile` and
 `UpdateTarget`; adapter-based update calls are likewise local compatibility
-paths. `UpdatePackageRevealAdapter`,
-`UpdatePackageStorageAdapter`, `SavedArtifactRevealAdapter`, and
-`RecordingProcessAdapter`, and `TlsTrustAdapter` are narrow facades around
-existing package, recording, and network actions. New features should add the
-smallest appropriate combination of a probe, a pure policy in
+paths. `UpdatePackageRevealAdapter` and `UpdatePackageStorageAdapter` own
+direct package actions. `SavedArtifactRevealAdapter`, `RecordingProcessAdapter`,
+and `TlsTrustAdapter` remain narrow facades around existing artifact, recording,
+and network actions. New features should add the smallest appropriate
+combination of a probe, a pure policy in
 `caveviewer.gui.features`, and an injected action adapter rather than expanding
 this broad protocol. Cache, chunk streaming, navigation, and map state are
 outside this runtime layer.
@@ -484,7 +483,8 @@ assert profile.mouse_look_button_name == "right"
   reveal label through the focused boundary. `UpdateManager` copies that static
   value into its immutable snapshot, and the compact splash renders it after
   the one-label ready-state delay without consulting the broad adapter.
-- `reveal_downloaded_payload()` exposes the verified package without running it
+- `UpdatePackageRevealAdapter.reveal_verified_package()` exposes the verified
+  package without running it
 - The typed update profile knows which channel the current build came from
 
 Revealing is deliberately manual and non-executing. macOS mounts the DMG

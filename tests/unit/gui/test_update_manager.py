@@ -32,39 +32,35 @@ from caveviewer.gui.platform.update_package_storage import (
 from caveviewer.gui.update_manager import UpdateManager, UpdateState
 
 
-class FakePlatformAdapter:
-    def __init__(self, downloads_dir: Path):
-        self.downloads_dir = downloads_dir
-        self.revealed_paths = []
-
-    def download_reveal_action_label(self):
-        return "Show Test Package"
-
-    def reveal_downloaded_payload(self, payload_path):
-        self.revealed_paths.append(payload_path)
-
-
-class FakeRuntimePlatformAdapter(FakePlatformAdapter):
-    pass
-
-
 class FakeUpdatePackageRevealAdapter:
     def __init__(
         self,
         *,
         route: UpdatePackageRevealRoute = UpdatePackageRevealRoute.DESKTOP_SERVICE,
+        label: str = "Show Test Package",
     ):
         self._route = route
+        self._label = label
         self.revealed_paths = []
 
     def reveal_route(self):
         return self._route
 
     def reveal_action_label(self):
-        return "Show Verified Test Package"
+        return self._label
 
     def reveal_verified_package(self, payload_path):
         self.revealed_paths.append(payload_path)
+
+
+class FakePlatformAdapter:
+    def __init__(self, downloads_dir: Path):
+        self.downloads_dir = downloads_dir
+        self.update_package_reveal_adapter = FakeUpdatePackageRevealAdapter()
+
+
+class FakeRuntimePlatformAdapter(FakePlatformAdapter):
+    pass
 
 
 class FakeUpdatePackageStorageAdapter:
@@ -152,6 +148,7 @@ def _runtime(adapter, desktop_services):
     return create_platform_runtime(
         platform_adapter=adapter,
         desktop_services=desktop_services,
+        update_package_reveal_adapter=adapter.update_package_reveal_adapter,
         update_package_storage_adapter=DefaultUpdatePackageStorageAdapter(
             adapter.downloads_dir
         ),
@@ -337,7 +334,7 @@ def test_download_reports_progress_verifies_persists_and_cleans_temp_dir(tmp_pat
         assert manager.reveal_download(automatic=True)
         assert not manager.reveal_download(automatic=True)
         assert manager.reveal_download()
-        assert adapter.revealed_paths == [
+        assert adapter.update_package_reveal_adapter.revealed_paths == [
             snapshot.payload_path,
             snapshot.payload_path,
         ]
@@ -833,7 +830,9 @@ def test_runtime_package_reveal_adapter_controls_label_and_action(tmp_path):
     payload_path = tmp_path / "CaveViewer.zip"
     payload_path.write_bytes(b"verified package")
     platform_adapter = FakeRuntimePlatformAdapter(tmp_path / "Downloads")
-    reveal_adapter = FakeUpdatePackageRevealAdapter()
+    reveal_adapter = FakeUpdatePackageRevealAdapter(
+        label="Show Verified Test Package"
+    )
     runtime = create_platform_runtime(
         platform_adapter=platform_adapter,
         desktop_services=FakeDesktopServices(),
@@ -856,7 +855,6 @@ def test_runtime_package_reveal_adapter_controls_label_and_action(tmp_path):
         assert manager.update_package_reveal_decision.state is FeatureState.ENABLED
         assert manager.reveal_download()
         assert reveal_adapter.revealed_paths == [str(payload_path)]
-        assert platform_adapter.revealed_paths == []
     finally:
         manager.shutdown()
 
@@ -969,7 +967,6 @@ def test_disabled_runtime_package_reveal_gate_blocks_native_action(tmp_path):
             == "update_package_reveal_route_unsupported"
         )
         assert not manager.reveal_download()
-        assert platform_adapter.revealed_paths == []
     finally:
         manager.shutdown()
 

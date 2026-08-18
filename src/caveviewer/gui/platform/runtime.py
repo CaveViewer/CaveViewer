@@ -443,8 +443,8 @@ def create_platform_runtime(
     resolved_update_package_reveal_adapter = (
         update_package_reveal_adapter
         or create_update_package_reveal_adapter(
-            resolved_platform_adapter,
             platform_name=resolved_platform_name,
+            desktop_services=resolved_desktop_services,
         )
     )
     resolved_update_package_storage_adapter = (
