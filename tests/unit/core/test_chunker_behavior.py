@@ -357,7 +357,7 @@ def _mesh_with_cells(cell_count: int) -> obj_parser.RawMesh:
     )
 
 
-def _navigation_mesh() -> obj_parser.RawMesh:
+def _small_mesh() -> obj_parser.RawMesh:
     positions = np.array(
         [
             [0.0, 0.0, 0.0],
@@ -800,7 +800,7 @@ def test_build_cache_is_render_and_guided_dive_only(tmp_path):
 
     result = chunker.build_cache(
         str(source),
-        _navigation_mesh(),
+        _small_mesh(),
         {},
         cache_dir=str(cache_dir),
         chunk_size=8.0,
@@ -816,6 +816,29 @@ def test_build_cache_is_render_and_guided_dive_only(tmp_path):
     assert guided_dive_cache_identity_from_manifest(manifest) == (
         build_guided_dive_cache_identity(source, manifest)
     )
+
+
+def test_existing_navigation_certificate_directory_is_ignored_by_render_cache(
+    tmp_path,
+):
+    source = tmp_path / "map.obj"
+    source.write_bytes(b"small source map")
+    cache_dir = tmp_path / "managed" / "map-key"
+
+    chunker.build_cache(
+        str(source),
+        _small_mesh(),
+        {},
+        cache_dir=str(cache_dir),
+        chunk_size=8.0,
+    )
+    certificate = cache_dir / "navigation_certificate" / "certificate.json"
+    certificate.parent.mkdir()
+    certificate.write_text("historical sidecar", encoding="utf-8")
+
+    assert chunker.cache_dir_is_valid(str(cache_dir), str(source)) is True
+    assert chunker.load_manifest(str(cache_dir))["source_obj"] == "map.obj"
+    assert certificate.read_text(encoding="utf-8") == "historical sidecar"
 
 
 def test_first_manifest_chunk_center_uses_minimum_numeric_cell():

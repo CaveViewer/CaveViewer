@@ -60,15 +60,6 @@ class CenterlinePath:
     endpoint_percentile: float
     endpoint_threshold_clearance_cells: int
     length_m: float
-    cached_points: Mapping[FootprintCell, Point] | None = None
-    cached_y_ranges: Mapping[FootprintCell, tuple[float, float]] | None = None
-    cached_clearance_margins: Mapping[FootprintCell, float] | None = None
-    cached_recovery_hotspots: Mapping[FootprintCell, Mapping[str, float]] | None = None
-    # Kept as ``Any`` so the replaceable centerline primitive does not import
-    # the optional voxel implementation. Runtime navigation treats this as an
-    # optional local voxel field or tiled atlas when the sidecar is available.
-    cached_voxel_volume: Any | None = None
-    cached_voxel_metrics: Mapping[str, Any] | None = None
 
     @property
     def points_xz(self) -> tuple[PointXZ, ...]:
@@ -150,64 +141,6 @@ def generate_centerline_path(
         endpoint_percentile=float(endpoint_percentile),
         endpoint_threshold_clearance_cells=int(endpoint_threshold),
         length_m=full_path_length_m,
-    )
-
-
-def generate_centerline_paths(
-    manifest: Mapping[str, Any],
-    *,
-    candidate_limit: int = DEFAULT_CENTERLINE_ROUTE_CANDIDATE_LIMIT,
-    endpoint_percentile: float = DEFAULT_CENTERLINE_ROUTE_ENDPOINT_PERCENTILE,
-) -> tuple[CenterlinePath, ...]:
-    """Generate one centerline path per connected cave footprint component.
-
-    Paths are sorted by descending path length. This function is intended for
-    cache metadata generation, where preserving multiple cave components is
-    useful and a later viewer can pick the best available route without
-    recalculating the centerline from scratch.
-    """
-    footprint = _parse_footprint(manifest)
-    clearance_scores = clearance_scores_for_footprint(footprint.cells)
-    paths: list[CenterlinePath] = []
-    for component in _centerline_components(footprint.cells):
-        path_cells, endpoint_threshold = _centerline_component_path(
-            component,
-            clearance_scores,
-            candidate_limit=max(2, int(candidate_limit)),
-            endpoint_percentile=float(endpoint_percentile),
-        )
-        if len(path_cells) < 2:
-            continue
-        component_centers = {
-            cell: footprint_world_center(cell, footprint.cell_size)
-            for cell in component
-        }
-        path_length_m = footprint_path_length(path_cells, component_centers)
-        paths.append(
-            CenterlinePath(
-                source=footprint.source,
-                footprint_cell_size=footprint.cell_size,
-                footprint_cell_count=len(footprint.cells),
-                component_size=len(component),
-                component_cells=frozenset(component),
-                cells=tuple(path_cells),
-                centers=component_centers,
-                clearance_scores=clearance_scores,
-                endpoint_percentile=float(endpoint_percentile),
-                endpoint_threshold_clearance_cells=int(endpoint_threshold),
-                length_m=path_length_m,
-            )
-        )
-    return tuple(
-        sorted(
-            paths,
-            key=lambda path: (
-                path.length_m,
-                len(path.cells),
-                path.component_size,
-            ),
-            reverse=True,
-        )
     )
 
 

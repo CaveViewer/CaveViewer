@@ -1033,7 +1033,7 @@ def first_manifest_chunk_center(
     """Return the original viewer start using the minimum spatial chunk.
 
     This render-only helper intentionally lives beside the chunk format rather
-    than depending on the optional navigation certificate subsystem.
+    than carrying route-planning state.
     """
     if not isinstance(manifest_chunks, Mapping) or not manifest_chunks:
         return None

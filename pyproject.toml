@@ -29,8 +29,6 @@ caveviewer = "caveviewer.__main__:run"
 caveviewer-benchmark = "caveviewer.benchmark:run"
 caveviewer-map-benchmark = "caveviewer.benchmarking.map_runner:run"
 caveviewer-chunker = "caveviewer.chunker:main"
-caveviewer-navigation-certify = "caveviewer.core.navigation.certificate_build:main"
-caveviewer-navigation-verify = "caveviewer.core.navigation.certificate:main"
 
 [tool.setuptools.dynamic]
 version = {attr = "caveviewer.version.APP_VERSION"}

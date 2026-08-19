@@ -36,9 +36,7 @@ from caveviewer.core.chunking import builder as chunker
 from caveviewer.core.map import slicing as map_slicing
 from caveviewer.core.hardware import gpu_memory, memory_targets, system_memory
 from caveviewer.core.diagnostics.logging import get_logger
-from caveviewer.core.navigation.curvature import CURVATURE_PROFILE_METHOD
 from caveviewer.core.streaming.world import StreamingWorld, StreamingConfig
-from caveviewer.core.navigation.voxel_volume import VOXEL_VOLUME_METHOD
 from caveviewer.gui.chunk_upload import ChunkUploadManager
 from caveviewer.gui.recording_capture import RecordingCaptureResources
 from caveviewer.gui.texture_manager import TextureManager

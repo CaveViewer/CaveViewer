@@ -293,17 +293,7 @@ caveviewer-chunker --source="C:\Maps\DevilsEye.obj" --chunk-size=64
 Normal cache compilation publishes only render assets, render chunks, the
 manifest, and the Guided Dive identity. Its final progress phases explicitly
 show render-manifest assembly, Guided Dive identity hashing, and publication.
-It does not build offline navigation artifacts. To build those separately for
-developer certification, run:
-
-```bash
-caveviewer-navigation-certify \
-  --source=/path/to/map-or-folder \
-  --cache-dir=/path/to/map/_cache
-```
-
-That command reports its own phase progress and atomically replaces only
-`_cache/navigation_certificate/`; it never rewrites the render manifest.
+It does not generate additional route-planning artifacts.
 
 | Option | Purpose |
 |---|---|
