@@ -37,6 +37,32 @@ presentation or render-thread OpenGL resources. `viewer_window.py` adapts a
 `BenchmarkController` into the real render loop when the benchmark CLI launches
 the viewer.
 
+## Runtime settings
+
+`caveviewer.core.preferences.runtime_settings` owns the declarative runtime
+settings registry and the immutable `RuntimeSettings` composition snapshot. It
+has no GUI, Tk, OpenGL, or application-entry-point dependency. The composition
+root supplies saved preference values, environment values, command-line
+overrides, and stable platform facts explicitly; the resolver never mutates the
+process environment. Each resolved value retains provenance (`built_in`,
+`preferences`, `environment`, or `cli`) and rejected fall-back values are
+returned as immutable issues for the composition boundary to report.
+
+`PreferenceSpec` remains the sole authority for persisted setting validation,
+ranges, conversion, and built-in defaults. Runtime entries reference those
+specifications instead of duplicating their metadata. Persisted settings retain
+the existing precedence: valid saved preference, then valid environment value,
+then built-in default. Environment-only values can have an explicitly declared
+CLI override, primary variable, legacy alias, and built-in order. Packaging and
+development-shell variables are intentionally excluded from the application
+snapshot.
+
+The registry is introduced before consumer migration. Existing callers still
+read their legacy environment paths until the follow-up runtime-settings
+consumer branch passes typed snapshots through the application, GUI, and worker
+composition roots. This avoids a partial migration changing startup behavior or
+using global environment mutation as configuration transport.
+
 ## Route primitives
 
 `caveviewer.core.navigation.centerline` and `caveviewer.core.navigation.route`

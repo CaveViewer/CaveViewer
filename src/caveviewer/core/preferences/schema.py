@@ -30,7 +30,21 @@ class PreferenceValueType(str, Enum):
     PATH_CREATE = "path_create"
 
 
-PreferenceDefaultProvider = str | Callable[[], str]
+@dataclass(frozen=True)
+class PreferenceDefaultContext:
+    """Process facts used to calculate a persisted field's built-in default.
+
+    The schema does not own these values.  A composition boundary supplies them
+    so preference and runtime-setting resolution stays deterministic in tests
+    and does not need to read global process state throughout the application.
+    """
+
+    environ: Mapping[str, str]
+    platform_name: str
+    home: str | os.PathLike[str] | None = None
+
+
+PreferenceDefaultProvider = str | Callable[[PreferenceDefaultContext], str]
 PreferenceEnvConverter = Callable[[str], str]
 
 
@@ -50,8 +64,15 @@ class PreferenceSpec:
     env_to_preference: PreferenceEnvConverter | None = None
     preference_to_env: PreferenceEnvConverter | None = None
 
-    def built_in_default(self) -> str:
-        value = self.default() if callable(self.default) else self.default
+    def built_in_default(
+        self,
+        context: PreferenceDefaultContext | None = None,
+    ) -> str:
+        value = (
+            self.default(context or default_preference_context())
+            if callable(self.default)
+            else self.default
+        )
         return str(value).strip()
 
     def value_from_env(self, raw_value: str) -> str:
@@ -128,18 +149,48 @@ class PreferencesValidationError(ValueError):
         super().__init__(result.message or "Invalid preferences.")
 
 
-def _recording_directory_default() -> str:
-    return os.path.abspath(
-        os.path.expanduser(os.path.join("~", "Movies", "CaveViewer"))
+def default_preference_context(
+    *,
+    environ: Mapping[str, str] | None = None,
+    platform_name: str | None = None,
+    home: str | os.PathLike[str] | None = None,
+) -> PreferenceDefaultContext:
+    """Return current process facts for legacy callers of the schema API.
+
+    New composition code should pass an explicit :class:`PreferenceDefaultContext`
+    to avoid consulting these globals.  Keeping this factory preserves the
+    existing public no-argument preference helpers while that migration happens.
+    """
+
+    return PreferenceDefaultContext(
+        environ=os.environ if environ is None else environ,
+        platform_name=sys.platform if platform_name is None else platform_name,
+        home=home,
     )
 
 
-def _map_library_directory_default() -> str:
-    return str(default_downloads_dir())
+def _context_home(context: PreferenceDefaultContext) -> str:
+    if context.home is not None:
+        return os.path.abspath(os.path.expanduser(os.fspath(context.home)))
+    return os.path.abspath(os.path.expanduser("~"))
 
 
-def _scan_throttle_default() -> str:
-    return "1" if sys.platform.startswith("win") else "0"
+def _recording_directory_default(context: PreferenceDefaultContext) -> str:
+    return os.path.join(_context_home(context), "Movies", "CaveViewer")
+
+
+def _map_library_directory_default(context: PreferenceDefaultContext) -> str:
+    return str(
+        default_downloads_dir(
+            environ=context.environ,
+            home=context.home,
+            platform_name=context.platform_name,
+        )
+    )
+
+
+def _scan_throttle_default(context: PreferenceDefaultContext) -> str:
+    return "1" if context.platform_name.startswith("win") else "0"
 
 
 def _faces_env_to_thousands(raw_value: str) -> str:
@@ -349,14 +400,35 @@ def default_preferences() -> dict[str, str]:
     return {field.key: "" for field in PREFERENCE_FIELDS}
 
 
-def default_recording_dir() -> str:
-    configured = os.getenv("CAVEVIEWER_RECORDING_DIR", "").strip()
-    return configured or _recording_directory_default()
+def default_recording_dir(
+    *,
+    environ: Mapping[str, str] | None = None,
+    default_context: PreferenceDefaultContext | None = None,
+) -> str:
+    """Return the configured or built-in recordings directory.
+
+    ``environ`` and ``default_context`` make the helper deterministic for
+    composition code.  The no-argument path retains the established process
+    environment behavior for existing callers.
+    """
+
+    context = default_context or default_preference_context(environ=environ)
+    environment = context.environ if environ is None else environ
+    configured = str(environment.get("CAVEVIEWER_RECORDING_DIR", "")).strip()
+    return configured or _recording_directory_default(context)
 
 
-def default_map_library_dir() -> str:
-    configured = os.getenv("CAVEVIEWER_MAP_LIBRARY_DIR", "").strip()
-    return configured or _map_library_directory_default()
+def default_map_library_dir(
+    *,
+    environ: Mapping[str, str] | None = None,
+    default_context: PreferenceDefaultContext | None = None,
+) -> str:
+    """Return the configured or built-in Map Library directory."""
+
+    context = default_context or default_preference_context(environ=environ)
+    environment = context.environ if environ is None else environ
+    configured = str(environment.get("CAVEVIEWER_MAP_LIBRARY_DIR", "")).strip()
+    return configured or _map_library_directory_default(context)
 
 
 def normalize_preferences(values: Mapping | None) -> dict[str, str]:
@@ -529,8 +601,13 @@ def validate_preferences(values: Mapping[str, str]) -> PreferencesValidationResu
     )
 
 
-def _validated_default(field: PreferenceSpec) -> str:
-    configured = os.getenv(field.env_var, "").strip()
+def _validated_default(
+    field: PreferenceSpec,
+    *,
+    environ: Mapping[str, str],
+    default_context: PreferenceDefaultContext,
+) -> str:
+    configured = str(environ.get(field.env_var, "")).strip()
     if configured:
         try:
             configured_value = field.value_from_env(configured)
@@ -552,7 +629,7 @@ def _validated_default(field: PreferenceSpec) -> str:
                 configured_result.message,
             )
 
-    built_in = field.built_in_default()
+    built_in = field.built_in_default(default_context)
     result = validate_preference(field, built_in)
     if not result.is_valid:
         raise RuntimeError(
@@ -561,13 +638,42 @@ def _validated_default(field: PreferenceSpec) -> str:
     return result.normalized_value
 
 
-def preference_defaults() -> dict[str, str]:
-    return {field.key: _validated_default(field) for field in PREFERENCE_FIELDS}
+def preference_defaults(
+    *,
+    environ: Mapping[str, str] | None = None,
+    default_context: PreferenceDefaultContext | None = None,
+) -> dict[str, str]:
+    """Return validated preferences after environment defaults are considered.
+
+    A saved preference is deliberately not part of this helper.  Callers that
+    need to compose saved values should use :func:`resolve_preferences` or the
+    runtime-settings resolver, both of which preserve the historical saved
+    preference > environment > built-in precedence.
+    """
+
+    context = default_context or default_preference_context(environ=environ)
+    environment = context.environ if environ is None else environ
+    return {
+        field.key: _validated_default(
+            field,
+            environ=environment,
+            default_context=context,
+        )
+        for field in PREFERENCE_FIELDS
+    }
 
 
-def resolve_preferences(values: Mapping | None = None) -> Preferences:
+def resolve_preferences(
+    values: Mapping | None = None,
+    *,
+    environ: Mapping[str, str] | None = None,
+    default_context: PreferenceDefaultContext | None = None,
+) -> Preferences:
     raw_values = normalize_preferences(values)
-    defaults = preference_defaults()
+    defaults = preference_defaults(
+        environ=environ,
+        default_context=default_context,
+    )
     resolved: dict[str, str] = {}
     for field in PREFERENCE_FIELDS:
         candidate = raw_values[field.key] or defaults[field.key]

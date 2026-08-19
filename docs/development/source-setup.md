@@ -592,6 +592,9 @@ advisory caps and do not show a bottom warning.
 The Preferences implementation is split by responsibility:
 `src/caveviewer/core/preferences/schema.py` owns the typed `PreferenceSpec` schema,
 validation, defaults, and environment mapping;
+`src/caveviewer/core/preferences/runtime_settings.py` owns the declarative
+runtime-setting inventory and immutable, provenance-bearing composition snapshot
+without importing GUI code;
 `src/caveviewer/gui/preferences.py` owns preferences persistence and legacy
 migration while re-exporting the core preferences API for GUI callers;
 `src/caveviewer/gui/preference_paths.py` owns preference/state file locations,
@@ -611,6 +614,9 @@ fall back independently to that field's valid default, so one stale value does
 not discard the rest of the configuration. Preferences are saved through an
 atomic temporary-file replacement; a write failure remains visible in the
 embedded Preferences panel and does not alter the previous preferences file.
+The runtime registry is intentionally introduced before callers are migrated:
+the current direct environment reads remain compatibility paths until the
+application composition root can pass one typed snapshot into each consumer.
 
 First-time map imports are isolated from the viewer event loop by
 `src/caveviewer/gui/import_process.py`. The viewer process keeps OpenGL/window
