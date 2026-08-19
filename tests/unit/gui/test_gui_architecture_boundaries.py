@@ -18,6 +18,11 @@ UPDATE_PACKAGE_REVEAL_MODULE = GUI_PLATFORM_ROOT / "update_package_reveal.py"
 UPDATE_PACKAGE_STORAGE_MODULE = GUI_PLATFORM_ROOT / "update_package_storage.py"
 UPDATE_MANAGER_MODULE = GUI_ROOT / "update_manager.py"
 STANDARD_LIBRARY_MAPS_MODULE = GUI_ROOT / "standard_library_maps.py"
+VIEWER_SESSION_COORDINATOR_MODULES = (
+    GUI_ROOT / "viewer_action_dispatch.py",
+    GUI_ROOT / "viewer_capture_workflow.py",
+    GUI_ROOT / "viewer_frame_scheduler.py",
+)
 APP_MODULE = "caveviewer.app"
 _LEGACY_STATIC_PRESENTATION_ACCESSORS = {
     "ui_font_family",
@@ -616,6 +621,27 @@ def test_viewer_does_not_construct_platform_services_at_module_import():
                         descendant.lineno,
                         f"constructs {descendant.func.id} during module import",
                     )
+                )
+
+    assert not violations, _format_violations(violations)
+
+
+def test_viewer_session_coordinators_do_not_import_opengl():
+    """Keep viewer session policy usable without a window or GL context."""
+    prohibited_modules = {"moderngl", "moderngl_window"}
+    violations: list[Violation] = []
+
+    for path in VIEWER_SESSION_COORDINATOR_MODULES:
+        for node in ast.walk(_parse_module(path)):
+            if isinstance(node, ast.Import):
+                imported_modules = {alias.name.split(".", 1)[0] for alias in node.names}
+            elif isinstance(node, ast.ImportFrom):
+                imported_modules = {(node.module or "").split(".", 1)[0]}
+            else:
+                continue
+            for module in imported_modules & prohibited_modules:
+                violations.append(
+                    Violation(path, node.lineno, f"imports OpenGL module {module}")
                 )
 
     assert not violations, _format_violations(violations)

@@ -75,6 +75,20 @@ from caveviewer.gui import view_culling
 from caveviewer.gui import viewer_input
 from caveviewer.gui import viewer_bookmarks
 from caveviewer.gui.recording_controller import RecordingStateController
+from caveviewer.gui.viewer_action_dispatch import (
+    ViewerActionDispatcher,
+    ViewerKeyPressActions,
+)
+from caveviewer.gui.viewer_capture_workflow import (
+    CaptureOverlayMode,
+    CaptureOverlayState,
+    ViewerCaptureWorkflow,
+)
+from caveviewer.gui.viewer_frame_scheduler import (
+    ViewerFramePhase,
+    ViewerFrameScheduler,
+    ViewerFrameState,
+)
 from caveviewer.gui.platform.factory import get_platform_adapter
 from caveviewer.gui.platform.presentation import (
     PresentationProfile,
@@ -134,7 +148,6 @@ _STARTUP_UPLOAD_TIME_BUDGET_MS = 12.0
 _VIEWER_STREAMING_SHUTDOWN_TIMEOUT_SECONDS = 2.0
 _ICONIFIED_RENDER_POLL_INTERVAL_S = 0.12
 _IMPORT_PAUSE_NOTICE_RENDER_INTERVAL_S = 1.0 / 30.0
-_EXIT_CAPTURE_STATUS_MINIMUM_SECONDS = 0.75
 _MAIN_THREAD_STALL_LOG_THRESHOLD_S = 0.5
 _MAIN_THREAD_STALL_LOG_MIN_INTERVAL_S = 2.0
 _RECORDED_DIVE_LOOKAHEAD_SECONDS = 10.0
@@ -833,11 +846,10 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._layout_cache_result: dict | None = None
         self._is_iconified = False
         self._is_background_paused = False
-        self._render_throttle_due_at: dict[str, float] = {}
+        self._frame_scheduler = ViewerFrameScheduler()
         self._closing_requested = False
-        self._close_after_capture_requested = False
-        self._close_after_capture_status_presented = False
-        self._close_after_capture_status_presented_at: float | None = None
+        self._capture_workflow = ViewerCaptureWorkflow()
+        self._action_dispatcher = ViewerActionDispatcher()
         self._slice_reveal_before_close = False
         self._slice_reveal_output_path: str | None = None
         self._slice_source_cache_dir: str | None = None
@@ -1249,6 +1261,30 @@ class CaveViewerWindow(mglw.WindowConfig):
             controller = RecordingStateController()
             self.__dict__["_recording_controller"] = controller
         return controller
+
+    def _ensure_frame_scheduler(self) -> ViewerFrameScheduler:
+        """Return the non-GL frame phase and throttling coordinator."""
+        scheduler = self.__dict__.get("_frame_scheduler")
+        if scheduler is None:
+            scheduler = ViewerFrameScheduler()
+            self.__dict__["_frame_scheduler"] = scheduler
+        return scheduler
+
+    def _ensure_capture_workflow(self) -> ViewerCaptureWorkflow:
+        """Return the non-GL workflow shared by the capture controllers."""
+        workflow = self.__dict__.get("_capture_workflow")
+        if workflow is None:
+            workflow = ViewerCaptureWorkflow()
+            self.__dict__["_capture_workflow"] = workflow
+        return workflow
+
+    def _ensure_action_dispatcher(self) -> ViewerActionDispatcher:
+        """Return the ordered key-action coordinator for this viewer session."""
+        dispatcher = self.__dict__.get("_action_dispatcher")
+        if dispatcher is None:
+            dispatcher = ViewerActionDispatcher()
+            self.__dict__["_action_dispatcher"] = dispatcher
+        return dispatcher
 
     def _ensure_manual_dive_trace_controller(self) -> ManualDiveTraceStateController:
         controller = self.__dict__.get("_manual_dive_trace_controller")
@@ -2205,7 +2241,7 @@ class CaveViewerWindow(mglw.WindowConfig):
 
     def _exit_capture_finalization_active(self) -> bool:
         """Return whether shutdown is waiting for a user artifact writer."""
-        return bool(getattr(self, "_close_after_capture_requested", False))
+        return self._ensure_capture_workflow().exit_finalization_active
 
     def _defer_backend_close_request(self) -> None:
         """Keep the GLFW window alive after its close callback has fired."""
@@ -2224,9 +2260,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         artifact_names: tuple[str, ...],
     ) -> None:
         """Stop active capture cleanly and show progress before shutdown."""
-        self._close_after_capture_requested = True
-        self._close_after_capture_status_presented = False
-        self._close_after_capture_status_presented_at = None
+        self._ensure_capture_workflow().begin_exit_finalization()
         self._defer_backend_close_request()
         self._reset_transient_input_state("saving capture before close")
 
@@ -2258,29 +2292,15 @@ class CaveViewerWindow(mglw.WindowConfig):
         allow_unpresented_status: bool = False,
     ) -> bool:
         """Close once all exit-time capture writers have published their files."""
-        if not self._exit_capture_finalization_active():
-            return False
-        if self._exit_capture_artifacts():
-            return False
-        if (
-            not getattr(self, "_close_after_capture_status_presented", False)
-            and not allow_unpresented_status
+        workflow = self._ensure_capture_workflow()
+        if not workflow.can_complete_exit_finalization(
+            artifacts_pending=bool(self._exit_capture_artifacts()),
+            now=time.perf_counter(),
+            allow_unpresented_status=allow_unpresented_status,
         ):
             return False
-        if not allow_unpresented_status:
-            presented_at = getattr(
-                self,
-                "_close_after_capture_status_presented_at",
-                None,
-            )
-            if (
-                presented_at is None
-                or time.perf_counter() - presented_at
-                < _EXIT_CAPTURE_STATUS_MINIMUM_SECONDS
-            ):
-                return False
 
-        self._close_after_capture_requested = False
+        workflow.complete_exit_finalization()
         if getattr(self, "_slice_reveal_before_close", False):
             output_path = getattr(self, "_slice_reveal_output_path", None)
             if output_path:
@@ -5297,12 +5317,9 @@ class CaveViewerWindow(mglw.WindowConfig):
             stage=message,
             note=detail,
         )
-        if (
-            self._exit_capture_finalization_active()
-            and not self._close_after_capture_status_presented
-        ):
-            self._close_after_capture_status_presented = True
-            self._close_after_capture_status_presented_at = time.perf_counter()
+        self._ensure_capture_workflow().mark_exit_status_presented(
+            now=time.perf_counter()
+        )
 
     def _render_recording_countdown_scrim(self, window_size: tuple[int, int], alpha: float = 0.62) -> None:
         """Darken the cave view behind the countdown ring without hiding it."""
@@ -5337,42 +5354,25 @@ class CaveViewerWindow(mglw.WindowConfig):
         self.ctx.enable(moderngl.DEPTH_TEST)
         self.ctx.enable(moderngl.CULL_FACE)
 
-    def _render_throttle_due(self, key: str, interval_s: float) -> bool:
-        """
-        Return true when a low-value render state should draw this callback.
-
-        Some early-return states, such as a minimized window, do not need
-        full-speed work. Use timestamp gates rather than sleeping in the render
-        callback so the backend/UI thread remains available for window events
-        and queued task results.
-        """
-        due_at = getattr(self, "_render_throttle_due_at", None)
-        if due_at is None:
-            due_at = {}
-            self._render_throttle_due_at = due_at
-
-        now = time.perf_counter()
-        if now < due_at.get(key, 0.0):
-            return False
-
-        due_at[key] = now + max(0.0, interval_s)
-        return True
-
-    def _reset_render_throttle(self, *keys: str) -> None:
-        """Forget throttle deadlines for states that are no longer active."""
-        due_at = getattr(self, "_render_throttle_due_at", None)
-        if not due_at:
-            return
-        if not keys:
-            due_at.clear()
-            return
-        for key in keys:
-            due_at.pop(key, None)
+    def _frame_phase(self) -> ViewerFramePhase:
+        """Select this callback's non-GL session phase."""
+        setup_complete = bool(getattr(self, "_window_setup_complete", False))
+        closing_requested = bool(getattr(self, "_closing_requested", False))
+        if not setup_complete or closing_requested:
+            return ViewerFramePhase.INACTIVE
+        return self._ensure_frame_scheduler().phase_for(
+            ViewerFrameState(
+                setup_complete=setup_complete,
+                closing_requested=closing_requested,
+                iconified=bool(getattr(self, "_is_iconified", False)),
+                finalizing_capture=self._exit_capture_finalization_active(),
+                import_active=bool(getattr(self, "_import_active", False)),
+                map_loaded=bool(getattr(self, "_has_map_loaded", False)),
+            )
+        )
 
     def on_render(self, current_time: float, frame_time: float):
-        if not getattr(self, "_window_setup_complete", False):
-            return
-        if self._closing_requested:
+        if self._frame_phase() is ViewerFramePhase.INACTIVE:
             return
 
         # Backends can miss iconify callbacks on Dock minimize; poll a
@@ -5380,12 +5380,16 @@ class CaveViewerWindow(mglw.WindowConfig):
         runtime_iconified = self._query_runtime_iconified_state()
         self._set_background_pause(runtime_iconified, "runtime window state")
 
-        if self._is_iconified:
+        frame_phase = self._frame_phase()
+        frame_scheduler = self._ensure_frame_scheduler()
+        if frame_phase is ViewerFramePhase.ICONIFIED:
             # Keep minimize mode cheap: no streaming updates/uploads while
             # iconified.  Poll low-frequency completion state without blocking
             # the render/window callback.
-            if self._render_throttle_due(
-                "iconified", _ICONIFIED_RENDER_POLL_INTERVAL_S
+            if frame_scheduler.is_due(
+                "iconified",
+                _ICONIFIED_RENDER_POLL_INTERVAL_S,
+                now=time.perf_counter(),
             ):
                 self._drain_recording_stop_results()
                 if self._slice_work_pending():
@@ -5397,7 +5401,7 @@ class CaveViewerWindow(mglw.WindowConfig):
                     )
                 self._drain_due_saved_artifact_reveals()
             return
-        self._reset_render_throttle("iconified")
+        frame_scheduler.reset_throttle("iconified")
 
         bitmap_font.set_raster_scale(_window_pixel_ratio(self.wnd))
 
@@ -5407,7 +5411,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._drain_recording_stop_results()
         self._drain_due_saved_artifact_reveals()
 
-        if self._exit_capture_finalization_active():
+        if frame_phase is ViewerFramePhase.FINALIZING_CAPTURE:
             self._update_manual_dive_trace()
             if self._slice_work_pending():
                 self._update_slice_export()
@@ -5428,7 +5432,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         # still present/swap after this method returns, so skipping draws here
         # can expose stale back buffers as visible flicker during first-time
         # imports.
-        if self._import_active:
+        if frame_phase is ViewerFramePhase.IMPORTING:
             self._drain_import_queue()
             if not self._import_active:
                 return
@@ -5450,18 +5454,20 @@ class CaveViewerWindow(mglw.WindowConfig):
                 note=self._import_progress_note,
             )
             return
-        self._reset_render_throttle("import_progress")
+        frame_scheduler.reset_throttle("import_progress")
 
-        if not self._has_map_loaded:
+        if frame_phase is ViewerFramePhase.STARTUP:
             if getattr(self, "_startup_map_load_pending", None) is not None:
                 self._load_startup_map_after_splash()
                 return
-            if self._render_throttle_due(
-                "import_pause_notice", _IMPORT_PAUSE_NOTICE_RENDER_INTERVAL_S
+            if frame_scheduler.is_due(
+                "import_pause_notice",
+                _IMPORT_PAUSE_NOTICE_RENDER_INTERVAL_S,
+                now=time.perf_counter(),
             ):
                 if self._render_import_pause_notice_if_active():
                     return
-                self._reset_render_throttle("import_pause_notice")
+                frame_scheduler.reset_throttle("import_pause_notice")
             elif getattr(self, "_import_pause_notice_until", None) is not None:
                 return
             # First frame with no map loaded yet: draw the loading panel
@@ -5479,6 +5485,14 @@ class CaveViewerWindow(mglw.WindowConfig):
             self._run_pending_import()
             return
 
+        self._render_interactive_frame(current_time, frame_time)
+
+    def _render_interactive_frame(
+        self,
+        current_time: float,
+        frame_time: float,
+    ) -> None:
+        """Render one interactive frame after non-GL session scheduling."""
         frame_start = time.perf_counter()
         benchmark_controller = getattr(self, "_benchmark_controller", None)
         benchmark_active = (
@@ -5773,7 +5787,18 @@ class CaveViewerWindow(mglw.WindowConfig):
         recording_read_ms = 0.0
         recording_stage_ms = 0.0
         recording_drain_ms = 0.0
-        if self._recording_hides_hud():
+        capture_overlay_mode = self._ensure_capture_workflow().overlay_mode_for(
+            CaptureOverlayState(
+                recording_armed=self._recording_hides_hud(),
+                manual_dive_trace_countdown_active=(
+                    self._ensure_manual_dive_trace_controller().countdown_active
+                ),
+                slice_countdown_active=(
+                    self._ensure_slice_selection_controller().countdown_active
+                ),
+            )
+        )
+        if capture_overlay_mode is CaptureOverlayMode.RECORDING:
             now = time.perf_counter()
             if self._recording_countdown_until is not None and now < self._recording_countdown_until:
                 self._render_countdown_overlay(
@@ -5791,7 +5816,7 @@ class CaveViewerWindow(mglw.WindowConfig):
                 recording_stage_ms = self._recording_last_stage_ms
                 recording_drain_ms = self._recording_last_drain_ms
             overlay_ms = 0.0
-        elif self._ensure_manual_dive_trace_controller().countdown_active:
+        elif capture_overlay_mode is CaptureOverlayMode.MANUAL_DIVE_TRACE_COUNTDOWN:
             now = time.perf_counter()
             self._render_countdown_overlay(
                 now=now,
@@ -5801,7 +5826,7 @@ class CaveViewerWindow(mglw.WindowConfig):
                 note=self._countdown_cancel_note("T"),
             )
             overlay_ms = 0.0
-        elif self._ensure_slice_selection_controller().countdown_active:
+        elif capture_overlay_mode is CaptureOverlayMode.SLICE_COUNTDOWN:
             now = time.perf_counter()
             self._render_countdown_overlay(
                 now=now,
@@ -6787,37 +6812,30 @@ class CaveViewerWindow(mglw.WindowConfig):
             return
         keys = self.wnd.keys
         if action == keys.ACTION_PRESS:
-            if self._handle_window_shortcut(key, modifiers):
-                return
-            if self._handle_recorded_dive_hotkey(key, modifiers):
-                return
-            if self.controls_overlay.is_waiting_for_begin:
-                space_key = self._resolve_key_optional(keys, "SPACE", "SPACEBAR")
-                if (
-                    space_key is not None
-                    and key == space_key
-                    and self.controls_overlay.is_ready_to_begin
-                ):
-                    self.controls_overlay.dismiss_begin_screen()
-                return
-            if self._handle_fly_speed_hotkey(key, modifiers):
-                return
-            if self._handle_bookmark_hotkey(key, modifiers):
-                return
-            if self._handle_manual_dive_trace_hotkey(key, modifiers):
-                return
-            if self._handle_slice_hotkey(key, modifiers):
-                return
-            if self._handle_recording_hotkey(key, modifiers):
-                return
-            if self._handle_slice_escape_hotkey(key):
-                return
-            if self._handle_reset_view_shortcut(key, modifiers):
+            actions = ViewerKeyPressActions(
+                window_shortcut=lambda: self._handle_window_shortcut(key, modifiers),
+                recorded_dive=lambda: self._handle_recorded_dive_hotkey(
+                    key, modifiers
+                ),
+                begin_screen=lambda: self._handle_begin_screen_hotkey(key),
+                fly_speed=lambda: self._handle_fly_speed_hotkey(key, modifiers),
+                bookmark=lambda: self._handle_bookmark_hotkey(key, modifiers),
+                manual_dive_trace=lambda: self._handle_manual_dive_trace_hotkey(
+                    key, modifiers
+                ),
+                slice=lambda: self._handle_slice_hotkey(key, modifiers),
+                recording=lambda: self._handle_recording_hotkey(key, modifiers),
+                slice_escape=lambda: self._handle_slice_escape_hotkey(key),
+                reset_view=lambda: self._handle_reset_view_shortcut(key, modifiers),
+            )
+            if self._ensure_action_dispatcher().dispatch_key_press(actions):
                 return
             self._keys_down.add(key)
         elif viewer_input.key_event_is_press_or_repeat(keys, action):
-            if not self.controls_overlay.is_waiting_for_begin:
-                self._handle_fly_speed_hotkey(key, modifiers)
+            self._ensure_action_dispatcher().dispatch_key_repeat(
+                waiting_for_begin=self.controls_overlay.is_waiting_for_begin,
+                fly_speed=lambda: self._handle_fly_speed_hotkey(key, modifiers),
+            )
         elif action == keys.ACTION_RELEASE:
             self._keys_down.discard(key)
 
@@ -6858,6 +6876,23 @@ class CaveViewerWindow(mglw.WindowConfig):
 
     def _request_import_pause(self) -> None:
         self._ensure_import_controller().request_pause()
+
+    def _handle_begin_screen_hotkey(self, key) -> bool:
+        """Keep the introductory overlay's single-key input boundary intact."""
+        if not self.controls_overlay.is_waiting_for_begin:
+            return False
+        space_key = self._resolve_key_optional(
+            self.wnd.keys,
+            "SPACE",
+            "SPACEBAR",
+        )
+        if (
+            space_key is not None
+            and key == space_key
+            and self.controls_overlay.is_ready_to_begin
+        ):
+            self.controls_overlay.dismiss_begin_screen()
+        return True
 
     def _handle_manual_dive_trace_hotkey(
         self,
@@ -7318,7 +7353,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         if self._closing_requested:
             return
         self._closing_requested = True
-        self._close_after_capture_requested = False
+        self._ensure_capture_workflow().complete_exit_finalization()
         self._slice_reveal_before_close = False
         self._slice_reveal_output_path = None
 

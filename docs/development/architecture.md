@@ -596,9 +596,18 @@ OpenGL HUD text is rasterized at framebuffer scale for crispness, while the
 always-visible right-side viewer controls use a separate responsive HUD scale
 based on the current viewer surface size. That keeps maximized and AppImage
 windows legible without requiring user-provided environment variables.
-Viewer recording keeps workflow decisions in `viewer_window.py` on the render
-thread. `gui.recording_capture` owns framebuffer readback resources and staged
-frame draining. `gui.recording` owns ffmpeg command construction, encoder
+`CaveViewerWindow` is the OpenGL boundary: it owns the context, framebuffer
+resources, shader/program calls, and GPU uploads on the render thread. Its
+non-GL session ordering is deliberately delegated to focused coordinators.
+`gui.viewer_frame_scheduler` selects the iconified, capture-finalization,
+import, startup, or interactive frame phase and owns non-blocking throttles.
+`gui.viewer_capture_workflow` owns cross-capture exit finalization and overlay
+priority; `gui.viewer_action_dispatch` owns keyboard action priority. These
+coordinators call no OpenGL APIs and remain unit-testable without a window
+backend.
+
+`gui.recording_capture` owns framebuffer readback resources and staged frame
+draining. `gui.recording` owns ffmpeg command construction, encoder
 writer/stderr workers, and asynchronous stop finalization.
 `gui.recording_controller` owns recording countdowns, transient status messages,
 capture timing, and dropped-frame accounting so those workflow decisions remain
