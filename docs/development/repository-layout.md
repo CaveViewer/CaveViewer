@@ -49,10 +49,7 @@ src/caveviewer/core/streaming/                 runtime chunk streaming policy
 src/caveviewer/core/streaming/world.py         worker lifecycle and render callbacks
 src/caveviewer/core/streaming/scheduler.py     backlog, selection, and eviction policy
 src/caveviewer/core/streaming/budget.py        typed-memory policy and residency budget calculation
-src/caveviewer/core/navigation/                 centerline, curvature, and voxel route policy
-src/caveviewer/core/navigation/certificate_build.py explicit cache-bound navigation certificate CLI
-src/caveviewer/core/navigation/voxel_cache.py   cache-time voxel graph/index models and summaries
-src/caveviewer/core/navigation/voxel_store.py   in-memory and bounded-LRU navigation voxel chunks
+src/caveviewer/core/navigation/                 centerline and camera-route primitives for benchmarking
 src/caveviewer/core/workers/                  worker allocation policy
 src/caveviewer/core/workers/allocation.py      CPU caps and RAM admission policy
 src/caveviewer/core/preferences/               preference schema and validation policy

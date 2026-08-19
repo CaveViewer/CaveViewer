@@ -87,14 +87,6 @@ def test_map_context_keeps_source_basename_and_render_identity_only():
             "source_obj": "/private/maps/cave.obj",
             "chunk_size": 50.0,
             GUIDED_DIVE_CACHE_IDENTITY_KEY: _cache_identity(),
-            "navigation": {
-                "version": 12,
-                "method": "fixed_orthogonal_voxel_graph_v12",
-                "navigation_start_anchor": {
-                    "position": [1.0, 2.0, 3.0],
-                    "source_vertex_index": 0,
-                },
-            },
         }
     ) == {
         "source_obj": "cave.obj",
