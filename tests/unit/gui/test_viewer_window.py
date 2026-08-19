@@ -256,6 +256,18 @@ def _recording_window():
     return window
 
 
+def _begin_exit_capture_finalization(
+    window,
+    *,
+    status_presented_at: float | None = None,
+):
+    """Prepare a lightweight viewer double for capture-finalization tests."""
+    workflow = window._ensure_capture_workflow()
+    workflow.begin_exit_finalization()
+    workflow.exit_status_presented_at = status_presented_at
+    return workflow
+
+
 def test_viewer_uses_the_injected_runtime_adapter_before_legacy_factory(monkeypatch):
     adapter = object()
     window = object.__new__(viewer_window.CaveViewerWindow)
@@ -2091,7 +2103,7 @@ def test_recording_late_capture_drops_frames_instead_of_enqueuing_duplicates(
 
 
 def test_frame_spike_log_reports_recording_read_time():
-    source = inspect.getsource(viewer_window.CaveViewerWindow.on_render)
+    source = inspect.getsource(viewer_window.CaveViewerWindow._render_interactive_frame)
 
     assert "recording_read=" in source
     assert "recording_stage=" in source
@@ -2102,7 +2114,8 @@ def test_render_loop_uses_nonblocking_throttle_instead_of_sleep():
     source = inspect.getsource(viewer_window.CaveViewerWindow.on_render)
 
     assert "time.sleep(" not in source
-    assert "_render_throttle_due(" in source
+    assert "frame_scheduler.is_due(" in source
+    assert "_render_interactive_frame(current_time, frame_time)" in source
 
 
 def test_viewer_window_delegates_recording_encoder_ownership():
@@ -2217,7 +2230,7 @@ def test_exit_finalization_keeps_its_video_status_and_does_not_reveal_files(
 ):
     monkeypatch.setattr(viewer_window.time, "perf_counter", lambda: 10.0)
     window = _recording_window()
-    window._close_after_capture_requested = True
+    _begin_exit_capture_finalization(window)
     window._show_capture_status(
         "Finishing video",
         "Saving the last frames. CaveViewer will close automatically.",
@@ -4457,7 +4470,6 @@ def test_iconified_render_throttles_polling_without_sleep(monkeypatch):
     window._window_setup_complete = True
     window._closing_requested = False
     window._is_iconified = False
-    window._render_throttle_due_at = {}
     window._query_runtime_iconified_state = lambda: True
     window._set_background_pause = (
         lambda should_pause, _reason: setattr(window, "_is_iconified", should_pause)
@@ -4496,7 +4508,6 @@ def test_import_progress_render_draws_every_callback_without_sleep(monkeypatch):
     window.import_progress_panel = FakeProgressPanel()
     window._startup_focus_enabled = False
     window._is_iconified = False
-    window._render_throttle_due_at = {}
     window._query_runtime_iconified_state = lambda: False
     window._set_background_pause = (
         lambda should_pause, _reason: setattr(window, "_is_iconified", should_pause)
@@ -4552,7 +4563,6 @@ def test_import_pause_notice_render_is_throttled_without_sleep(monkeypatch):
     window._pending_import_started = False
     window._pending_import_splash_rendered = False
     window._import_pause_notice_until = 999.0
-    window._render_throttle_due_at = {}
     window._query_runtime_iconified_state = lambda: False
     window._set_background_pause = (
         lambda should_pause, _reason: setattr(window, "_is_iconified", should_pause)
@@ -5000,8 +5010,6 @@ def test_on_close_keeps_viewer_open_while_active_trace_is_saved():
     recorder = FakeManualDiveTrace()
     window = _recording_window()
     window._closing_requested = False
-    window._close_after_capture_requested = False
-    window._close_after_capture_status_presented = False
     window._has_map_loaded = True
     window._manual_dive_trace = recorder
     window._manual_dive_trace_writers = []
@@ -5020,7 +5028,7 @@ def test_on_close_keeps_viewer_open_while_active_trace_is_saved():
     window.on_close()
 
     assert not window._closing_requested
-    assert window._close_after_capture_requested
+    assert window._exit_capture_finalization_active()
     assert window.wnd.is_closing is False
     assert recorder.stopped == [
         (ManualDivePose.from_camera(window.camera), "viewer_closed")
@@ -5043,8 +5051,6 @@ def test_on_close_keeps_viewer_open_while_active_video_is_saved():
     calls = []
     window = _recording_window()
     window._closing_requested = False
-    window._close_after_capture_requested = False
-    window._close_after_capture_status_presented = False
     window._has_map_loaded = True
     window._recording_session = object()
     window._manual_dive_trace = None
@@ -5064,7 +5070,7 @@ def test_on_close_keeps_viewer_open_while_active_video_is_saved():
     window.on_close()
 
     assert not window._closing_requested
-    assert window._close_after_capture_requested
+    assert window._exit_capture_finalization_active()
     assert window.wnd.is_closing is False
     assert window._recording_status_message == "Finishing video"
     assert window._recording_status_detail == (
@@ -5081,20 +5087,17 @@ def test_exit_capture_finalization_waits_until_status_is_visible(monkeypatch):
     calls = []
     window = _recording_window()
     window._closing_requested = False
-    window._close_after_capture_requested = True
-    window._close_after_capture_status_presented = False
-    window._close_after_capture_status_presented_at = None
+    workflow = _begin_exit_capture_finalization(window)
     window._manual_dive_trace = None
     window._manual_dive_trace_writers = []
     window._complete_window_close = lambda: calls.append("close")
 
     assert window._complete_exit_capture_finalization_if_ready() is False
 
-    window._close_after_capture_status_presented = True
-    window._close_after_capture_status_presented_at = 9.5
+    workflow.mark_exit_status_presented(now=9.5)
     assert window._complete_exit_capture_finalization_if_ready() is False
 
-    window._close_after_capture_status_presented_at = 9.25
+    workflow.exit_status_presented_at = 9.25
     assert window._complete_exit_capture_finalization_if_ready() is True
     assert calls == ["close"]
 
@@ -5110,8 +5113,7 @@ def test_exit_finalization_keeps_its_trace_status_and_does_not_reveal_files(tmp_
         error=None,
     )
     window = _recording_window()
-    window._close_after_capture_requested = True
-    window._close_after_capture_status_presented = False
+    _begin_exit_capture_finalization(window)
     window._manual_dive_trace = None
     window._manual_dive_trace_writers = [_pending_manual_trace_writer(recorder)]
     window._show_capture_status(

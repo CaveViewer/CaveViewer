@@ -31,6 +31,18 @@ def _slice_window(tmp_path):
     return window
 
 
+def _begin_exit_capture_finalization(
+    window,
+    *,
+    status_presented_at: float | None = None,
+):
+    """Prepare a lightweight slice viewer double for close-time workflows."""
+    workflow = window._ensure_capture_workflow()
+    workflow.begin_exit_finalization()
+    workflow.exit_status_presented_at = status_presented_at
+    return workflow
+
+
 def test_ctrl_c_workflow_arms_shared_countdown_then_cancels(monkeypatch, tmp_path):
     window = _slice_window(tmp_path)
     calls = []
@@ -141,9 +153,6 @@ def test_close_active_slice_uses_last_camera_position_and_defers_window_close(tm
     selection.start_countdown(now=0.0, start_number=0)
     assert selection.begin_selection((1.0, 2.0, 3.0))
     window._closing_requested = False
-    window._close_after_capture_requested = False
-    window._close_after_capture_status_presented = False
-    window._close_after_capture_status_presented_at = None
     window._recording_session = None
     window._recording_stop_thread = None
     window._manual_dive_trace = None
@@ -156,7 +165,7 @@ def test_close_active_slice_uses_last_camera_position_and_defers_window_close(tm
     window.on_close()
 
     assert launched == [True]
-    assert window._close_after_capture_requested
+    assert window._exit_capture_finalization_active()
     assert window.wnd.is_closing is False
     assert window._recording_status_message == "Finishing slice"
 
@@ -172,9 +181,6 @@ def test_close_active_slice_uses_last_camera_position_for_the_export_request(tmp
     window._slice_display_base = "Ginnie Springs - Segment 1"
     window._slice_root_cave_name = "Ginnie Springs"
     window._closing_requested = False
-    window._close_after_capture_requested = False
-    window._close_after_capture_status_presented = False
-    window._close_after_capture_status_presented_at = None
     window._recording_session = None
     window._recording_stop_thread = None
     window._manual_dive_trace = None
@@ -199,7 +205,7 @@ def test_close_active_slice_uses_last_camera_position_for_the_export_request(tmp
     request = launched[0]
     assert request.entry_position == (1.0, 2.0, 3.0)
     assert request.bounds.maximum == (12.0, 13.0, 14.0)
-    assert window._close_after_capture_requested
+    assert window._exit_capture_finalization_active()
 
 
 def test_slice_of_a_slice_keeps_the_original_cave_name(tmp_path):
@@ -215,9 +221,6 @@ def test_slice_of_a_slice_keeps_the_original_cave_name(tmp_path):
 def test_close_during_slice_export_leaves_the_worker_running(tmp_path):
     window = _slice_window(tmp_path)
     window._closing_requested = False
-    window._close_after_capture_requested = False
-    window._close_after_capture_status_presented = False
-    window._close_after_capture_status_presented_at = None
     window._recording_session = None
     window._recording_stop_thread = None
     window._manual_dive_trace = None
@@ -238,7 +241,7 @@ def test_close_during_slice_export_leaves_the_worker_running(tmp_path):
     window.on_close()
 
     assert cancel_requests == []
-    assert window._close_after_capture_requested
+    assert window._exit_capture_finalization_active()
     assert window._recording_status_message == "Finishing slice"
 
 
@@ -307,9 +310,7 @@ def test_close_time_slice_success_reveals_before_finishing_shutdown(monkeypatch,
 
     monkeypatch.setattr(map_history, "remember_recent_map_path", lambda _path: None)
     window.__dict__["_slice_export_controller"] = FakeExporter()
-    window._close_after_capture_requested = True
-    window._close_after_capture_status_presented = True
-    window._close_after_capture_status_presented_at = 0.0
+    _begin_exit_capture_finalization(window, status_presented_at=0.0)
     window._recording_session = None
     window._recording_stop_thread = None
     window._manual_dive_trace = None

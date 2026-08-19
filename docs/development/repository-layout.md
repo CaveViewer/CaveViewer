@@ -93,6 +93,9 @@ src/caveviewer/gui/recording.py               recording encoder process/thread h
 src/caveviewer/gui/recording_controller.py    recording countdown/status/timing state
 src/caveviewer/gui/recording_capture.py       render-thread recording readback resources
 src/caveviewer/gui/manual_dive_trace_controller.py manual trace countdown/reveal state
+src/caveviewer/gui/viewer_frame_scheduler.py  non-GL viewer frame-phase and throttling policy
+src/caveviewer/gui/viewer_capture_workflow.py non-GL exit-capture and overlay-priority workflow
+src/caveviewer/gui/viewer_action_dispatch.py  ordered non-GL viewer keyboard action dispatch
 src/caveviewer/gui/chunk_upload.py            render-thread chunk upload state and cleanup
 src/caveviewer/gui/texture_manager.py         render-thread OpenGL texture lifecycle
 src/caveviewer/gui/view_culling.py            resident chunk frustum-culling cache
