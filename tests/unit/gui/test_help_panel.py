@@ -121,8 +121,18 @@ def test_help_panel_uses_a_quiet_table_without_card_borders():
     assert 'text="Help"' not in create_source
     assert "TopTabbedContentSurface(" in create_source
     assert "highlightbackground" not in create_source
-    assert "row_divider_color" in row_source
-    assert "canvas.create_line(" in row_source
+    assert "tab_baseline_color" in create_source
+    assert "canvas.create_line(" not in row_source
+
+
+def test_help_panel_uses_standard_section_spacing_without_heading_rules():
+    table_source = inspect.getsource(help_panel.HelpPanel._render_table)
+    heading_source = inspect.getsource(help_panel.HelpPanel._draw_section_heading)
+
+    assert "STANDARD_CONTENT_SECTION_SPACING.between_sections_y" in table_source
+    assert "top_pad_y=0 if shortcut_index == 0 else None" in table_source
+    assert "STANDARD_CONTENT_SECTION_SPACING.heading_to_content_y" in heading_source
+    assert "canvas.create_line(" not in heading_source
 
 
 def test_help_panel_is_embedded_and_uses_the_shared_scroll_host():

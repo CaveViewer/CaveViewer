@@ -13,6 +13,7 @@ from caveviewer.gui.controls_catalog import (
     is_help_shortcut_visible,
     shortcut_keycap_parts,
 )
+from caveviewer.gui.section_spacing import STANDARD_CONTENT_SECTION_SPACING
 from caveviewer.gui.scrollable_content import (
     CanvasScrollbarStyle,
     CanvasVerticalScrollbar,
@@ -150,7 +151,7 @@ class HelpPanelStyle:
     keycap_text_color: str
     action_color: str
     detail_color: str
-    row_divider_color: str
+    tab_baseline_color: str
     content_pad_x: int
     tab_font: tuple
     section_font: tuple
@@ -212,7 +213,7 @@ class HelpPanel:
             px=self._px,
             tab_style=TopTabStripStyle(
                 background_color=style.background_color,
-                baseline_color=style.row_divider_color,
+                baseline_color=style.tab_baseline_color,
                 active_color=style.tab_active_color,
                 inactive_color=style.section_color,
                 focus_color=style.tab_focus_color,
@@ -324,10 +325,16 @@ class HelpPanel:
         y = 0
         for section_index, section in enumerate(self._tab_sections[active_tab_key]):
             if section_index:
-                y += self._px(7)
+                y += self._px(STANDARD_CONTENT_SECTION_SPACING.between_sections_y)
             y = self._draw_section_heading(canvas, section, y)
-            for shortcut in section.shortcuts:
-                y = self._draw_shortcut_row(canvas, shortcut, y, width)
+            for shortcut_index, shortcut in enumerate(section.shortcuts):
+                y = self._draw_shortcut_row(
+                    canvas,
+                    shortcut,
+                    y,
+                    width,
+                    top_pad_y=0 if shortcut_index == 0 else None,
+                )
 
         self._content_height = max(0, y)
         try:
@@ -354,7 +361,11 @@ class HelpPanel:
             anchor="nw",
             tags="help-content",
         )
-        return y + self._font_line_height("section") + self._px(7)
+        return (
+            y
+            + self._font_line_height("section")
+            + self._px(STANDARD_CONTENT_SECTION_SPACING.heading_to_content_y)
+        )
 
     def _draw_shortcut_row(
         self,
@@ -362,6 +373,8 @@ class HelpPanel:
         shortcut: KeyboardShortcut,
         y: int,
         content_width: int,
+        *,
+        top_pad_y: int | None = None,
     ) -> int:
         style = self._style
         key_width = min(
@@ -374,11 +387,12 @@ class HelpPanel:
             content_width - action_x - self._px(12),
         )
         row_pad_y = self._px(7)
+        resolved_top_pad_y = row_pad_y if top_pad_y is None else top_pad_y
         detail = shortcut.context_note
         primary_font_role = "overview" if detail else "action"
         action_item = canvas.create_text(
             action_x,
-            y + row_pad_y,
+            y + resolved_top_pad_y,
             text=shortcut.action,
             font=self._canvas_font(primary_font_role),
             fill=style.action_color,
@@ -398,7 +412,7 @@ class HelpPanel:
             detail_gap = self._px(3)
             detail_item = canvas.create_text(
                 action_x,
-                y + row_pad_y + action_height + detail_gap,
+                y + resolved_top_pad_y + action_height + detail_gap,
                 text=detail,
                 font=self._canvas_font("detail"),
                 fill=style.detail_color,
@@ -418,20 +432,20 @@ class HelpPanel:
         self._draw_keycap_sequence(
             canvas,
             x=self._px(12),
-            y=y + row_pad_y + max(0, (content_height - keycap_height) // 2),
+            y=(
+                y
+                + resolved_top_pad_y
+                + max(0, (content_height - keycap_height) // 2)
+            ),
             shortcut=shortcut.shortcut,
         )
-        row_bottom = y + row_pad_y * 2 + max(content_height, keycap_height)
-        canvas.create_line(
-            0,
-            row_bottom,
-            content_width,
-            row_bottom,
-            fill=style.row_divider_color,
-            width=max(1, self._px(1)),
-            tags="help-content",
+        row_bottom = (
+            y
+            + resolved_top_pad_y
+            + row_pad_y
+            + max(content_height, keycap_height)
         )
-        return row_bottom + max(1, self._px(1))
+        return row_bottom
 
     def _keycap_height(self, shortcut: str) -> int:
         if not shortcut_keycap_parts(shortcut):
