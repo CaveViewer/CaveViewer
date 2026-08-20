@@ -17,7 +17,7 @@ on:
         type: boolean
         default: false
       publish:
-        description: "Publish the Windows ZIP to the GitHub release"
+        description: "Publish the signed Windows installer EXE to the GitHub release"
         required: false
         type: boolean
         default: false
@@ -43,7 +43,7 @@ on:
         type: boolean
         default: false
       publish:
-        description: "Publish the Windows ZIP to the GitHub release"
+        description: "Publish the signed Windows installer EXE to the GitHub release"
         required: false
         type: boolean
         default: false
@@ -86,7 +86,9 @@ jobs:
   build-windows:
     needs: essential-tests
     if: ${{ !cancelled() && (inputs.skip_essential_tests == true || inputs.reuse_pr_validation == true || needs.essential-tests.result == 'success') }}
-    runs-on: windows-latest
+    # Publishing must run where the non-exportable code-signing certificate is
+    # installed. Package-only validation remains on the disposable hosted host.
+    runs-on: ${{ inputs.publish && vars.CAVEVIEWER_WINDOWS_SIGNING_RUNNER || 'windows-latest' }}
     permissions:
       contents: read
 
@@ -102,11 +104,19 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Build Windows ZIP
+      - name: Install Inno Setup
+        shell: powershell
+        run: choco install innosetup --no-progress --yes
+
+      - name: Build Windows installer
         shell: bash
         env:
           RELEASE_VERSION: ${{ inputs.version }}
           RELEASE_NOTES: ${{ inputs.release_notes }}
+          CAVEVIEWER_ALLOW_UNSIGNED_WINDOWS_PACKAGE: ${{ inputs.publish && '0' || '1' }}
+          CAVEVIEWER_WINDOWS_SIGNING_CERTIFICATE_SUBJECT: ${{ inputs.publish && vars.CAVEVIEWER_WINDOWS_SIGNING_CERTIFICATE_SUBJECT || '' }}
+          CAVEVIEWER_WINDOWS_TIMESTAMP_URL: ${{ inputs.publish && vars.CAVEVIEWER_WINDOWS_TIMESTAMP_URL || '' }}
+          CAVEVIEWER_INNO_SETUP_COMPILER: "C:\\Program Files (x86)\\Inno Setup 6\\ISCC.exe"
         run: |
           ./scripts/release.sh \
             --target=windows \
@@ -115,12 +125,33 @@ jobs:
             --action=package \
             --skip-tests
 
-      - name: Upload Windows ZIP for testing
+      - name: Smoke-test Windows installer and update handoff
+        shell: powershell
+        env:
+          SMOKE_VERSION: ${{ inputs.version }}
+          SMOKE_REQUIRE_SIGNATURE: ${{ inputs.publish && 'true' || 'false' }}
+          SMOKE_CERTIFICATE_SUBJECT: ${{ inputs.publish && vars.CAVEVIEWER_WINDOWS_SIGNING_CERTIFICATE_SUBJECT || '' }}
+        run: |
+          $smokeArguments = @{
+            InstallerPath = "dist/windows/packages/CaveViewer-$env:SMOKE_VERSION-windows.exe"
+            MetadataPath = "dist/windows/metadata/CaveViewer-$env:SMOKE_VERSION.json"
+            UpdateMetadataPath = "dist/windows/metadata/CaveViewer-$env:SMOKE_VERSION.update.json"
+            ExpectedVersion = $env:SMOKE_VERSION
+          }
+          if ($env:SMOKE_REQUIRE_SIGNATURE -eq "true") {
+            $smokeArguments.ExpectedCertificateSubject = $env:SMOKE_CERTIFICATE_SUBJECT
+          }
+          else {
+            $smokeArguments.AllowUnsigned = $true
+          }
+          & .\scripts\windows\smoke_installer.ps1 @smokeArguments
+
+      - name: Upload Windows installer for testing
         uses: actions/upload-artifact@v7
         with:
           name: CaveViewer-${{ inputs.version }}-windows
           path: |
-            dist/windows/packages/CaveViewer-${{ inputs.version }}-windows.zip
+            dist/windows/packages/CaveViewer-${{ inputs.version }}-windows.exe
             dist/windows/metadata/CaveViewer-${{ inputs.version }}.json
             dist/windows/metadata/CaveViewer-${{ inputs.version }}.update.json
           if-no-files-found: error

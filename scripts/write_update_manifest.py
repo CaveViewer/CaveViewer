@@ -20,7 +20,10 @@ from urllib.parse import urlparse
 
 _VERSION_PATTERN = re.compile(r"\d+(?:\.\d+)+\Z")
 _TARGET_URL_SUFFIXES = {
-    "windows": (".zip",),
+    # ZIP remains valid for already-published source-bundle manifests while
+    # new frozen installers use EXE. The alias keys identify which updater
+    # handoff applies without forcing old clients to parse a new schema.
+    "windows": (".zip", ".exe"),
     "linux": (".appimage",),
     "macos": (".dmg",),
 }
@@ -43,6 +46,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--channel", choices=("stable", "prerelease"), required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--architecture", choices=_MACOS_ARCHITECTURES)
+    parser.add_argument("--authenticode-certificate-subject", default="")
     args = parser.parse_args(argv)
 
     if args.target == "macos" and args.architecture is None:
@@ -106,13 +110,26 @@ def _manifest_payload(args: argparse.Namespace, size_bytes: int, sha256: str) ->
         "sha256": sha256,
     }
     if args.target == "windows":
-        payload.update(
-            {
-                "download_url_windows_zip": args.download_url,
-                "download_size_bytes_windows_zip": size_bytes,
-                "sha256_windows_zip": sha256,
-            }
-        )
+        if urlparse(args.download_url).path.lower().endswith(".exe"):
+            payload.update(
+                {
+                    "authenticode_certificate_subject": (
+                        args.authenticode_certificate_subject
+                    ),
+                    "download_url_windows_exe": args.download_url,
+                    "download_size_bytes_windows_exe": size_bytes,
+                    "install_channel": "windows_installer",
+                    "sha256_windows_exe": sha256,
+                }
+            )
+        else:
+            payload.update(
+                {
+                    "download_url_windows_zip": args.download_url,
+                    "download_size_bytes_windows_zip": size_bytes,
+                    "sha256_windows_zip": sha256,
+                }
+            )
     elif args.target == "linux":
         payload.update(
             {
@@ -159,6 +176,23 @@ def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     args.version = _canonical_version(args.version)
     _validate_download_url(args.target, args.download_url)
+    args.authenticode_certificate_subject = str(
+        args.authenticode_certificate_subject
+    ).strip()
+    is_windows_exe = (
+        args.target == "windows"
+        and urlparse(args.download_url).path.lower().endswith(".exe")
+    )
+    if is_windows_exe and not args.authenticode_certificate_subject:
+        raise ManifestInputError(
+            "Windows EXE update manifests require "
+            "--authenticode-certificate-subject"
+        )
+    if not is_windows_exe and args.authenticode_certificate_subject:
+        raise ManifestInputError(
+            "--authenticode-certificate-subject is only valid for Windows EXE "
+            "update manifests"
+        )
     size_bytes, sha256 = _artifact_integrity(args.artifact_file)
     _write_json(args.output, _manifest_payload(args, size_bytes, sha256))
     print(f"Wrote update manifest: {args.output}")

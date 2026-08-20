@@ -136,8 +136,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows\setup.ps1
 
 Notes:
 
-- `scripts/windows/setup.ps1` is designed to install prerequisites and set up a runnable local source environment.
+- `scripts/windows/setup.ps1` accepts only a real 64-bit Python 3.12 interpreter, creates CaveViewer's user-owned virtual environment below `%LOCALAPPDATA%\CaveViewer\runtime`, and installs the local source tree into that environment.
 - `scripts/windows/launch.bat` is a launcher for the setup script.
+- Setup does not rely on a later PATH refresh or change system Python, firewall rules, or administrator-owned locations. Its retained setup and launch logs are under `%LOCALAPPDATA%\CaveViewer\logs`.
+- These source-only helpers are not Windows release installers. End users
+  should install the signed `CaveViewer-<version>-windows.exe` release asset.
 
 ## Run Automated Tests
 
@@ -164,10 +167,14 @@ the application version or creating artifacts. It uses
 select another prepared Python 3.12 interpreter. The interpreter must have
 `requirements.txt` and `requirements-dev.txt` installed.
 
-GitHub also runs separate Linux, macOS ARM64, and macOS Intel package smoke workflows for
-pull requests and pushes to `main` or `release/**` when packaging, release
-scripts, runtime source, or dependency files change. They also run weekly and
-can be dispatched manually. The Linux workflow builds the x86_64 AppImage
+GitHub also runs separate Windows, Linux, macOS ARM64, and macOS Intel package
+smoke workflows for pull requests and pushes to `main` or `release/**` when
+packaging, release scripts, runtime source, or dependency files change. They
+also run weekly and can be dispatched manually. The Windows workflow builds an
+unsigned test-only EXE on a disposable runner and validates native installer
+paths, isolated install verification, and update handoff; publishing reruns
+the same smoke on the protected signer and requires the real signature. The
+Linux workflow builds the x86_64 AppImage
 through the Docker release path, validates AppImage desktop install/uninstall
 behavior in a temporary home directory, and validates the installed
 desktop/AppStream metadata. Both macOS workflows build a native DMG through the
@@ -434,9 +441,9 @@ state machine is:
 
 ```text
 IDLE -> CHECKING -> {UP_TO_DATE, AVAILABLE, IDLE on check error}
-AVAILABLE -> DOWNLOADING -> VERIFYING -> READY
-                |              |
-                +--------------+-> FAILED -> DOWNLOADING (retry)
+AVAILABLE -> DOWNLOADING -> VERIFYING -> READY -> HANDOFF_VERIFYING -> INSTALLING -> SHUTDOWN
+                |              |          |                  |
+                +--------------+-> FAILED -> DOWNLOADING     +-> READY (handoff failure/cancel)
 (DOWNLOADING or VERIFYING) -- cancel request --> worker cleanup --> AVAILABLE
 any non-SHUTDOWN state -> SHUTDOWN
 ```
@@ -444,12 +451,16 @@ any non-SHUTDOWN state -> SHUTDOWN
 The splash polls immutable manager snapshots and maps the visible states to
 `Update to <version>`, `Downloading… <percentage>%` with `Cancel`,
 `Verifying…` with `Cancel`, `Update ready`, and `Download failed` with a
-separate `Retry` action. A ready update remains a single footer label: after
-three seconds, `Update ready` becomes the focused platform action that reveals
-the already verified package: `Show in Finder` on macOS, `Show in Explorer` on
-Windows, or `Open Download Folder` on Linux. A cancellation request only
-signals the manager worker; it cleans staging output and returns to the
-available update without affecting an already verified package.
+separate `Retry` action. A normal ready update remains a single footer label:
+after three seconds, `Update ready` becomes the focused platform action that
+reveals the already verified package: `Show in Finder` on macOS, `Show in
+Explorer` for a Windows ZIP migration package, or `Open Download Folder` on
+Linux. A registered signed Windows EXE instead presents `Install and restart
+<version>` immediately. Its explicit click downloads the EXE, starts the
+handoff after promotion, and the splash exits only after the installer process
+starts. A cancellation request only signals the manager worker; it cleans
+staging output and returns to the available update without affecting an already
+verified package.
 While a splash window is visible, it is the foreground update surface and
 suppresses duplicate desktop notifications for update progress or completion.
 If a download finishes after that surface closes, desktop notifications remain
@@ -460,13 +471,17 @@ later splash presents its current state. Closing the whole app moves the
 manager to `SHUTDOWN`, cancels any active transfer, waits for its worker, and
 removes the temporary staging directory.
 
-A verified package is atomically promoted to `~/Downloads` through a hidden
-temporary sibling and is never executed or installed. A visible splash makes
-one automatic reveal attempt and retains a
-manual platform action: macOS mounts a DMG read-only and shows its `.app` in
-Finder, Windows selects the package in Explorer, and Linux asks the desktop
-portal to reveal it, with `xdg-open` as a fallback. Completion while a map is
-open remains silent until the splash is shown again.
+A verified package is atomically promoted through a hidden temporary sibling.
+macOS, Linux, and Windows ZIP migration packages go to `~/Downloads` and stay
+manual: a visible splash makes one automatic reveal attempt and retains a
+manual platform action. A signed Windows EXE from a registered frozen Inno
+Setup installation goes to `%LOCALAPPDATA%\CaveViewer\updates` instead. The
+handoff rechecks size/SHA-256 and Authenticode status, exact publisher, and
+timestamp immediately before it starts the installer with distinct arguments.
+The installer validates `--expected-version`, waits at most five minutes for
+`--wait-pid`, verifies the new payload, records its per-user provenance marker,
+and relaunches it. A source/ZIP launch has no marker and must use the manual
+migration action; it never executes an EXE update.
 
 On Linux, every directory chooser also uses XDG Desktop Portal when available.
 Cancellation is distinct from portal failure; unavailable or old portals fall

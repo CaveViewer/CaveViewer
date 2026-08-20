@@ -1,0 +1,102 @@
+name: Windows Package Smoke
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 11 * * 3"
+  pull_request:
+    paths:
+      - ".github/workflows/windows-package-smoke.yml"
+      - ".github/workflows/windows-release.yml"
+      - "packaging/**"
+      - "scripts/**"
+      - "src/**"
+      - "!src/caveviewer/version.py"
+      - "requirements*.txt"
+      - "pyproject.toml"
+  push:
+    branches:
+      - main
+      - "release/**"
+    paths:
+      - ".github/workflows/windows-package-smoke.yml"
+      - ".github/workflows/windows-release.yml"
+      - "packaging/**"
+      - "scripts/**"
+      - "src/**"
+      - "!src/caveviewer/version.py"
+      - "requirements*.txt"
+      - "pyproject.toml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: caveviewer-windows-package-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows-package-smoke:
+    name: Windows installer package smoke
+    runs-on: windows-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install Inno Setup
+        shell: powershell
+        run: choco install innosetup --no-progress --yes
+
+      - name: Resolve package smoke version
+        shell: powershell
+        run: |
+          $versionText = Get-Content -LiteralPath "src/caveviewer/version.py" -Raw
+          $match = [regex]::Match($versionText, '(?m)^APP_VERSION\s*=\s*["'']([^"'']+)["'']')
+          if (-not $match.Success) {
+            throw "APP_VERSION not found in src/caveviewer/version.py"
+          }
+          "SMOKE_VERSION=$($match.Groups[1].Value)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Build unsigned Windows installer for mechanical smoke coverage
+        shell: bash
+        env:
+          RELEASE_NOTES: Windows package smoke
+          CAVEVIEWER_ALLOW_UNSIGNED_WINDOWS_PACKAGE: "1"
+          CAVEVIEWER_INNO_SETUP_COMPILER: "C:\\Program Files (x86)\\Inno Setup 6\\ISCC.exe"
+        run: |
+          ./scripts/release.sh \
+            --target=windows \
+            --version="$SMOKE_VERSION" \
+            --notes="$RELEASE_NOTES" \
+            --action=package \
+            --skip-tests
+
+      - name: Smoke-test Windows installer paths and update handoff
+        shell: powershell
+        run: |
+          & .\scripts\windows\smoke_installer.ps1 `
+            -InstallerPath "dist/windows/packages/CaveViewer-$env:SMOKE_VERSION-windows.exe" `
+            -MetadataPath "dist/windows/metadata/CaveViewer-$env:SMOKE_VERSION.json" `
+            -UpdateMetadataPath "dist/windows/metadata/CaveViewer-$env:SMOKE_VERSION.update.json" `
+            -ExpectedVersion $env:SMOKE_VERSION `
+            -AllowUnsigned
+
+      - name: Upload Windows installer package smoke artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: CaveViewer-${{ env.SMOKE_VERSION }}-windows-package-smoke
+          path: |
+            dist/windows/packages/CaveViewer-${{ env.SMOKE_VERSION }}-windows.exe
+            dist/windows/metadata/CaveViewer-${{ env.SMOKE_VERSION }}.json
+            dist/windows/metadata/CaveViewer-${{ env.SMOKE_VERSION }}.update.json
+          if-no-files-found: error
+          retention-days: 7

@@ -136,8 +136,10 @@ def test_development_launchers_use_the_installed_package():
     assert "pip install" in install_script
     assert "-e \"$project_root\"" in install_script
     assert 'python" -m caveviewer' in install_script
-    assert "pip install" in windows_setup
-    assert '-e `"$ProjectRoot`"' in windows_setup
+    assert '"pip",' in windows_setup
+    assert '"-e",' in windows_setup
+    assert "$ProjectRoot" in windows_setup
+    assert "$script:RuntimePython" in windows_setup
     assert '"-m caveviewer"' in windows_setup
 
 
@@ -154,6 +156,18 @@ def test_packaging_consumers_reference_migrated_paths():
     windows_packager = (
         REPOSITORY_ROOT / "scripts" / "windows" / "package.sh"
     ).read_text(encoding="utf-8")
+    windows_builder = (
+        REPOSITORY_ROOT / "scripts" / "windows" / "build.sh"
+    ).read_text(encoding="utf-8")
+    windows_installer = (
+        REPOSITORY_ROOT / "packaging" / "windows" / "CaveViewerSetup.iss"
+    ).read_text(encoding="utf-8")
+    windows_metadata_writer = (
+        REPOSITORY_ROOT / "scripts" / "windows" / "write_package_metadata.py"
+    ).read_text(encoding="utf-8")
+    windows_installer_smoke = (
+        REPOSITORY_ROOT / "scripts" / "windows" / "smoke_installer.ps1"
+    ).read_text(encoding="utf-8")
     pyinstaller_spec = (
         REPOSITORY_ROOT / "packaging" / "pyinstaller" / "CaveViewer.spec"
     ).read_text(encoding="utf-8")
@@ -165,8 +179,12 @@ def test_packaging_consumers_reference_migrated_paths():
     assert 'packaging/pyinstaller/CaveViewer.spec' in macos_builder
     assert "src/caveviewer/resources" in linux_builder
     assert 'src/caveviewer/__main__.py' in linux_builder
-    assert '"src",' in windows_packager
-    assert '"packaging",' in windows_packager
+    assert "CaveViewer.spec" in windows_builder
+    assert "CaveViewer.exe" in windows_builder
+    assert "CaveViewerSetup.iss" in windows_packager
+    assert "windows_signed_installer" in windows_metadata_writer
+    assert "Assert-InstallerSignature" in windows_installer_smoke
+    assert "OutputBaseFilename={#OutputBaseName}" in windows_installer
     assert "package_root / '__main__.py'" in pyinstaller_spec
     assert "caveviewer/resources/shaders" in pyinstaller_spec
     assert "cave_metadata_catalog.v1.json" in pyinstaller_spec

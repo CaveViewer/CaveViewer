@@ -1069,10 +1069,10 @@ section { position: relative; }
             <p class="passage__label">Always current</p>
             <h3>Download updates from the launch screen</h3>
             <p>CaveViewer checks a signed update manifest on launch. Start a
-            download and keep working — it continues in the background. After
-            verifying the package, CaveViewer keeps it in your Downloads folder
-            and reveals it for you to install manually. It never runs or
-            installs anything for you.</p>
+            download and keep working — it continues in the background. macOS,
+            Linux, and legacy Windows packages stay in Downloads for manual
+            installation. A signed Windows installer can offer one explicit
+            install-and-restart action after it rechecks the downloaded EXE.</p>
           </div>
           <div class="passage">
             <p class="passage__label">Any machine</p>
@@ -1238,41 +1238,15 @@ section { position: relative; }
           <li class="step">
             <div>
               <h4>Download the build for your platform</h4>
-              <p>From the <a href="https://github.com/CaveViewer/CaveViewer/releases/latest">Releases page</a>, grab the <code>.dmg</code> for macOS (Apple Silicon or Intel), the <code>.zip</code> for Windows, or the Linux x86_64 <code>.AppImage</code>.</p>
+              <p>From the <a href="https://github.com/CaveViewer/CaveViewer/releases/latest">Releases page</a>, grab the <code>.dmg</code> for macOS (Apple Silicon or Intel), the signed Windows installer <code>.exe</code>, or the Linux x86_64 <code>.AppImage</code>.</p>
             </div>
           </li>
           <li class="step">
             <div>
               <h4>Install it</h4>
               <p><b>macOS:</b> open the DMG and drag CaveViewer into Applications. The first time it opens, go to Settings → Privacy &amp; Security and allow it to run.<br>
-              <b>Windows:</b> extract the zip and double-click <code>launch.bat</code>. It installs Python if needed, the Visual C++ runtime and required libraries, opens a firewall rule so update checks can reach GitHub, and creates a Desktop shortcut.<br>
+              <b>Windows:</b> run <code>CaveViewer-&lt;version&gt;-windows.exe</code>. CaveViewer Setup installs a frozen per-user application and its shortcuts; Python, archive extraction, and a batch launcher are not needed.<br>
               <b>Linux:</b> run <code>chmod +x CaveViewer-*.AppImage</code>, then launch it directly — no system install needed.</p>
-              <div class="shot-quad">
-                <div>
-                  <div class="shot">
-                    <a class="shot-link" href="images/setup-ready.png" target="_blank" rel="noopener"><img src="images/setup-ready.png" alt="CaveViewer Setup window, ready to install, listing the setup steps"></a>
-                  </div>
-                  <p class="shot-caption">Ready to install</p>
-                </div>
-                <div>
-                  <div class="shot">
-                    <a class="shot-link" href="images/setup-progress.png" target="_blank" rel="noopener"><img src="images/setup-progress.png" alt="CaveViewer Setup window mid-install, with a live log"></a>
-                  </div>
-                  <p class="shot-caption">Installing, live log</p>
-                </div>
-                <div>
-                  <div class="shot">
-                    <a class="shot-link" href="images/setup-success.png" target="_blank" rel="noopener"><img src="images/setup-success.png" alt="CaveViewer Setup window showing the CaveViewer is ready dialog with all steps checked off"></a>
-                  </div>
-                  <p class="shot-caption">Ready to launch</p>
-                </div>
-                <div>
-                  <div class="shot">
-                    <a class="shot-link" href="images/setup-desktop-icon.png" target="_blank" rel="noopener"><img src="images/setup-desktop-icon.png" alt="The CaveViewer desktop shortcut icon"></a>
-                  </div>
-                  <p class="shot-caption">On your desktop</p>
-                </div>
-              </div>
             </div>
           </li>
           <li class="step">

@@ -150,6 +150,9 @@ Packaging scripts use platform-isolated virtual environments by default.
 - Linux Docker build:
   - Default template: `.venv-linux-build-{arch}`
   - Override with `CAVEVIEWER_LINUX_BUILD_VENV=/path/with-{arch}-token`
+- Windows build: `.venv-windows-build`
+  - Override with `CAVEVIEWER_WINDOWS_BUILD_VENV=/path/to/venv` or select a
+    prepared Python 3.12 executable with `CAVEVIEWER_WINDOWS_BUILD_PYTHON`
 
 Developer setup remains independent:
 
@@ -157,3 +160,14 @@ Developer setup remains independent:
 - Override with `CAVEVIEWER_DEV_VENV=/path/to/venv`.
 
 For Linux-specific packaging details, see `scripts/linux/README.md`.
+
+Windows payload builds and installer packages require a native Windows host.
+`scripts/windows/build.sh` creates the frozen one-folder payload and
+`scripts/windows/package.sh` wraps it in `CaveViewer-<version>-windows.exe`.
+Production packages require an Authenticode certificate in the protected
+Windows signer; `CAVEVIEWER_ALLOW_UNSIGNED_WINDOWS_PACKAGE=1` is limited to
+non-publishing package validation and its metadata is rejected by finalization.
+`scripts/windows/smoke_installer.ps1` validates the native per-user install and
+update handoff. The disposable package-smoke workflow permits only an unsigned
+test artifact; publishing reruns it with the expected certificate subject and
+RFC-3161 timestamp.

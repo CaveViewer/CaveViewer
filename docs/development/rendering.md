@@ -139,9 +139,11 @@ $env:CAVEVIEWER_UPLOAD_TIME_BUDGET_MS = "2"
 .\.venv-dev\Scripts\python -m caveviewer
 ```
 
-If you are using the Windows setup package instead of a development venv, set
-the same `$env:` values in PowerShell and launch with `python -m caveviewer`
-from the CaveViewer folder. PowerShell environment variables apply to the
+If you are using the Windows setup package instead of a development venv, its
+Desktop shortcut already uses CaveViewer's verified runtime. For a temporary
+PowerShell override, use the exact `python.exe` path recorded in the setup log
+under `%LOCALAPPDATA%\CaveViewer\logs`, then run `-m caveviewer` from the
+extracted CaveViewer folder. PowerShell environment variables apply to the
 current shell session; close the window or run `Remove-Item Env:\NAME` to clear
 one.
 
@@ -164,8 +166,10 @@ $env:CAVEVIEWER_VSYNC = "0"
 .\.venv-dev\Scripts\python -m caveviewer
 ```
 
-If you are using the Windows setup package instead of a development venv, run
-PowerShell from the CaveViewer folder and use:
+If you are using the Windows setup package instead of a development venv, use
+the Desktop shortcut for normal launches. For an explicit PowerShell launch,
+use the verified `python.exe` path recorded in the setup log under
+`%LOCALAPPDATA%\CaveViewer\logs`, from the extracted CaveViewer folder:
 
 ```powershell
 $env:CAVEVIEWER_VSYNC = "0"
@@ -199,8 +203,9 @@ $env:CAVEVIEWER_UPLOAD_TIME_BUDGET_MS = "1"
 .\.venv-dev\Scripts\python -m caveviewer
 ```
 
-For the Windows setup package, use the same `$env:` values and launch with
-`python -m caveviewer` from the CaveViewer folder.
+For the Windows setup package, use the same `$env:` values with the verified
+`python.exe` path recorded in the setup log, rather than an ambient `python`
+command from PATH.
 
 Practical tuning order:
 

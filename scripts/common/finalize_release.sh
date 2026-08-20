@@ -183,7 +183,7 @@ find_artifact() {
 }
 
 release_assets=()
-windows_zip_path=""
+windows_exe_path=""
 linux_x86_64_path=""
 macos_arm64_path=""
 macos_x86_64_path=""
@@ -191,10 +191,10 @@ macos_x86_64_path=""
 # Resolve every requested artifact before creating or modifying a release. A
 # missing platform package therefore cannot leave a partially published set.
 if $selected_windows; then
-  windows_zip_path="$(find_artifact "CaveViewer-${normalized_version}-windows.zip")"
+  windows_exe_path="$(find_artifact "CaveViewer-${normalized_version}-windows.exe")"
   windows_meta_path="$(find_artifact "CaveViewer-${normalized_version}.json")"
   windows_update_meta_path="$(find_artifact "CaveViewer-${normalized_version}.update.json")"
-  release_assets+=("$windows_zip_path" "$windows_meta_path" "$windows_update_meta_path")
+  release_assets+=("$windows_exe_path" "$windows_meta_path" "$windows_update_meta_path")
 fi
 if $selected_linux_x86_64; then
   linux_x86_64_path="$(find_artifact "CaveViewer-${normalized_version}-x86_64.AppImage")"
@@ -240,6 +240,18 @@ fi
 "$signing_python" -c \
   'import sys; from pathlib import Path; from cryptography.hazmat.primitives import serialization; serialization.load_pem_private_key(Path(sys.argv[1]).read_bytes(), password=None)' \
   "$signing_key_path"
+
+if $selected_windows; then
+  "$signing_python" "$repo_root/scripts/windows/verify_package_metadata.py" \
+    --artifact-file "$windows_exe_path" \
+    --metadata-file "$windows_meta_path" \
+    --update-metadata-file "$windows_update_meta_path"
+  windows_authenticode_certificate_subject="$(
+    "$signing_python" -c \
+      'import json, sys; value = json.load(open(sys.argv[1], encoding="utf-8")).get("authenticode_certificate_subject"); isinstance(value, str) and value.strip() or sys.exit("Error: Windows update metadata has no Authenticode certificate subject."); print(value.strip())' \
+      "$windows_update_meta_path"
+  )"
+fi
 
 resolved_expected_sha="$(git -C "$repo_root" rev-parse "${expected_source_sha}^{commit}")"
 current_sha="$(git -C "$repo_root" rev-parse HEAD)"
@@ -296,10 +308,11 @@ sign_manifest() {
 if $selected_windows; then
   "$repo_root/scripts/windows/update_manifest.sh" \
     --version "$normalized_version" \
-    --download-url "$release_base_url/$(basename "$windows_zip_path")" \
-    --artifact-file "$windows_zip_path" \
+    --download-url "$release_base_url/$(basename "$windows_exe_path")" \
+    --artifact-file "$windows_exe_path" \
     --notes "$release_notes" \
-    --channel "$manifest_channel"
+    --channel "$manifest_channel" \
+    --authenticode-certificate-subject "$windows_authenticode_certificate_subject"
   sign_manifest "$repo_root/updates/windows/$manifest_channel.json"
 fi
 

@@ -68,6 +68,10 @@ from .update_package_storage import (
     UpdatePackageStorageAdapter,
     create_update_package_storage_adapter,
 )
+from .update_package_install import (
+    UpdatePackageInstallerAdapter,
+    create_update_package_installer_adapter,
+)
 from .saved_artifact_reveal import (
     SavedArtifactRevealAdapter,
     create_saved_artifact_reveal_adapter,
@@ -255,6 +259,7 @@ class PlatformRuntime:
     automatic_update_capability: CapabilityResult[UpdateTarget]
     update_package_reveal_adapter: UpdatePackageRevealAdapter
     update_package_storage_adapter: UpdatePackageStorageAdapter
+    update_package_installer_adapter: UpdatePackageInstallerAdapter
     saved_artifact_reveal_adapter: SavedArtifactRevealAdapter
     recording_process_adapter: RecordingProcessAdapter
     tls_trust_adapter: TlsTrustAdapter
@@ -412,6 +417,7 @@ def create_platform_runtime(
     presentation_actions_adapter: PresentationActionsAdapter | None = None,
     update_package_reveal_adapter: UpdatePackageRevealAdapter | None = None,
     update_package_storage_adapter: UpdatePackageStorageAdapter | None = None,
+    update_package_installer_adapter: UpdatePackageInstallerAdapter | None = None,
     saved_artifact_reveal_adapter: SavedArtifactRevealAdapter | None = None,
     recording_process_adapter: RecordingProcessAdapter | None = None,
     tls_trust_adapter: TlsTrustAdapter | None = None,
@@ -458,6 +464,10 @@ def create_platform_runtime(
     resolved_update_package_storage_adapter = (
         update_package_storage_adapter
         or create_update_package_storage_adapter(platform_name=resolved_platform_name)
+    )
+    resolved_update_package_installer_adapter = (
+        update_package_installer_adapter
+        or create_update_package_installer_adapter(platform_name=resolved_platform_name)
     )
     resolved_saved_artifact_reveal_adapter = (
         saved_artifact_reveal_adapter
@@ -526,6 +536,7 @@ def create_platform_runtime(
         automatic_update_capability=automatic_update_capability,
         update_package_reveal_adapter=resolved_update_package_reveal_adapter,
         update_package_storage_adapter=resolved_update_package_storage_adapter,
+        update_package_installer_adapter=resolved_update_package_installer_adapter,
         saved_artifact_reveal_adapter=resolved_saved_artifact_reveal_adapter,
         recording_process_adapter=resolved_recording_process_adapter,
         tls_trust_adapter=resolved_tls_trust_adapter,

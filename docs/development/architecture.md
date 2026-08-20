@@ -399,15 +399,17 @@ and Linux desktop-service fallback are implemented by direct focused adapters.
 Verified update-package storage uses a similarly focused adapter, but it is
 not a feature gate. Checksum verification has already completed when
 `UpdateManager` calls `UpdatePackageStorageAdapter`, while the availability of
-a user-visible local destination can change at any time. The adapter promotes
-the temporary verified payload and returns its final path; a storage exception
-is an ordinary update-workflow failure and still runs the normal temporary-file
-cleanup. Its direct platform implementations preserve macOS DMG naming,
-Windows/default Downloads handling, and Linux AppImage permissions. To avoid
-publishing a partial cross-filesystem copy, they copy into a hidden temporary
-file in Downloads, flush and close it, then atomically rename it to the chosen
-non-conflicting final path. A failed promotion removes only that hidden file
-and never exposes a final package path.
+a local destination can change at any time. The adapter promotes the temporary
+verified payload and returns its final path; a storage exception is an ordinary
+update-workflow failure and still runs the normal temporary-file cleanup. Its
+direct platform implementations preserve macOS DMG naming, Linux AppImage
+permissions, and legacy package Downloads handling. A Windows EXE eligible for
+automatic installation is instead kept under the current user's private
+`%LOCALAPPDATA%\CaveViewer\updates` root. To avoid publishing a partial
+cross-filesystem copy, adapters copy into a hidden temporary sibling, flush and
+close it, then atomically rename it to the chosen non-conflicting final path. A
+failed promotion removes only that hidden file and never exposes a final
+package path.
 
 Saved-artifact reveal is another focused action, not a feature gate. A video
 encoder or trace writer has already reported success when `CaveViewerWindow`
@@ -680,9 +682,9 @@ that loop exits. Update state is explicit and validated:
 
 ```text
 IDLE -> CHECKING -> {UP_TO_DATE, AVAILABLE, IDLE on check error}
-AVAILABLE -> DOWNLOADING -> VERIFYING -> READY
-                |              |
-                +--------------+-> FAILED -> DOWNLOADING (retry)
+AVAILABLE -> DOWNLOADING -> VERIFYING -> READY -> HANDOFF_VERIFYING -> INSTALLING -> SHUTDOWN
+                |              |          |                  |
+                +--------------+-> FAILED -> DOWNLOADING     +-> READY (handoff failure/cancel)
 (DOWNLOADING or VERIFYING) -- cancel request --> worker cleanup --> AVAILABLE
 any non-SHUTDOWN state -> SHUTDOWN
 ```
@@ -703,19 +705,28 @@ temporary files to be removed.
 The update checker returns one immutable outcome: `UpdateAvailable`,
 `UpdateNotAvailable`, or `UpdateCheckFailed`. Only `UpdateAvailable` contains
 an `UpdateArtifact`, whose version, HTTPS URL, package kind, positive size, and
-SHA-256 were validated before signature verification. `UpdateManager` stores
-that available outcome only for the download/retry workflow and passes its
-non-optional artifact to the worker. Release notes remain a published manifest
-field but are not carried through the manager or splash without a designed UI.
-The immutable update snapshot also carries the focused adapter's static reveal
-label, so the splash can render the platform-native READY action without
-consulting a broad platform adapter.
+SHA-256 were validated before signature verification. A Windows EXE also needs
+the signed `windows_installer` channel and an exact Authenticode certificate
+subject. `UpdateManager` stores that available outcome only for the
+download/retry workflow and passes its non-optional artifact to the worker.
+Release notes remain a published manifest field but are not carried through the
+manager or splash without a designed UI. The immutable update snapshot carries
+focused reveal and, where safe, install-action labels, so the splash does not
+consult a broad platform adapter.
 
-Verified packages are persisted to the user's Downloads folder. Platform
-adapters only reveal them for manual handling: Finder mounts macOS DMGs
-read-only and reveals the `.app`, Explorer selects the Windows payload, and
-Linux asks the desktop portal to reveal it with a containing-folder fallback.
-No adapter executes or installs an update.
+Verified packages normally remain manual: Finder mounts macOS DMGs read-only
+and reveals the `.app`, Explorer selects a Windows ZIP migration payload, and
+Linux asks the desktop portal to reveal its package with a containing-folder
+fallback. The sole execution boundary is `WindowsUpdatePackageInstallerAdapter`.
+It is available only to a frozen EXE whose exact executable path matches the
+per-user Inno Setup provenance marker. After an explicit splash action it
+rehashes the private EXE, requires a valid Authenticode chain, exact signed
+publisher, and RFC-3161 timestamp, then uses a distinct argument vector to
+start `CaveViewerSetup.exe /SP- /SILENT /NORESTART /LOG=... --update
+--wait-pid <pid> --expected-version <version>`. The installer owns the bounded
+wait, new-payload verification, provenance update, and relaunch. A failure
+returns the manager to `READY`; the Tk splash closes only after the detached
+installer process has started.
 
 ## Updates and release assets
 
@@ -725,7 +736,9 @@ contracts. The public verification key under `src/caveviewer/resources/` is
 bundled with the application; private signing material must never enter the
 repository.
 
-Windows uses `updates/windows/<channel>.json`. Linux distribution is x86_64-only
+Windows uses `updates/windows/<channel>.json`; EXE manifests additionally bind
+the `windows_installer` channel and Authenticode certificate subject into the
+Ed25519-signed manifest. Linux distribution is x86_64-only
 and uses `updates/linux/x86_64/<channel>.json`. macOS uses architecture-specific
 `updates/macos/<arm64|x86_64>/<channel>.json` paths. Every manifest has a
 companion `.sig` file; top-level macOS manifests and signatures remain legacy

@@ -68,6 +68,8 @@ src/caveviewer/gui/platform/presentation_actions.py focused native presentation-
 src/caveviewer/gui/platform/directory_selection.py shared action-time directory-picker authorization
 src/caveviewer/gui/platform/update_package_reveal.py focused verified-package reveal facade
 src/caveviewer/gui/platform/update_package_storage.py focused verified-package storage facade
+src/caveviewer/gui/platform/update_package_install.py focused signed Windows EXE handoff facade
+src/caveviewer/gui/platform/windows_update_paths.py Windows user-owned update/log locations
 src/caveviewer/gui/platform/recording_process.py focused recording-encoder startup facade
 src/caveviewer/gui/platform/tls_trust.py       focused native TLS-trust augmentation facade
 src/caveviewer/gui/platform/probes/           platform capability probes and configuration
@@ -106,6 +108,7 @@ benchmarks/                                   versioned benchmark scenario/thres
 docs/                                         site and development documentation
 packaging/pyinstaller/CaveViewer.spec         PyInstaller configuration
 packaging/linux/                              desktop and AppStream metadata
+packaging/windows/CaveViewerSetup.iss          Inno Setup installer definition
 scripts/                                      development and release automation
 scripts/benchmark/                            benchmark comparison helpers and compatibility wrappers
 updates/                                      published update manifests/signatures
@@ -164,7 +167,8 @@ CaveViewer/
 │   └── development/
 ├── packaging/
 │   ├── linux/
-│   └── pyinstaller/
+│   ├── pyinstaller/
+│   └── windows/
 ├── scripts/
 │   └── benchmark/
 ├── updates/

@@ -2,8 +2,8 @@
 set -euo pipefail
 
 # Windows publisher.
-# Builds or reuses the Windows zip, publishes/uploads a GitHub release, and
-# writes and signs an update manifest for the selected channel.
+# Builds or reuses the signed Windows installer EXE, publishes/uploads a GitHub
+# release, and writes and signs an update manifest for the selected channel.
 #
 # Usage:
 #   publish.sh --version=<version> [--notes=<release_notes>] [--use-existing-artifacts] [--pre-release]
@@ -155,12 +155,13 @@ if ! grep -q '^APP_VERSION = "' "$version_file"; then
   exit 1
 fi
 
-app_zip_name="CaveViewer-${normalized_version}-windows.zip"
+app_exe_name="CaveViewer-${normalized_version}-windows.exe"
 app_meta_name="CaveViewer-${normalized_version}.json"
 app_update_meta_name="CaveViewer-${normalized_version}.update.json"
-app_zip_path="$windows_packages_dir/$app_zip_name"
+app_exe_path="$windows_packages_dir/$app_exe_name"
 app_meta_path="$windows_metadata_dir/$app_meta_name"
 app_update_meta_path="$windows_metadata_dir/$app_update_meta_name"
+metadata_verifier="$script_dir/verify_package_metadata.py"
 
 current_version="$(cv_read_app_version "$version_file")"
 if [ "$current_version" != "$normalized_version" ]; then
@@ -176,8 +177,8 @@ else
   "$script_dir/package.sh" --base-download-url "https://github.com/$repo/releases/download/$tag"
 fi
 
-if [ ! -f "$app_zip_path" ]; then
-  echo "Error: expected Windows zip package not found: $app_zip_path"
+if [ ! -f "$app_exe_path" ]; then
+  echo "Error: expected Windows installer package not found: $app_exe_path"
   exit 1
 fi
 
@@ -191,31 +192,54 @@ if [ ! -f "$app_update_meta_path" ]; then
   exit 1
 fi
 
+if [ ! -f "$metadata_verifier" ]; then
+  echo "Error: Windows package metadata verifier is missing: $metadata_verifier"
+  exit 1
+fi
+if [ -x "$repo_root/.venv-windows-build/Scripts/python.exe" ]; then
+  metadata_python="$repo_root/.venv-windows-build/Scripts/python.exe"
+elif command -v python >/dev/null 2>&1; then
+  metadata_python="python"
+else
+  echo "Error: Python is required to verify Windows package metadata."
+  exit 1
+fi
+"$metadata_python" "$metadata_verifier" \
+  --artifact-file "$app_exe_path" \
+  --metadata-file "$app_meta_path" \
+  --update-metadata-file "$app_update_meta_path"
+authenticode_certificate_subject="$(
+  "$metadata_python" -c \
+    'import json, sys; value = json.load(open(sys.argv[1], encoding="utf-8")).get("authenticode_certificate_subject"); isinstance(value, str) and value.strip() or sys.exit("Error: Windows update metadata has no Authenticode certificate subject."); print(value.strip())' \
+    "$app_update_meta_path"
+)"
+
 if gh release view "$tag" --repo "$repo" >/dev/null 2>&1; then
   echo "Release $tag already exists; uploading/replacing assets"
-  gh release upload "$tag" "$app_zip_path" "$app_meta_path" "$app_update_meta_path" --repo "$repo" --clobber
+  gh release upload "$tag" "$app_exe_path" "$app_meta_path" "$app_update_meta_path" --repo "$repo" --clobber
 else
   echo "Creating release $tag and uploading Windows assets"
-  create_args=("$tag" "$app_zip_path" "$app_meta_path" "$app_update_meta_path" --repo "$repo" --title "$release_title" --notes "$release_notes")
+  create_args=("$tag" "$app_exe_path" "$app_meta_path" "$app_update_meta_path" --repo "$repo" --title "$release_title" --notes "$release_notes")
   $pre_release && create_args+=(--prerelease)
   gh release create "${create_args[@]}"
 fi
 
-zip_asset_url="$(gh api "repos/$repo/releases/tags/$tag" --jq ".assets[] | select(.name == \"$app_zip_name\") | .browser_download_url")"
+installer_asset_url="$(gh api "repos/$repo/releases/tags/$tag" --jq ".assets[] | select(.name == \"$app_exe_name\") | .browser_download_url")"
 
-if [ -z "$zip_asset_url" ]; then
-  echo "Error: could not resolve browser_download_url for asset $app_zip_name on release $tag"
+if [ -z "$installer_asset_url" ]; then
+  echo "Error: could not resolve browser_download_url for asset $app_exe_name on release $tag"
   exit 1
 fi
 
-echo "Windows zip asset URL: $zip_asset_url"
+echo "Windows installer asset URL: $installer_asset_url"
 
 "$script_dir/update_manifest.sh" \
   --version "$normalized_version" \
-  --download-url "$zip_asset_url" \
-  --artifact-file "$app_zip_path" \
+  --download-url "$installer_asset_url" \
+  --artifact-file "$app_exe_path" \
   --notes "$release_notes" \
-  --channel "$manifest_channel"
+  --channel "$manifest_channel" \
+  --authenticode-certificate-subject "$authenticode_certificate_subject"
 
 signing_python="${CAVEVIEWER_RELEASE_SIGNING_PYTHON:-}"
 if [ -z "$signing_python" ]; then

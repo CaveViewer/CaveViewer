@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import threading
 from dataclasses import replace
 from pathlib import Path
@@ -78,6 +79,30 @@ class FakeUpdatePackageStorageAdapter:
         return str(self.destination)
 
 
+class FakeUpdatePackageInstallerAdapter:
+    def __init__(self, *, supported=True, error: Exception | None = None):
+        self.supported = supported
+        self.error = error
+        self.calls = []
+
+    def supports_package_kind(
+        self, package_kind, *, authenticode_certificate_subject
+    ):
+        return (
+            self.supported
+            and package_kind == "exe"
+            and authenticode_certificate_subject == "CN=CaveViewer Update Publisher"
+        )
+
+    def install_action_label(self):
+        return "Install and restart"
+
+    def install_verified_package(self, payload_path, **kwargs):
+        self.calls.append((payload_path, kwargs))
+        if self.error is not None:
+            raise self.error
+
+
 class FakeDesktopInhibitor:
     def __init__(self, calls):
         self._calls = calls
@@ -144,7 +169,21 @@ def _available_outcome():
     )
 
 
-def _runtime(adapter, desktop_services):
+def _available_exe_outcome(payload: bytes):
+    return UpdateAvailable(
+        current_version="1.0.63",
+        artifact=UpdateArtifact(
+            version="1.0.64",
+            download_url="https://example.invalid/CaveViewer-1.0.64-windows.exe",
+            size_bytes=len(payload),
+            sha256=hashlib.sha256(payload).hexdigest(),
+            package_kind="exe",
+            authenticode_certificate_subject="CN=CaveViewer Update Publisher",
+        ),
+    )
+
+
+def _runtime(adapter, desktop_services, *, installer_adapter=None):
     return create_platform_runtime(
         platform_adapter=adapter,
         desktop_services=desktop_services,
@@ -152,17 +191,29 @@ def _runtime(adapter, desktop_services):
         update_package_storage_adapter=DefaultUpdatePackageStorageAdapter(
             adapter.downloads_dir
         ),
+        update_package_installer_adapter=installer_adapter,
         environment={},
     )
 
 
-def _checked_manager(tmp_path, download_update, *, desktop_services=None):
+def _checked_manager(
+    tmp_path,
+    download_update,
+    *,
+    desktop_services=None,
+    outcome=None,
+    installer_adapter=None,
+):
     adapter = FakePlatformAdapter(tmp_path / "Downloads")
     services = desktop_services or FakeDesktopServices()
     manager = UpdateManager(
         "1.0.63",
-        platform_runtime=_runtime(adapter, services),
-        check_for_update=lambda *_args, **_kwargs: _available_outcome(),
+        platform_runtime=_runtime(
+            adapter,
+            services,
+            installer_adapter=installer_adapter,
+        ),
+        check_for_update=lambda *_args, **_kwargs: outcome or _available_outcome(),
         download_update=download_update,
         temp_root=str(tmp_path),
     )
@@ -170,6 +221,94 @@ def _checked_manager(tmp_path, download_update, *, desktop_services=None):
     assert manager.wait_for_background_task(1)
     assert manager.snapshot().state == UpdateState.AVAILABLE
     return manager, adapter
+
+
+def test_explicit_windows_install_action_downloads_then_hands_off_a_verified_exe(
+    tmp_path,
+):
+    payload = b"signed Windows installer fixture"
+    installer_adapter = FakeUpdatePackageInstallerAdapter()
+
+    def download_update(_url, _size, destination, **_kwargs):
+        Path(destination).write_bytes(payload)
+
+    manager, adapter = _checked_manager(
+        tmp_path,
+        download_update,
+        outcome=_available_exe_outcome(payload),
+        installer_adapter=installer_adapter,
+    )
+    try:
+        assert manager.snapshot().install_action_label == "Install and restart"
+        assert manager.start_installation()
+        assert manager.wait_for_background_task(1)
+        ready_snapshot = manager.snapshot()
+        assert ready_snapshot.state is UpdateState.READY
+        assert ready_snapshot.install_requested
+
+        assert manager.install_downloaded_update()
+        assert manager.wait_for_background_task(1)
+        installed_snapshot = manager.snapshot()
+        assert installed_snapshot.state is UpdateState.INSTALLING
+        assert not installed_snapshot.install_requested
+        assert len(installer_adapter.calls) == 1
+        payload_path, arguments = installer_adapter.calls[0]
+        assert payload_path == str(
+            adapter.downloads_dir / "CaveViewer-1.0.64-windows.exe"
+        )
+        assert arguments["version"] == "1.0.64"
+        assert arguments["expected_size_bytes"] == len(payload)
+        assert arguments["expected_sha256"] == hashlib.sha256(payload).hexdigest()
+        assert (
+            arguments["authenticode_certificate_subject"]
+            == "CN=CaveViewer Update Publisher"
+        )
+        assert arguments["parent_process_id"] > 0
+    finally:
+        manager.shutdown()
+
+
+def test_failed_windows_handoff_keeps_the_gui_open_for_a_retry(tmp_path):
+    payload = b"signed Windows installer fixture"
+    installer_adapter = FakeUpdatePackageInstallerAdapter(
+        error=RuntimeError("unexpected publisher")
+    )
+
+    def download_update(_url, _size, destination, **_kwargs):
+        Path(destination).write_bytes(payload)
+
+    manager, _adapter = _checked_manager(
+        tmp_path,
+        download_update,
+        outcome=_available_exe_outcome(payload),
+        installer_adapter=installer_adapter,
+    )
+    try:
+        assert manager.start_installation()
+        assert manager.wait_for_background_task(1)
+        assert manager.install_downloaded_update()
+        assert manager.wait_for_background_task(1)
+
+        snapshot = manager.snapshot()
+        assert snapshot.state is UpdateState.READY
+        assert snapshot.error == "unexpected publisher"
+        assert not snapshot.install_requested
+        assert snapshot.install_action_label == "Install and restart"
+    finally:
+        manager.shutdown()
+
+
+def test_legacy_zip_update_remains_download_and_reveal_only(tmp_path):
+    manager, _adapter = _checked_manager(
+        tmp_path,
+        lambda *_args, **_kwargs: None,
+        installer_adapter=FakeUpdatePackageInstallerAdapter(),
+    )
+    try:
+        assert manager.snapshot().install_action_label is None
+        assert not manager.start_installation()
+    finally:
+        manager.shutdown()
 
 
 def test_manager_requires_a_process_owned_runtime(tmp_path):

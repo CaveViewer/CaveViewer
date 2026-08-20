@@ -30,6 +30,9 @@ from caveviewer.gui.platform.desktop_inhibition import (
     release_desktop_inhibitor,
 )
 from caveviewer.gui.platform.runtime import PlatformRuntime
+from caveviewer.gui.platform.update_package_install import (
+    UpdateInstallationCancelled,
+)
 from caveviewer.gui.update_checker import (
     UpdateArtifact,
     UpdateAvailable,
@@ -55,6 +58,8 @@ class UpdateState(enum.Enum):
     DOWNLOADING = "downloading"
     VERIFYING = "verifying"
     READY = "ready"
+    HANDOFF_VERIFYING = "handoff_verifying"
+    INSTALLING = "installing"
     FAILED = "failed"
     SHUTDOWN = "shutdown"
 
@@ -82,7 +87,13 @@ _ALLOWED_TRANSITIONS = {
         UpdateState.FAILED,
         UpdateState.SHUTDOWN,
     },
-    UpdateState.READY: {UpdateState.SHUTDOWN},
+    UpdateState.READY: {UpdateState.HANDOFF_VERIFYING, UpdateState.SHUTDOWN},
+    UpdateState.HANDOFF_VERIFYING: {
+        UpdateState.READY,
+        UpdateState.INSTALLING,
+        UpdateState.SHUTDOWN,
+    },
+    UpdateState.INSTALLING: {UpdateState.SHUTDOWN},
     UpdateState.FAILED: {UpdateState.DOWNLOADING, UpdateState.SHUTDOWN},
     UpdateState.SHUTDOWN: set(),
 }
@@ -99,6 +110,8 @@ class UpdateSnapshot:
     total_bytes: int | None = None
     payload_path: str | None = None
     reveal_action_label: str = "Show update"
+    install_action_label: str | None = None
+    install_requested: bool = False
     error: str | None = None
     automatic_update: FeatureDecision | None = None
     update_package_reveal: FeatureDecision | None = None
@@ -132,6 +145,9 @@ class UpdateManager:
         self._update_package_storage_adapter = (
             platform_runtime.update_package_storage_adapter
         )
+        self._update_package_installer_adapter = (
+            platform_runtime.update_package_installer_adapter
+        )
         self._check_for_update = (
             check_for_update or update_checker.check_for_update_target
         )
@@ -153,6 +169,7 @@ class UpdateManager:
         self._payload_path: str | None = None
         self._error: str | None = None
         self._automatic_reveal_done = False
+        self._install_after_download_requested = False
         self._foreground_update_surface_active = False
 
         self._cancel_event: threading.Event | None = None
@@ -192,6 +209,8 @@ class UpdateManager:
                 total_bytes=self._total_bytes,
                 payload_path=self._payload_path,
                 reveal_action_label=self.reveal_action_label,
+                install_action_label=self._install_action_label_locked(),
+                install_requested=self._install_after_download_requested,
                 error=self._error,
                 automatic_update=self._automatic_update_decision,
                 update_package_reveal=self._update_package_reveal_decision,
@@ -200,6 +219,28 @@ class UpdateManager:
     @property
     def reveal_action_label(self) -> str:
         return self._update_package_reveal_adapter.reveal_action_label()
+
+    def _install_action_label_locked(self) -> str | None:
+        """Return the explicit EXE handoff label only for its safe contract."""
+        available_update = self._available_update
+        if available_update is None:
+            return None
+        artifact = available_update.artifact
+        try:
+            supported = self._update_package_installer_adapter.supports_package_kind(
+                artifact.package_kind,
+                authenticode_certificate_subject=(
+                    artifact.authenticode_certificate_subject
+                ),
+            )
+            label = self._update_package_installer_adapter.install_action_label()
+        except Exception as error:
+            _LOG.warning("Could not resolve update install action: %s", error)
+            return None
+        if not supported:
+            return None
+        normalized_label = str(label).strip()
+        return normalized_label or None
 
     @property
     def automatic_update_decision(self) -> FeatureDecision:
@@ -310,56 +351,151 @@ class UpdateManager:
     def start_download(self) -> bool:
         """Start or retry the available update without blocking the caller."""
         with self._lock:
-            if not self._automatic_update_decision.allows_execution:
-                _LOG.info(
-                    "Automatic update download is gated: reason=%s",
-                    self._automatic_update_decision.reason_code,
-                )
+            return self._start_download_locked(install_after_download=False)
+
+    def _start_download_locked(self, *, install_after_download: bool) -> bool:
+        """Register a download while preserving the caller's explicit intent."""
+        if not self._automatic_update_decision.allows_execution:
+            _LOG.info(
+                "Automatic update download is gated: reason=%s",
+                self._automatic_update_decision.reason_code,
+            )
+            return False
+        if self._state not in {UpdateState.AVAILABLE, UpdateState.FAILED}:
+            return False
+        available_update = self._available_update
+        if available_update is None:
+            _LOG.error(
+                "Update state %s has no validated update artifact.",
+                self._state.value,
+            )
+            return False
+
+        artifact = available_update.artifact
+        self._transition_locked(UpdateState.DOWNLOADING)
+        self._downloaded_bytes = 0
+        self._total_bytes = artifact.size_bytes
+        self._payload_path = None
+        self._error = None
+        self._automatic_reveal_done = False
+        self._install_after_download_requested = install_after_download
+        self._persistence_started = False
+
+        cancel_event = threading.Event()
+        done_event = threading.Event()
+        worker = threading.Thread(
+            target=self._run_download,
+            args=(artifact, cancel_event, done_event),
+            name="caveviewer-update-download",
+            # A partial file must reach its finally block before process exit.
+            daemon=False,
+        )
+        self._cancel_event = cancel_event
+        self._worker = worker
+        self._worker_kind = "download"
+        self._task_done = done_event
+
+        # See check_for_updates(): registration and start are one lifecycle
+        # operation, so shutdown always observes a started download worker.
+        try:
+            worker.start()
+        except RuntimeError as error:
+            self._transition_locked(UpdateState.FAILED)
+            self._error = str(error)
+            self._install_after_download_requested = False
+            done_event.set()
+            _LOG.warning("Could not start update download worker: %s", error)
+            return False
+        return True
+
+    def start_installation(self) -> bool:
+        """Download an eligible EXE or start its delayed install handoff."""
+        with self._lock:
+            if self._state in {UpdateState.AVAILABLE, UpdateState.FAILED}:
+                if self._install_action_label_locked() is None:
+                    return False
+                return self._start_download_locked(install_after_download=True)
+            if self._state != UpdateState.READY:
                 return False
-            if self._state not in {UpdateState.AVAILABLE, UpdateState.FAILED}:
+
+        return self.install_downloaded_update()
+
+    def install_downloaded_update(self) -> bool:
+        """Verify and launch a ready EXE from a worker before closing the GUI."""
+        with self._lock:
+            if self._state != UpdateState.READY or not self._payload_path:
                 return False
             available_update = self._available_update
-            if available_update is None:
-                _LOG.error(
-                    "Update state %s has no validated update artifact.",
-                    self._state.value,
-                )
+            if available_update is None or self._install_action_label_locked() is None:
                 return False
 
             artifact = available_update.artifact
-            self._transition_locked(UpdateState.DOWNLOADING)
-            self._downloaded_bytes = 0
-            self._total_bytes = artifact.size_bytes
-            self._payload_path = None
+            payload_path = self._payload_path
+            self._transition_locked(UpdateState.HANDOFF_VERIFYING)
             self._error = None
-            self._automatic_reveal_done = False
-            self._persistence_started = False
-
+            self._install_after_download_requested = True
             cancel_event = threading.Event()
             done_event = threading.Event()
             worker = threading.Thread(
-                target=self._run_download,
-                args=(artifact, cancel_event, done_event),
-                name="caveviewer-update-download",
-                # A partial file must reach its finally block before process exit.
-                daemon=False,
+                target=self._run_install_handoff,
+                args=(artifact, payload_path, cancel_event, done_event),
+                name="caveviewer-update-install-handoff",
+                # The UI only closes after Popen succeeds. Shutdown cancels this
+                # short verification worker before it can launch a process.
+                daemon=True,
             )
             self._cancel_event = cancel_event
             self._worker = worker
-            self._worker_kind = "download"
+            self._worker_kind = "handoff"
             self._task_done = done_event
-
-            # See check_for_updates(): registration and start are one lifecycle
-            # operation, so shutdown always observes a started download worker.
             try:
                 worker.start()
-            except RuntimeError as exc:
-                self._transition_locked(UpdateState.FAILED)
-                self._error = str(exc)
+            except RuntimeError as error:
+                self._transition_locked(UpdateState.READY)
+                self._install_after_download_requested = False
+                self._error = str(error)
                 done_event.set()
-                _LOG.warning("Could not start update download worker: %s", exc)
+                _LOG.warning("Could not start update install handoff worker: %s", error)
                 return False
             return True
+
+    def _run_install_handoff(
+        self,
+        artifact: UpdateArtifact,
+        payload_path: str,
+        cancel_event: threading.Event,
+        done_event: threading.Event,
+    ) -> None:
+        """Run slow execution-boundary verification away from the Tk thread."""
+        next_state = UpdateState.READY
+        error: str | None = None
+        try:
+            if cancel_event.is_set():
+                raise UpdateInstallationCancelled("Update installation was cancelled.")
+            self._update_package_installer_adapter.install_verified_package(
+                payload_path,
+                version=artifact.version,
+                expected_size_bytes=artifact.size_bytes,
+                expected_sha256=artifact.sha256,
+                authenticode_certificate_subject=(
+                    artifact.authenticode_certificate_subject or ""
+                ),
+                parent_process_id=os.getpid(),
+                cancellation_requested=cancel_event.is_set,
+            )
+            next_state = UpdateState.INSTALLING
+        except UpdateInstallationCancelled:
+            _LOG.info("Windows update install handoff was cancelled before launch.")
+        except Exception as caught_error:
+            error = str(caught_error)
+            _LOG.warning("Could not start Windows update installation: %s", caught_error)
+
+        with self._lock:
+            if self._state != UpdateState.SHUTDOWN:
+                self._install_after_download_requested = False
+                self._error = error
+                self._transition_locked(next_state)
+            done_event.set()
 
     def cancel_download(self) -> bool:
         """Request cooperative cancellation before package persistence begins.
@@ -380,6 +516,7 @@ class UpdateManager:
             ):
                 return False
             cancel_event.set()
+            self._install_after_download_requested = False
             _LOG.info("Update download cancellation requested.")
             return True
 

@@ -26,7 +26,7 @@ _DEFAULT_UPDATE_REPOSITORY = "CaveViewer/CaveViewer"
 _DEFAULT_UPDATE_USER_AGENT = "CaveViewer-UpdateChecker"
 _PACKAGE_KINDS_BY_CHANNEL: dict[str, frozenset[str]] = {
     "macos_app": frozenset({"dmg", "pkg"}),
-    "windows_app": frozenset({"zip", "msi", "exe"}),
+    "windows_app": frozenset({"zip", "exe"}),
     "linux_app": frozenset({"appimage", "deb", "rpm", "tar.gz"}),
 }
 
@@ -56,6 +56,9 @@ class UpdateManifestSchema:
     download_sha256_keys: tuple[str, ...]
     allowed_package_kinds: frozenset[str] | None
     missing_download_url_message: str
+    installer_package_kind: str | None = None
+    installer_channel: str | None = None
+    authenticode_certificate_subject_keys: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -91,6 +94,29 @@ class UpdateManifestSchema:
         if not missing_message:
             raise ValueError("missing download URL message must be non-empty")
         object.__setattr__(self, "missing_download_url_message", missing_message)
+
+        installer_package_kind = _clean(self.installer_package_kind).lower()
+        installer_channel = _clean(self.installer_channel).lower()
+        if bool(installer_package_kind) != bool(installer_channel):
+            raise ValueError(
+                "installer package kind and installer channel must be configured together"
+            )
+        subject_keys = tuple(
+            _clean(key)
+            for key in self.authenticode_certificate_subject_keys
+            if _clean(key)
+        )
+        if installer_package_kind and not subject_keys:
+            raise ValueError(
+                "installer package contract requires Authenticode subject keys"
+            )
+        object.__setattr__(self, "installer_package_kind", installer_package_kind or None)
+        object.__setattr__(self, "installer_channel", installer_channel or None)
+        object.__setattr__(
+            self,
+            "authenticode_certificate_subject_keys",
+            subject_keys,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -191,6 +217,9 @@ def _manifest_schema(
     download_sha256_keys: tuple[str, ...],
     install_channel: str,
     missing_download_url_message: str,
+    installer_package_kind: str | None = None,
+    installer_channel: str | None = None,
+    authenticode_certificate_subject_keys: tuple[str, ...] = (),
 ) -> UpdateManifestSchema:
     return UpdateManifestSchema(
         download_url_keys=download_url_keys,
@@ -198,6 +227,9 @@ def _manifest_schema(
         download_sha256_keys=download_sha256_keys,
         allowed_package_kinds=_PACKAGE_KINDS_BY_CHANNEL.get(install_channel),
         missing_download_url_message=missing_download_url_message,
+        installer_package_kind=installer_package_kind,
+        installer_channel=installer_channel,
+        authenticode_certificate_subject_keys=authenticode_certificate_subject_keys,
     )
 
 
@@ -269,19 +301,16 @@ def select_update_profile(
             user_agent=_DEFAULT_UPDATE_USER_AGENT,
             manifest_schema=_manifest_schema(
                 download_url_keys=(
-                    "download_url_windows_msi",
                     "download_url_windows_exe",
                     "download_url_windows_zip",
                     "download_url_windows",
                 ),
                 download_size_keys=(
-                    "download_size_bytes_windows_msi",
                     "download_size_bytes_windows_exe",
                     "download_size_bytes_windows_zip",
                     "download_size_bytes_windows",
                 ),
                 download_sha256_keys=(
-                    "sha256_windows_msi",
                     "sha256_windows_exe",
                     "sha256_windows_zip",
                     "sha256_windows",
@@ -289,6 +318,11 @@ def select_update_profile(
                 install_channel="windows_app",
                 missing_download_url_message=(
                     "Update manifest is missing a Windows download URL."
+                ),
+                installer_package_kind="exe",
+                installer_channel="windows_installer",
+                authenticode_certificate_subject_keys=(
+                    "authenticode_certificate_subject",
                 ),
             ),
         )

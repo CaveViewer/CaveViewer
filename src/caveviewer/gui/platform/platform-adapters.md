@@ -19,6 +19,8 @@ platform/
 ├── runtime.py               # Per-process platform composition and feature gates
 ├── update_package_reveal.py # Focused non-executing verified-package facade
 ├── update_package_storage.py # Focused verified-package storage facade
+├── update_package_install.py # Focused signed Windows EXE handoff facade
+├── windows_update_paths.py   # User-owned Windows update/log locations
 ├── saved_artifact_reveal.py # Focused post-save user-artifact reveal facade
 ├── saved_recording_reveal.py # Compatibility imports for former recording facade
 ├── recording_process.py      # Focused recording-encoder startup facade
@@ -164,6 +166,15 @@ AppImage behavior. A persistence exception is an ordinary update-workflow
 failure, after which `UpdateManager` performs its normal temporary-file
 cleanup.
 
+The separately composed `UpdatePackageInstallerAdapter` is intentionally not a
+broad update adapter or a feature gate. Its default implementation is a
+fail-closed no-op everywhere except a registered frozen Windows installer
+payload. Only a manifest-bound EXE with a nonempty Authenticode publisher can
+request its label. At the explicit action boundary it rechecks the private
+payload's size/SHA-256 and Windows signature, then starts the Inno installer
+with a distinct argument vector. Source/ZIP Windows launches keep the existing
+manual reveal route.
+
 Saved-artifact reveal is a focused post-save `SavedArtifactRevealAdapter`. It
 runs only after a video encoder or trace writer reports success for a
 user-visible stop, so it does not require a capability probe or feature gate:
@@ -249,8 +260,9 @@ platform actions. `PresentationProfile` owns static GUI choices and
 adapter-based presentation calls are a local compatibility path only.
 Automatic-update policy and manifest parsing have moved to `UpdateProfile` and
 `UpdateTarget`; adapter-based update calls are likewise local compatibility
-paths. `UpdatePackageRevealAdapter` and `UpdatePackageStorageAdapter` own
-direct package actions. `SavedArtifactRevealAdapter`, `RecordingProcessAdapter`,
+paths. `UpdatePackageRevealAdapter`, `UpdatePackageStorageAdapter`, and the
+narrowly scoped `UpdatePackageInstallerAdapter` own direct package actions.
+`SavedArtifactRevealAdapter`, `RecordingProcessAdapter`,
 and `TlsTrustAdapter` remain narrow facades around existing artifact, recording,
 and network actions. New features should add the smallest appropriate
 combination of a probe, a pure policy in
@@ -470,15 +482,17 @@ assert profile.mouse_look_button_name == "right"
 2. Build the full string in UI code without adding platform checks.
 
 ### Update Packages & Distribution Channels
-**When**: Different distribution formats (DMG for macOS, ZIP for Windows, AppImage for Linux)
+**When**: Different distribution formats (DMG for macOS, signed EXE or legacy ZIP for Windows, AppImage for Linux)
 
 **How**:
 - `runtime.update_profile.install_channel` identifies the current package channel
 - `UpdatePackageStorageAdapter.persist_verified_package()` promotes a verified
   temporary package into platform-specific user-visible storage. Its direct
   platform adapters preserve Downloads naming, collision suffixes, macOS DMG
-  fallback naming, and Linux AppImage permissions. They copy through a hidden
-  sibling in Downloads and atomically publish only the completed package.
+  fallback naming, and Linux AppImage permissions. Windows keeps eligible EXE
+  installers in its private LocalAppData update root; ZIP migration payloads
+  remain in Downloads. They copy through a hidden sibling and atomically
+  publish only the completed package.
 - `UpdatePackageRevealAdapter.reveal_action_label()` exposes the platform-native
   reveal label through the focused boundary. `UpdateManager` copies that static
   value into its immutable snapshot, and the compact splash renders it after
@@ -490,7 +504,9 @@ assert profile.mouse_look_button_name == "right"
 Revealing is deliberately manual and non-executing. macOS mounts the DMG
 read-only and reveals its `.app` in Finder, Windows selects the package in
 Explorer, and Linux uses `OpenURI.OpenDirectory` with `xdg-open` fallback.
-Adapters must never launch an installer or execute a downloaded package.
+Only `UpdatePackageInstallerAdapter` may launch an installer, and only after
+the Windows EXE provenance, rehash, and Authenticode checks pass after explicit
+user consent. Reveal adapters never execute a downloaded package.
 
 ### Saved Files
 **When**: A workflow creates a user-owned output file, such as an MP4 video or

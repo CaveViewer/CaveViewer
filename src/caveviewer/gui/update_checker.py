@@ -52,6 +52,7 @@ class UpdateArtifact:
     size_bytes: int
     sha256: str
     package_kind: str
+    authenticode_certificate_subject: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -234,12 +235,38 @@ def _parse_update_manifest(
             error="Update manifest SHA-256 must be a 64-character hexadecimal digest.",
         )
 
+    authenticode_certificate_subject: str | None = None
+    manifest_schema = update_target.manifest_schema
+    if package_kind == manifest_schema.installer_package_kind:
+        declared_channel = str(data.get("install_channel") or "").strip().lower()
+        if declared_channel != manifest_schema.installer_channel:
+            return UpdateCheckFailed(
+                current_version=current_version,
+                error=(
+                    "Update manifest does not declare the required Windows "
+                    "installer channel."
+                ),
+            )
+        authenticode_certificate_subject = _first_non_empty_str(
+            data,
+            manifest_schema.authenticode_certificate_subject_keys,
+        )
+        if not authenticode_certificate_subject:
+            return UpdateCheckFailed(
+                current_version=current_version,
+                error=(
+                    "Update manifest is missing the Authenticode certificate "
+                    "subject for its Windows installer."
+                ),
+            )
+
     return UpdateArtifact(
         version=latest_tag,
         download_url=download_url,
         size_bytes=download_size_bytes,
         sha256=download_sha256,
         package_kind=package_kind,
+        authenticode_certificate_subject=authenticode_certificate_subject,
     )
 
 

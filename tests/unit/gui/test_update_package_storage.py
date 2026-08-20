@@ -11,13 +11,14 @@ from caveviewer.gui.platform.update_package_storage import (
     DefaultUpdatePackageStorageAdapter,
     LinuxUpdatePackageStorageAdapter,
     MacOSUpdatePackageStorageAdapter,
+    WindowsUpdatePackageStorageAdapter,
     create_update_package_storage_adapter,
 )
 
 
 def _staged_payload(tmp_path: Path, payload: bytes = b"verified package") -> Path:
     staged_path = tmp_path / "staging" / "update_payload.bin"
-    staged_path.parent.mkdir()
+    staged_path.parent.mkdir(exist_ok=True)
     staged_path.write_bytes(payload)
     return staged_path
 
@@ -82,7 +83,7 @@ def test_macos_storage_preserves_dmg_fallback_and_collision_suffix(tmp_path):
         ("darwin", MacOSUpdatePackageStorageAdapter),
         ("linux", LinuxUpdatePackageStorageAdapter),
         ("linux2", LinuxUpdatePackageStorageAdapter),
-        ("win32", DefaultUpdatePackageStorageAdapter),
+        ("win32", WindowsUpdatePackageStorageAdapter),
         ("freebsd", DefaultUpdatePackageStorageAdapter),
     ],
 )
@@ -180,3 +181,30 @@ def test_linux_storage_marks_appimage_executable_before_atomic_promotion(
 
     assert str(observed["hidden_name"]).startswith(".")
     assert final_path.read_bytes() == b"verified package"
+
+
+def test_windows_storage_keeps_signed_exes_private_but_legacy_zips_visible(tmp_path):
+    update_root = tmp_path / "Local App Data" / "CaveViewer" / "updates"
+    downloads_dir = tmp_path / "Downloads"
+    adapter = WindowsUpdatePackageStorageAdapter(
+        update_root=update_root,
+        downloads_dir=downloads_dir,
+    )
+
+    exe_path = Path(
+        adapter.persist_verified_package(
+            str(_staged_payload(tmp_path, b"signed installer")),
+            "https://updates.example/CaveViewer-2.0.0-windows.exe",
+        )
+    )
+    zip_path = Path(
+        adapter.persist_verified_package(
+            str(_staged_payload(tmp_path, b"legacy migration package")),
+            "https://updates.example/CaveViewer-1.0.78-windows.zip",
+        )
+    )
+
+    assert exe_path == update_root / "CaveViewer-2.0.0-windows.exe"
+    assert exe_path.read_bytes() == b"signed installer"
+    assert zip_path == downloads_dir / "CaveViewer-1.0.78-windows.zip"
+    assert zip_path.read_bytes() == b"legacy migration package"

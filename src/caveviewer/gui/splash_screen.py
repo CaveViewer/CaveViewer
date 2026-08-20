@@ -22,8 +22,9 @@ using the program, where a quick plain dialog is the better fit and a full
 splash screen would just be unnecessary ceremony.
 
 This window presents the process-owned update manager's state. Downloads may
-continue after this Tk window closes; verified packages are revealed for
-manual handling only when a splash is visible.
+continue after this Tk window closes; a registered Windows installer can also
+perform one explicit verified install-and-restart handoff. Other packages stay
+manual reveal-only.
 """
 
 from __future__ import annotations
@@ -838,6 +839,7 @@ def _set_tk_window_icon(window) -> None:
 
 class _UpdateAction(enum.Enum):
     DOWNLOAD = "download"
+    INSTALL = "install"
     RETRY = "retry"
     CANCEL = "cancel"
     REVEAL = "reveal"
@@ -857,8 +859,13 @@ class _UpdatePresentation:
 
 def _invoke_update_action(update_manager: UpdateManager, action: _UpdateAction) -> None:
     """Route a compact splash action to the process-owned update manager."""
-    if action in {_UpdateAction.DOWNLOAD, _UpdateAction.RETRY}:
+    if action == _UpdateAction.DOWNLOAD:
         update_manager.start_download()
+    elif action == _UpdateAction.INSTALL:
+        update_manager.start_installation()
+    elif action == _UpdateAction.RETRY:
+        if not update_manager.start_installation():
+            update_manager.start_download()
     elif action == _UpdateAction.CANCEL:
         update_manager.cancel_download()
     elif action == _UpdateAction.REVEAL:
@@ -895,6 +902,14 @@ def _update_presentation(snapshot: UpdateSnapshot) -> _UpdatePresentation:
     ):
         return _UpdatePresentation(status_text=snapshot.automatic_update.explanation)
     if snapshot.state == UpdateState.AVAILABLE:
+        if snapshot.install_action_label:
+            action_text = snapshot.install_action_label
+            if snapshot.available_version:
+                action_text = f"{action_text} {snapshot.available_version}"
+            return _UpdatePresentation(
+                action_text=action_text,
+                action=_UpdateAction.INSTALL,
+            )
         action_text = "Update to"
         if snapshot.available_version:
             action_text = f"{action_text} {snapshot.available_version}"
@@ -919,6 +934,17 @@ def _update_presentation(snapshot: UpdateSnapshot) -> _UpdatePresentation:
             progress_fraction=1.0,
         )
     if snapshot.state == UpdateState.READY:
+        if snapshot.install_action_label:
+            if snapshot.install_requested:
+                return _UpdatePresentation(status_text="Preparing update…")
+            status_text = "Update ready"
+            if snapshot.error:
+                status_text = "Installer could not start"
+            return _UpdatePresentation(
+                status_text=status_text,
+                action_text=snapshot.install_action_label,
+                action=_UpdateAction.INSTALL,
+            )
         if (
             snapshot.update_package_reveal is not None
             and not snapshot.update_package_reveal.allows_execution
@@ -932,7 +958,18 @@ def _update_presentation(snapshot: UpdateSnapshot) -> _UpdatePresentation:
             action=_UpdateAction.REVEAL,
             action_replaces_status_after_delay=True,
         )
+    if snapshot.state == UpdateState.HANDOFF_VERIFYING:
+        return _UpdatePresentation(status_text="Verifying installer…")
+    if snapshot.state == UpdateState.INSTALLING:
+        return _UpdatePresentation(status_text="Starting update…")
     if snapshot.state == UpdateState.FAILED:
+        if snapshot.install_action_label and snapshot.install_requested:
+            return _UpdatePresentation(
+                status_text="Update download failed",
+                action_text="Retry installation",
+                action=_UpdateAction.RETRY,
+                error=True,
+            )
         return _UpdatePresentation(
             status_text="Download failed",
             action_text="Retry",
@@ -1286,6 +1323,13 @@ def show_splash_screen(
             _apply_update_presentation(presentation)
         if (
             snapshot.state == UpdateState.READY
+            and snapshot.install_requested
+            and snapshot.install_action_label
+        ):
+            update_manager.install_downloaded_update()
+        elif (
+            snapshot.state == UpdateState.READY
+            and not snapshot.install_action_label
             and (
                 snapshot.update_package_reveal is None
                 or snapshot.update_package_reveal.allows_execution
@@ -1294,6 +1338,9 @@ def show_splash_screen(
             # Only a visible splash performs the one automatic file-manager
             # reveal; downloads completing inside the viewer stay unobtrusive.
             update_manager.reveal_download(automatic=True)
+        if snapshot.state == UpdateState.INSTALLING:
+            _leave_splash()
+            return
         session.schedule_after(root, 100, _refresh_update_presentation)
 
     close_waiting_for_rebuild_pause = [False]

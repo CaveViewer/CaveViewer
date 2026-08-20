@@ -29,32 +29,24 @@
     Python).
 
 .NOTES
-    Must be run on Windows. Installing Python system-wide requires
-    administrator privileges -- the script requests elevation automatically
-    if it isn't already running elevated (a Windows UAC prompt will appear;
-    this is expected and necessary).
+    Must be run on Windows. Setup deliberately stays in the desktop user's
+    context: Python and CaveViewer's virtual environment live below
+    %LOCALAPPDATA%, so an elevated installer can never create files the user
+    cannot later launch or update.
 #>
 
 param(
-    [int]$IoWorkers = 0
+    [int]$IoWorkers = 0,
+    [switch]$AutoInstall,
+    [switch]$NonInteractive,
+    [string]$PythonExecutable = "",
+    [string]$RuntimeRoot = "",
+    [string]$ShortcutDirectory = "",
+    [string]$LogDirectory = ""
 )
 
 if ($IoWorkers -lt 0) {
     $IoWorkers = 0
-}
-
-# -- Self-elevate if not already running as Administrator -------------------
-$currentPrincipal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
-$isAdmin = $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-
-if (-not $isAdmin) {
-    $scriptPath = $MyInvocation.MyCommand.Path
-    $argList = "-NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`""
-    if ($IoWorkers -gt 0) {
-        $argList += " -IoWorkers $IoWorkers"
-    }
-    Start-Process powershell.exe -ArgumentList $argList -Verb RunAs -WindowStyle Minimized
-    exit
 }
 
 Add-Type -AssemblyName System.Windows.Forms
@@ -129,6 +121,48 @@ if (Test-Path $VersionFile) {
     }
 }
 $SafeAppVersion = ($AppVersion -replace '[^A-Za-z0-9_.-]', '_')
+
+$LocalAppDataRoot = [System.Environment]::GetFolderPath(
+    [System.Environment+SpecialFolder]::LocalApplicationData
+)
+if ([string]::IsNullOrWhiteSpace($LocalAppDataRoot)) {
+    $LocalAppDataRoot = $env:LOCALAPPDATA
+}
+if ([string]::IsNullOrWhiteSpace($LocalAppDataRoot)) {
+    throw "CaveViewer Setup could not determine the current user's LocalAppData directory."
+}
+
+$CaveViewerDataRoot = Join-Path $LocalAppDataRoot "CaveViewer"
+$SetupLogDirectory = if ([string]::IsNullOrWhiteSpace($LogDirectory)) {
+    Join-Path $CaveViewerDataRoot "logs"
+} else {
+    [System.IO.Path]::GetFullPath($LogDirectory)
+}
+try {
+    New-Item -ItemType Directory -Path $SetupLogDirectory -Force -ErrorAction Stop | Out-Null
+} catch {
+    throw "CaveViewer Setup could not create its log directory '$SetupLogDirectory': $($_.Exception.Message)"
+}
+
+$setupLogStamp = Get-Date -Format "yyyyMMdd-HHmmss"
+$SetupLogPath = Join-Path $SetupLogDirectory "setup-$SafeAppVersion-$setupLogStamp.log"
+try {
+    [System.IO.File]::WriteAllText(
+        $SetupLogPath,
+        "CaveViewer Setup log`r`n",
+        [System.Text.Encoding]::UTF8
+    )
+} catch {
+    throw "CaveViewer Setup could not create its log file '$SetupLogPath': $($_.Exception.Message)"
+}
+
+# Runtime state is intentionally explicit.  No later installation, shortcut,
+# or launch step performs another ambient PATH lookup for Python.
+$script:SelectedPython = $null
+$script:RuntimePython = $null
+$script:RuntimePythonw = $null
+$script:RuntimeDirectory = $null
+$script:LaunchScriptPath = $null
 
 $PythonInstallerUrl = "https://www.python.org/ftp/python/3.12.7/python-3.12.7-amd64.exe"
 $PythonInstallerPath = Join-Path $env:TEMP "python-installer-caveviewer.exe"
@@ -215,7 +249,7 @@ $titleLabel.Size = Size-S 660 34
 $headerPanel.Controls.Add($titleLabel)
 
 $subLabel = New-Object System.Windows.Forms.Label
-$subLabel.Text = "Installs Python if needed, prepares CaveViewer's libraries, and creates a Desktop shortcut."
+$subLabel.Text = "Uses a verified Python 3.12 runtime, installs CaveViewer, and creates a Desktop shortcut."
 $subLabel.Font = $FontBody
 $subLabel.ForeColor = [System.Drawing.Color]::FromArgb(221, 226, 235)
 $subLabel.BackColor = $ColorHeader
@@ -252,6 +286,15 @@ $btnInstall.FlatStyle = "Flat"
 $btnInstall.FlatAppearance.BorderSize = 0
 $form.Controls.Add($btnInstall)
 
+$btnOpenLog = New-Object System.Windows.Forms.Button
+$btnOpenLog.Text = "Open log"
+$btnOpenLog.Location = Point-S 572 176
+$btnOpenLog.Size = Size-S 116 24
+$btnOpenLog.Font = $FontSmall
+$btnOpenLog.FlatStyle = "Flat"
+$btnOpenLog.FlatAppearance.BorderSize = 1
+$form.Controls.Add($btnOpenLog)
+
 $stepsPanel = New-Object System.Windows.Forms.Panel
 $stepsPanel.BackColor = $ColorPanel
 $stepsPanel.Location = Point-S 28 194
@@ -268,7 +311,7 @@ $stepsHeader.Size = Size-S 180 24
 $stepsPanel.Controls.Add($stepsHeader)
 
 $stepLabels = @{}
-$stepNames = @("Python", "Visual C++ runtime", "Python libraries", "Firewall access", "Desktop shortcut")
+$stepNames = @("Python", "CaveViewer runtime", "Python libraries", "Desktop shortcut")
 for ($i = 0; $i -lt $stepNames.Count; $i++) {
     $stepLabel = New-Object System.Windows.Forms.Label
     $stepLabel.Text = "[ ] $($stepNames[$i])"
@@ -345,11 +388,28 @@ function Set-StepState {
 function Write-Log {
     param([string]$Message)
     $timestamp = Get-Date -Format "HH:mm:ss"
-    $logBox.AppendText("[$timestamp] $Message`r`n")
-    $logBox.SelectionStart = $logBox.Text.Length
-    $logBox.ScrollToCaret()
+    $line = "[$timestamp] $Message"
+    try {
+        Add-Content -LiteralPath $SetupLogPath -Value $line -Encoding UTF8 -ErrorAction Stop
+    } catch {
+        # The visible log remains useful even if a storage failure occurs.
+        $line = "$line [also could not append setup log: $($_.Exception.Message)]"
+    }
+    if ($null -ne $logBox) {
+        $logBox.AppendText("$line`r`n")
+        $logBox.SelectionStart = $logBox.Text.Length
+        $logBox.ScrollToCaret()
+    }
     [System.Windows.Forms.Application]::DoEvents()
 }
+
+$btnOpenLog.Add_Click({
+    try {
+        Start-Process -FilePath $SetupLogPath -ErrorAction Stop
+    } catch {
+        Write-Log "ERROR: Could not open setup log '$SetupLogPath': $($_.Exception.Message)"
+    }
+})
 
 function Invoke-CaveViewerDownload {
     <#
@@ -424,62 +484,324 @@ function Invoke-CaveViewerDownload {
     }
 }
 
-function Test-PythonInstalled {
+function ConvertTo-CaveViewerLogArgument {
+    param([AllowEmptyString()][string]$Value)
+
+    return "'" + $Value.Replace("'", "''") + "'"
+}
+
+function Format-CaveViewerCommand {
+    param(
+        [string]$FilePath,
+        [string[]]$ArgumentList
+    )
+
+    $rendered = @(ConvertTo-CaveViewerLogArgument $FilePath)
+    foreach ($argument in $ArgumentList) {
+        $rendered += ConvertTo-CaveViewerLogArgument ([string]$argument)
+    }
+    return $rendered -join " "
+}
+
+function Invoke-CaveViewerCommand {
     <#
-        Checks for a working `python` command on PATH. Returns the version
-        string if found, or $null if not found / not runnable.
-
-        Hardened against a known Windows quirk: on a fresh system with no
-        Python installed, typing `python` doesn't always fail cleanly --
-        Windows sometimes routes it through a built-in "app execution
-        alias" stub that opens the Microsoft Store instead of erroring.
-        That stub typically lives under WindowsApps and is a few KB in
-        size (a real Python install is not), so as a second check beyond
-        just "did the command run", we also reject suspiciously tiny
-        python.exe files living in that specific stub location.
+        Invoke a native command using a path and argument array, never an
+        interpolated command line.  The rendered command is only for the
+        retained diagnostic log and is fully quoted there as well.
     #>
-    try {
-        $cmd = Get-Command python -ErrorAction SilentlyContinue
-        if ($cmd -and $cmd.Source -like "*\WindowsApps\python.exe") {
-            $fileInfo = Get-Item $cmd.Source -ErrorAction SilentlyContinue
-            if ($fileInfo -and $fileInfo.Length -lt 100000) {
-                return $null
-            }
-        }
+    param(
+        [string]$FilePath,
+        [string[]]$ArgumentList,
+        [string]$Description
+    )
 
-        $output = & python --version 2>&1
-        if ($LASTEXITCODE -eq 0) {
-            return $output.ToString().Trim()
+    Write-Log "Running $Description: $(Format-CaveViewerCommand -FilePath $FilePath -ArgumentList $ArgumentList)"
+    try {
+        $output = @(& $FilePath @ArgumentList 2>&1)
+        $exitCode = $LASTEXITCODE
+    } catch {
+        Write-Log "ERROR: $Description could not start: $($_.Exception.Message)"
+        return [pscustomobject]@{ Succeeded = $false; ExitCode = $null }
+    }
+
+    foreach ($line in $output) {
+        if ($null -ne $line -and -not [string]::IsNullOrWhiteSpace($line.ToString())) {
+            Write-Log "[$Description] $line"
+        }
+    }
+    Write-Log "$Description exited with code $exitCode."
+    return [pscustomobject]@{ Succeeded = ($exitCode -eq 0); ExitCode = $exitCode }
+}
+
+function Get-PythonRuntimeInfo {
+    <#
+        Return a validated Python interpreter record, or $null.  A candidate
+        must be a real executable, report Python 3.12, and report a 64-bit
+        process.  Merely having a `python` command on PATH is not sufficient.
+    #>
+    param([string]$ExecutablePath)
+
+    if ([string]::IsNullOrWhiteSpace($ExecutablePath)) {
+        return $null
+    }
+
+    try {
+        $resolvedPath = (Resolve-Path -LiteralPath $ExecutablePath -ErrorAction Stop).Path
+        $fileInfo = Get-Item -LiteralPath $resolvedPath -ErrorAction Stop
+    } catch {
+        return $null
+    }
+
+    if ($fileInfo.PSIsContainer) {
+        return $null
+    }
+
+    # Windows' Store app-execution alias must not be executed: it can open the
+    # Store instead of starting Python.  Reject it before running a probe.
+    if ($resolvedPath -match '(?i)\\WindowsApps\\python(?:\.exe)?$' -and $fileInfo.Length -lt 100000) {
+        return $null
+    }
+
+    $probe = "import struct, sys; print('%d|%d|%d|%s' % (sys.version_info[0], sys.version_info[1], struct.calcsize('P') * 8, sys.executable))"
+    try {
+        $probeOutput = @(& $resolvedPath "-c" $probe 2>&1)
+        $probeExitCode = $LASTEXITCODE
+    } catch {
+        return $null
+    }
+    if ($probeExitCode -ne 0 -or $probeOutput.Count -eq 0) {
+        return $null
+    }
+
+    $line = $probeOutput[$probeOutput.Count - 1].ToString().Trim()
+    $parts = $line -split '\|', 4
+    if ($parts.Count -ne 4) {
+        return $null
+    }
+
+    try {
+        $major = [int]$parts[0]
+        $minor = [int]$parts[1]
+        $bits = [int]$parts[2]
+    } catch {
+        return $null
+    }
+
+    if ($major -ne 3 -or $minor -ne 12 -or $bits -ne 64) {
+        return $null
+    }
+
+    return [pscustomobject]@{
+        ExecutablePath = $resolvedPath
+        Version = "$major.$minor"
+        Architecture = "$bits-bit"
+    }
+}
+
+function Find-SupportedPython {
+    $candidatePaths = New-Object System.Collections.Generic.List[string]
+
+    if (-not [string]::IsNullOrWhiteSpace($PythonExecutable)) {
+        $candidatePaths.Add($PythonExecutable)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($env:CAVEVIEWER_PYTHON)) {
+        $candidatePaths.Add($env:CAVEVIEWER_PYTHON)
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($LocalAppDataRoot)) {
+        $candidatePaths.Add((Join-Path $LocalAppDataRoot "Programs\Python\Python312\python.exe"))
+    }
+    if (-not [string]::IsNullOrWhiteSpace($env:ProgramFiles)) {
+        $candidatePaths.Add((Join-Path $env:ProgramFiles "Python312\python.exe"))
+    }
+    if (-not [string]::IsNullOrWhiteSpace(${env:ProgramFiles(x86)})) {
+        $candidatePaths.Add((Join-Path ${env:ProgramFiles(x86)} "Python312\python.exe"))
+    }
+
+    try {
+        $pythonCommand = Get-Command python.exe -ErrorAction SilentlyContinue
+        if ($pythonCommand -and $pythonCommand.Source) {
+            $candidatePaths.Add($pythonCommand.Source)
         }
     } catch {
-        # python not found on PATH at all -- expected, not an error to surface
+        # No ambient Python command is an expected case.
     }
+
+    try {
+        $pyCommand = Get-Command py.exe -ErrorAction SilentlyContinue
+        if ($pyCommand -and $pyCommand.Source) {
+            $launcherOutput = @(& $pyCommand.Source -3.12 -c "import sys; print(sys.executable)" 2>$null)
+            if ($LASTEXITCODE -eq 0 -and $launcherOutput.Count -gt 0) {
+                $candidatePaths.Add($launcherOutput[$launcherOutput.Count - 1].ToString().Trim())
+            }
+        }
+    } catch {
+        # The Python launcher is optional.
+    }
+
+    $seen = @{}
+    foreach ($candidatePath in $candidatePaths) {
+        if ([string]::IsNullOrWhiteSpace($candidatePath)) {
+            continue
+        }
+        $candidateKey = $candidatePath.ToLowerInvariant()
+        if ($seen.ContainsKey($candidateKey)) {
+            continue
+        }
+        $seen[$candidateKey] = $true
+
+        $runtime = Get-PythonRuntimeInfo -ExecutablePath $candidatePath
+        if ($null -ne $runtime) {
+            return $runtime
+        }
+        Write-Log "Ignored unsupported Python candidate: $candidatePath"
+    }
+
     return $null
 }
 
-function Resolve-PythonGuiPath {
-    $pythonPath = (Get-Command python -ErrorAction Stop).Source
-    $pythonDir = Split-Path -Parent $pythonPath
-    $pythonwPath = Join-Path $pythonDir "pythonw.exe"
-    if (Test-Path $pythonwPath) {
-        return $pythonwPath
+function Install-SupportedPython {
+    Write-Log "Looking for a real 64-bit Python 3.12 interpreter..."
+    $runtime = Find-SupportedPython
+    if ($null -ne $runtime) {
+        Write-Log "Selected Python $($runtime.Version) $($runtime.Architecture): $($runtime.ExecutablePath)"
+        return $runtime
     }
-    return $pythonPath
+
+    if ($NonInteractive) {
+        Write-Log "ERROR: Noninteractive setup requires a preinstalled, supported Python 3.12 interpreter."
+        return $null
+    }
+
+    Write-Log "No supported Python 3.12 interpreter was found. Downloading the official per-user installer..."
+    $downloadOk = Invoke-CaveViewerDownload -Url $PythonInstallerUrl -DestinationPath $PythonInstallerPath -TimeoutSeconds 120
+    if (-not $downloadOk) {
+        Write-Log "ERROR: Failed to download the Python installer. Check your internet connection and try again."
+        return $null
+    }
+
+    $userPythonDirectory = Join-Path $LocalAppDataRoot "Programs\Python\Python312"
+    $installArguments = @(
+        "/quiet",
+        "InstallAllUsers=0",
+        "PrependPath=0",
+        "Include_test=0",
+        "Include_launcher=0",
+        "Include_pip=1",
+        "TargetDir=$userPythonDirectory"
+    )
+    $installResult = Invoke-CaveViewerCommand -FilePath $PythonInstallerPath -ArgumentList $installArguments -Description "Python 3.12 installer"
+    if (-not $installResult.Succeeded) {
+        Write-Log "ERROR: Python installer failed; exit code $($installResult.ExitCode)."
+        return $null
+    }
+
+    $runtime = Get-PythonRuntimeInfo -ExecutablePath (Join-Path $userPythonDirectory "python.exe")
+    if ($null -eq $runtime) {
+        Write-Log "ERROR: The Python installer completed, but its 64-bit Python 3.12 executable could not be verified at '$userPythonDirectory'."
+        return $null
+    }
+
+    Write-Log "Installed and verified Python $($runtime.Version) $($runtime.Architecture): $($runtime.ExecutablePath)"
+    return $runtime
+}
+
+function Initialize-CaveViewerRuntime {
+    param([pscustomobject]$PythonRuntime)
+
+    if ($null -eq $PythonRuntime) {
+        return $false
+    }
+
+    if ([string]::IsNullOrWhiteSpace($RuntimeRoot)) {
+        $runtimeDirectory = Join-Path $CaveViewerDataRoot "runtime\python312"
+    } else {
+        $runtimeDirectory = [System.IO.Path]::GetFullPath($RuntimeRoot)
+    }
+    $runtimePython = Join-Path $runtimeDirectory "Scripts\python.exe"
+    $runtimePythonw = Join-Path $runtimeDirectory "Scripts\pythonw.exe"
+
+    try {
+        New-Item -ItemType Directory -Path $runtimeDirectory -Force -ErrorAction Stop | Out-Null
+    } catch {
+        Write-Log "ERROR: Could not create CaveViewer's runtime directory '$runtimeDirectory': $($_.Exception.Message)"
+        return $false
+    }
+
+    if (Test-Path -LiteralPath $runtimePython) {
+        $runtimeInfo = Get-PythonRuntimeInfo -ExecutablePath $runtimePython
+        if ($null -eq $runtimeInfo) {
+            Write-Log "ERROR: Existing CaveViewer runtime is not a verified 64-bit Python 3.12 environment: $runtimePython"
+            return $false
+        }
+        Write-Log "Reusing verified CaveViewer runtime: $runtimePython"
+    } else {
+        $venvArguments = @("-m", "venv")
+        if ($NonInteractive) {
+            # The native package smoke is offline. It borrows only the runner's
+            # already-installed build tooling while still creating a distinct
+            # CaveViewer environment; normal user installation stays isolated.
+            $venvArguments += "--system-site-packages"
+        }
+        $venvArguments += $runtimeDirectory
+        $venvResult = Invoke-CaveViewerCommand -FilePath $PythonRuntime.ExecutablePath -ArgumentList $venvArguments -Description "CaveViewer virtual-environment creation"
+        if (-not $venvResult.Succeeded -or -not (Test-Path -LiteralPath $runtimePython)) {
+            Write-Log "ERROR: Could not create and verify CaveViewer's virtual environment at '$runtimeDirectory'."
+            return $false
+        }
+        Write-Log "Created CaveViewer's user-owned virtual environment: $runtimeDirectory"
+    }
+
+    $pipResult = Invoke-CaveViewerCommand -FilePath $runtimePython -ArgumentList @("-m", "pip", "--version") -Description "CaveViewer runtime pip verification"
+    if (-not $pipResult.Succeeded) {
+        Write-Log "ERROR: CaveViewer's virtual environment has no usable pip."
+        return $false
+    }
+
+    $script:SelectedPython = $PythonRuntime
+    $script:RuntimeDirectory = $runtimeDirectory
+    $script:RuntimePython = $runtimePython
+    $script:RuntimePythonw = if (Test-Path -LiteralPath $runtimePythonw) { $runtimePythonw } else { $runtimePython }
+    return $true
+}
+
+function Resolve-PythonGuiPath {
+    if ([string]::IsNullOrWhiteSpace($script:RuntimePythonw)) {
+        throw "CaveViewer's verified runtime has not been initialized."
+    }
+    return $script:RuntimePythonw
 }
 
 function Start-CaveViewerApp {
-    $pythonGuiPath = Resolve-PythonGuiPath
+    if ([string]::IsNullOrWhiteSpace($script:RuntimePython)) {
+        throw "CaveViewer's verified runtime has not been initialized."
+    }
 
     $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = $pythonGuiPath
+    $psi.FileName = $script:RuntimePython
     $psi.Arguments = "-m caveviewer"
     $psi.WorkingDirectory = $ProjectRoot
     $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
     if ($IoWorkers -gt 0) {
         $psi.EnvironmentVariables["CAVEVIEWER_IO_WORKERS"] = [string]$IoWorkers
     }
 
-    return [System.Diagnostics.Process]::Start($psi)
+    $proc = New-Object System.Diagnostics.Process
+    $proc.StartInfo = $psi
+    $outputHandler = {
+        if (-not [string]::IsNullOrWhiteSpace($EventArgs.Data)) {
+            Write-Log "[CaveViewer launch] $($EventArgs.Data)"
+        }
+    }
+    Register-ObjectEvent -InputObject $proc -EventName OutputDataReceived -Action $outputHandler | Out-Null
+    Register-ObjectEvent -InputObject $proc -EventName ErrorDataReceived -Action $outputHandler | Out-Null
+    $proc.Start() | Out-Null
+    $proc.BeginOutputReadLine()
+    $proc.BeginErrorReadLine()
+    return $proc
 }
 
 # -- Step functions -----------------------------------------------------------
@@ -488,256 +810,196 @@ function Start-CaveViewerApp {
 # than barreling ahead and pretending a failed step succeeded.
 
 function Install-Python {
-    Write-Log "Checking for an existing Python installation..."
-
-    $existing = Test-PythonInstalled
-    if ($existing) {
-        Write-Log "Found existing Python: $existing -- skipping install."
-        return $true
-    }
-
-    Write-Log "Python not found. Downloading the official installer from python.org..."
-    Write-Log "(This may take a minute depending on your internet connection.)"
-
-    $downloadOk = Invoke-CaveViewerDownload -Url $PythonInstallerUrl -DestinationPath $PythonInstallerPath -TimeoutSeconds 120
-    if (-not $downloadOk) {
-        Write-Log "ERROR: Failed to download the Python installer. Check your internet connection and try again."
+    $runtime = Install-SupportedPython
+    if ($null -eq $runtime) {
         return $false
     }
-
-    Write-Log "Download complete. Running the installer silently..."
-    Write-Log "(InstallAllUsers + PrependPath are set automatically -- this is the"
-    Write-Log " 'Add Python to PATH' step that has to be checked manually otherwise.)"
-
-    $installArgs = "/quiet InstallAllUsers=1 PrependPath=1 Include_test=0"
-    $proc = Start-Process -FilePath $PythonInstallerPath -ArgumentList $installArgs -Wait -PassThru
-
-    if ($proc.ExitCode -ne 0) {
-        Write-Log "ERROR: Python installer exited with code $($proc.ExitCode)."
-        return $false
-    }
-
-    Write-Log "Python installed successfully."
-
-    $machinePath = [System.Environment]::GetEnvironmentVariable("Path", "Machine")
-    $userPath = [System.Environment]::GetEnvironmentVariable("Path", "User")
-    $env:Path = "$machinePath;$userPath"
-
-    Start-Sleep -Seconds 1
-    $verify = Test-PythonInstalled
-    if ($verify) {
-        Write-Log "Verified: $verify"
-        return $true
-    }
-
-    Write-Log "WARNING: Python installed, but couldn't be verified in this window."
-    Write-Log "This can happen if Windows hasn't fully refreshed PATH yet -- continuing anyway."
+    $script:SelectedPython = $runtime
     return $true
 }
 
-function Install-VcRedist {
-    <#
-        Silently installs the Microsoft Visual C++ 2015-2022 Redistributable
-        (x64) if it is not already present.
-
-        Why this is needed: some Python extension packages (including pyglm,
-        which moderngl-window depends on) ship compiled .pyd files that link
-        against vcruntime140.dll / vcruntime140_1.dll. These DLLs are part of
-        the MSVC Redistributable. Python's own installer includes them inside
-        its own directory, but some .pyd files resolve them via the system
-        PATH/SxS manifest instead -- and if the Redistributable was never
-        installed system-wide, the DLL is not found and Python throws
-        "ImportError: DLL load failed" on the very first import.
-
-        The Redistributable installer is idempotent: if a compatible version
-        is already present it exits immediately with code 0 and does nothing.
-        If it needs to install, it runs silently with no visible UI.
-
-        Non-fatal: if the download or install fails for any reason, setup
-        continues -- the packages may still work if vcruntime140.dll was
-        already present from a previous install of Python, Visual Studio,
-        or another application.
-    #>
-    $vcRedistUrl  = "https://aka.ms/vs/17/release/vc_redist.x64.exe"
-    $vcRedistPath = Join-Path $env:TEMP "vc_redist_caveviewer.exe"
-
-    Write-Log "Ensuring Visual C++ Redistributable is installed..."
-
-    $downloadOk = Invoke-CaveViewerDownload -Url $vcRedistUrl -DestinationPath $vcRedistPath -TimeoutSeconds 60
-    if (-not $downloadOk) {
-        Write-Log "Note: could not download the Visual C++ Redistributable -- skipping (may already be installed)."
-        return
+function Prepare-CaveViewerRuntime {
+    if ($null -eq $script:SelectedPython) {
+        Write-Log "ERROR: CaveViewer cannot create its runtime before Python 3.12 is selected."
+        return $false
     }
-
-    try {
-        $proc = Start-Process -FilePath $vcRedistPath -ArgumentList "/quiet /norestart" -Wait -PassThru
-        if ($proc.ExitCode -eq 0 -or $proc.ExitCode -eq 1638) {
-            # 0 = installed successfully, 1638 = a newer version is already installed
-            Write-Log "Visual C++ Redistributable is ready."
-        } else {
-            Write-Log "Note: Visual C++ Redistributable installer returned code $($proc.ExitCode) -- continuing anyway."
-        }
-    } catch {
-        Write-Log "Note: could not run the Visual C++ Redistributable installer -- continuing anyway."
-    } finally {
-        Remove-Item $vcRedistPath -Force -ErrorAction SilentlyContinue
-    }
+    return Initialize-CaveViewerRuntime -PythonRuntime $script:SelectedPython
 }
 
 function Install-Requirements {
-    Write-Log "Installing required packages from requirements.txt..."
-    Write-Log "(moderngl, moderngl-window, numpy, Pillow, truststore -- this may take a minute.)"
-
-    if (-not (Test-Path $RequirementsFile)) {
+    Write-Log "Installing required packages into CaveViewer's verified virtual environment..."
+    if ([string]::IsNullOrWhiteSpace($script:RuntimePython)) {
+        Write-Log "ERROR: CaveViewer's verified runtime is unavailable."
+        return $false
+    }
+    if (-not (Test-Path -LiteralPath $RequirementsFile)) {
         Write-Log "ERROR: Could not find requirements.txt at:"
         Write-Log "  $RequirementsFile"
         Write-Log "Make sure this setup folder is still inside the CaveViewer project folder."
         return $false
     }
 
-    $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = "python"
-    $psi.Arguments = "-m pip install -r `"$RequirementsFile`" -e `"$ProjectRoot`""
-    $psi.RedirectStandardOutput = $true
-    $psi.RedirectStandardError = $true
-    $psi.UseShellExecute = $false
-    $psi.CreateNoWindow = $true
-
-    $proc = New-Object System.Diagnostics.Process
-    $proc.StartInfo = $psi
-
-    $outputHandler = {
-        if (-not [string]::IsNullOrEmpty($EventArgs.Data)) {
-            Write-Log $EventArgs.Data
-        }
+    $pipArguments = @(
+        "-m",
+        "pip",
+        "install",
+        "--disable-pip-version-check"
+    )
+    if ($NonInteractive) {
+        # The package smoke must not make network requests. It still proves
+        # interpreter selection, venv creation, editable installation, and
+        # an installed-module import using the exact production runtime.
+        Write-Log "Noninteractive verification uses pip --no-deps; dependency downloads are intentionally disabled."
+        $pipArguments += @("--no-deps", "--no-build-isolation")
+    } else {
+        $pipArguments += @("-r", $RequirementsFile)
     }
-    Register-ObjectEvent -InputObject $proc -EventName OutputDataReceived -Action $outputHandler | Out-Null
-    Register-ObjectEvent -InputObject $proc -EventName ErrorDataReceived -Action $outputHandler | Out-Null
-
-    $proc.Start() | Out-Null
-    $proc.BeginOutputReadLine()
-    $proc.BeginErrorReadLine()
-    $proc.WaitForExit()
-
-    Get-EventSubscriber | Where-Object { $_.SourceObject -eq $proc } | Unregister-Event
-
-    if ($proc.ExitCode -ne 0) {
-        Write-Log "ERROR: pip install failed (exit code $($proc.ExitCode))."
+    $pipArguments += @("-e", $ProjectRoot)
+    $pipResult = Invoke-CaveViewerCommand -FilePath $script:RuntimePython -ArgumentList $pipArguments -Description "CaveViewer dependency installation"
+    if (-not $pipResult.Succeeded) {
+        Write-Log "ERROR: pip install failed; exit code $($pipResult.ExitCode)."
         return $false
     }
 
-    Write-Log "All requirements installed successfully."
+    return Test-CaveViewerInstallation
+}
+
+function Test-CaveViewerInstallation {
+    if ([string]::IsNullOrWhiteSpace($script:RuntimePython)) {
+        Write-Log "ERROR: CaveViewer's verified runtime is unavailable for installation verification."
+        return $false
+    }
+
+    # This checks the editable installation through the same explicit virtual
+    # environment that the shortcut will use.  It imports no GUI or GPU code.
+    $verifyCode = "import caveviewer; from caveviewer.version import APP_NAME, APP_VERSION; print(APP_NAME + ' ' + APP_VERSION)"
+    $verifyResult = Invoke-CaveViewerCommand -FilePath $script:RuntimePython -ArgumentList @("-c", $verifyCode) -Description "CaveViewer installed-module verification"
+    if (-not $verifyResult.Succeeded) {
+        Write-Log "ERROR: CaveViewer could not be imported from its verified virtual environment."
+        return $false
+    }
+
+    Write-Log "Verified CaveViewer module with $script:RuntimePython."
     return $true
 }
 
-function Add-PythonFirewallRule {
-    <#
-        Adds a Windows Firewall outbound allow-rule for python.exe so that
-        CaveViewer can reach GitHub (update checks, map-library catalog) the
-        very first time it runs.
+function ConvertTo-PowerShellSingleQuotedLiteral {
+    param([AllowEmptyString()][string]$Value)
 
-        Why this matters: setup runs elevated (Administrator), but the
-        Desktop shortcut launches python as a normal user.  The first time a
-        newly-installed python.exe makes an outbound TCP connection, Windows
-        Defender Firewall can show a "allow / block" popup.  If the user
-        dismisses or blocks that popup, Python is firewall-blocked for every
-        subsequent session -- the app can't check for updates or load the
-        map-library list even though the machine is genuinely online.
-        Creating the rule here, while we're still elevated, prevents the
-        popup entirely and ensures the app works out of the box.
+    return "'" + $Value.Replace("'", "''") + "'"
+}
 
-        This step is intentionally non-fatal: if the rule can't be created
-        (e.g. a corporate Group Policy blocks New-NetFirewallRule), setup
-        still completes successfully -- the app will run, and the worst-case
-        is the user sees the firewall popup on first launch.
-    #>
-    try {
-        $pythonCmd = Get-Command python -ErrorAction SilentlyContinue
-        $pythonPath = if ($pythonCmd) { $pythonCmd.Source } else { $null }
-        if (-not $pythonPath -or -not (Test-Path $pythonPath)) {
-            Write-Log "Firewall rule skipped: python.exe path not found."
-            return
-        }
+function ConvertTo-ShortcutFileArgument {
+    param([string]$Path)
 
-        $ruleName = "CaveViewer - Python outbound"
-
-        # Remove any stale rule from a previous install before re-adding.
-        Remove-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue
-
-        New-NetFirewallRule `
-            -DisplayName $ruleName `
-            -Direction Outbound `
-            -Program $pythonPath `
-            -Action Allow `
-            -Profile Any `
-            -Enabled True | Out-Null
-
-        Write-Log "Firewall rule created -- Python can reach the internet when launched from the Desktop shortcut."
-    } catch {
-        # Non-fatal: log the reason but let setup continue.
-        Write-Log "Note: could not create firewall rule ($($_.Exception.Message))."
-        Write-Log "If CaveViewer can't reach GitHub on first launch, allow Python through Windows Firewall manually."
+    if ($Path.Contains('"')) {
+        throw "Windows paths cannot contain a double quote."
     }
+    return '"' + $Path + '"'
+}
+
+function New-CaveViewerLauncher {
+    if ([string]::IsNullOrWhiteSpace($script:RuntimePython) -or [string]::IsNullOrWhiteSpace($script:RuntimeDirectory)) {
+        throw "CaveViewer's verified runtime has not been initialized."
+    }
+
+    $launcherPath = Join-Path $script:RuntimeDirectory "launch-caveviewer.ps1"
+    $launcherLines = @(
+        '$ErrorActionPreference = ''Stop''',
+        ('$python = {0}' -f (ConvertTo-PowerShellSingleQuotedLiteral $script:RuntimePython)),
+        ('$projectRoot = {0}' -f (ConvertTo-PowerShellSingleQuotedLiteral $ProjectRoot)),
+        ('$launchLogPath = {0}' -f (ConvertTo-PowerShellSingleQuotedLiteral $SetupLogPath)),
+        'try {',
+        '    New-Item -ItemType Directory -Path (Split-Path -Parent $launchLogPath) -Force | Out-Null',
+        '    Set-Location -LiteralPath $projectRoot'
+    )
+    if ($IoWorkers -gt 0) {
+        $launcherLines += ('$env:CAVEVIEWER_IO_WORKERS = {0}' -f (ConvertTo-PowerShellSingleQuotedLiteral ([string]$IoWorkers)))
+    }
+    $launcherLines += @(
+        '    & $python -m caveviewer *>> $launchLogPath',
+        '    $exitCode = $LASTEXITCODE',
+        '    if ($exitCode -ne 0) {',
+        '        Add-Content -LiteralPath $launchLogPath -Value ("[$(Get-Date -Format ''s'')] CaveViewer exited with code $exitCode.") -Encoding UTF8',
+        '    }',
+        '    exit $exitCode',
+        '} catch {',
+        '    Add-Content -LiteralPath $launchLogPath -Value ("[$(Get-Date -Format ''s'')] CaveViewer launch failed: $($_.Exception.Message)") -Encoding UTF8',
+        '    exit 1',
+        '}'
+    )
+    [System.IO.File]::WriteAllText(
+        $launcherPath,
+        ($launcherLines -join [System.Environment]::NewLine) + [System.Environment]::NewLine,
+        [System.Text.Encoding]::UTF8
+    )
+    $script:LaunchScriptPath = $launcherPath
+    return $launcherPath
 }
 
 function New-DesktopShortcut {
-    Write-Log "Creating a CaveViewer shortcut on your Desktop..."
+    Write-Log "Creating a CaveViewer shortcut with its verified runtime..."
 
     try {
-        $desktopPath = [System.Environment]::GetFolderPath("Desktop")
+        $desktopPath = if ([string]::IsNullOrWhiteSpace($ShortcutDirectory)) {
+            [System.Environment]::GetFolderPath("Desktop")
+        } else {
+            [System.IO.Path]::GetFullPath($ShortcutDirectory)
+        }
+        New-Item -ItemType Directory -Path $desktopPath -Force -ErrorAction Stop | Out-Null
         $shortcutPath = Join-Path $desktopPath "CaveViewer.lnk"
+        $launcherPath = New-CaveViewerLauncher
 
-        $pythonGuiPath = Resolve-PythonGuiPath
+        $powerShellPath = Join-Path $PSHOME "powershell.exe"
+        if (-not (Test-Path -LiteralPath $powerShellPath)) {
+            throw "Could not find PowerShell at '$powerShellPath'."
+        }
+
         $iconPath = Join-Path $ScriptDir "icon\caveviewer.ico"
-        $stableIconDir = Join-Path $env:ProgramData "CaveViewer"
+        $stableIconDir = Join-Path $CaveViewerDataRoot "icons"
         $stableIconPath = Join-Path $stableIconDir "caveviewer-$SafeAppVersion.ico"
 
         $wshShell = New-Object -ComObject WScript.Shell
         $shortcut = $wshShell.CreateShortcut($shortcutPath)
-
-        if ($IoWorkers -gt 0) {
-            # Launch through hidden PowerShell so the shortcut can set this
-            # runtime-only environment variable without modifying system/user
-            # env settings or showing a console window.
-            $shortcut.TargetPath = "powershell.exe"
-            $shortcut.Arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command `"`$env:CAVEVIEWER_IO_WORKERS='$IoWorkers'; Start-Process -WindowStyle Hidden -FilePath '$pythonGuiPath' -ArgumentList '-m','caveviewer' -WorkingDirectory '$ProjectRoot'`""
-            Write-Log "Shortcut configured with CAVEVIEWER_IO_WORKERS=$IoWorkers."
-        } else {
-            $shortcut.TargetPath = $pythonGuiPath
-            $shortcut.Arguments = "-m caveviewer"
-        }
-
+        $shortcut.TargetPath = $powerShellPath
+        $shortcut.Arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File $(ConvertTo-ShortcutFileArgument $launcherPath)"
         $shortcut.WorkingDirectory = $ProjectRoot
-        $shortcut.Description = "Launch CaveViewer"
+        $shortcut.Description = "Launch CaveViewer using its verified Python 3.12 runtime"
 
-        if (Test-Path $iconPath) {
-            New-Item -ItemType Directory -Path $stableIconDir -Force | Out-Null
-            Copy-Item $iconPath $stableIconPath -Force
+        if (Test-Path -LiteralPath $iconPath) {
+            New-Item -ItemType Directory -Path $stableIconDir -Force -ErrorAction Stop | Out-Null
+            Copy-Item -LiteralPath $iconPath -Destination $stableIconPath -Force
             $shortcut.IconLocation = "$stableIconPath,0"
-            Write-Log "Using custom CaveViewer icon: $stableIconPath"
+            Write-Log "Using user-owned CaveViewer icon: $stableIconPath"
         } else {
-            $shortcut.IconLocation = "$pythonGuiPath,0"
-            Write-Log "Custom icon not found at $iconPath -- using default icon instead."
+            $shortcut.IconLocation = "$(Resolve-PythonGuiPath),0"
+            Write-Log "Custom icon not found at $iconPath -- using the verified runtime icon instead."
         }
 
         $shortcut.Save()
         Write-Log "Shortcut created: $shortcutPath"
+        Write-Log "Shortcut launcher: $launcherPath"
         return $true
     } catch {
-        Write-Log "ERROR: Failed to create the desktop shortcut."
-        Write-Log $_.Exception.Message
+        Write-Log "ERROR: Failed to create the desktop shortcut: $($_.Exception.Message)"
         return $false
     }
 }
 
-# -- Single Install button: runs all three steps in sequence -----------------
+# -- Install workflow ---------------------------------------------------------
 
-$btnInstall.Add_Click({
+function Invoke-CaveViewerInstall {
+    # Shared by the Install button, noninteractive package smoke, and the
+    # updater's automatic handoff.  Every path uses the same explicit runtime.
     $btnInstall.Enabled = $false
     $btnInstall.Text = "Installing..."
     foreach ($stepName in $stepNames) {
         Set-StepState $stepName "pending"
     }
+    Write-Log "Setup log: $SetupLogPath"
+    Write-Log "Project root: $ProjectRoot"
+    Write-Log "User-owned runtime root: $(if ([string]::IsNullOrWhiteSpace($RuntimeRoot)) { Join-Path $CaveViewerDataRoot 'runtime\python312' } else { $RuntimeRoot })"
+
     Set-SetupStatus "Checking Python..." 5
     Set-StepState "Python" "running"
 
@@ -749,49 +1011,49 @@ $btnInstall.Add_Click({
         Write-Log "Setup stopped -- Python installation failed. Click Install to try again."
         $btnInstall.Enabled = $true
         $btnInstall.Text = "Install"
-        return
+        return $false
     }
     Set-StepState "Python" "done"
 
-    # Non-fatal: ensures vcruntime140.dll is present system-wide so that
-    # Python extension packages (pyglm, moderngl, etc.) can load their DLLs.
-    Set-SetupStatus "Preparing Visual C++ runtime..." 25
-    Set-StepState "Visual C++ runtime" "running"
-    Install-VcRedist
-    Set-StepState "Visual C++ runtime" "done"
+    Set-SetupStatus "Preparing CaveViewer runtime..." 28
+    Set-StepState "CaveViewer runtime" "running"
+    $ok = Prepare-CaveViewerRuntime
+    if (-not $ok) {
+        Set-StepState "CaveViewer runtime" "failed"
+        Set-SetupStatus "Runtime preparation failed" 28
+        Write-Log ""
+        Write-Log "Setup stopped -- CaveViewer's verified runtime could not be prepared. Click Install to try again."
+        $btnInstall.Enabled = $true
+        $btnInstall.Text = "Install"
+        return $false
+    }
+    Set-StepState "CaveViewer runtime" "done"
 
-    Set-SetupStatus "Installing Python libraries..." 45
+    Set-SetupStatus "Installing Python libraries..." 55
     Set-StepState "Python libraries" "running"
     $ok = Install-Requirements
     if (-not $ok) {
         Set-StepState "Python libraries" "failed"
-        Set-SetupStatus "Library installation failed" 45
+        Set-SetupStatus "Library installation failed" 55
         Write-Log ""
         Write-Log "Setup stopped -- installing requirements failed. Click Install to try again."
         $btnInstall.Enabled = $true
         $btnInstall.Text = "Install"
-        return
+        return $false
     }
     Set-StepState "Python libraries" "done"
 
-    # Non-fatal: add a firewall rule so CaveViewer can reach GitHub on first
-    # launch without triggering a "block or allow?" popup.
-    Set-SetupStatus "Configuring firewall access..." 75
-    Set-StepState "Firewall access" "running"
-    Add-PythonFirewallRule
-    Set-StepState "Firewall access" "done"
-
-    Set-SetupStatus "Creating Desktop shortcut..." 88
+    Set-SetupStatus "Creating Desktop shortcut..." 84
     Set-StepState "Desktop shortcut" "running"
     $ok = New-DesktopShortcut
     if (-not $ok) {
         Set-StepState "Desktop shortcut" "failed"
-        Set-SetupStatus "Shortcut creation failed" 88
+        Set-SetupStatus "Shortcut creation failed" 84
         Write-Log ""
         Write-Log "Setup stopped -- could not create the desktop shortcut. Click Install to try again."
         $btnInstall.Enabled = $true
         $btnInstall.Text = "Install"
-        return
+        return $false
     }
     Set-StepState "Desktop shortcut" "done"
 
@@ -800,8 +1062,13 @@ $btnInstall.Add_Click({
     Set-SetupStatus "CaveViewer is ready" 100
     $btnInstall.Text = "Done"
     $btnInstall.Enabled = $false
+    return $true
+}
 
-    Show-InstallCompleteDialog
+$btnInstall.Add_Click({
+    if (Invoke-CaveViewerInstall) {
+        Show-InstallCompleteDialog
+    }
 })
 
 function Show-InstallCompleteDialog {
@@ -890,12 +1157,59 @@ function Show-InstallCompleteDialog {
     [void]$dialog.ShowDialog($form)
 }
 
+function Start-AutomaticUpdateInstall {
+    # The verified-update handoff selected this mode only after an explicit
+    # in-app click.  It keeps setup visible and leaves it open on any failure.
+    if (-not (Invoke-CaveViewerInstall)) {
+        return
+    }
+
+    try {
+        Write-Log "Automatic update installation finished; launching CaveViewer."
+        $proc = Start-CaveViewerApp
+        Start-Sleep -Milliseconds 1200
+        if ($proc -and $proc.HasExited) {
+            Write-Log "WARNING: CaveViewer exited immediately after automatic update launch (exit code $($proc.ExitCode))."
+            Write-Log "The setup window will stay open so you can review the log or launch from the Desktop shortcut."
+            $btnInstall.Enabled = $true
+            $btnInstall.Text = "Install"
+            return
+        }
+        $form.Close()
+    } catch {
+        Write-Log "WARNING: Could not launch CaveViewer after the automatic update: $($_.Exception.Message)"
+        Write-Log "The setup window will stay open so you can review the log or launch from the Desktop shortcut."
+        $btnInstall.Enabled = $true
+        $btnInstall.Text = "Install"
+    }
+}
+
 Write-Log "Welcome to CaveViewer Setup."
+Write-Log "Setup log is retained at: $SetupLogPath"
 if ($IoWorkers -gt 0) {
     Write-Log "Runtime worker override enabled: CAVEVIEWER_IO_WORKERS=$IoWorkers"
 }
 Write-Log "CaveViewer is licensed under the GNU General Public License v3.0."
 Write-Log "License files are included with this setup folder: LICENSE and THIRD_PARTY_NOTICES.md."
-Write-Log "Click Install to set up Python, the required libraries, and a Desktop shortcut."
+Write-Log "Setup does not change system Python, PATH, firewall, or administrator-owned locations."
+
+if ($NonInteractive) {
+    Write-Log "Noninteractive installer verification requested."
+    if (Invoke-CaveViewerInstall) {
+        Write-Log "Noninteractive installer verification completed successfully."
+        exit 0
+    }
+    Write-Log "Noninteractive installer verification failed. See the setup log above."
+    exit 1
+}
+
+if ($AutoInstall) {
+    Write-Log "Automatic update installation requested."
+    $form.Add_Shown({
+        Start-AutomaticUpdateInstall
+    })
+} else {
+    Write-Log "Click Install to set up Python, the required libraries, and a Desktop shortcut."
+}
 
 [void]$form.ShowDialog()
