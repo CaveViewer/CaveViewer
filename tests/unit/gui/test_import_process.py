@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -85,9 +86,9 @@ class FakeSpawnContext:
         return process
 
 
-def _runtime_settings() -> ImportRuntimeSettings:
+def _runtime_settings(*, map_cache_dir: str = "/cache-root") -> ImportRuntimeSettings:
     return ImportRuntimeSettings(
-        map_cache_dir="/cache-root",
+        map_cache_dir=map_cache_dir,
         chunk_size_meters=12.5,
         max_upload_group_mb=24.0,
         obj_scan_throttle_seconds=0.003,
@@ -253,15 +254,19 @@ def test_import_process_reports_progress_and_done(monkeypatch):
 
 
 def test_import_process_uses_explicit_runtime_settings_without_environment(
-    monkeypatch,
+    monkeypatch, tmp_path,
 ):
     events = FakeEventQueue()
-    settings = _runtime_settings()
+    map_root = tmp_path / "maps"
+    source_path = map_root / "cave.obj"
+    cache_root = tmp_path / "cache-root"
+    expected_cache_dir = cache_root / "cave"
+    settings = _runtime_settings(map_cache_dir=str(cache_root))
     child_runtime_calls = []
 
     def fake_import(model_descriptor, textures_dir, **options):
-        assert model_descriptor == {"obj_path": "/maps/cave.obj"}
-        assert textures_dir == "/maps"
+        assert model_descriptor == {"obj_path": str(source_path)}
+        assert textures_dir == str(map_root)
         assert options["chunk_size"] == 12.5
         assert options["max_upload_group_mb"] == 24.0
         assert options["obj_scan_throttle_seconds"] == 0.003
@@ -269,8 +274,8 @@ def test_import_process_uses_explicit_runtime_settings_without_environment(
         assert options["obj_bucket_workers"] == 3
         assert options["chunk_build_workers"] == 4
         assert options["chunk_build_reserved_cpus"] == 1
-        assert options["cache_dir"].startswith("/cache-root")
-        return "/cache/cave"
+        assert Path(options["cache_dir"]).is_relative_to(cache_root)
+        return str(expected_cache_dir)
 
     monkeypatch.setattr(importer, "import_and_cache_any", fake_import)
     monkeypatch.setattr(
@@ -290,14 +295,18 @@ def test_import_process_uses_explicit_runtime_settings_without_environment(
     )
 
     import_process._run_import_process(
-        {"obj_path": "/maps/cave.obj"},
-        "/maps",
+        {"obj_path": str(source_path)},
+        str(map_root),
         events,
         runtime_settings=settings,
     )
 
     assert child_runtime_calls == [7]
-    assert events.events[-1] == ("done", "/cache/cave", "/cache/cave")
+    assert events.events[-1] == (
+        "done",
+        str(expected_cache_dir),
+        str(expected_cache_dir),
+    )
 
 
 def test_import_process_forces_rebuild_when_requested(monkeypatch):
