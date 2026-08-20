@@ -259,20 +259,23 @@ fi
 mkdir -p "$packages_dir" "$metadata_dir" "$installer_dir"
 rm -f "$artifact_path" "$metadata_path" "$update_metadata_path" "$installer_path"
 
+# Use ISCC's dash-prefixed switches. Git Bash/MSYS rewrites slash-prefixed
+# arguments such as /D... as POSIX paths before native Windows programs see
+# them, which makes ISCC interpret them as additional script filenames.
 inno_args=(
-  "/DAppVersion=$version"
-  "/DPayloadDir=$(windows_path "$payload_dir")"
-  "/DOutputDir=$(windows_path "$installer_dir")"
-  "/DOutputBaseName=CaveViewerSetup"
-  "/DSetupIconFile=$(windows_path "$icon_file")"
+  "-DAppVersion=$version"
+  "-DPayloadDir=$(windows_path "$payload_dir")"
+  "-DOutputDir=$(windows_path "$installer_dir")"
+  "-DOutputBaseName=CaveViewerSetup"
+  "-DSetupIconFile=$(windows_path "$icon_file")"
 )
 if $signing_enabled; then
   # Inno Setup expands $f to an already-quoted filename. Do not add another
   # quote layer or paths containing spaces will be passed incorrectly.
   inno_sign_command="$(windows_path "$powershell_exe") -NoProfile -ExecutionPolicy Bypass -File \"$sign_script_windows\" -ArtifactPath \$f -CertificateSubject \"$certificate_subject\" -TimestampUrl \"$timestamp_url\""
   inno_args+=(
-    "/DEnableCodeSigning=1"
-    "/SCaveViewerSign=$inno_sign_command"
+    "-DEnableCodeSigning=1"
+    "-SCaveViewerSign=$inno_sign_command"
   )
 fi
 inno_args+=("$(windows_path "$installer_script")")

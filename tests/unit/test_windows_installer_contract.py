@@ -107,6 +107,14 @@ def test_frozen_installer_pipeline_is_per_user_and_fails_closed_without_signing(
     assert "CaveViewerSetup.exe" in packager
     assert "cygpath -aw" in packager
     assert '-ArtifactPath "$(windows_path "$artifact")"' in packager
+    assert '"-DAppVersion=$version"' in packager
+    assert '"-DPayloadDir=$(windows_path "$payload_dir")"' in packager
+    assert '"-DOutputDir=$(windows_path "$installer_dir")"' in packager
+    assert '"-DSetupIconFile=$(windows_path "$icon_file")"' in packager
+    assert '"-DEnableCodeSigning=1"' in packager
+    assert '"-SCaveViewerSign=$inno_sign_command"' in packager
+    assert '"/DAppVersion=$version"' not in packager
+    assert '"/SCaveViewerSign=$inno_sign_command"' not in packager
     assert "windows_signed_installer" in metadata_writer
     assert "windows.zip" not in packager
 
