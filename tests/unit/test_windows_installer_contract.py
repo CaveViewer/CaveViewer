@@ -68,13 +68,16 @@ def test_public_windows_build_scripts_expose_help_and_reject_positional_argument
     for script_name in ("build.sh", "package.sh"):
         script = WINDOWS_SCRIPTS / script_name
         help_result = subprocess.run(
-            [str(script), "--help"], capture_output=True, text=True, check=False
+            ["bash", str(script), "--help"],
+            capture_output=True,
+            text=True,
+            check=False,
         )
         assert help_result.returncode == 0, help_result.stderr
         assert "Usage:" in help_result.stdout
 
         invalid_result = subprocess.run(
-            [str(script), "unexpected"],
+            ["bash", str(script), "unexpected"],
             capture_output=True,
             text=True,
             check=False,
