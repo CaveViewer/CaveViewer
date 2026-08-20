@@ -447,7 +447,7 @@ def create_platform_runtime(
     )
     resolved_presentation_actions_adapter = (
         presentation_actions_adapter
-        or create_presentation_actions_adapter(resolved_platform_adapter)
+        or create_presentation_actions_adapter(platform_name=resolved_platform_name)
     )
     profile = PlatformProfile(
         platform_name=resolved_platform_name,

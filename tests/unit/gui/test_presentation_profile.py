@@ -3,15 +3,20 @@
 from __future__ import annotations
 
 from dataclasses import FrozenInstanceError
+from types import SimpleNamespace
 
 import pytest
 
+from caveviewer.gui.platform import presentation_actions
 from caveviewer.gui.platform.default import DefaultSplashPlatformAdapter
 from caveviewer.gui.platform.presentation import (
     font_candidates_for_profile,
     select_presentation_profile,
 )
 from caveviewer.gui.platform.presentation_actions import (
+    DefaultPresentationActionsAdapter,
+    MacOSPresentationActionsAdapter,
+    WindowsPresentationActionsAdapter,
     create_presentation_actions_adapter,
 )
 from caveviewer.gui.platform.runtime import create_platform_runtime
@@ -103,32 +108,151 @@ def test_fontconfig_is_an_action_time_fallback(monkeypatch):
     )
 
 
-def test_presentation_actions_facade_delegates_only_native_actions():
-    calls: list[tuple[object, ...]] = []
+@pytest.mark.parametrize(
+    ("platform_name", "adapter_type"),
+    [
+        ("darwin", MacOSPresentationActionsAdapter),
+        ("win32", WindowsPresentationActionsAdapter),
+        ("linux", DefaultPresentationActionsAdapter),
+        ("freebsd", DefaultPresentationActionsAdapter),
+    ],
+)
+def test_presentation_actions_select_direct_native_implementation(
+    platform_name,
+    adapter_type,
+):
+    assert isinstance(
+        create_presentation_actions_adapter(platform_name=platform_name),
+        adapter_type,
+    )
 
-    class FakePlatformAdapter:
-        def configure_process_dpi_awareness(self):
-            calls.append(("dpi",))
 
-        def install_about_handler(self, root, program_name, version):
-            calls.append(("about", root, program_name, version))
+def test_default_presentation_actions_keep_best_effort_focus_order():
+    calls: list[str] = []
 
-        def focus_viewer_window(self, window):
-            calls.append(("focus", window))
+    class Target:
+        def __init__(self, name: str) -> None:
+            self._name = name
 
-    adapter = create_presentation_actions_adapter(FakePlatformAdapter())
-    root = object()
-    window = object()
+        def switch_to(self) -> None:
+            calls.append(f"{self._name}.switch")
 
-    adapter.configure_process_dpi_awareness()
-    adapter.install_about_handler(root, "CaveViewer", "1.2.3")
-    adapter.focus_viewer_window(window)
+        def activate(self) -> None:
+            calls.append(f"{self._name}.activate")
+
+    class Window(Target):
+        def __init__(self) -> None:
+            super().__init__("window")
+            self._window = Target("native")
+
+    DefaultPresentationActionsAdapter().focus_viewer_window(Window())
 
     assert calls == [
-        ("dpi",),
-        ("about", root, "CaveViewer", "1.2.3"),
-        ("focus", window),
+        "window.switch",
+        "window.activate",
+        "native.switch",
+        "native.activate",
     ]
+
+
+def test_macos_presentation_actions_keep_native_focus_preference():
+    calls: list[str] = []
+
+    class NativeWindow:
+        def activate(self) -> None:
+            calls.append("native.activate")
+
+    class Window:
+        _window = NativeWindow()
+
+        def activate(self) -> None:
+            calls.append("window.activate")
+
+    MacOSPresentationActionsAdapter().focus_viewer_window(Window())
+
+    assert calls == ["native.activate"]
+
+
+def test_macos_presentation_actions_register_tcl_only_about_handler():
+    class FakeRoot:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, ...]] = []
+            self.scripts: list[str] = []
+
+        def call(self, *args: str) -> None:
+            self.calls.append(args)
+
+        def eval(self, script: str) -> None:
+            self.scripts.append(script)
+
+    root = FakeRoot()
+
+    MacOSPresentationActionsAdapter().install_about_handler(root, "CaveViewer", "1.2.3")
+
+    assert root.calls == [
+        ("set", "_cv_about_title", "About CaveViewer"),
+        ("set", "_cv_about_msg", "CaveViewer\nVersion 1.2.3"),
+        (
+            "set",
+            "_cv_about_detail",
+            "CaveViewer created by Brian Deatherage & Zsolt Zsabo of\n"
+            "BottomLine Projects Scientific Dive Team and other volunteers.\n\n"
+            "Licensed under the GNU General Public License v3.0.",
+        ),
+    ]
+    assert "proc ::tk::mac::ShowAbout" in root.scripts[0]
+    assert "proc tkAboutDialog {} { ::tk::mac::ShowAbout }" in root.scripts[0]
+    assert presentation_actions._macos_about_root_ref is root
+
+
+def test_windows_presentation_actions_prefer_per_monitor_v2_dpi(monkeypatch):
+    calls: list[tuple[str, int | None]] = []
+    fake_ctypes = SimpleNamespace(
+        c_void_p=lambda value: value,
+        windll=SimpleNamespace(
+            user32=SimpleNamespace(
+                SetProcessDpiAwarenessContext=lambda value: calls.append(("v2", value))
+                or 1,
+                SetProcessDPIAware=lambda: calls.append(("vista", None)),
+            ),
+            shcore=SimpleNamespace(
+                SetProcessDpiAwareness=lambda value: calls.append(("v81", value))
+            ),
+        ),
+    )
+    monkeypatch.setattr(presentation_actions, "ctypes", fake_ctypes)
+
+    WindowsPresentationActionsAdapter().configure_process_dpi_awareness()
+
+    assert calls == [("v2", -4)]
+
+
+def test_windows_presentation_actions_keep_dpi_fallbacks(monkeypatch):
+    calls: list[tuple[str, int | None]] = []
+
+    def unavailable_v2(value: int) -> int:
+        calls.append(("v2", value))
+        return 0
+
+    def unavailable_v81(value: int) -> None:
+        calls.append(("v81", value))
+        raise OSError("not available")
+
+    fake_ctypes = SimpleNamespace(
+        c_void_p=lambda value: value,
+        windll=SimpleNamespace(
+            user32=SimpleNamespace(
+                SetProcessDpiAwarenessContext=unavailable_v2,
+                SetProcessDPIAware=lambda: calls.append(("vista", None)),
+            ),
+            shcore=SimpleNamespace(SetProcessDpiAwareness=unavailable_v81),
+        ),
+    )
+    monkeypatch.setattr(presentation_actions, "ctypes", fake_ctypes)
+
+    WindowsPresentationActionsAdapter().configure_process_dpi_awareness()
+
+    assert calls == [("v2", -4), ("v81", 2), ("vista", None)]
 
 
 def test_runtime_composes_injected_presentation_values():
@@ -145,3 +269,17 @@ def test_runtime_composes_injected_presentation_values():
 
     assert runtime.presentation_profile is profile
     assert runtime.presentation_actions_adapter is actions
+
+
+def test_runtime_composes_direct_presentation_actions_without_broad_adapter_methods():
+    runtime = create_platform_runtime(
+        platform_adapter=object(),
+        desktop_services=object(),
+        environment={},
+        platform_name="darwin",
+    )
+
+    assert isinstance(
+        runtime.presentation_actions_adapter,
+        MacOSPresentationActionsAdapter,
+    )

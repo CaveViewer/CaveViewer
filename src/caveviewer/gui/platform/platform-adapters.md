@@ -1,6 +1,9 @@
 # Platform-Specific Code Module
 
-This directory implements a **platform adapter pattern** that allows the CaveViewer application to provide platform-specific behavior across macOS, Windows, and Linux without scattering conditional logic throughout the codebase.
+This directory implements focused platform boundaries that provide macOS,
+Windows, Linux, and fallback behavior without scattering conditional logic
+throughout the codebase. `SplashPlatformAdapter` is a shrinking compatibility
+surface for concerns that have not yet moved behind a focused contract.
 
 ## Directory Structure
 
@@ -15,7 +18,7 @@ platform/
 ├── directory_selection.py   # Shared action-time directory-picker authorization
 ├── file_selection.py        # Shared action-time file-picker authorization
 ├── presentation.py          # Immutable fonts, layouts, shortcut, and input profile
-├── presentation_actions.py  # Focused native DPI, About-menu, and focus facade
+├── presentation_actions.py  # Direct native DPI, About-menu, and focus actions
 ├── runtime.py               # Per-process platform composition and feature gates
 ├── update_package_reveal.py # Focused non-executing verified-package facade
 ├── update_package_storage.py # Focused verified-package storage facade
@@ -42,22 +45,20 @@ platform/
 
 ## Architecture Overview
 
-The module uses Python's **Protocol** pattern to define a contract (`SplashPlatformAdapter`) that each platform implementation must satisfy. This allows:
-
-- **No scattered runtime conditionals**: One factory selects the adapter, and feature code calls adapter methods
-- **Easy testing**: Mock adapters can be injected for testing specific platforms
-- **Extensibility**: New platform-specific methods can be added to the protocol and implemented per-platform
-- **Maintainability**: Platform-specific logic is isolated in dedicated files
+Focused protocols and immutable profiles keep platform behavior local while
+still allowing deterministic test injection. The broad
+`SplashPlatformAdapter` protocol remains only for compatibility concerns that
+have not yet received a focused owner; new features must not add methods to it.
 
 `SplashPlatformAdapter` continues to own unmigrated package behavior. Static
 GUI presentation now lives in the immutable `PresentationProfile`, selected
 purely from the composed platform name. It contains fonts, Tk and splash
 layouts, shortcut/input conventions, text scaling, and startup sizing choices;
 it never creates a Tk root, probes a display, or invokes native APIs.
-`PresentationActionsAdapter` owns the small
-action-time native boundary for process DPI setup, macOS About registration,
-and viewer focus. Its current implementation is deliberately a narrow facade
-over the established adapter methods while native implementations migrate.
+`PresentationActionsAdapter` owns the small action-time native boundary for
+process DPI setup, macOS About registration, and viewer focus. Its direct
+Windows, macOS, and fallback implementations are selected from the composed
+platform name without constructing Tk objects or invoking native APIs.
 
 Static update release policy now lives in the immutable
 `UpdateProfile` selected from platform and process-architecture facts; the
@@ -256,8 +257,9 @@ map-opening callers.
 
 `SplashPlatformAdapter` remains a compatibility surface for unmigrated
 platform actions. `PresentationProfile` owns static GUI choices and
-`PresentationActionsAdapter` owns the three native presentation actions;
-adapter-based presentation calls are a local compatibility path only.
+`PresentationActionsAdapter` owns the three native presentation actions
+directly; neither its factory nor its action implementations depend on the
+broad adapter.
 Automatic-update policy and manifest parsing have moved to `UpdateProfile` and
 `UpdateTarget`; adapter-based update calls are likewise local compatibility
 paths. `UpdatePackageRevealAdapter`, `UpdatePackageStorageAdapter`, and the
@@ -274,22 +276,25 @@ outside this runtime layer.
 
 ### `base.py` – Protocol Definition
 
-Defines `SplashPlatformAdapter`, a Protocol that specifies all platform-aware methods:
+Defines `SplashPlatformAdapter`, the frozen compatibility Protocol for
+unmigrated action-time platform effects:
 
 ```python
 class SplashPlatformAdapter(Protocol):
-    def bookmark_save_modifier(self) -> str:
-        """Return 'command' (macOS) or 'control' (Windows/Linux)"""
+    def reveal_file(self, path: str) -> None:
+        ...
 
-    def mouse_look_button_name(self) -> str:
-        """Return 'right' (macOS) or 'left' (Windows/Linux)"""
+    def load_system_certificates(self, context: object) -> None:
+        ...
 
-    # ... other methods for update metadata, package reveal, UI fonts, etc.
+    def recording_subprocess_startup_kwargs(self) -> dict:
+        ...
 ```
 
-The presentation methods shown above are retained only for legacy callers.
-New UI code reads `PlatformRuntime.presentation_profile` (or a pure direct
-fallback) instead of this protocol.
+Fonts, layouts, shortcut/input conventions, text scaling, startup focus policy,
+and viewer sizing do not belong to this protocol. UI code reads
+`PlatformRuntime.presentation_profile` (or a pure direct fallback) instead.
+Native presentation effects use `PresentationActionsAdapter`.
 
 **When to modify**: Only for an existing compatibility concern that has not
 yet been split. New platform-dependent features use a narrow edge probe, pure
@@ -308,7 +313,9 @@ probe.
 `PresentationActionsAdapter` has only `configure_process_dpi_awareness()`,
 `install_about_handler()`, and `focus_viewer_window()`. Those calls occur at
 their native action boundaries, after consumers have already selected static
-presentation data from the profile.
+presentation data from the profile. Its factory selects direct Windows, macOS,
+or conservative fallback implementations from the composed platform name; the
+factory has no Tk, display, or native-action side effects.
 
 ### `factory.py` – Platform Detection
 
@@ -349,44 +356,28 @@ concerns are split out of `SplashPlatformAdapter`.
 
 ### `macos.py` – macOS Implementations
 
-Extends `DefaultSplashPlatformAdapter` with macOS-specific overrides:
-
-```python
-class MacOSSplashPlatformAdapter(DefaultSplashPlatformAdapter):
-    def ui_font_family(self) -> str:
-        return "Helvetica Neue"
-
-    def bookmark_save_modifier(self) -> str:
-        return "command"
-
-    def mouse_look_button_name(self) -> str:
-        return "right"
-
-```
+`MacOSSplashPlatformAdapter` retains Finder reveal. Its fonts, layouts, input
+conventions, and scaling are selected by the macOS `PresentationProfile`;
+its About-menu registration and viewer focus are direct
+`MacOSPresentationActionsAdapter` effects.
 
 ### `windows.py` & `linux.py` – Platform Overrides
 
-Similarly extend `DefaultSplashPlatformAdapter` with Windows/Linux specific behavior:
-
-```python
-class WindowsSplashPlatformAdapter(DefaultSplashPlatformAdapter):
-    def bookmark_save_modifier(self) -> str:
-        return "control"
-
-    def mouse_look_button_name(self) -> str:
-        return "left"
-
-```
+`WindowsSplashPlatformAdapter` retains certificate-store loading,
+recording-process startup flags, and Explorer reveal.
+`LinuxSplashPlatformAdapter` retains portal-backed file reveal. Their static
+presentation values are selected by `PresentationProfile`, not overridden on
+the broad adapter. Windows DPI setup belongs to
+`WindowsPresentationActionsAdapter`.
 
 ### `default.py` – Fallback Implementations
 
-Provides safe defaults for methods that should work on all platforms:
+Provides conservative fallbacks for remaining compatibility actions:
 
 ```python
 class DefaultSplashPlatformAdapter(SplashPlatformAdapter):
-    def ui_font_family(self) -> str:
-        return "Segoe UI"  # Generic, widely available
-
+    def reveal_file(self, path: str) -> None:
+        raise RuntimeError("Revealing files is unsupported on this platform")
 ```
 
 ## Usage Examples

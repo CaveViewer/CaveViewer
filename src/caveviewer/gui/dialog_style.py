@@ -11,8 +11,10 @@ import tkinter as tk
 from dataclasses import dataclass
 from typing import Callable, Literal
 
-from caveviewer.gui.platform.base import DialogLayoutPolicy
-from caveviewer.gui.platform.presentation import get_presentation_profile
+from caveviewer.gui.platform.presentation import (
+    DialogLayoutPolicy,
+    get_presentation_profile,
+)
 from caveviewer.gui.tk_theme import DARK_THEME
 
 

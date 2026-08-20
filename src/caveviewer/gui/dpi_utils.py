@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import os
 
-from caveviewer.gui.platform.factory import get_platform_adapter
 from caveviewer.gui.platform.presentation import (
     PresentationProfile,
     get_presentation_profile,
@@ -38,9 +37,7 @@ def configure_process_dpi_awareness(
     if _DPI_AWARENESS_CONFIGURED:
         return
     _DPI_AWARENESS_CONFIGURED = True
-    adapter = presentation_actions_adapter or create_presentation_actions_adapter(
-        get_platform_adapter()
-    )
+    adapter = presentation_actions_adapter or create_presentation_actions_adapter()
     adapter.configure_process_dpi_awareness()
 
 
