@@ -158,7 +158,8 @@ def test_frozen_installer_pipeline_is_per_user_and_fails_closed_without_signing(
     assert "CaveViewer smoke & café O'Brien" in smoke
     assert "--expected-version" in smoke
     assert "ConvertTo-WindowsCommandLineArgument" in smoke
-    assert "Start-Process -FilePath $Path -ArgumentList $commandLine -Wait -PassThru" in smoke
+    assert "Start-Process -FilePath $Path -ArgumentList $commandLine -PassThru" in smoke
+    assert "$process.WaitForExit($InstallerProcessWaitMilliseconds)" in smoke
     assert "$process.ExitCode" in smoke
 
 

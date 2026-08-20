@@ -27,6 +27,7 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+$InstallerProcessWaitMilliseconds = 120000
 
 function Assert-Condition {
     param(
@@ -133,7 +134,11 @@ function Invoke-CaveViewerInstaller {
     $commandLine = (@($Arguments | ForEach-Object {
         ConvertTo-WindowsCommandLineArgument -Argument $_
     }) -join " ")
-    $process = Start-Process -FilePath $Path -ArgumentList $commandLine -Wait -PassThru
+    $process = Start-Process -FilePath $Path -ArgumentList $commandLine -PassThru
+    if (-not $process.WaitForExit($InstallerProcessWaitMilliseconds)) {
+        Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+        throw "$Description did not finish within two minutes."
+    }
     if ($process.ExitCode -ne 0) {
         throw "$Description failed with installer exit code $($process.ExitCode)."
     }
