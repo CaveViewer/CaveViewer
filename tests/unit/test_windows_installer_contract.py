@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -65,22 +66,33 @@ def test_windows_setup_retains_diagnostics_and_exposes_noninteractive_smoke_mode
 
 
 def test_public_windows_build_scripts_expose_help_and_reject_positional_arguments():
+    bash_executable = "bash"
+    if sys.platform == "win32":
+        # `bash` resolves to the Windows Subsystem for Linux launcher on the
+        # hosted runner. Use the Git Bash executable that the Windows package
+        # workflow uses instead.
+        git_bash = Path(os.environ["ProgramFiles"]) / "Git" / "bin" / "bash.exe"
+        assert git_bash.is_file(), f"Git Bash is required: {git_bash}"
+        bash_executable = str(git_bash)
+
     for script_name in ("build.sh", "package.sh"):
         script = WINDOWS_SCRIPTS / script_name
         help_result = subprocess.run(
-            ["bash", str(script), "--help"],
+            [bash_executable, script.name, "--help"],
             capture_output=True,
             text=True,
             check=False,
+            cwd=WINDOWS_SCRIPTS,
         )
         assert help_result.returncode == 0, help_result.stderr
         assert "Usage:" in help_result.stdout
 
         invalid_result = subprocess.run(
-            ["bash", str(script), "unexpected"],
+            [bash_executable, script.name, "unexpected"],
             capture_output=True,
             text=True,
             check=False,
+            cwd=WINDOWS_SCRIPTS,
         )
         assert invalid_result.returncode == 1
         assert "positional arguments are not supported" in invalid_result.stderr
@@ -131,6 +143,8 @@ def test_frozen_installer_pipeline_is_per_user_and_fails_closed_without_signing(
     assert "--wait-pid" in installer
     assert "--expected-version" in installer
     assert "MAX_PARENT_WAIT_MS = 300000" in installer
+    assert "StrToIntDef(Candidate, 0)" in installer
+    assert "TryStrToInt" not in installer
     assert "RecordSuccessfulInstallation" in installer
     assert "RegWriteStringValue" in installer
     assert "Software\\CaveViewer\\Installation" in installer

@@ -119,9 +119,7 @@ begin
       Continue;
     end;
 
-    if not TryStrToInt(Candidate, ParsedPid) then begin
-      Exit;
-    end;
+    ParsedPid := StrToIntDef(Candidate, 0);
     if ParsedPid <= 0 then begin
       Exit;
     end;
