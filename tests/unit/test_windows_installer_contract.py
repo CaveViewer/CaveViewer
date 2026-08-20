@@ -120,7 +120,7 @@ def test_frozen_installer_pipeline_is_per_user_and_fails_closed_without_signing(
 
     assert "DefaultDirName={localappdata}\\Programs\\CaveViewer" in installer
     assert "PrivilegesRequired=lowest" in installer
-    assert "PrivilegesRequiredOverridesAllowed=none" in installer
+    assert "PrivilegesRequiredOverridesAllowed=none" not in installer
     assert "UninstallPreviousVersion=no" in installer
     assert '#define AppPayloadDirectory "app-" + AppVersion' in installer
     assert "--update" in installer

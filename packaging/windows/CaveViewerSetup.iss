@@ -34,7 +34,8 @@ DefaultDirName={localappdata}\Programs\CaveViewer
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
-PrivilegesRequiredOverridesAllowed=none
+; Leave PrivilegesRequiredOverridesAllowed unset: its default disallows
+; overrides, preserving this installer’s per-user, non-elevated contract.
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 OutputDir={#OutputDir}
