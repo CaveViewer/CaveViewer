@@ -24,6 +24,9 @@
 
 [Setup]
 AppId={{9B39A7AF-4525-4B39-8C14-7B6BFC651E9B}
+; A stable AppId makes subsequent installers share this installation's
+; uninstaller log. Keep older versioned payloads so a successful update can
+; retain its last known-good version until the user uninstalls CaveViewer.
 AppName={#AppName}
 AppVersion={#AppVersion}
 AppPublisher={#AppPublisher}
@@ -43,7 +46,6 @@ OutputBaseFilename={#OutputBaseName}
 SetupIconFile={#SetupIconFile}
 UninstallDisplayName={#AppName}
 UninstallDisplayIcon={app}\{#AppPayloadDirectory}\CaveViewer.exe
-UninstallPreviousVersion=no
 CloseApplications=yes
 CloseApplicationsFilter=CaveViewer.exe
 RestartApplications=no
