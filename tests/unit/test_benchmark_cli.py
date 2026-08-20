@@ -55,16 +55,25 @@ def test_benchmark_cli_runs_viewer_benchmark_and_prints_summary(
         encoding="utf-8",
     )
 
-    def fake_run_viewer_benchmark(cache, textures, scenario, output):
+    def fake_run_viewer_benchmark(
+        cache,
+        textures,
+        scenario,
+        output,
+        *,
+        runtime_settings,
+    ):
         assert cache == str(cache_dir)
         assert textures == str(cache_dir)
         assert scenario.name == "cli"
         assert output == str(output_dir)
-        assert os.environ["CAVEVIEWER_VSYNC"] == "0"
-        assert os.environ["CAVEVIEWER_IO_WORKERS"] == "4"
-        assert os.environ["CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME"] == "5"
-        assert os.environ["CAVEVIEWER_UPLOAD_GROUPS_PER_FRAME"] == "7"
-        assert os.environ["CAVEVIEWER_UPLOAD_TIME_BUDGET_MS"] == "9.5"
+        assert runtime_settings.viewer_configuration().vsync is False
+        assert runtime_settings["io_workers"] == 4
+        assert runtime_settings["upload_chunks_per_frame"] == 5
+        assert runtime_settings["upload_groups_per_frame"] == 7
+        assert runtime_settings["upload_time_budget_ms"] == 9.5
+        assert "CAVEVIEWER_VSYNC" not in os.environ
+        assert "CAVEVIEWER_IO_WORKERS" not in os.environ
         summary_path = Path(output) / "summary.json"
         summary_path.parent.mkdir(parents=True, exist_ok=True)
         summary_path.write_text(

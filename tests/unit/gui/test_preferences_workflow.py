@@ -7,39 +7,39 @@ from caveviewer.gui.preferences_workflow import (
 )
 
 
-def test_preferences_workflow_loads_and_applies_initial_preferences():
+def test_preferences_workflow_loads_initial_preferences_without_notifying_save():
     preferences = settings.preference_defaults()
     loaded = []
     applied = []
     workflow = PreferencesDialogWorkflow(
         load_preferences_fn=lambda: loaded.append(True) or preferences,
         save_preferences_fn=lambda _preferences: None,
-        apply_preferences_to_env_fn=applied.append,
+        on_preferences_saved=applied.append,
     )
 
     assert workflow.load_initial() is preferences
 
     assert loaded == [True]
-    assert applied == [preferences]
+    assert applied == []
 
 
-def test_preferences_workflow_saves_before_applying_preferences():
+def test_preferences_workflow_saves_before_notifying_snapshot_owner():
     preferences = settings.preference_defaults()
     calls = []
     workflow = PreferencesDialogWorkflow(
         load_preferences_fn=lambda: preferences,
         save_preferences_fn=lambda value: calls.append(("save", value)),
-        apply_preferences_to_env_fn=lambda value: calls.append(("apply", value)),
+        on_preferences_saved=lambda value: calls.append(("saved", value)),
     )
 
     result = workflow.apply(preferences)
 
     assert result == PreferencesApplyResult(preferences=preferences)
     assert result.succeeded
-    assert calls == [("save", preferences), ("apply", preferences)]
+    assert calls == [("save", preferences), ("saved", preferences)]
 
 
-def test_preferences_workflow_does_not_apply_after_save_failure():
+def test_preferences_workflow_does_not_notify_after_save_failure():
     preferences = settings.preference_defaults()
     applied = []
     workflow = PreferencesDialogWorkflow(
@@ -47,7 +47,7 @@ def test_preferences_workflow_does_not_apply_after_save_failure():
         save_preferences_fn=lambda _value: (_ for _ in ()).throw(
             settings.PreferencesSaveError("Could not save settings.")
         ),
-        apply_preferences_to_env_fn=applied.append,
+        on_preferences_saved=applied.append,
     )
 
     result = workflow.apply(preferences)

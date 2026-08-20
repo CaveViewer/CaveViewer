@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -10,6 +11,7 @@ import pytest
 from caveviewer.core.chunking import builder as chunker
 from caveviewer.core.map.cache_build_lock import CacheBuildInProgressError
 from caveviewer.core.map import importer
+from caveviewer.core.preferences.runtime_settings import ImportRuntimeSettings
 from caveviewer.gui import import_process
 
 
@@ -82,6 +84,20 @@ class FakeSpawnContext:
         process = FakeProcess(target, args, name)
         self.processes.append(process)
         return process
+
+
+def _runtime_settings(*, map_cache_dir: str = "/cache-root") -> ImportRuntimeSettings:
+    return ImportRuntimeSettings(
+        map_cache_dir=map_cache_dir,
+        chunk_size_meters=12.5,
+        max_upload_group_mb=24.0,
+        obj_scan_throttle_seconds=0.003,
+        obj_import_batch_faces=42_000,
+        obj_bucket_workers=3,
+        chunk_build_workers=4,
+        chunk_build_reserved_cpus=1,
+        import_nice_increment=7,
+    )
 
 
 def test_source_path_from_descriptor_accepts_supported_formats():
@@ -160,6 +176,28 @@ def test_start_import_process_allows_a_splash_owned_child_to_outlive_tk_close():
     assert handle.process.daemon is False
 
 
+def test_start_import_process_serializes_explicit_runtime_settings_to_child():
+    context = FakeSpawnContext()
+    settings = _runtime_settings()
+
+    handle = import_process.start_import_process(
+        {"glb_path": "/maps/cave.glb"},
+        "/maps",
+        context=context,
+        runtime_settings=settings,
+    )
+
+    assert handle.process.args == (
+        {"glb_path": "/maps/cave.glb"},
+        "/maps",
+        context.queues[0],
+        context.queues[1],
+        False,
+        False,
+        settings,
+    )
+
+
 def test_import_event_log_handler_sends_log_event_to_parent_queue():
     events = FakeEventQueue()
     handler = import_process._ImportEventLogHandler(events)
@@ -213,6 +251,62 @@ def test_import_process_reports_progress_and_done(monkeypatch):
         ("progress", "building cache", 0.5),
         ("done", "/cache/cave", "/cache/cave"),
     ]
+
+
+def test_import_process_uses_explicit_runtime_settings_without_environment(
+    monkeypatch, tmp_path,
+):
+    events = FakeEventQueue()
+    map_root = tmp_path / "maps"
+    source_path = map_root / "cave.obj"
+    cache_root = tmp_path / "cache-root"
+    expected_cache_dir = cache_root / "cave"
+    settings = _runtime_settings(map_cache_dir=str(cache_root))
+    child_runtime_calls = []
+
+    def fake_import(model_descriptor, textures_dir, **options):
+        assert model_descriptor == {"obj_path": str(source_path)}
+        assert textures_dir == str(map_root)
+        assert options["chunk_size"] == 12.5
+        assert options["max_upload_group_mb"] == 24.0
+        assert options["obj_scan_throttle_seconds"] == 0.003
+        assert options["obj_import_batch_faces"] == 42_000
+        assert options["obj_bucket_workers"] == 3
+        assert options["chunk_build_workers"] == 4
+        assert options["chunk_build_reserved_cpus"] == 1
+        assert Path(options["cache_dir"]).is_relative_to(cache_root)
+        return str(expected_cache_dir)
+
+    monkeypatch.setattr(importer, "import_and_cache_any", fake_import)
+    monkeypatch.setattr(
+        import_process,
+        "_configure_import_child_logging",
+        lambda _events: None,
+    )
+    monkeypatch.setattr(
+        import_process,
+        "configure_import_child_runtime",
+        lambda *, nice_increment: child_runtime_calls.append(nice_increment),
+    )
+    monkeypatch.setattr(
+        import_process,
+        "_start_heartbeat_thread",
+        lambda *_args, **_kwargs: SimpleNamespace(join=lambda timeout=None: None),
+    )
+
+    import_process._run_import_process(
+        {"obj_path": str(source_path)},
+        str(map_root),
+        events,
+        runtime_settings=settings,
+    )
+
+    assert child_runtime_calls == [7]
+    assert events.events[-1] == (
+        "done",
+        str(expected_cache_dir),
+        str(expected_cache_dir),
+    )
 
 
 def test_import_process_forces_rebuild_when_requested(monkeypatch):

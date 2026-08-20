@@ -30,6 +30,7 @@ from caveviewer.core.chunking.staging import (
 )
 from caveviewer.core.diagnostics.logging import configure_logging, get_logger
 from caveviewer.core.map.cache_build_lock import CacheBuildInProgressError
+from caveviewer.core.preferences.runtime_settings import ImportRuntimeSettings
 from caveviewer.gui.platform.process_priority import lower_current_process_priority
 
 
@@ -89,11 +90,33 @@ def source_path_from_descriptor(model_descriptor: dict) -> str:
     return str(source_path)
 
 
-def cache_dir_for_descriptor(model_descriptor: dict) -> str:
+def _runtime_cache_environment(
+    runtime_settings: ImportRuntimeSettings,
+) -> dict[str, str]:
+    """Serialize only storage values needed by the cache-path compatibility API."""
+
+    environment: dict[str, str] = {}
+    if runtime_settings.map_cache_dir:
+        environment["CAVEVIEWER_MAP_CACHE_DIR"] = runtime_settings.map_cache_dir
+    return environment
+
+
+def cache_dir_for_descriptor(
+    model_descriptor: dict,
+    *,
+    runtime_settings: ImportRuntimeSettings | None = None,
+) -> str:
     """Return the generated cache directory that an import will publish into."""
     from caveviewer.core.map.cache_paths import map_cache_build_dir
 
-    return map_cache_build_dir(source_path_from_descriptor(model_descriptor))
+    return map_cache_build_dir(
+        source_path_from_descriptor(model_descriptor),
+        environ=(
+            _runtime_cache_environment(runtime_settings)
+            if runtime_settings is not None
+            else None
+        ),
+    )
 
 
 def start_import_process(
@@ -104,10 +127,14 @@ def start_import_process(
     resume_required: bool = False,
     daemon: bool = True,
     context: BaseContext | None = None,
+    runtime_settings: ImportRuntimeSettings | None = None,
 ) -> ImportProcessHandle:
     """Start a spawned import process and return its event handle."""
     process_context = context or multiprocessing.get_context("spawn")
-    cache_dir = cache_dir_for_descriptor(model_descriptor)
+    cache_dir = cache_dir_for_descriptor(
+        model_descriptor,
+        runtime_settings=runtime_settings,
+    )
     events = process_context.Queue()
     commands = process_context.Queue()
     process_args = (
@@ -119,6 +146,10 @@ def start_import_process(
     )
     if resume_required:
         process_args += (True,)
+    if runtime_settings is not None:
+        if not resume_required:
+            process_args += (False,)
+        process_args += (runtime_settings,)
     process = process_context.Process(
         target=_run_import_process,
         args=process_args,
@@ -230,7 +261,7 @@ def cleanup_import_staging_dirs(
     return cleaned
 
 
-def configure_import_child_runtime() -> None:
+def configure_import_child_runtime(*, nice_increment: int = IMPORT_CHILD_NICE_INCREMENT) -> None:
     """Reduce the import child's impact on the interactive desktop."""
     capped = _limit_native_threads()
     if capped:
@@ -239,7 +270,7 @@ def configure_import_child_runtime() -> None:
             ", ".join(capped),
             IMPORT_NATIVE_THREAD_LIMIT,
         )
-    lower_current_process_priority(nice_increment=IMPORT_CHILD_NICE_INCREMENT)
+    lower_current_process_priority(nice_increment=nice_increment)
 
 
 def _limit_native_threads(environ: dict[str, str] | None = None) -> list[str]:
@@ -367,6 +398,7 @@ def _run_import_process(
     commands: Any = None,
     force_rebuild: bool = False,
     resume_required: bool = False,
+    runtime_settings: ImportRuntimeSettings | None = None,
 ) -> None:
     """Child-process entry point. Sends progress, done, or error events."""
     _configure_import_child_logging(events)
@@ -376,7 +408,12 @@ def _run_import_process(
     command_thread: threading.Thread | None = None
     pause_event = threading.Event()
     try:
-        configure_import_child_runtime()
+        if runtime_settings is None:
+            configure_import_child_runtime()
+        else:
+            configure_import_child_runtime(
+                nice_increment=runtime_settings.import_nice_increment
+            )
         heartbeat_stop = threading.Event()
         command_stop = threading.Event()
         heartbeat_state: dict[str, float | str] = {
@@ -416,6 +453,26 @@ def _run_import_process(
             "progress_cb": on_progress,
             "pause_requested": pause_event.is_set,
         }
+        if runtime_settings is not None:
+            import_options.update(
+                {
+                    "cache_dir": cache_dir_for_descriptor(
+                        model_descriptor,
+                        runtime_settings=runtime_settings,
+                    ),
+                    "chunk_size": runtime_settings.chunk_size_meters,
+                    "max_upload_group_mb": runtime_settings.max_upload_group_mb,
+                    "obj_scan_throttle_seconds": (
+                        runtime_settings.obj_scan_throttle_seconds
+                    ),
+                    "obj_import_batch_faces": runtime_settings.obj_import_batch_faces,
+                    "obj_bucket_workers": runtime_settings.obj_bucket_workers,
+                    "chunk_build_workers": runtime_settings.chunk_build_workers,
+                    "chunk_build_reserved_cpus": (
+                        runtime_settings.chunk_build_reserved_cpus
+                    ),
+                }
+            )
         if resume_required:
             import_options["resume_required"] = True
         cache_dir = import_and_cache_any(

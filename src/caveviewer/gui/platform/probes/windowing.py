@@ -24,6 +24,7 @@ def probe_viewer_launch(
     *,
     environ: Mapping[str, str] | None = None,
     platform_name: str | None = None,
+    requested_window_system: str | None = None,
 ) -> CapabilityResult[ViewerLaunchTarget]:
     """Report the currently selectable viewer-window route without launching it.
 
@@ -39,14 +40,16 @@ def probe_viewer_launch(
         plan = resolve_window_backend_plan(
             environ=environment,
             platform_name=resolved_platform_name,
+            requested_window_system=requested_window_system,
         )
     except WindowBackendError:
         return CapabilityResult.unavailable(
             reason_code="viewer_launch_backend_request_invalid",
             evidence={
-                "requested_window_system": environment.get(
-                    WINDOW_SYSTEM_ENV_VAR,
-                    "auto",
+                "requested_window_system": (
+                    environment.get(WINDOW_SYSTEM_ENV_VAR, "auto")
+                    if requested_window_system is None
+                    else requested_window_system
                 )
             },
         )

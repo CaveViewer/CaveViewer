@@ -13,6 +13,7 @@ from enum import Enum
 import queue
 from typing import Any, Callable
 
+from caveviewer.core.preferences.runtime_settings import ImportRuntimeSettings
 from caveviewer.gui.import_process import start_import_process
 from caveviewer.gui.map_cache_rebuild import CacheRebuildTarget
 
@@ -85,8 +86,12 @@ class CacheRebuildJobController:
         self,
         *,
         start_process: Callable[..., Any] = start_import_process,
+        runtime_settings_provider: (
+            Callable[[], ImportRuntimeSettings | None] | None
+        ) = None,
     ) -> None:
         self._start_process = start_process
+        self._runtime_settings_provider = runtime_settings_provider
         self._handle: Any | None = None
         self.target: CacheRebuildTarget | None = None
         self.state = CacheRebuildJobState.IDLE
@@ -138,6 +143,8 @@ class CacheRebuildJobController:
             }
             if resume_required:
                 start_options["resume_required"] = True
+            if self._runtime_settings_provider is not None:
+                start_options["runtime_settings"] = self._runtime_settings_provider()
             self._handle = self._start_process(
                 dict(target.model_descriptor),
                 str(target.textures_dir),

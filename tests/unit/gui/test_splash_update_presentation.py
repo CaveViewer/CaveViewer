@@ -677,7 +677,8 @@ def test_themed_about_content_reuses_the_splash_identity_in_both_hosts():
 def test_cache_rebuild_starts_from_splash_without_a_confirmation_window():
     splash_source = inspect.getsource(splash_screen.show_splash_screen)
 
-    assert "CacheRebuildJobController()" in splash_source
+    assert "CacheRebuildJobController(" in splash_source
+    assert "runtime_settings_provider=" in splash_source
     assert "confirm_cache_rebuild=" not in splash_source
     assert "_confirm_cache_rebuild_dialog" not in splash_source
     assert "request_cache_rebuild_pause" in splash_source

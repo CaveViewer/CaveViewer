@@ -292,6 +292,7 @@ def detect_total_gpu_memory_bytes(
     nvidia_detector: Callable[[], int | None] | None = None,
     amd_detector: Callable[[], int | None] | None = None,
     logger=None,
+    environment: Mapping[str, str] | None = None,
 ) -> int | None:
     """Return the legacy numeric GPU budget from the typed capability probe."""
     result = probe_gpu_memory_budget(
@@ -299,5 +300,6 @@ def detect_total_gpu_memory_bytes(
         nvidia_detector=nvidia_detector,
         amd_detector=amd_detector,
         logger=logger,
+        environment=environment,
     )
     return result.value.total_bytes if result.value is not None else None

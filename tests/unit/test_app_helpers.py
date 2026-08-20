@@ -14,6 +14,7 @@ import pytest
 from caveviewer import app
 from caveviewer.core.diagnostics import logging as logging_utils
 from caveviewer.core.chunking import builder as chunker
+from caveviewer.core.preferences import runtime_settings
 
 
 class _LogRecorder:
@@ -117,38 +118,36 @@ def test_app_routes_moderngl_window_logging_through_caveviewer_format(
     )
 
 
-def test_environment_default_helpers_cover_static_callable_and_failure(monkeypatch):
-    assert app._default_io_workers() == "2"
-    assert app._default_chunk_build_workers() == "1"
-    assert app._effective_env_default("CAVEVIEWER_CHUNK_SIZE_METERS") == "50"
-    assert app._effective_env_default("CAVEVIEWER_MAX_UPLOAD_GROUP_MB") == "16"
-    assert app._effective_env_default("CAVEVIEWER_UI_TEXT_SCALE") == "1.28"
-    assert app._effective_env_default("CAVEVIEWER_VIEWER_UI_SCALE") == "auto"
-    assert app._effective_env_default("NOT_CONFIGURED") is None
-
-    def fail_default():
-        raise RuntimeError("unavailable")
-
-    monkeypatch.setitem(app._CAVEVIEWER_ENV_EFFECTIVE_DEFAULTS, "BROKEN", fail_default)
-    assert app._effective_env_default("BROKEN") is None
-
-
 def test_environment_diagnostics_report_set_discovered_and_effective_values(
-    monkeypatch,
+    monkeypatch, tmp_path
 ):
     recorder = _LogRecorder()
     monkeypatch.setattr(app, "_LOG", recorder)
-    monkeypatch.setenv("CAVEVIEWER_UI_TEXT_SCALE", "2.0")
-    monkeypatch.setenv("CAVEVIEWER_CUSTOM_SETTING", "enabled")
-    monkeypatch.setenv("CAVEVIEWER_EMPTY_SETTING", "")
+    snapshot = runtime_settings.resolve_runtime_settings(
+        environ={
+            "CAVEVIEWER_UI_TEXT_SCALE": "2.0",
+            "CAVEVIEWER_CUSTOM_SETTING": "enabled",
+            "CAVEVIEWER_MAP_CACHE_DIR": "/private/cache",
+            "CAVEVIEWER_IO_NICE": "not-a-number",
+        },
+        platform=runtime_settings.RuntimePlatformFacts(
+            platform_name="linux",
+            os_name="posix",
+            home=tmp_path,
+        ),
+    )
 
-    app._print_caveviewer_environment_settings()
+    app._print_runtime_settings(snapshot)
 
     output = "\n".join(recorder.info_messages)
-    assert "CAVEVIEWER_UI_TEXT_SCALE=2.0" in output
-    assert "CAVEVIEWER_CUSTOM_SETTING=enabled" in output
-    assert "CAVEVIEWER_IO_WORKERS=<unset> (effective: 2)" in output
-    assert "CAVEVIEWER_EMPTY_SETTING" not in output
+    assert "CAVEVIEWER_UI_TEXT_SCALE=2.0 (source: environment)" in output
+    assert "CAVEVIEWER_CUSTOM_SETTING" not in output
+    assert "CAVEVIEWER_MAP_CACHE_DIR" not in output
+    assert "CAVEVIEWER_IO_NICE=5 (source: built_in)" in output
+    assert recorder.warning_messages == [
+        "Ignoring invalid runtime setting CAVEVIEWER_IO_NICE from environment: "
+        "expected a whole number"
+    ]
 
 
 @pytest.mark.parametrize(

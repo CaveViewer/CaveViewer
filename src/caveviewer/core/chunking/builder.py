@@ -224,6 +224,8 @@ def build_cache(
     cache_dir: str | None = None,
     assets: tuple[CacheAsset, ...] | list[CacheAsset] = (),
     max_upload_group_mb: float | None = None,
+    chunk_build_workers: int | None = None,
+    chunk_build_reserved_cpus: int | None = None,
 ) -> str:
     """
     Partition `mesh` into spatial chunks and atomically publish the cache.
@@ -257,15 +259,24 @@ def build_cache(
             phase_started_at = time.perf_counter()
             _stage_cache_assets(staging_dir, assets)
             _log_cache_build_phase("render assets staged", phase_started_at)
+            build_options = {
+                "chunk_size": chunk_size,
+                "progress_cb": progress_cb,
+                "max_upload_group_mb": resolved_max_upload_group_mb,
+                "max_upload_group_bytes": resolved_max_upload_group_bytes,
+            }
+            if chunk_build_workers is not None:
+                build_options["chunk_build_workers"] = chunk_build_workers
+            if chunk_build_reserved_cpus is not None:
+                build_options["chunk_build_reserved_cpus"] = (
+                    chunk_build_reserved_cpus
+                )
             _build_cache_in_directory(
                 obj_path,
                 mesh,
                 materials,
                 staging_dir,
-                chunk_size=chunk_size,
-                progress_cb=progress_cb,
-                max_upload_group_mb=resolved_max_upload_group_mb,
-                max_upload_group_bytes=resolved_max_upload_group_bytes,
+                **build_options,
             )
             phase_started_at = time.perf_counter()
             _publish_cache_directory(staging_dir, cache_dir)
@@ -331,6 +342,7 @@ def build_cache_incremental_obj(
     face_batch_size: int | None = None,
     bucket_workers: int | None = None,
     max_upload_group_mb: float | None = None,
+    obj_scan_throttle_seconds: float | None = None,
     pause_requested: Callable[[], bool] | None = None,
     resume_required: bool = False,
 ) -> str:
@@ -400,18 +412,25 @@ def build_cache_incremental_obj(
                 phase_started_at = time.perf_counter()
                 _stage_cache_assets(staging_dir, assets)
                 _log_cache_build_phase("render assets staged", phase_started_at)
+            build_options = {
+                "chunk_size": chunk_size,
+                "progress_cb": progress_cb,
+                "face_batch_size": resolved_face_batch_size,
+                "bucket_workers": resolved_bucket_workers,
+                "max_upload_group_mb": resolved_max_upload_group_mb,
+                "max_upload_group_bytes": resolved_max_upload_group_bytes,
+                "pause_requested": pause_requested,
+                "resume_checkpoint": resume_checkpoint,
+            }
+            if obj_scan_throttle_seconds is not None:
+                build_options["obj_scan_throttle_seconds"] = (
+                    obj_scan_throttle_seconds
+                )
             _build_incremental_obj_cache_in_directory(
                 obj_path,
                 materials,
                 staging_dir,
-                chunk_size=chunk_size,
-                progress_cb=progress_cb,
-                face_batch_size=resolved_face_batch_size,
-                bucket_workers=resolved_bucket_workers,
-                max_upload_group_mb=resolved_max_upload_group_mb,
-                max_upload_group_bytes=resolved_max_upload_group_bytes,
-                pause_requested=pause_requested,
-                resume_checkpoint=resume_checkpoint,
+                **build_options,
             )
             _remove_resume_checkpoint(staging_dir)
             phase_started_at = time.perf_counter()
@@ -449,6 +468,7 @@ def _build_incremental_obj_cache_in_directory(
     bucket_workers: int | None = None,
     max_upload_group_mb: float | None = None,
     max_upload_group_bytes: int | None = None,
+    obj_scan_throttle_seconds: float | None = None,
     pause_requested: Callable[[], bool] | None = None,
     resume_checkpoint: dict | None = None,
 ) -> str:
@@ -512,11 +532,13 @@ def _build_incremental_obj_cache_in_directory(
             bucket_workers=bucket_workers,
         )
 
-    vertex_data = parse_obj_vertices(
-        obj_path,
-        progress_cb=vertex_progress,
-        preflight_cb=incremental_preflight,
-    )
+    vertex_options = {
+        "progress_cb": vertex_progress,
+        "preflight_cb": incremental_preflight,
+    }
+    if obj_scan_throttle_seconds is not None:
+        vertex_options["scan_throttle_seconds"] = obj_scan_throttle_seconds
+    vertex_data = parse_obj_vertices(obj_path, **vertex_options)
 
     if checkpoint_stage in {"bucketing", "finalizing"}:
         bucket_parts = _deserialize_bucket_parts(
@@ -744,7 +766,9 @@ def _build_cache_in_directory(obj_path: str, mesh: RawMesh, materials: dict,
                               progress_cb=None,
                               *,
                               max_upload_group_mb: float | None = None,
-                              max_upload_group_bytes: int | None = None) -> str:
+                              max_upload_group_bytes: int | None = None,
+                              chunk_build_workers: int | None = None,
+                              chunk_build_reserved_cpus: int | None = None) -> str:
     """Build all cache artifacts inside an unpublished staging directory."""
     render_chunks_started_at = time.perf_counter()
     chunks_dir = os.path.join(cache_dir, CHUNKS_DIRNAME)
@@ -855,8 +879,16 @@ def _build_cache_in_directory(obj_path: str, mesh: RawMesh, materials: dict,
         per_cell_groups.setdefault(real_cell, []).append((mat_name, face_idx_in_order))
 
     worker_allocation = resolve_worker_allocation(
-        os.environ.get("CAVEVIEWER_CHUNK_BUILD_WORKERS"),
-        os.environ.get("CAVEVIEWER_CHUNK_BUILD_RESERVED_CPUS"),
+        (
+            str(chunk_build_workers)
+            if chunk_build_workers is not None
+            else os.environ.get("CAVEVIEWER_CHUNK_BUILD_WORKERS")
+        ),
+        (
+            str(chunk_build_reserved_cpus)
+            if chunk_build_reserved_cpus is not None
+            else os.environ.get("CAVEVIEWER_CHUNK_BUILD_RESERVED_CPUS")
+        ),
         default_workers=1,
         default_reserved_cpus=2,
     )

@@ -35,6 +35,14 @@ from caveviewer.core.diagnostics.logging import (
     get_logger,
     set_console_progress,
 )
+from caveviewer.core.preferences.runtime_settings import (
+    RUNTIME_SETTING_SPECS,
+    RuntimeSettings,
+    RuntimeSettingsSession,
+    current_runtime_platform_facts,
+    resolve_runtime_settings,
+    runtime_setting_spec,
+)
 
 __version__ = APP_VERSION
 
@@ -102,50 +110,6 @@ def _route_moderngl_window_logging() -> None:
         pass
     adopt_logger()
 
-_KNOWN_CAVEVIEWER_ENV_VARS = (
-    "CAVEVIEWER_APP_ICON",
-    "CAVEVIEWER_CHUNK_BUILD_RESERVED_CPUS",
-    "CAVEVIEWER_CHUNK_BUILD_WORKERS",
-    "CAVEVIEWER_CHUNK_SIZE_METERS",
-    "CAVEVIEWER_DEV_VENV",
-    "CAVEVIEWER_FORCE_STARTUP_FOCUS",
-    "CAVEVIEWER_FORCE_UPDATE",
-    "CAVEVIEWER_GITHUB_REPO",
-    "CAVEVIEWER_GPU_MEMORY_GB",
-    "CAVEVIEWER_GPU_MEMORY_UTILIZATION_TARGET",
-    "CAVEVIEWER_HOME",
-    "CAVEVIEWER_IMPORT_NICE",
-    "CAVEVIEWER_IO_NICE",
-    "CAVEVIEWER_IO_RESERVED_CPUS",
-    "CAVEVIEWER_IO_WORKERS",
-    "CAVEVIEWER_LINUX_BUILD_VENV",
-    "CAVEVIEWER_LOG_LEVEL",
-    "CAVEVIEWER_MACOS_BUILD_VENV",
-    "CAVEVIEWER_MAP_CACHE_DIR",
-    "CAVEVIEWER_MAX_UPLOAD_GROUP_MB",
-    "CAVEVIEWER_MEMORY_UTILIZATION_TARGET",
-    "CAVEVIEWER_OBJ_BUCKET_WORKERS",
-    "CAVEVIEWER_OBJ_IMPORT_BATCH_FACES",
-    "CAVEVIEWER_OBJ_SCAN_THROTTLE_MS",
-    "CAVEVIEWER_PROJECT_ROOT",
-    "CAVEVIEWER_TEXT_AA_MODE",
-    "CAVEVIEWER_TEXTURE_RESIDENT_CACHE_MB",
-    "CAVEVIEWER_TK_SCALE",
-    "CAVEVIEWER_UI_FONT",
-    "CAVEVIEWER_UI_TEXT_SCALE",
-    "CAVEVIEWER_UPDATE_BRANCH",
-    "CAVEVIEWER_UPDATE_CHANNEL",
-    "CAVEVIEWER_UPDATE_MANIFEST_URL",
-    "CAVEVIEWER_UPDATE_MANIFEST_SIGNATURE_URL",
-    "CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME",
-    "CAVEVIEWER_UPLOAD_GROUPS_PER_FRAME",
-    "CAVEVIEWER_UPLOAD_TIME_BUDGET_MS",
-    "CAVEVIEWER_VIEWER_UI_SCALE",
-    "CAVEVIEWER_VSYNC",
-    "CAVEVIEWER_WINDOW_SYSTEM",
-)
-
-
 def _console_write(text: str) -> None:
     """Best-effort console output for terminal runs; GUI launches may not have stdout."""
     stream = getattr(sys, "stdout", None)
@@ -182,77 +146,40 @@ def _make_import_progress_callback(extra_progress_cb=None, *, console_progress: 
     return _emit_progress, _finish_progress
 
 
-def _default_io_workers() -> str:
-    return "2"
+def _runtime_diagnostic_value(value: object) -> str:
+    """Format one safe resolved value without exposing unset internals."""
+
+    return "<unset>" if value is None else str(value)
 
 
-def _default_chunk_build_workers() -> str:
-    return "1"
+def _print_runtime_settings(runtime_settings: RuntimeSettings) -> None:
+    """Log the registry's safe effective settings without inspecting ``environ``.
 
-
-def _default_text_aa_mode() -> str:
-    return "light" if sys.platform == "darwin" or sys.platform.startswith("linux") else "normal"
-
-
-_CAVEVIEWER_ENV_EFFECTIVE_DEFAULTS = {
-    "CAVEVIEWER_CHUNK_BUILD_RESERVED_CPUS": "2",
-    "CAVEVIEWER_CHUNK_BUILD_WORKERS": _default_chunk_build_workers,
-    "CAVEVIEWER_CHUNK_SIZE_METERS": "50",
-    "CAVEVIEWER_MAX_UPLOAD_GROUP_MB": "16",
-    "CAVEVIEWER_GPU_MEMORY_GB": "auto-detect",
-    "CAVEVIEWER_GPU_MEMORY_UTILIZATION_TARGET": "70",
-    "CAVEVIEWER_IMPORT_NICE": "5",
-    "CAVEVIEWER_IO_NICE": "5",
-    "CAVEVIEWER_IO_RESERVED_CPUS": "3",
-    "CAVEVIEWER_IO_WORKERS": _default_io_workers,
-    "CAVEVIEWER_MEMORY_UTILIZATION_TARGET": "8",
-    "CAVEVIEWER_OBJ_BUCKET_WORKERS": "2",
-    "CAVEVIEWER_OBJ_IMPORT_BATCH_FACES": "200000",
-    "CAVEVIEWER_OBJ_SCAN_THROTTLE_MS": "1" if os.name == "nt" else "0",
-    "CAVEVIEWER_TEXT_AA_MODE": _default_text_aa_mode,
-    "CAVEVIEWER_TEXTURE_RESIDENT_CACHE_MB": "auto",
-    "CAVEVIEWER_UI_TEXT_SCALE": "1.28",
-    "CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME": "1",
-    "CAVEVIEWER_UPLOAD_GROUPS_PER_FRAME": "1",
-    "CAVEVIEWER_UPLOAD_TIME_BUDGET_MS": "3.0",
-    "CAVEVIEWER_VIEWER_UI_SCALE": "auto",
-}
-
-
-def _effective_env_default(key: str) -> str | None:
-    default = _CAVEVIEWER_ENV_EFFECTIVE_DEFAULTS.get(key)
-    if default is None:
-        return None
-    if callable(default):
-        try:
-            return str(default())
-        except Exception:
-            return None
-    return str(default)
-
-
-def _print_caveviewer_environment_settings() -> None:
+    The registry, rather than an ad-hoc environment-variable list, decides
+    which settings are both application runtime inputs and safe for startup
+    diagnostics.  Unknown process variables and settings that may contain
+    private paths or URLs are deliberately omitted.
     """
-    Print known CaveViewer environment settings without dumping unrelated
-    OS/user variables that may contain secrets.
-    """
-    known = set(_KNOWN_CAVEVIEWER_ENV_VARS)
-    discovered = {
-        key
-        for key, value in os.environ.items()
-        if key.startswith("CAVEVIEWER_") and key not in known and str(value).strip() != ""
-    }
 
-    _LOG.info("CaveViewer environment settings at startup:")
-    for key in sorted(known | discovered):
-        value = os.environ.get(key)
-        is_set = value is not None and str(value).strip() != ""
-        display_value = value if is_set else "<unset>"
-        if not is_set:
-            effective_default = _effective_env_default(key)
-            if effective_default is not None:
-                display_value = f"{display_value} (effective: {effective_default})"
-        _LOG.info(f"  {key}={display_value}")
+    _LOG.info("CaveViewer runtime settings at startup:")
+    for spec in RUNTIME_SETTING_SPECS:
+        if not spec.diagnostic_safe or spec.environment_variable is None:
+            continue
+        _LOG.info(
+            "  %s=%s (source: %s)",
+            spec.environment_variable,
+            _runtime_diagnostic_value(runtime_settings[spec.key]),
+            runtime_settings.source(spec.key).value,
+        )
+    for issue in runtime_settings.issues:
+        spec = runtime_setting_spec(issue.key)
+        setting_name = spec.environment_variable or issue.key
+        _LOG.warning(
+            "Ignoring invalid runtime setting %s from %s: %s",
+            setting_name,
+            issue.source.value,
+            issue.message,
+        )
 
 
 def _consume_update_branch_arg(argv: list[str]) -> tuple[list[str], str | None]:
@@ -432,12 +359,21 @@ def _print_viewer_controls() -> None:
     _LOG.info("Controls help is available in-app via the Help button.")
 
 
-def _log_cache_chunk_size(cache_dir: str, *, context: str = "Chunk cache") -> None:
+def _log_cache_chunk_size(
+    cache_dir: str,
+    *,
+    context: str = "Chunk cache",
+    runtime_settings: RuntimeSettings | None = None,
+) -> None:
     """Log the chunk size recorded in an existing cache manifest."""
     from caveviewer.core.chunking import builder as chunker
 
     cache_chunk_size = chunker.cache_chunk_size(cache_dir)
-    configured_chunk_size = chunker.configured_chunk_size()
+    configured_chunk_size = (
+        float(runtime_settings["chunk_size_meters"])
+        if runtime_settings is not None
+        else chunker.configured_chunk_size()
+    )
     if cache_chunk_size is None:
         _LOG.warning(
             f"{context} does not report a valid chunk size in manifest.json; "
@@ -477,7 +413,12 @@ def _resolve_recorded_dive_selection(selected_path: str):
     return os.fspath(source_path), trace
 
 
-def _run_map_session(folder: str, *, platform_runtime=None) -> None:
+def _run_map_session(
+    folder: str,
+    *,
+    platform_runtime=None,
+    runtime_settings: RuntimeSettings | None = None,
+) -> None:
     """Load and view one cave map. Returns when the viewer window closes."""
     from caveviewer.gui.recorded_dive import RecordedDiveError
 
@@ -510,7 +451,11 @@ def _run_map_session(folder: str, *, platform_runtime=None) -> None:
                 "(Delete the reported cache directory to force a rebuild.)"
             )
             _LOG.info(f"Using cache directory: {_prebuilt_cache}")
-            _log_cache_chunk_size(_prebuilt_cache, context="Pre-compiled map cache")
+            _log_cache_chunk_size(
+                _prebuilt_cache,
+                context="Pre-compiled map cache",
+                runtime_settings=runtime_settings,
+            )
             _print_viewer_controls()
             from caveviewer.gui.viewer_window import run_viewer
             try:
@@ -520,6 +465,8 @@ def _run_map_session(folder: str, *, platform_runtime=None) -> None:
                 }
                 if platform_runtime is not None:
                     viewer_kwargs["platform_runtime"] = platform_runtime
+                if runtime_settings is not None:
+                    viewer_kwargs["runtime_settings"] = runtime_settings
                 run_viewer(_prebuilt_cache, **viewer_kwargs)
                 _record_application_event(
                     "viewer_session_returned",
@@ -566,7 +513,11 @@ def _run_map_session(folder: str, *, platform_runtime=None) -> None:
         from caveviewer.core.map.cache_paths import map_texture_dir
         cache_textures_dir = map_texture_dir(source_path, cache_dir, folder)
         _LOG.info(f"Using cache directory: {cache_dir}")
-        _log_cache_chunk_size(cache_dir, context="Existing chunk cache")
+        _log_cache_chunk_size(
+            cache_dir,
+            context="Existing chunk cache",
+            runtime_settings=runtime_settings,
+        )
         from caveviewer.gui.viewer_window import run_viewer
         try:
             viewer_kwargs = {
@@ -575,6 +526,8 @@ def _run_map_session(folder: str, *, platform_runtime=None) -> None:
             }
             if platform_runtime is not None:
                 viewer_kwargs["platform_runtime"] = platform_runtime
+            if runtime_settings is not None:
+                viewer_kwargs["runtime_settings"] = runtime_settings
             if recorded_dive_trace is not None:
                 from caveviewer.gui.recorded_dive import (
                     validate_recorded_dive_manifest,
@@ -618,6 +571,8 @@ def _run_map_session(folder: str, *, platform_runtime=None) -> None:
             viewer_kwargs = {"textures_dir": folder}
             if platform_runtime is not None:
                 viewer_kwargs["platform_runtime"] = platform_runtime
+            if runtime_settings is not None:
+                viewer_kwargs["runtime_settings"] = runtime_settings
             if recorded_dive_trace is not None:
                 viewer_kwargs["recorded_dive_trace"] = recorded_dive_trace
             run_viewer_with_pending_import(model_descriptor, **viewer_kwargs)
@@ -640,7 +595,43 @@ def _run_map_session(folder: str, *, platform_runtime=None) -> None:
 
 
 def main():
-    configure_logging()
+    try:
+        sys.argv, _update_branch = _consume_update_branch_arg(sys.argv)
+    except ValueError as e:
+        _LOG.error(str(e))
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(2)
+
+    force_update_requested = "--force-update" in sys.argv
+    if force_update_requested:
+        sys.argv = [a for a in sys.argv if a != "--force-update"]
+
+    cli_overrides: dict[str, object] = {}
+    if _update_branch:
+        cli_overrides["update_branch"] = _update_branch
+    if force_update_requested:
+        cli_overrides["force_update"] = True
+
+    # The entry point owns the mutable session reference. All consumers get
+    # immutable snapshots from it; Preferences saves replace the snapshot
+    # rather than assigning their values into os.environ.
+    from caveviewer.gui.preferences import load_saved_preference_values
+
+    platform_facts = current_runtime_platform_facts()
+    logging_settings = resolve_runtime_settings(
+        preferences={},
+        environ=os.environ,
+        cli_overrides=cli_overrides,
+        platform=platform_facts,
+    )
+    configure_logging(str(logging_settings["log_level"]))
+    runtime_settings_session = RuntimeSettingsSession(
+        preferences=load_saved_preference_values(),
+        environ=os.environ,
+        cli_overrides=cli_overrides,
+        platform=platform_facts,
+    )
+    runtime_settings = runtime_settings_session.snapshot
     _route_moderngl_window_logging()
     if os.name == "nt":
         try:
@@ -651,31 +642,15 @@ def main():
     _LOG.info("=" * 60)
     _LOG.info(f"  {APP_NAME} {__version__}")
     _LOG.info("=" * 60)
-
-    try:
-        sys.argv, _update_branch = _consume_update_branch_arg(sys.argv)
-    except ValueError as e:
-        _LOG.error(str(e))
-        print(f"Error: {e}", file=sys.stderr)
-        sys.exit(2)
     if _update_branch:
-        os.environ["CAVEVIEWER_UPDATE_BRANCH"] = _update_branch
         _LOG.info("Using update branch override: %s", _update_branch)
 
-    _print_caveviewer_environment_settings()
+    _print_runtime_settings(runtime_settings)
 
     # Debug flag: forces the update prompt to appear regardless of the current
-    # version.
-    # Usage: ./run_caveviewer.sh --force-update
-    #        CAVEVIEWER_FORCE_UPDATE=1 ./run_caveviewer.sh
-    #        ./run_caveviewer.sh --update-branch feature/pubkey
-    _force_update = (
-        "--force-update" in sys.argv
-        or os.getenv("CAVEVIEWER_FORCE_UPDATE", "").strip()
-        in ("1", "true", "yes")
-    )
-    if _force_update:
-        sys.argv = [a for a in sys.argv if a != "--force-update"]
+    # version. CLI input is resolved before this one composition call, while
+    # CAVEVIEWER_FORCE_UPDATE remains a normal environment-only setting.
+    _force_update = bool(runtime_settings["force_update"])
 
     # Every interactive viewer path receives one process-owned runtime.  CLI
     # launches skip splash/update presentation, but still need the same
@@ -687,7 +662,8 @@ def main():
         selected_path = sys.argv.pop(1).strip()
         _run_map_session(
             selected_path,
-            platform_runtime=create_platform_runtime(),
+            platform_runtime=create_platform_runtime(runtime_settings=runtime_settings),
+            runtime_settings=runtime_settings,
         )
         return
 
@@ -697,7 +673,7 @@ def main():
     from caveviewer.gui.splash_screen import show_splash_screen
     from caveviewer.gui.update_manager import UpdateManager
 
-    platform_runtime = create_platform_runtime()
+    platform_runtime = create_platform_runtime(runtime_settings=runtime_settings)
     update_manager = UpdateManager(
         current_version=_splash_version,
         platform_runtime=platform_runtime,
@@ -710,13 +686,19 @@ def main():
                 update_manager=update_manager,
                 desktop_services=platform_runtime.desktop_services,
                 platform_runtime=platform_runtime,
+                runtime_settings_provider=lambda: runtime_settings_session.snapshot,
+                on_preferences_saved=runtime_settings_session.replace_preferences,
             )
 
             if not folder:
                 _LOG.info("No folder selected. Exiting.")
                 return
 
-            _run_map_session(folder, platform_runtime=platform_runtime)
+            _run_map_session(
+                folder,
+                platform_runtime=platform_runtime,
+                runtime_settings=runtime_settings_session.snapshot,
+            )
             # Viewer closed -- loop back to a new splash backed by the same
             # process-owned update state and any in-progress download.
     finally:

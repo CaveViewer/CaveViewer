@@ -30,6 +30,7 @@ from caveviewer.core.preferences.schema import (
     PreferenceValueType,
     validate_preference,
 )
+from caveviewer.storage_paths import ApplicationPaths, resolve_application_paths
 
 
 RuntimeValue: TypeAlias = str | int | float | bool | None
@@ -38,6 +39,90 @@ RuntimeSettingDefault: TypeAlias = (
     RuntimeValue
     | Callable[["RuntimePlatformFacts", Mapping[str, RuntimeValue]], RuntimeValue]
 )
+
+
+@dataclass(frozen=True, slots=True)
+class ImportRuntimeSettings:
+    """Serializable import settings owned by one spawned import request.
+
+    The parent composition boundary creates this immutable value from its
+    resolved snapshot and sends it with a child-process launch request.  The
+    child must use these values rather than consulting the parent's mutable
+    process environment.
+    """
+
+    map_cache_dir: str | None
+    chunk_size_meters: float
+    max_upload_group_mb: float
+    obj_scan_throttle_seconds: float
+    obj_import_batch_faces: int
+    obj_bucket_workers: int
+    chunk_build_workers: int
+    chunk_build_reserved_cpus: int
+    import_nice_increment: int
+
+
+@dataclass(frozen=True, slots=True)
+class StreamingRuntimeSettings:
+    """Immutable worker and residency policy for one streaming-world owner."""
+
+    memory_target_percent: float
+    gpu_memory_target_percent: float
+    gpu_memory_gb: float | None
+    io_workers: int
+    io_reserved_cpus: int
+    io_nice_increment: int
+    texture_resident_cache_mb: float | None
+    upload_chunks_per_frame: int
+    upload_groups_per_frame: int
+    upload_time_budget_ms: float
+
+
+@dataclass(frozen=True, slots=True)
+class RecordingRuntimeSettings:
+    """Immutable recording policy consumed by one viewer-session owner."""
+
+    directory: str
+    ffmpeg_path: str | None
+    fps: int
+    max_height: int
+    crf: int
+
+
+@dataclass(frozen=True, slots=True)
+class ViewerRuntimeSettings:
+    """Immutable GUI/viewer values applied before a window is launched."""
+
+    app_icon: str | None
+    force_startup_focus: bool
+    gpu_draw_timer: bool
+    navigation_guard: bool
+    navigation_guard_radius_cells: int
+    text_antialiasing_mode: str
+    tk_scale: float | None
+    ui_font: str | None
+    ui_text_scale: float
+    ui_text_scale_override: float | None
+    viewer_ui_scale: float | None
+    vsync: bool
+    max_texture_dimension: int | None
+    commit_identifier: str | None
+    streaming: StreamingRuntimeSettings
+    recording: RecordingRuntimeSettings
+
+
+@dataclass(frozen=True, slots=True)
+class MapLibraryRuntimeSettings:
+    """Immutable Map Library source and storage values for one UI session."""
+
+    directory: str
+    storage_home: str | None
+    data_directory: str
+    cache_directory: str
+    repository: str
+    release_tag: str
+    api_url: str
+    catalog_asset_name: str
 
 
 class RuntimeSettingCategory(str, Enum):
@@ -90,7 +175,11 @@ def current_runtime_platform_facts() -> RuntimePlatformFacts:
     application edge until all launch paths have been migrated.
     """
 
-    return RuntimePlatformFacts(platform_name=sys.platform, os_name=os.name)
+    return RuntimePlatformFacts(
+        platform_name=sys.platform,
+        os_name=os.name,
+        home=os.path.expanduser("~"),
+    )
 
 
 @dataclass(frozen=True)
@@ -216,6 +305,7 @@ class RuntimeSettings(Mapping[str, RuntimeValue]):
 
     __hash__ = None
     _entries: Mapping[str, ResolvedRuntimeSetting]
+    storage_paths: ApplicationPaths
     issues: tuple[RuntimeSettingIssue, ...] = ()
 
     def __post_init__(self) -> None:
@@ -249,6 +339,145 @@ class RuntimeSettings(Mapping[str, RuntimeValue]):
         """Return a mutable value copy for serializable worker requests."""
 
         return {key: entry.value for key, entry in self._entries.items()}
+
+    def import_configuration(self) -> ImportRuntimeSettings:
+        """Return the explicit, serializable settings for one import child."""
+
+        return ImportRuntimeSettings(
+            map_cache_dir=_optional_runtime_text(self["map_cache_dir"]),
+            chunk_size_meters=_runtime_float(self["chunk_size_meters"]),
+            max_upload_group_mb=_runtime_float(self["max_upload_group_mb"]),
+            obj_scan_throttle_seconds=(
+                _runtime_float(self["obj_scan_throttle_ms"]) / 1_000.0
+            ),
+            obj_import_batch_faces=(
+                _runtime_integer(self["obj_import_batch_thousands"]) * 1_000
+            ),
+            obj_bucket_workers=_runtime_integer(self["obj_bucket_workers"]),
+            chunk_build_workers=_runtime_integer(self["chunk_build_workers"]),
+            chunk_build_reserved_cpus=_runtime_integer(
+                self["chunk_build_reserved_cpus"]
+            ),
+            import_nice_increment=_runtime_integer(self["import_nice_increment"]),
+        )
+
+    def streaming_configuration(self) -> StreamingRuntimeSettings:
+        """Return the immutable worker/residency policy for one map session."""
+
+        return StreamingRuntimeSettings(
+            memory_target_percent=_runtime_float(self["memory_target_percent"]),
+            gpu_memory_target_percent=_runtime_float(
+                self["gpu_memory_target_percent"]
+            ),
+            gpu_memory_gb=_optional_runtime_float(self["gpu_memory_gb"]),
+            io_workers=_runtime_integer(self["io_workers"]),
+            io_reserved_cpus=_runtime_integer(self["io_reserved_cpus"]),
+            io_nice_increment=_runtime_integer(self["io_nice_increment"]),
+            texture_resident_cache_mb=_optional_runtime_float(
+                self["texture_resident_cache_mb"]
+            ),
+            upload_chunks_per_frame=_runtime_integer(
+                self["upload_chunks_per_frame"]
+            ),
+            upload_groups_per_frame=_runtime_integer(
+                self["upload_groups_per_frame"]
+            ),
+            upload_time_budget_ms=_runtime_float(self["upload_time_budget_ms"]),
+        )
+
+    def viewer_configuration(self) -> ViewerRuntimeSettings:
+        """Return one viewer-owned bundle without exposing process globals."""
+
+        return ViewerRuntimeSettings(
+            app_icon=_optional_runtime_text(self["app_icon"]),
+            force_startup_focus=_runtime_boolean(self["force_startup_focus"]),
+            gpu_draw_timer=_runtime_boolean(self["gpu_draw_timer"]),
+            navigation_guard=_runtime_boolean(self["navigation_guard"]),
+            navigation_guard_radius_cells=_runtime_integer(
+                self["navigation_guard_radius_cells"]
+            ),
+            text_antialiasing_mode=_runtime_text(self["text_antialiasing_mode"]),
+            tk_scale=_optional_runtime_float(self["tk_scale"]),
+            ui_font=_optional_runtime_text(self["ui_font"]),
+            ui_text_scale=_runtime_float(self["ui_text_scale"]),
+            ui_text_scale_override=(
+                _runtime_float(self["ui_text_scale"])
+                if self.source("ui_text_scale") is not SettingSource.BUILT_IN
+                else None
+            ),
+            viewer_ui_scale=_optional_runtime_float(self["viewer_ui_scale"]),
+            vsync=_runtime_boolean(self["vsync"]),
+            max_texture_dimension=_optional_runtime_integer(
+                self["max_texture_size"]
+            ),
+            commit_identifier=_optional_runtime_text(self["commit_identifier"]),
+            streaming=self.streaming_configuration(),
+            recording=RecordingRuntimeSettings(
+                directory=_runtime_text(self["recording_dir"]),
+                ffmpeg_path=_optional_runtime_text(self["ffmpeg_path"]),
+                fps=_runtime_integer(self["recording_fps"]),
+                max_height=_runtime_integer(self["recording_max_height"]),
+                crf=_runtime_integer(self["recording_crf"]),
+            ),
+        )
+
+    def map_library_configuration(self) -> MapLibraryRuntimeSettings:
+        """Return the Map Library's source and storage configuration."""
+
+        return MapLibraryRuntimeSettings(
+            directory=_runtime_text(self["map_library_dir"]),
+            storage_home=_optional_runtime_text(self["storage_home"]),
+            data_directory=str(self.storage_paths.data_dir),
+            cache_directory=str(self.storage_paths.cache_dir),
+            repository=_runtime_text(self["map_library_repository"]),
+            release_tag=_runtime_text(self["map_library_release_tag"]),
+            api_url=_runtime_text(self["map_library_api_url"]),
+            catalog_asset_name=_runtime_text(
+                self["map_library_catalog_asset_name"]
+            ),
+        )
+
+
+def _runtime_text(value: RuntimeValue) -> str:
+    if not isinstance(value, str):
+        raise TypeError(f"Expected resolved text value, got {value!r}")
+    return value
+
+
+def _optional_runtime_text(value: RuntimeValue) -> str | None:
+    if value is None:
+        return None
+    return _runtime_text(value)
+
+
+def _runtime_integer(value: RuntimeValue) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"Expected resolved integer value, got {value!r}")
+    return value
+
+
+def _runtime_float(value: RuntimeValue) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError(f"Expected resolved floating-point value, got {value!r}")
+    return float(value)
+
+
+def _optional_runtime_integer(value: RuntimeValue) -> int | None:
+    if value is None:
+        return None
+    return _runtime_integer(value)
+
+
+def _optional_runtime_float(value: RuntimeValue) -> float | None:
+    if value is None:
+        return None
+    return _runtime_float(value)
+
+
+def _runtime_boolean(value: RuntimeValue) -> bool:
+    if not isinstance(value, bool):
+        raise TypeError(f"Expected resolved boolean value, got {value!r}")
+    return value
 
 
 def _required_text(raw_value: str) -> str:
@@ -548,6 +777,7 @@ RUNTIME_SETTING_SPECS = (
         parser=_log_level,
         default="INFO",
         enum_values=("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"),
+        cli_name="log_level",
     ),
     _environment_setting(
         "force_startup_focus",
@@ -779,6 +1009,7 @@ RUNTIME_SETTING_SPECS = (
         parser=_vsync,
         default=True,
         enum_values=("0", "1", "false", "true", "no", "yes"),
+        cli_name="vsync",
     ),
     _environment_setting(
         "window_system",
@@ -884,6 +1115,47 @@ def runtime_environment_variable_names() -> frozenset[str]:
     """Return every application-runtime environment name, including aliases."""
 
     return frozenset(RUNTIME_SETTING_SPECS_BY_ENVIRONMENT_VARIABLE)
+
+
+def render_runtime_environment_table() -> str:
+    """Render the deterministic runtime-variable reference for source docs.
+
+    ``docs/development/source-setup.md`` embeds this exact output between
+    stable markers.  The renderer intentionally uses declaration metadata
+    rather than resolving values, so generating documentation cannot read
+    process globals or create platform-dependent output.
+    """
+
+    rows = (
+        "| Variable | Category | Default | Description |",
+        "| --- | --- | --- | --- |",
+    )
+    rendered_rows = [*rows]
+    for spec in RUNTIME_SETTING_SPECS:
+        if not spec.documentation_visible or spec.environment_variable is None:
+            continue
+        variables = " / ".join(
+            f"`{name}`" for name in spec.environment_variables
+        )
+        category = spec.category.value.replace("_", " ")
+        default = _runtime_setting_documentation_default(spec)
+        description = " ".join(spec.description.split()).replace("|", "\\|")
+        rendered_rows.append(
+            f"| {variables} | {category} | {default} | {description} |"
+        )
+    return "\n".join(rendered_rows)
+
+
+def _runtime_setting_documentation_default(spec: RuntimeSettingSpec) -> str:
+    """Return a platform-independent documentation label for one default."""
+
+    if spec.preference is not None:
+        return "saved preference or platform default"
+    if spec.default is None:
+        return "_(unset)_"
+    if callable(spec.default):
+        return "derived from runtime inputs"
+    return f"`{spec.default}`"
 
 
 def _is_supplied(raw_value: object | None) -> bool:
@@ -1036,4 +1308,62 @@ def resolve_runtime_settings(
             source=SettingSource.BUILT_IN,
         )
 
-    return RuntimeSettings(entries, tuple(issues))
+    storage_paths = resolve_application_paths(
+        environ=environ,
+        home=platform.home,
+        platform_name=platform.platform_name,
+    )
+    return RuntimeSettings(
+        entries,
+        storage_paths=storage_paths,
+        issues=tuple(issues),
+    )
+
+
+class RuntimeSettingsSession:
+    """Application-owned replacement point for immutable runtime snapshots.
+
+    The composition/Tk owner creates this object with a copy of the process
+    inputs once at startup.  Calling :meth:`replace_preferences` after a
+    successful Preferences save creates a new immutable snapshot for later
+    Map Library or viewer work; it never mutates ``os.environ`` and is not a
+    cross-thread synchronization primitive.
+    """
+
+    def __init__(
+        self,
+        *,
+        preferences: Mapping[str, object] | None,
+        environ: Mapping[str, str],
+        cli_overrides: Mapping[str, object] | None,
+        platform: RuntimePlatformFacts,
+    ) -> None:
+        self._preferences = dict(preferences or {})
+        self._environ = MappingProxyType(dict(environ))
+        self._cli_overrides = MappingProxyType(dict(cli_overrides or {}))
+        self._platform = platform
+        self._snapshot = self._resolve()
+
+    @property
+    def snapshot(self) -> RuntimeSettings:
+        """Return the current immutable snapshot for the next owned action."""
+
+        return self._snapshot
+
+    def replace_preferences(
+        self,
+        preferences: Mapping[str, object],
+    ) -> RuntimeSettings:
+        """Resolve and publish a new snapshot after a successful save."""
+
+        self._preferences = dict(preferences)
+        self._snapshot = self._resolve()
+        return self._snapshot
+
+    def _resolve(self) -> RuntimeSettings:
+        return resolve_runtime_settings(
+            preferences=self._preferences,
+            environ=self._environ,
+            cli_overrides=self._cli_overrides,
+            platform=self._platform,
+        )

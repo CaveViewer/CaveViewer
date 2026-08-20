@@ -459,7 +459,7 @@ def test_runtime_consumers_reject_unvalidated_mappings(
             valid_preferences, tmp_path / "advanced_settings.json"
         )
     with pytest.raises(TypeError, match="Preferences snapshot"):
-        settings.apply_preferences_to_env(valid_preferences)
+        settings.preference_env_updates(valid_preferences)
 
 
 def test_every_numeric_setting_has_a_display_range():
@@ -581,10 +581,10 @@ def test_apply_maps_every_setting_to_its_declared_environment_variable(
             valid_preferences[key] = str(value)
 
     expected = settings.require_validated_preferences(valid_preferences)
-    settings.apply_preferences_to_env(expected)
+    updates = settings.preference_env_updates(expected)
 
     for field in settings.PREFERENCE_FIELDS:
-        assert os.environ[field.env_var] == field.value_to_env(expected[field.key])
+        assert updates[field.env_var] == field.value_to_env(expected[field.key])
 
 
 def test_obj_import_batch_preference_maps_thousands_to_faces_env(
@@ -593,10 +593,10 @@ def test_obj_import_batch_preference_maps_thousands_to_faces_env(
     valid_preferences["obj_import_batch_thousands"] = "250"
 
     snapshot = settings.require_validated_preferences(valid_preferences)
-    settings.apply_preferences_to_env(snapshot)
+    updates = settings.preference_env_updates(snapshot)
 
     assert snapshot["obj_import_batch_thousands"] == "250"
-    assert os.environ["CAVEVIEWER_OBJ_IMPORT_BATCH_FACES"] == "250000"
+    assert updates["CAVEVIEWER_OBJ_IMPORT_BATCH_FACES"] == "250000"
 
 
 def test_preferences_panel_uses_extracted_settings_logic():
@@ -1077,7 +1077,6 @@ def test_preferences_panel_reports_atomic_save_failure(
     snapshot = settings.require_validated_preferences(valid_preferences)
     original_preferences = settings.load_preferences()
     feedback = []
-    applied = []
     panel = preferences_dialog.PreferencesPanel.__new__(
         preferences_dialog.PreferencesPanel
     )
@@ -1093,17 +1092,11 @@ def test_preferences_panel_reports_atomic_save_failure(
         raise settings.PreferencesSaveError("Could not save settings.")
 
     monkeypatch.setattr(preferences_dialog, "save_preferences", fail_save)
-    monkeypatch.setattr(
-        preferences_dialog,
-        "apply_preferences_to_env",
-        lambda value: applied.append(value),
-    )
 
     panel.apply()
 
     assert feedback == [("Could not save settings.", MessageKind.ERROR)]
     assert panel.preferences is original_preferences
-    assert applied == []
 
 
 def test_preferences_panel_calls_apply_callback_after_success(valid_preferences):

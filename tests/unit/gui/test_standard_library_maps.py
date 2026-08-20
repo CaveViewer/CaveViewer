@@ -527,6 +527,42 @@ def test_github_release_source_delegates_catalog_refresh(monkeypatch):
     )
 
 
+def test_explicit_map_library_configuration_does_not_read_process_paths(
+    monkeypatch,
+    tmp_path,
+):
+    configuration = standard_library_maps.MapLibraryConfiguration(
+        directory=str(tmp_path / "downloads"),
+        storage_home=None,
+        data_directory=str(tmp_path / "captured-data"),
+        cache_directory=str(tmp_path / "captured-cache"),
+        repository="Example/Maps",
+        release_tag="test-release",
+        api_url="https://example.invalid/release",
+        catalog_asset_name="catalog.json",
+    )
+    expected_refresh = object()
+    captured = []
+    monkeypatch.setenv("CAVEVIEWER_HOME", str(tmp_path / "ignored-process-home"))
+    monkeypatch.setattr(
+        standard_library_maps,
+        "fetch_standard_library_catalog_refresh",
+        lambda supplied: captured.append(supplied) or expected_refresh,
+    )
+
+    source = standard_library_maps.GitHubReleaseMapLibrarySource(configuration)
+
+    assert source.fetch_catalog() is expected_refresh
+    assert captured == [configuration]
+    assert standard_library_maps._catalog_cache_path(configuration) == (
+        tmp_path / "captured-cache" / "map_library_catalog.v1.json"
+    )
+    assert standard_library_maps._default_legacy_map_library_dirs(configuration) == (
+        tmp_path / "captured-data" / standard_library_maps.MAP_LIBRARY_DIRNAME,
+        tmp_path / "captured-data" / standard_library_maps._LEGACY_MAP_LIBRARY_DIRNAME,
+    )
+
+
 @pytest.mark.parametrize(
     "payload",
     [

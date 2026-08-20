@@ -19,6 +19,7 @@ from caveviewer.core.capabilities import (
     UpdatePackageRevealRoute,
     ViewerLaunchTarget,
 )
+from caveviewer.core.preferences.runtime_settings import RuntimeSettings
 from caveviewer.gui.features import (
     FeatureDecision,
     FeatureGateRegistry,
@@ -244,6 +245,7 @@ class PlatformRuntime:
     """
 
     profile: PlatformProfile
+    runtime_settings: RuntimeSettings | None
     presentation_profile: PresentationProfile
     presentation_actions_adapter: PresentationActionsAdapter
     platform_adapter: SplashPlatformAdapter
@@ -385,7 +387,12 @@ class PlatformRuntime:
 
     def viewer_launch_capability(self) -> CapabilityResult[ViewerLaunchTarget]:
         """Probe the current display/backend route only when opening a viewer."""
-        return probe_viewer_launch(platform_name=self.profile.platform_name)
+        if self.runtime_settings is None:
+            return probe_viewer_launch(platform_name=self.profile.platform_name)
+        return probe_viewer_launch(
+            platform_name=self.profile.platform_name,
+            requested_window_system=str(self.runtime_settings["window_system"]),
+        )
 
     def viewer_launch_preflight(self) -> ViewerLaunchPreflight:
         """Pair one fresh viewer-launch route fact with its pure policy."""
@@ -409,6 +416,7 @@ def create_platform_runtime(
     recording_process_adapter: RecordingProcessAdapter | None = None,
     tls_trust_adapter: TlsTrustAdapter | None = None,
     window_backend_adapter: WindowBackendAdapter | None = None,
+    runtime_settings: RuntimeSettings | None = None,
     environment: Mapping[str, str] | None = None,
     platform_name: str | None = None,
     machine: str | None = None,
@@ -469,6 +477,7 @@ def create_platform_runtime(
         update_configuration = build_update_configuration(
             resolved_update_profile,
             environment=environment,
+            runtime_settings=runtime_settings,
         )
         automatic_update_capability = probe_automatic_update(
             resolved_update_profile,
@@ -507,6 +516,7 @@ def create_platform_runtime(
 
     return PlatformRuntime(
         profile=profile,
+        runtime_settings=runtime_settings,
         presentation_profile=resolved_presentation_profile,
         presentation_actions_adapter=resolved_presentation_actions_adapter,
         platform_adapter=resolved_platform_adapter,

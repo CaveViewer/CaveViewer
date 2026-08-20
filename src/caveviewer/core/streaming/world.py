@@ -32,6 +32,7 @@ from caveviewer.core.capabilities import (
     GpuMemoryBudget,
     RamAvailability,
 )
+from caveviewer.core.preferences.runtime_settings import StreamingRuntimeSettings
 from caveviewer.core.chunking import builder as chunker
 from caveviewer.core.hardware import gpu_memory, memory_targets, system_memory
 from caveviewer.core.workers.allocation import (
@@ -130,6 +131,8 @@ def _detect_total_gpu_memory_bytes(gpu_vendor: str | None = None) -> int | None:
 
 def _probe_gpu_memory_budget(
     gpu_vendor: str | None = None,
+    *,
+    environment: dict[str, str] | None = None,
 ) -> CapabilityResult[GpuMemoryBudget]:
     """Probe one active-GPU budget through StreamingWorld's testable hooks."""
     return gpu_memory.probe_gpu_memory_budget(
@@ -137,6 +140,7 @@ def _probe_gpu_memory_budget(
         nvidia_detector=_detect_nvidia_gpu_memory_bytes,
         amd_detector=_detect_linux_amd_gpu_memory_bytes,
         logger=_LOG,
+        environment=environment,
     )
 
 
@@ -250,7 +254,8 @@ class StreamingWorld:
                  texture_gpu_budget_bytes: int | None = None,
                  gpu_geometry_budget_bytes: int | None = None,
                  manifest: dict | None = None,
-                 estimate_texture_gpu_bytes: bool = True):
+                 estimate_texture_gpu_bytes: bool = True,
+                 runtime_settings: StreamingRuntimeSettings | None = None):
         """
         on_decode_textures, if given, is called from a background worker
         thread right after a chunk's geometry finishes loading, with the
@@ -315,11 +320,28 @@ class StreamingWorld:
         self._last_wanted_cells: set[tuple[int, int, int]] = set()
         self._prefetch_wanted_cells: set[tuple[int, int, int]] = set()
 
-        target_env = os.environ.get("CAVEVIEWER_MEMORY_UTILIZATION_TARGET")
-        self._memory_target_fraction = _parse_memory_target_fraction(target_env)
+        self._runtime_settings = runtime_settings
+        if runtime_settings is None:
+            target_env = os.environ.get("CAVEVIEWER_MEMORY_UTILIZATION_TARGET")
+            self._memory_target_fraction = _parse_memory_target_fraction(target_env)
+            gpu_target_env = os.environ.get("CAVEVIEWER_GPU_MEMORY_UTILIZATION_TARGET")
+            self._gpu_target_fraction = _parse_gpu_target_fraction(gpu_target_env)
+            gpu_memory_environment = None
+        else:
+            self._memory_target_fraction = max(
+                0.01,
+                min(0.80, float(runtime_settings.memory_target_percent) / 100.0),
+            )
+            self._gpu_target_fraction = max(
+                0.01,
+                min(0.80, float(runtime_settings.gpu_memory_target_percent) / 100.0),
+            )
+            gpu_memory_environment = (
+                {"CAVEVIEWER_GPU_MEMORY_GB": str(runtime_settings.gpu_memory_gb)}
+                if runtime_settings.gpu_memory_gb is not None
+                else {}
+            )
         self._estimated_chunk_ram_bytes = self._estimate_chunk_ram_bytes(sampled_chunk_keys)
-        gpu_target_env = os.environ.get("CAVEVIEWER_GPU_MEMORY_UTILIZATION_TARGET")
-        self._gpu_target_fraction = _parse_gpu_target_fraction(gpu_target_env)
         self._texture_gpu_budget_bytes = (
             max(0, int(texture_gpu_budget_bytes))
             if texture_gpu_budget_bytes is not None
@@ -332,11 +354,17 @@ class StreamingWorld:
         )
         self._estimated_chunk_gpu_bytes = self._estimate_chunk_gpu_bytes(sampled_chunk_keys)
         self._ram_availability_capability = _probe_ram_availability()
-        self._gpu_memory_capability = (
-            _supplied_gpu_memory_capability(total_gpu_memory_bytes)
-            if total_gpu_memory_bytes is not None
-            else _probe_gpu_memory_budget(gpu_vendor)
-        )
+        if total_gpu_memory_bytes is not None:
+            self._gpu_memory_capability = _supplied_gpu_memory_capability(
+                total_gpu_memory_bytes
+            )
+        elif runtime_settings is None:
+            self._gpu_memory_capability = _probe_gpu_memory_budget(gpu_vendor)
+        else:
+            self._gpu_memory_capability = _probe_gpu_memory_budget(
+                gpu_vendor,
+                environment=gpu_memory_environment,
+            )
         self._streaming_memory_decision = decide_streaming_memory(
             available_cell_count=len(self.available_cells),
             ram_capability=self._ram_availability_capability,
@@ -397,12 +425,25 @@ class StreamingWorld:
         self._ready_backlog = _BoundedReadyBacklog(ready_backlog_capacity)
         self._lock = threading.Lock()
         worker_allocation = resolve_worker_allocation(
-            os.environ.get("CAVEVIEWER_IO_WORKERS"),
-            os.environ.get("CAVEVIEWER_IO_RESERVED_CPUS"),
+            (
+                str(runtime_settings.io_workers)
+                if runtime_settings is not None
+                else os.environ.get("CAVEVIEWER_IO_WORKERS")
+            ),
+            (
+                str(runtime_settings.io_reserved_cpus)
+                if runtime_settings is not None
+                else os.environ.get("CAVEVIEWER_IO_RESERVED_CPUS")
+            ),
             default_workers=2,
             default_reserved_cpus=3,
         )
         self._worker_pool_size = worker_allocation.effective_workers
+        self._worker_nice_increment = (
+            int(runtime_settings.io_nice_increment)
+            if runtime_settings is not None
+            else None
+        )
         _LOG.info(describe_worker_target("Streaming", worker_allocation))
         self._stop_event = threading.Event()
         self._paused_event = threading.Event()
@@ -941,7 +982,14 @@ class StreamingWorld:
         # worker-entry helper so Linux adjusts only this native loader thread
         # and leaves the render thread responsive while chunks are read and
         # prepared.
-        lower_current_thread_priority()
+        worker_nice_increment = getattr(self, "_worker_nice_increment", None)
+        if worker_nice_increment is None:
+            lower_current_thread_priority()
+        else:
+            lower_current_thread_priority(
+                nice_increment=worker_nice_increment,
+                environ={},
+            )
         while not self._stop_event.is_set():
             if self._paused_event.is_set():
                 self._wait_while_paused()

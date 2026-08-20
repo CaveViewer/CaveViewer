@@ -48,18 +48,22 @@ def apply_tk_scaling(
     root,
     *,
     presentation_profile: PresentationProfile | None = None,
+    scale_override: float | None = None,
 ) -> None:
     """Nudge Tk to use the current display DPI for font/layout scaling."""
     profile = presentation_profile or get_presentation_profile()
     if not profile.supports_tk_display_scaling:
         return
     try:
-        override = os.getenv("CAVEVIEWER_TK_SCALE", "").strip()
-        if override:
-            scale = float(override)
+        if scale_override is not None:
+            scale = float(scale_override)
         else:
-            pixels_per_inch = float(root.winfo_fpixels("1i"))
-            scale = pixels_per_inch / 72.0 if pixels_per_inch > 0 else 0.0
+            override = os.getenv("CAVEVIEWER_TK_SCALE", "").strip()
+            if override:
+                scale = float(override)
+            else:
+                pixels_per_inch = float(root.winfo_fpixels("1i"))
+                scale = pixels_per_inch / 72.0 if pixels_per_inch > 0 else 0.0
         if scale > 0:
             root.tk.call("tk", "scaling", max(0.75, min(4.0, scale)))
     except Exception:
@@ -70,12 +74,15 @@ def tk_display_scale(
     root,
     *,
     presentation_profile: PresentationProfile | None = None,
+    scale_override: float | None = None,
 ) -> float:
     """Return display scale relative to 96 DPI for pixel-sized Tk layout values."""
     profile = presentation_profile or get_presentation_profile()
     if not profile.supports_tk_display_scaling:
         return 1.0
     try:
+        if scale_override is not None:
+            return max(0.75, min(4.0, float(scale_override))) / (96.0 / 72.0)
         override = os.getenv("CAVEVIEWER_TK_SCALE", "").strip()
         if override:
             return max(0.75, min(4.0, float(override))) / (96.0 / 72.0)

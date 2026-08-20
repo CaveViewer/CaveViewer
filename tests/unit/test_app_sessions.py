@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import traceback
 from pathlib import Path
@@ -414,8 +415,13 @@ def _prepare_main(monkeypatch):
     recorder = _LogRecorder()
     configured = []
     monkeypatch.setattr(app, "_LOG", recorder)
-    monkeypatch.setattr(app, "configure_logging", lambda: configured.append(True))
-    monkeypatch.setattr(app, "_print_caveviewer_environment_settings", lambda: None)
+    monkeypatch.setattr(
+        app,
+        "configure_logging",
+        lambda *args, **_kwargs: configured.append(args),
+    )
+    monkeypatch.setattr(app, "_print_runtime_settings", lambda *_args: None)
+    monkeypatch.setenv("CAVEVIEWER_LOG_LEVEL", "INFO")
     return recorder, configured
 
 
@@ -431,7 +437,7 @@ def test_main_applies_update_branch_and_opens_cli_map(monkeypatch):
     monkeypatch.setattr(
         platform_runtime_module,
         "create_platform_runtime",
-        lambda: runtime,
+        lambda **_kwargs: runtime,
     )
     monkeypatch.setattr(
         app,
@@ -441,9 +447,11 @@ def test_main_applies_update_branch_and_opens_cli_map(monkeypatch):
 
     app.main()
 
-    assert configured == [True]
-    assert opened == [("/maps/cave", {"platform_runtime": runtime})]
-    assert app.os.environ["CAVEVIEWER_UPDATE_BRANCH"] == "feature/updates"
+    assert configured == [("INFO",)]
+    assert opened[0][0] == "/maps/cave"
+    assert opened[0][1]["platform_runtime"] is runtime
+    assert opened[0][1]["runtime_settings"]["update_branch"] == "feature/updates"
+    assert app.os.environ.get("CAVEVIEWER_UPDATE_BRANCH") != "feature/updates"
     assert "Using update branch override: feature/updates" in recorder.info_messages
 
 
@@ -464,18 +472,15 @@ def test_main_consumes_cli_map_path_before_viewer_launch(monkeypatch):
     monkeypatch.setattr(
         platform_runtime_module,
         "create_platform_runtime",
-        lambda: runtime,
+        lambda **_kwargs: runtime,
     )
 
     app.main()
 
-    assert opened == [
-        (
-            "/maps/cave",
-            ["caveviewer", "--backend", "glfw"],
-            {"platform_runtime": runtime},
-        ),
-    ]
+    assert opened[0][0] == "/maps/cave"
+    assert opened[0][1] == ["caveviewer", "--backend", "glfw"]
+    assert opened[0][2]["platform_runtime"] is runtime
+    assert opened[0][2]["runtime_settings"]["log_level"] == "INFO"
 
 
 def test_main_rejects_invalid_update_branch_argument(monkeypatch, capsys):
@@ -503,12 +508,12 @@ def test_main_configures_windows_dpi_best_effort(monkeypatch, dpi_fails):
 
     dpi_utils.configure_process_dpi_awareness = configure_dpi
     monkeypatch.setitem(sys.modules, "caveviewer.gui.dpi_utils", dpi_utils)
-    monkeypatch.setattr(app.os, "name", "nt")
+    monkeypatch.setattr(app, "os", SimpleNamespace(name="nt", environ=os.environ))
     monkeypatch.setattr(app.sys, "argv", ["caveviewer", "/maps/cave"])
     monkeypatch.setattr(
         platform_runtime_module,
         "create_platform_runtime",
-        lambda: object(),
+        lambda **_kwargs: object(),
     )
     monkeypatch.setattr(app, "_run_map_session", lambda _folder, **_kwargs: None)
 
@@ -534,15 +539,15 @@ def test_main_force_update_flag_configures_process_owned_manager(monkeypatch):
     assert manager.current_version == "0.0.0"
     assert manager.platform_runtime is not None
     assert manager.shutdown_calls == 1
-    assert splash_calls == [
-        {
-            "program_name": app.APP_NAME,
-            "version": "0.0.0",
-            "update_manager": manager,
-            "desktop_services": manager.platform_runtime.desktop_services,
-            "platform_runtime": manager.platform_runtime,
-        }
-    ]
+    assert len(splash_calls) == 1
+    splash_call = splash_calls[0]
+    assert splash_call["program_name"] == app.APP_NAME
+    assert splash_call["version"] == "0.0.0"
+    assert splash_call["update_manager"] is manager
+    assert splash_call["desktop_services"] is manager.platform_runtime.desktop_services
+    assert splash_call["platform_runtime"] is manager.platform_runtime
+    assert splash_call["runtime_settings_provider"]()["force_update"] is True
+    assert callable(splash_call["on_preferences_saved"])
     assert "--force-update" not in app.sys.argv
     assert recorder.info_messages[-1] == "No folder selected. Exiting."
 
@@ -587,12 +592,9 @@ def test_main_reopens_splash_after_a_map_session(monkeypatch):
 
     app.main()
 
-    assert opened == [
-        (
-            "/maps/first",
-            {"platform_runtime": managers[0].platform_runtime},
-        )
-    ]
+    assert opened[0][0] == "/maps/first"
+    assert opened[0][1]["platform_runtime"] is managers[0].platform_runtime
+    assert opened[0][1]["runtime_settings"]["log_level"] == "INFO"
     assert versions == [app.__version__, app.__version__]
     assert managers == [seen_managers[0]]
     assert seen_managers == [managers[0], managers[0]]

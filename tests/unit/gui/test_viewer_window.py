@@ -20,6 +20,7 @@ from caveviewer.core.capabilities import (
     WindowSystem,
 )
 from caveviewer.core.map import cache_paths
+from caveviewer.core.preferences import runtime_settings
 from caveviewer.gui import recording, viewer_window
 from caveviewer.gui.features import (
     FeatureDecision,
@@ -169,6 +170,31 @@ def test_benchmark_route_prefetch_stats_reports_missing_route_cells():
         "missing_cells": 2,
         "coverage_pct": pytest.approx(100.0 / 3.0),
     }
+
+
+def test_slice_storage_uses_runtime_settings_snapshot(tmp_path, monkeypatch):
+    storage_dir = tmp_path / "snapshot-maps"
+    snapshot = runtime_settings.resolve_runtime_settings(
+        preferences={"map_library_dir": str(storage_dir)},
+        environ={},
+        platform=runtime_settings.RuntimePlatformFacts(
+            platform_name="linux",
+            os_name="posix",
+            home=tmp_path,
+        ),
+    )
+    from caveviewer.gui import preferences
+
+    monkeypatch.setattr(
+        preferences,
+        "load_preferences",
+        lambda: (_ for _ in ()).throw(AssertionError("legacy preferences read")),
+    )
+    window = viewer_window.CaveViewerWindow.__new__(viewer_window.CaveViewerWindow)
+    window._runtime_settings = snapshot
+
+    assert window._slice_storage_directory() == str(storage_dir)
+    assert storage_dir.is_dir()
 
 
 class FakeImportThread:
