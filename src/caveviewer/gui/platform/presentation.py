@@ -13,11 +13,55 @@ import subprocess
 import sys
 from dataclasses import dataclass, replace
 
-from .base import (
-    DialogLayoutPolicy,
-    PreferencesDialogLayoutPolicy,
-    SplashLayoutPolicy,
-)
+
+@dataclass(frozen=True)
+class SplashLayoutPolicy:
+    """Immutable platform-specific splash-window presentation decisions."""
+
+    app_icon_resource_name: str
+    reuse_existing_root: bool
+    destroy_root_on_close: bool
+    windows_layout: bool
+    linux_layout: bool
+    window_width: int
+    min_height: int
+    extra_bottom_slack: int
+    secondary_link_row_bottom_gap: int
+    footer_credits_bottom_pad: int
+    title_to_action_gap: int
+    browse_button_bottom_gap: int
+    instruction_bottom_gap: int
+    secondary_link_row_top_gap: int
+
+
+@dataclass(frozen=True)
+class PreferencesDialogLayoutPolicy:
+    """Immutable platform-specific embedded Preferences presentation policy."""
+
+    windows_layout: bool
+    macos_layout: bool
+    linux_layout: bool
+    wrap_length: int
+    text_entry_width: int
+    body_pad_x: int
+    min_width: int
+    row_pad_x: int
+    row_pad_y: int
+    control_row_top_pad_y: int
+    tab_pad_x: int
+    tab_pad_y: int
+    tab_bottom_pad_y: int
+    button_row_top_pad_y: int
+    tab_highlight_thickness: int
+    notice_wrap_length: int
+
+
+@dataclass(frozen=True)
+class DialogLayoutPolicy:
+    """Immutable platform-specific shared Tk dialog presentation policy."""
+
+    body_pad_x: int
+    use_label_action_buttons: bool
 
 
 _DEFAULT_FONT_CANDIDATES = (

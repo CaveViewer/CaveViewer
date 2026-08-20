@@ -371,10 +371,10 @@ shortcut and mouse-input labels, text scaling, startup focus policy, and backend
 sizing preferences.
 It is selected without creating Tk widgets or probing the display. The narrow
 action adapter performs only process DPI setup, macOS About-menu registration,
-and best-effort viewer focus. The current facade preserves the broad adapter's
-native implementations while static presentation consumers migrate; Linux
-fontconfig lookup remains an action-time font fallback rather than a profile
-selection side effect.
+and best-effort viewer focus. It selects direct Windows, macOS, or fallback
+implementations from the composed platform fact and does not depend on
+`SplashPlatformAdapter`; Linux fontconfig lookup remains an action-time font
+fallback rather than a profile-selection side effect.
 
 Automatic updates have a typed static boundary. `select_update_profile()` maps
 only the composed platform and process architecture to an immutable

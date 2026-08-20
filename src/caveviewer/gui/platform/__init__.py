@@ -1,7 +1,6 @@
 """Public factories and types for platform-specific desktop integration."""
 
 from .app_identity import LINUX_WINDOW_INSTANCE_NAME, tk_root_options
-from .base import DialogLayoutPolicy, PreferencesDialogLayoutPolicy, SplashLayoutPolicy
 from .desktop_services import (
     DesktopServiceError,
     DesktopInhibitor,
@@ -12,7 +11,10 @@ from .desktop_services import (
 )
 from .factory import get_platform_adapter, get_splash_platform_adapter
 from .presentation import (
+    DialogLayoutPolicy,
+    PreferencesDialogLayoutPolicy,
     PresentationProfile,
+    SplashLayoutPolicy,
     font_candidates_for_profile,
     get_presentation_profile,
     select_presentation_profile,
