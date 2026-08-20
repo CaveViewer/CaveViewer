@@ -153,6 +153,8 @@ def test_frozen_installer_pipeline_is_per_user_and_fails_closed_without_signing(
     assert "SignedUninstaller=yes" in installer
     assert "Get-AuthenticodeSignature -LiteralPath" in smoke
     assert "TimeStamperCertificate" in smoke
+    assert "[AllowEmptyString()][string]$CertificateSubject" in smoke
+    assert "-ExpectedCertificateSubject is required for a signed release smoke test." in smoke
     assert "CaveViewer smoke & café O'Brien" in smoke
     assert "--expected-version" in smoke
     assert "& $Path @Arguments" in smoke

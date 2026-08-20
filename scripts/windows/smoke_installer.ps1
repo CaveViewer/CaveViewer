@@ -54,7 +54,7 @@ function Assert-PackageMetadata {
         [Parameter(Mandatory = $true)][string]$PackageMetadataPath,
         [Parameter(Mandatory = $true)][string]$UpdatePath,
         [Parameter(Mandatory = $true)][string]$Version,
-        [Parameter(Mandatory = $true)][string]$CertificateSubject,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$CertificateSubject,
         [Parameter(Mandatory = $true)][bool]$UnsignedAllowed
     )
 
@@ -87,7 +87,7 @@ function Assert-PackageMetadata {
 function Assert-InstallerSignature {
     param(
         [Parameter(Mandatory = $true)][string]$Path,
-        [Parameter(Mandatory = $true)][string]$CertificateSubject,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$CertificateSubject,
         [Parameter(Mandatory = $true)][bool]$UnsignedAllowed
     )
 
