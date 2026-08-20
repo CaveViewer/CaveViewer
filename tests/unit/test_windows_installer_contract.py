@@ -158,6 +158,8 @@ def test_frozen_installer_pipeline_is_per_user_and_fails_closed_without_signing(
     assert "CaveViewer smoke & café O'Brien" in smoke
     assert "--expected-version" in smoke
     assert "& $Path @Arguments" in smoke
+    assert "$commandSucceeded = $?" in smoke
+    assert "$LASTEXITCODE" not in smoke
 
 
 def test_authenticode_helpers_use_certificate_store_sha256_and_timestamping():

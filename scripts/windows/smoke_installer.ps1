@@ -111,8 +111,9 @@ function Invoke-CaveViewerInstaller {
     )
 
     & $Path @Arguments
-    if ($LASTEXITCODE -ne 0) {
-        throw "$Description failed with installer exit code $LASTEXITCODE."
+    $commandSucceeded = $?
+    if (-not $commandSucceeded) {
+        throw "$Description failed."
     }
 }
 
