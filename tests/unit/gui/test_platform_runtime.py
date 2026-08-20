@@ -49,6 +49,20 @@ class FakeUpdatePackageStorageAdapter:
         raise AssertionError("runtime composition must not persist a package")
 
 
+class FakeUpdatePackageInstallerAdapter:
+    def supports_package_kind(
+        self, _package_kind, *, authenticode_certificate_subject
+    ):
+        del authenticode_certificate_subject
+        raise AssertionError("runtime composition must not inspect an installer")
+
+    def install_action_label(self):
+        raise AssertionError("runtime composition must not label an installer")
+
+    def install_verified_package(self, _payload_path, **_kwargs):
+        raise AssertionError("runtime composition must not launch an installer")
+
+
 class FakeSavedArtifactRevealAdapter:
     def reveal_saved_artifact(self, _output_path):
         raise AssertionError("runtime composition must not reveal an artifact")
@@ -101,7 +115,7 @@ class FakeWindowBackendAdapter:
             "windows_app",
             True,
             "/updates/windows/prerelease.json",
-            frozenset({"zip", "msi", "exe"}),
+            frozenset({"zip", "exe"}),
         ),
         (
             "linux",
@@ -161,6 +175,7 @@ def test_runtime_resolves_environment_only_when_it_is_composed(monkeypatch):
     adapter = FakePlatformAdapter()
     desktop_services = object()
     storage_adapter = FakeUpdatePackageStorageAdapter()
+    installer_adapter = FakeUpdatePackageInstallerAdapter()
     artifact_reveal_adapter = FakeSavedArtifactRevealAdapter()
     recording_process_adapter = FakeRecordingProcessAdapter()
     tls_trust_adapter = FakeTlsTrustAdapter()
@@ -170,6 +185,7 @@ def test_runtime_resolves_environment_only_when_it_is_composed(monkeypatch):
         platform_adapter=adapter,
         desktop_services=desktop_services,
         update_package_storage_adapter=storage_adapter,
+        update_package_installer_adapter=installer_adapter,
         saved_artifact_reveal_adapter=artifact_reveal_adapter,
         recording_process_adapter=recording_process_adapter,
         tls_trust_adapter=tls_trust_adapter,
@@ -185,6 +201,7 @@ def test_runtime_resolves_environment_only_when_it_is_composed(monkeypatch):
     assert runtime.platform_adapter is adapter
     assert runtime.desktop_services is desktop_services
     assert runtime.update_package_storage_adapter is storage_adapter
+    assert runtime.update_package_installer_adapter is installer_adapter
     assert runtime.saved_artifact_reveal_adapter is artifact_reveal_adapter
     assert runtime.recording_process_adapter is recording_process_adapter
     assert runtime.tls_trust_adapter is tls_trust_adapter

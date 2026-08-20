@@ -428,9 +428,9 @@ run_selected_packages() {
   fi
 
   if $selected_windows; then
-    local windows_zip_path="$repo_root/dist/windows/packages/CaveViewer-${normalized_version}-windows.zip"
-    if $reuse_existing_artifacts && ! $rebuild && [ -f "$windows_zip_path" ]; then
-      echo "[windows] Reusing existing package: $windows_zip_path"
+    local windows_exe_path="$repo_root/dist/windows/packages/CaveViewer-${normalized_version}-windows.exe"
+    if $reuse_existing_artifacts && ! $rebuild && [ -f "$windows_exe_path" ]; then
+      echo "[windows] Reusing existing package: $windows_exe_path"
     else
       echo "[windows] Building package..."
       "$script_dir/windows/package.sh"
@@ -455,7 +455,7 @@ run_selected_packages() {
   fi
 
   if $selected_windows; then
-    print_artifact "Windows ZIP" "$repo_root/dist/windows/packages/CaveViewer-${normalized_version}-windows.zip"
+    print_artifact "Windows installer EXE" "$repo_root/dist/windows/packages/CaveViewer-${normalized_version}-windows.exe"
   fi
 }
 

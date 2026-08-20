@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import os
 import shutil
@@ -41,6 +42,7 @@ def _copy_release_files(destination: Path) -> None:
         "scripts/sign_update_manifest.py",
         "scripts/write_update_manifest.py",
         "scripts/windows/update_manifest.sh",
+        "scripts/windows/verify_package_metadata.py",
         "packaging/linux/io.github.caveviewer.caveviewer.metainfo.xml",
         "src/caveviewer/version.py",
     )
@@ -53,9 +55,7 @@ def _copy_release_files(destination: Path) -> None:
 
 def _write_release_artifacts(artifacts_dir: Path, version: str) -> None:
     artifact_names = (
-        f"CaveViewer-{version}-windows.zip",
-        f"CaveViewer-{version}.json",
-        f"CaveViewer-{version}.update.json",
+        f"CaveViewer-{version}-windows.exe",
         f"CaveViewer-{version}-x86_64.AppImage",
         f"CaveViewer-{version}-macos-arm64.dmg",
         f"CaveViewer-{version}-macos-arm64.json",
@@ -68,6 +68,40 @@ def _write_release_artifacts(artifacts_dir: Path, version: str) -> None:
             f"artifact-{index}-{artifact_name}\n".encode("utf-8")
         )
 
+    windows_artifact = artifacts_dir / f"CaveViewer-{version}-windows.exe"
+    windows_metadata = {
+        "artifact_file": windows_artifact.name,
+        "authenticode_certificate_subject": "CN=CaveViewer Test Publisher",
+        "authenticode_required": True,
+        "authenticode_status": "verified",
+        "entrypoint": "CaveViewerSetup.exe",
+        "package_type": "windows_signed_installer",
+        "sha256": hashlib.sha256(windows_artifact.read_bytes()).hexdigest(),
+        "size_bytes": windows_artifact.stat().st_size,
+        "version": version,
+    }
+    (artifacts_dir / f"CaveViewer-{version}.json").write_text(
+        json.dumps(windows_metadata, sort_keys=True),
+        encoding="utf-8",
+    )
+    windows_update_metadata = {
+        "authenticode_certificate_subject": "CN=CaveViewer Test Publisher",
+        "authenticode_required": True,
+        "authenticode_status": "verified",
+        "download_size_bytes": windows_artifact.stat().st_size,
+        "download_size_bytes_windows_exe": windows_artifact.stat().st_size,
+        "download_url": "",
+        "download_url_windows_exe": "",
+        "install_channel": "windows_installer",
+        "latest_version": version,
+        "sha256": hashlib.sha256(windows_artifact.read_bytes()).hexdigest(),
+        "sha256_windows_exe": hashlib.sha256(windows_artifact.read_bytes()).hexdigest(),
+    }
+    (artifacts_dir / f"CaveViewer-{version}.update.json").write_text(
+        json.dumps(windows_update_metadata, sort_keys=True),
+        encoding="utf-8",
+    )
+
 
 def test_finalizer_rejects_incomplete_artifacts_before_creating_a_release(
     tmp_path: Path,
@@ -77,7 +111,7 @@ def test_finalizer_rejects_incomplete_artifacts_before_creating_a_release(
     gh_log = tmp_path / "gh.log"
     artifacts_dir.mkdir()
     fake_bin.mkdir()
-    (artifacts_dir / "CaveViewer-9.9.9-windows.zip").write_bytes(b"zip")
+    (artifacts_dir / "CaveViewer-9.9.9-windows.exe").write_bytes(b"installer")
 
     fake_gh = fake_bin / "gh"
     fake_gh.write_text(
@@ -242,6 +276,12 @@ def test_finalizer_publishes_all_assets_and_pushes_one_signed_metadata_commit(
         assert manifest_payload["download_url"].startswith(
             f"https://github.com/example/CaveViewer/releases/download/v{version}/"
         )
+        if manifest_path == "updates/windows/stable.json":
+            assert manifest_payload["install_channel"] == "windows_installer"
+            assert (
+                manifest_payload["authenticode_certificate_subject"]
+                == "CN=CaveViewer Test Publisher"
+            )
         assert b"\r\n" not in manifest.read_bytes()
         signature = base64.b64decode(
             manifest.with_name(f"{manifest.name}.sig").read_text(encoding="ascii").strip(),

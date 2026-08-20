@@ -23,4 +23,6 @@ set "CAVEVIEWER_IO_WORKERS="
 set "IO_WORKERS_ARG="
 if not "%CAVEVIEWER_IO_WORKERS%"=="" set "IO_WORKERS_ARG=-IoWorkers %CAVEVIEWER_IO_WORKERS%"
 
-start "" /min powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Minimized -File "%~dp0setup.ps1" %IO_WORKERS_ARG%
+REM Keep setup visible. If it cannot create or verify CaveViewer's user-owned
+REM Python 3.12 runtime, its retained log explains the exact failed step.
+start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0setup.ps1" %IO_WORKERS_ARG%

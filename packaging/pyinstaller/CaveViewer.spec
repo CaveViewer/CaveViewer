@@ -68,6 +68,7 @@ a = Analysis(
     optimize=0,
 )
 pyz = PYZ(a.pure)
+app_icon = os.environ.get('CAVEVIEWER_APP_ICON', '').strip()
 
 exe = EXE(
     pyz,
@@ -79,12 +80,13 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    console=True,
+    console=not sys.platform.startswith('win'),
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=app_icon or None,
 )
 coll = COLLECT(
     exe,
@@ -106,11 +108,15 @@ bundle_kwargs = {
         'CFBundleVersion': app_version,
     },
 }
-app_icon = os.environ.get('CAVEVIEWER_APP_ICON', '').strip()
 if app_icon:
     bundle_kwargs['icon'] = app_icon
 
-app = BUNDLE(
-    coll,
-    **bundle_kwargs,
-)
+if sys.platform == 'darwin':
+    app = BUNDLE(
+        coll,
+        **bundle_kwargs,
+    )
+else:
+    # Windows and Linux packaging consume a normal one-folder payload. A macOS
+    # BUNDLE here would hide that payload inside an .app wrapper on Windows.
+    app = coll

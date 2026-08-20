@@ -126,6 +126,25 @@ def test_linux_release_workflows_build_before_packaging_on_fresh_runners():
         ), workflow_name
 
 
+def test_windows_release_workflow_builds_the_exe_on_a_signing_capable_runner():
+    workflow = (WORKFLOWS_DIR / "windows-release.yml").read_text(encoding="utf-8")
+
+    assert "Install Inno Setup" in workflow
+    assert "choco install innosetup" in workflow
+    assert "Build Windows installer" in workflow
+    assert "CaveViewer-${{ inputs.version }}-windows.exe" in workflow
+    assert "CaveViewer-${{ inputs.version }}-windows.zip" not in workflow
+    assert "CAVEVIEWER_ALLOW_UNSIGNED_WINDOWS_PACKAGE" in workflow
+    assert "CAVEVIEWER_WINDOWS_SIGNING_RUNNER" in workflow
+    assert "CAVEVIEWER_WINDOWS_SIGNING_CERTIFICATE_SUBJECT" in workflow
+    assert "CAVEVIEWER_WINDOWS_TIMESTAMP_URL" in workflow
+    assert "Smoke-test Windows installer and update handoff" in workflow
+    assert "smoke_installer.ps1" in workflow
+    assert workflow.index("Smoke-test Windows installer and update handoff") < workflow.index(
+        "Upload Windows installer for testing"
+    )
+
+
 def test_linux_release_workflow_smoke_tests_appimage_desktop_integration():
     workflow = (WORKFLOWS_DIR / "linux-x86_64-release.yml").read_text(
         encoding="utf-8"
@@ -172,6 +191,14 @@ def test_package_smoke_workflows_are_read_only_and_non_publishing():
             "macos-x86_64.dmg",
             "--target=macos-x86_64",
             "Smoke-test macOS x86_64 DMG",
+        ),
+        (
+            "windows-package-smoke.yml",
+            "Windows Package Smoke",
+            "windows-latest",
+            "windows.exe",
+            "--target=windows",
+            "smoke_installer.ps1",
         ),
     )
 

@@ -13,6 +13,7 @@ from caveviewer.gui import update_checker
 from caveviewer.gui.platform.probes.updates import (
     UpdateManifestSchema,
     UpdateTarget,
+    select_update_profile,
 )
 from caveviewer.gui.update_signature import SignatureVerificationError
 
@@ -114,6 +115,79 @@ def test_manifest_parser_returns_a_complete_artifact_for_a_newer_update(
     assert parsed.size_bytes == 123
     assert parsed.sha256 == "a" * 64
     assert parsed.package_kind == "zip"
+
+
+def _windows_exe_target() -> UpdateTarget:
+    profile = select_update_profile(platform_name="win32", machine="AMD64")
+    return UpdateTarget(
+        install_channel=profile.install_channel,
+        manifest_url="https://updates.example/windows/stable.json",
+        manifest_signature_url="https://updates.example/windows/stable.json.sig",
+        user_agent="CaveViewer-Windows-Installer-Test",
+        manifest_schema=profile.manifest_schema,
+    )
+
+
+def test_windows_exe_manifest_requires_its_installer_channel_and_signer_subject():
+    target = _windows_exe_target()
+    manifest = {
+        "latest_version": "2.0.0",
+        "download_url_windows_exe": "https://updates.example/CaveViewer-2.0.0-windows.exe",
+        "download_size_bytes_windows_exe": 123,
+        "sha256_windows_exe": "A" * 64,
+        "install_channel": "windows_installer",
+        "authenticode_certificate_subject": "CN=CaveViewer Update Publisher",
+    }
+
+    parsed = update_checker._parse_update_manifest(
+        "1.0.0",
+        manifest,
+        update_target=target,
+        package_kind_for_url=lambda _url: "exe",
+    )
+
+    assert isinstance(parsed, update_checker.UpdateArtifact)
+    assert parsed.package_kind == "exe"
+    assert parsed.authenticode_certificate_subject == "CN=CaveViewer Update Publisher"
+
+    manifest.pop("install_channel")
+    rejected_channel = update_checker._parse_update_manifest(
+        "1.0.0",
+        manifest,
+        update_target=target,
+        package_kind_for_url=lambda _url: "exe",
+    )
+    assert isinstance(rejected_channel, update_checker.UpdateCheckFailed)
+    assert "installer channel" in rejected_channel.error
+
+    manifest["install_channel"] = "windows_installer"
+    manifest.pop("authenticode_certificate_subject")
+    rejected_subject = update_checker._parse_update_manifest(
+        "1.0.0",
+        manifest,
+        update_target=target,
+        package_kind_for_url=lambda _url: "exe",
+    )
+    assert isinstance(rejected_subject, update_checker.UpdateCheckFailed)
+    assert "Authenticode certificate subject" in rejected_subject.error
+
+
+def test_windows_zip_manifest_remains_a_manual_migration_package_without_signer_data():
+    parsed = update_checker._parse_update_manifest(
+        "1.0.0",
+        {
+            "latest_version": "2.0.0",
+            "download_url_windows_zip": "https://updates.example/CaveViewer-2.0.0-windows.zip",
+            "download_size_bytes_windows_zip": 123,
+            "sha256_windows_zip": "A" * 64,
+        },
+        update_target=_windows_exe_target(),
+        package_kind_for_url=lambda _url: "zip",
+    )
+
+    assert isinstance(parsed, update_checker.UpdateArtifact)
+    assert parsed.package_kind == "zip"
+    assert parsed.authenticode_certificate_subject is None
 
 
 def test_manifest_parser_returns_up_to_date_without_an_artifact(update_target):

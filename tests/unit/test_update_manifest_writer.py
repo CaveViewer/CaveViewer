@@ -25,8 +25,27 @@ def _run_writer(*args: str | Path) -> subprocess.CompletedProcess[str]:
 
 
 @pytest.mark.parametrize(
-    ("target", "architecture", "artifact_name", "download_url", "aliases"),
+    (
+        "target",
+        "architecture",
+        "artifact_name",
+        "download_url",
+        "aliases",
+        "authenticode_certificate_subject",
+    ),
     [
+        (
+            "windows",
+            None,
+            "CaveViewer-1.2.3-windows.exe",
+            "https://downloads.example/CaveViewer-1.2.3-windows.exe",
+            (
+                "download_url_windows_exe",
+                "download_size_bytes_windows_exe",
+                "sha256_windows_exe",
+            ),
+            "CN=CaveViewer Update Publisher",
+        ),
         (
             "windows",
             None,
@@ -37,6 +56,7 @@ def _run_writer(*args: str | Path) -> subprocess.CompletedProcess[str]:
                 "download_size_bytes_windows_zip",
                 "sha256_windows_zip",
             ),
+            None,
         ),
         (
             "linux",
@@ -48,6 +68,7 @@ def _run_writer(*args: str | Path) -> subprocess.CompletedProcess[str]:
                 "download_size_bytes_linux_appimage",
                 "sha256_linux_appimage",
             ),
+            None,
         ),
         (
             "macos",
@@ -59,6 +80,7 @@ def _run_writer(*args: str | Path) -> subprocess.CompletedProcess[str]:
                 "download_size_bytes_macosx_dmg",
                 "sha256_macosx_dmg",
             ),
+            None,
         ),
     ],
 )
@@ -69,6 +91,7 @@ def test_writer_generates_platform_aliases_and_escaped_json(
     artifact_name: str,
     download_url: str,
     aliases: tuple[str, str, str],
+    authenticode_certificate_subject: str | None,
 ):
     artifact = tmp_path / artifact_name
     artifact_contents = b"CaveViewer artifact\n"
@@ -93,6 +116,13 @@ def test_writer_generates_platform_aliases_and_escaped_json(
     ]
     if architecture is not None:
         command.extend(("--architecture", architecture))
+    if authenticode_certificate_subject is not None:
+        command.extend(
+            (
+                "--authenticode-certificate-subject",
+                authenticode_certificate_subject,
+            )
+        )
 
     completed = _run_writer(*command)
 
@@ -113,6 +143,12 @@ def test_writer_generates_platform_aliases_and_escaped_json(
     if target == "macos":
         assert payload["platform"] == "macos"
         assert payload["architecture"] == architecture
+    if authenticode_certificate_subject is not None:
+        assert payload["install_channel"] == "windows_installer"
+        assert (
+            payload["authenticode_certificate_subject"]
+            == authenticode_certificate_subject
+        )
 
 
 @pytest.mark.parametrize(
@@ -140,7 +176,7 @@ def test_writer_generates_platform_aliases_and_escaped_json(
             "1.2.3",
             "https://downloads.example/CaveViewer.dmg",
             b"artifact",
-            "must end with one of: .zip",
+            "must end with one of: .zip, .exe",
         ),
         (
             "1.2.3",
@@ -180,4 +216,31 @@ def test_writer_rejects_invalid_unsigned_manifest_inputs(
 
     assert completed.returncode == 2
     assert expected_error in completed.stderr
+    assert not output.exists()
+
+
+def test_writer_rejects_a_windows_exe_without_its_authenticode_subject(tmp_path: Path):
+    artifact = tmp_path / "CaveViewer-1.2.3-windows.exe"
+    artifact.write_bytes(b"signed installer fixture")
+    output = tmp_path / "updates" / "stable.json"
+
+    completed = _run_writer(
+        "--target",
+        "windows",
+        "--version",
+        "1.2.3",
+        "--download-url",
+        "https://downloads.example/CaveViewer-1.2.3-windows.exe",
+        "--artifact-file",
+        artifact,
+        "--notes",
+        "Release notes",
+        "--channel",
+        "stable",
+        "--output",
+        output,
+    )
+
+    assert completed.returncode == 2
+    assert "--authenticode-certificate-subject" in completed.stderr
     assert not output.exists()

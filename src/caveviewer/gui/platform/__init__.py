@@ -31,6 +31,7 @@ from .runtime import (
 )
 from .update_package_reveal import UpdatePackageRevealAdapter
 from .update_package_storage import UpdatePackageStorageAdapter
+from .update_package_install import UpdatePackageInstallerAdapter
 from .saved_artifact_reveal import SavedArtifactRevealAdapter
 from .recording_process import RecordingProcessAdapter
 from .tls_trust import TlsTrustAdapter
@@ -74,6 +75,7 @@ __all__ = [
     "ViewerLaunchPreflight",
     "UpdatePackageRevealAdapter",
     "UpdatePackageStorageAdapter",
+    "UpdatePackageInstallerAdapter",
     "SavedArtifactRevealAdapter",
     "RecordingProcessAdapter",
     "TlsTrustAdapter",

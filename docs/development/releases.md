@@ -11,16 +11,32 @@ CaveViewer publishes four user-installable artifacts from four GitHub workflows:
 
 | Target | Workflow | Runner | User artifact |
 |---|---|---|---|
-| `windows` | `Windows Release` | `windows-latest` | `CaveViewer-<version>-windows.zip` |
+| `windows` | `Windows Release` | `windows-latest` for package validation; configured protected Windows signer for publishing | `CaveViewer-<version>-windows.exe` |
 | `linux-x86_64` | `Linux x86_64 Release` | `ubuntu-latest` | `CaveViewer-<version>-x86_64.AppImage` |
 | `macos-arm64` | `macOS ARM64 Release` | `macos-15` | `CaveViewer-<version>-macos-arm64.dmg` |
 | `macos-x86_64` | `macOS x86_64 Release` | `macos-15-intel` | `CaveViewer-<version>-macos-x86_64.dmg` |
 
-The Windows ZIP is a guided source/setup bundle. Its root `launch.bat` starts
-`setup.ps1`, which installs Python when needed, installs the required Python
-packages, prepares the Visual C++ runtime, configures outbound firewall access
-when permitted, and creates a desktop shortcut. The DMGs and AppImages are
-bundled applications.
+The Windows release asset is a signed installer EXE. It embeds a PyInstaller
+one-folder CaveViewer payload, installs per-user under
+`%LOCALAPPDATA%\Programs\CaveViewer`, and keeps user state at the compatible
+`%USERPROFILE%\.caveviewer` location. The installer adds a versioned payload
+directory only after copying a complete frozen payload, verifies a controlled
+non-GPU executable path, updates shortcuts, and can wait for an updater parent
+with `--update --wait-pid <pid> --expected-version <version>`. After controlled
+payload verification it records the current per-user payload/executable
+provenance and relaunches the new application. The asset name is versioned for
+release integrity, while the embedded installer entrypoint is
+`CaveViewerSetup.exe`.
+
+`Windows Package Smoke` exercises the unsigned mechanical contract on a
+disposable Windows runner, including paths with spaces, Unicode, apostrophes,
+and ampersands, isolated noninteractive installation, and the update wait
+handoff. A publishing `Windows Release` reruns that smoke on the protected
+signer, where it requires the expected Authenticode publisher and timestamp.
+
+The legacy Windows `launch.bat`/`setup.ps1` source helpers remain available for
+developers and migration support only; they are not included in the new
+release artifact. The DMGs and AppImages are bundled applications.
 
 GitHub automatically provides its own source-code ZIP and tarball for each tag.
 `scripts/common/package_source.sh` can create
@@ -69,7 +85,12 @@ bytes during a Windows checkout or commit.
 manifest can be signed, it canonicalizes the numeric version, reads the built
 artifact, and writes its positive byte size and lowercase 64-character
 SHA-256. The payload URL must be HTTPS and match the selected platform package
-type (Windows ZIP, Linux AppImage, or macOS DMG). Platform shell wrappers only
+type (Windows EXE, Linux AppImage, or macOS DMG). A Windows EXE manifest also
+contains `install_channel: windows_installer` and the exact
+`authenticode_certificate_subject` verified from package metadata; the client
+requires both before it can offer automatic install/restart. Already-published
+Windows ZIP manifests remain valid during migration, and retain their
+ZIP-specific alias keys. Platform shell wrappers only
 choose the manifest path and delegate to this writer; do not add another
 heredoc-based JSON serializer. Its canonical signed representation uses
 lexicographic JSON key order, two-space indentation, and a final LF newline.
@@ -178,6 +199,18 @@ branch-level concurrency lock.
 The repository secret `CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY` must contain the
 Ed25519 private key used for update manifests. Only the finalizer receives this
 secret. Package-only runs do not require it.
+
+Authenticode signing is a distinct Windows release boundary. A publishing
+Windows runner must be configured through the non-secret repository variables
+`CAVEVIEWER_WINDOWS_SIGNING_RUNNER`,
+`CAVEVIEWER_WINDOWS_SIGNING_CERTIFICATE_SUBJECT`, and
+`CAVEVIEWER_WINDOWS_TIMESTAMP_URL`; the non-exportable certificate and private
+key must exist only in that protected runner's current-user certificate store.
+The package step signs frozen PE payload binaries, installer, and uninstaller
+with SHA-256 and an RFC-3161 timestamp, then verifies them before calculating
+the release digest. Hosted package-only runs may create an explicitly
+`unsigned-test-only` artifact for mechanical validation, but the finalizer and
+local publisher reject that metadata so it cannot be published.
 
 ## macOS package validation
 
@@ -288,10 +321,12 @@ Publishing also requires an authenticated GitHub CLI and
   dependency, or release-script changes.
 - For stable releases, verify the GitHub release is not marked prerelease and
   that the “latest release” link resolves to the new tag.
-- Smoke-test install, launch, map import, background update download, and manual
-  package reveal on each available platform/architecture. Confirm CaveViewer
-  neither executes nor installs the package, and report any platform that was
-  not tested directly.
+- Smoke-test install, launch, map import, and background update download on
+  each available platform/architecture. Confirm macOS, Linux, and Windows ZIP
+  migration packages remain reveal-only. On a signed Windows installer build,
+  also exercise `Install and restart`: validate the publisher/timestamp,
+  update wait/version contract, controlled payload verification, and relaunch.
+  Report any platform that was not tested directly.
 - Validate the rendered Linux desktop file with `desktop-file-validate` and the
   metainfo file with `appstreamcli validate --no-net --pedantic`.
 - Smoke-test AppImage desktop integration with

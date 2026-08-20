@@ -1,4 +1,4 @@
-"""Atomically promote verified update packages into user-visible Downloads."""
+"""Atomically promote verified update packages to their platform-owned location."""
 
 from __future__ import annotations
 
@@ -9,6 +9,8 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
+
+from .windows_update_paths import default_windows_update_root
 
 
 class UpdatePackageStorageAdapter(Protocol):
@@ -83,6 +85,38 @@ class LinuxUpdatePackageStorageAdapter:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class WindowsUpdatePackageStorageAdapter:
+    """Keep automatic installer EXEs in a private user-owned update directory.
+
+    Legacy ZIP packages still land in Downloads so a source-bundle user can
+    find and run the one-time migration installer manually. The automatic EXE
+    path is private and is re-hashed immediately before it is launched.
+    """
+
+    update_root: Path | str | None = None
+    downloads_dir: Path | str | None = None
+
+    def persist_verified_package(
+        self,
+        temporary_payload_path: str,
+        download_url: str | None,
+    ) -> str:
+        """Atomically promote EXE installers outside the user-visible Downloads folder."""
+        filename = _generic_package_filename(download_url)
+        destination_dir = (
+            _resolve_windows_update_root(self.update_root)
+            if filename.lower().endswith(".exe")
+            else _resolve_downloads_dir(self.downloads_dir)
+        )
+        return _promote_verified_package(
+            temporary_payload_path=Path(temporary_payload_path),
+            downloads_dir=destination_dir,
+            filename=filename,
+            make_executable=False,
+        )
+
+
 def create_update_package_storage_adapter(
     *,
     platform_name: str | None = None,
@@ -93,6 +127,8 @@ def create_update_package_storage_adapter(
         return MacOSUpdatePackageStorageAdapter()
     if normalized_platform.startswith("linux"):
         return LinuxUpdatePackageStorageAdapter()
+    if normalized_platform.startswith("win"):
+        return WindowsUpdatePackageStorageAdapter()
     return DefaultUpdatePackageStorageAdapter()
 
 
@@ -101,6 +137,13 @@ def _resolve_downloads_dir(configured_dir: Path | str | None) -> Path:
     if configured_dir is not None:
         return Path(configured_dir)
     return Path(os.path.expanduser("~")) / "Downloads"
+
+
+def _resolve_windows_update_root(configured_dir: Path | str | None) -> Path:
+    """Return an injected test path or the current user's Windows update root."""
+    if configured_dir is not None:
+        return Path(configured_dir)
+    return default_windows_update_root()
 
 
 def _generic_package_filename(download_url: str | None) -> str:

@@ -178,6 +178,10 @@ class _FakeUpdateActionManager:
     def start_download(self):
         self.calls.append("start")
 
+    def start_installation(self):
+        self.calls.append("install")
+        return True
+
     def cancel_download(self):
         self.calls.append("cancel")
 
@@ -201,6 +205,20 @@ def test_cancel_update_action_accepts_pointer_and_keyboard_activation(sequence):
     assert set(label.bindings) == {"<Button-1>", "<Return>", "<space>"}
     assert label.bindings[sequence]() == "break"
     assert manager.calls == ["cancel"]
+
+
+def test_install_update_action_requests_the_explicit_manager_handoff():
+    label = _FakeUpdateActionLabel()
+    manager = _FakeUpdateActionManager()
+
+    splash_screen._bind_update_label_action(
+        label,
+        manager,
+        splash_screen._UpdateAction.INSTALL,
+    )
+
+    assert label.bindings["<Button-1>"]() == "break"
+    assert manager.calls == ["install"]
 
 
 def test_disabled_update_gate_shows_its_safe_explanation_without_an_action():
@@ -266,6 +284,76 @@ def test_ready_update_uses_the_snapshot_label_as_the_reveal_action():
         "Open Download Folder",
         splash_screen._BUTTON_BG,
         splash_screen._UpdateAction.REVEAL,
+    )
+
+
+def test_windows_exe_update_prompts_for_install_restart_and_never_uses_reveal():
+    available = splash_screen._update_presentation(
+        UpdateSnapshot(
+            state=UpdateState.AVAILABLE,
+            current_version="1.0.63",
+            available_version="1.0.64",
+            install_action_label="Install and restart",
+        )
+    )
+    ready = splash_screen._update_presentation(
+        UpdateSnapshot(
+            state=UpdateState.READY,
+            current_version="1.0.63",
+            available_version="1.0.64",
+            payload_path=r"C:\Users\Ada\AppData\Local\CaveViewer\updates\CaveViewerSetup.exe",
+            install_action_label="Install and restart",
+        )
+    )
+    handoff = splash_screen._update_presentation(
+        UpdateSnapshot(
+            state=UpdateState.HANDOFF_VERIFYING,
+            current_version="1.0.63",
+        )
+    )
+
+    assert available == splash_screen._UpdatePresentation(
+        action_text="Install and restart 1.0.64",
+        action=splash_screen._UpdateAction.INSTALL,
+    )
+    assert ready == splash_screen._UpdatePresentation(
+        status_text="Update ready",
+        action_text="Install and restart",
+        action=splash_screen._UpdateAction.INSTALL,
+    )
+    assert handoff == splash_screen._UpdatePresentation(
+        status_text="Verifying installer…"
+    )
+
+
+def test_requested_windows_installation_shows_handoff_progress_and_retry():
+    preparing = splash_screen._update_presentation(
+        UpdateSnapshot(
+            state=UpdateState.READY,
+            current_version="1.0.63",
+            install_action_label="Install and restart",
+            install_requested=True,
+        )
+    )
+    installing = splash_screen._update_presentation(
+        UpdateSnapshot(state=UpdateState.INSTALLING, current_version="1.0.63")
+    )
+    failed = splash_screen._update_presentation(
+        UpdateSnapshot(
+            state=UpdateState.FAILED,
+            current_version="1.0.63",
+            install_action_label="Install and restart",
+            install_requested=True,
+        )
+    )
+
+    assert preparing == splash_screen._UpdatePresentation(status_text="Preparing update…")
+    assert installing == splash_screen._UpdatePresentation(status_text="Starting update…")
+    assert failed == splash_screen._UpdatePresentation(
+        status_text="Update download failed",
+        action_text="Retry installation",
+        action=splash_screen._UpdateAction.RETRY,
+        error=True,
     )
 
 

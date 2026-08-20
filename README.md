@@ -29,7 +29,12 @@ If this is your first time installing the app, you have to go to Settings -> Pri
 
 ### Windows
 
-Download the latest zip from https://github.com/CaveViewer/CaveViewer/releases and extract it anywhere on your machine. Then click on `launch.bat` inside the folder to install.
+Download `CaveViewer-<version>-windows.exe` from the latest
+[CaveViewer release](https://github.com/CaveViewer/CaveViewer/releases), then
+run it. The signed CaveViewer Setup installer installs the application for the
+current user and creates its shortcuts; no Python installation, virtual
+environment, archive extraction, or batch file is required. Existing ZIP
+releases remain only for users completing the migration from an older release.
 
 ### Linux
 
@@ -57,7 +62,7 @@ compositor-specific issue, launch with `CAVEVIEWER_WINDOW_SYSTEM=wayland` or
 of the primary monitor's usable work area using the selected backend's scaled
 screen coordinates.
 
-### In-app update downloads
+### In-app updates
 
 The splash screen checks the signed update manifest for the current platform
 and architecture. If you start a download, it continues in the background while
@@ -66,12 +71,16 @@ splash screen is visible it owns update progress and completion feedback; if a
 download completes in the background, CaveViewer may use a desktop notification
 instead of interrupting map viewing.
 
-After verification, CaveViewer keeps the package in `~/Downloads` and reveals
-it for manual installation: macOS mounts the DMG read-only and shows the app in
-Finder, Windows selects the package in Explorer, and Linux opens the download
-folder. CaveViewer never executes the package or installs the update. Closing
-the whole application cancels an unfinished download and removes its temporary
-files; a verified package remains in `~/Downloads`.
+After verification, macOS and Linux keep the package in `~/Downloads` and
+reveal it for manual installation. Windows ZIP migration packages are handled
+the same way. A CaveViewer installed by the signed Windows EXE instead shows an
+explicit `Install and restart <version>` action for a signed EXE update. After
+that click, CaveViewer keeps the EXE under the current user's
+`%LOCALAPPDATA%\CaveViewer\updates`, rechecks its size, SHA-256, Authenticode
+publisher, chain, and timestamp, then starts the installer update contract and
+exits normally. The installer waits for CaveViewer, verifies the new frozen
+payload, and relaunches it. A source/ZIP installation never auto-executes an
+EXE; it receives the manual migration path instead.
 
 ## Getting Started with the Map Library
 

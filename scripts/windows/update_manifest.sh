@@ -6,25 +6,26 @@ set -euo pipefail
 # size, SHA-256, and release notes for the in-app update client.
 #
 # Usage:
-#   update_manifest.sh --version=<version> --download-url=<windows_zip_url> --artifact-file=<windows_zip_file> [--notes=<release_notes>] [--channel=<stable|prerelease>]
+#   update_manifest.sh --version=<version> --download-url=<windows_package_url> --artifact-file=<windows_package_file> --authenticode-certificate-subject=<subject> [--notes=<release_notes>] [--channel=<stable|prerelease>]
 # Example:
 #   update_manifest.sh --version=1.0.1 \
-#     --download-url="https://github.com/<owner>/CaveViewerPlus/releases/download/v1.0.1/CaveViewer-1.0.1-windows.zip" \
-#     --artifact-file="dist/windows/packages/CaveViewer-1.0.1-windows.zip" \
+#     --download-url="https://github.com/<owner>/CaveViewer/releases/download/v1.0.1/CaveViewer-1.0.1-windows.exe" \
+#     --artifact-file="dist/windows/packages/CaveViewer-1.0.1-windows.exe" \
 #     --notes="Bug fixes and performance improvements"
 
 print_usage() {
   cat <<'EOF'
 Usage:
-  update_manifest.sh --version=<version> --download-url=<url> --artifact-file=<path> [--notes=<release_notes>] [--channel=<stable|prerelease>]
+  update_manifest.sh --version=<version> --download-url=<url> --artifact-file=<path> --authenticode-certificate-subject=<subject> [--notes=<release_notes>] [--channel=<stable|prerelease>]
 EOF
 }
 
 version=""
-windows_zip_url=""
-windows_zip_file=""
+windows_package_url=""
+windows_package_file=""
 release_notes=""
 channel="stable"
+authenticode_certificate_subject=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --version=*) version="${1#--version=}" ; shift ;;
@@ -34,18 +35,18 @@ while [ "$#" -gt 0 ]; do
       version="$1"
       shift
       ;;
-    --download-url=*) windows_zip_url="${1#--download-url=}" ; shift ;;
+    --download-url=*) windows_package_url="${1#--download-url=}" ; shift ;;
     --download-url)
       shift
       if [ "$#" -eq 0 ]; then echo "Error: --download-url requires a value."; exit 1; fi
-      windows_zip_url="$1"
+      windows_package_url="$1"
       shift
       ;;
-    --artifact-file=*) windows_zip_file="${1#--artifact-file=}" ; shift ;;
+    --artifact-file=*) windows_package_file="${1#--artifact-file=}" ; shift ;;
     --artifact-file)
       shift
       if [ "$#" -eq 0 ]; then echo "Error: --artifact-file requires a value."; exit 1; fi
-      windows_zip_file="$1"
+      windows_package_file="$1"
       shift
       ;;
     --notes=*) release_notes="${1#--notes=}" ; shift ;;
@@ -60,6 +61,13 @@ while [ "$#" -gt 0 ]; do
       shift
       if [ "$#" -eq 0 ]; then echo "Error: --channel requires a value."; exit 1; fi
       channel="$1"
+      shift
+      ;;
+    --authenticode-certificate-subject=*) authenticode_certificate_subject="${1#--authenticode-certificate-subject=}" ; shift ;;
+    --authenticode-certificate-subject)
+      shift
+      if [ "$#" -eq 0 ]; then echo "Error: --authenticode-certificate-subject requires a value."; exit 1; fi
+      authenticode_certificate_subject="$1"
       shift
       ;;
     -h|--help)
@@ -79,8 +87,8 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-if [ -z "$version" ] || [ -z "$windows_zip_url" ] || [ -z "$windows_zip_file" ]; then
-  echo "Error: --version, --download-url, and --artifact-file are required."
+if [ -z "$version" ] || [ -z "$windows_package_url" ] || [ -z "$windows_package_file" ] || [ -z "$authenticode_certificate_subject" ]; then
+  echo "Error: --version, --download-url, --artifact-file, and --authenticode-certificate-subject are required."
   print_usage
   exit 1
 fi
@@ -108,8 +116,9 @@ fi
 "$manifest_python" "$repo_root/scripts/write_update_manifest.py" \
   --target windows \
   --version "$version" \
-  --download-url "$windows_zip_url" \
-  --artifact-file "$windows_zip_file" \
+  --download-url "$windows_package_url" \
+  --artifact-file "$windows_package_file" \
   --notes "$release_notes" \
   --channel "$channel" \
+  --authenticode-certificate-subject "$authenticode_certificate_subject" \
   --output "$manifest_path"

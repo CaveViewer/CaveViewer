@@ -56,10 +56,21 @@ def test_signed_update_manifests_follow_the_release_contract(manifest: Path):
     sha256 = payload["sha256"]
 
     if relative_path.parts[0] == "windows":
-        assert download_url.endswith("-windows.zip")
-        assert payload["download_url_windows_zip"] == download_url
-        assert payload["download_size_bytes_windows_zip"] == download_size_bytes
-        assert payload["sha256_windows_zip"] == sha256
+        if download_url.endswith("-windows.exe"):
+            assert payload["download_url_windows_exe"] == download_url
+            assert payload["download_size_bytes_windows_exe"] == download_size_bytes
+            assert payload["sha256_windows_exe"] == sha256
+            assert payload["install_channel"] == "windows_installer"
+            certificate_subject = payload["authenticode_certificate_subject"]
+            assert isinstance(certificate_subject, str)
+            assert certificate_subject.strip()
+        else:
+            # Existing signed manifests retain the ZIP aliases until their
+            # source-bundle clients have completed the EXE migration.
+            assert download_url.endswith("-windows.zip")
+            assert payload["download_url_windows_zip"] == download_url
+            assert payload["download_size_bytes_windows_zip"] == download_size_bytes
+            assert payload["sha256_windows_zip"] == sha256
     elif relative_path.parts[0] == "linux":
         assert download_url.lower().endswith(".appimage")
         assert payload["download_url_linux_appimage"] == download_url
