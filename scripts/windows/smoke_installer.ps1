@@ -103,6 +103,26 @@ function Assert-InstallerSignature {
     Assert-Condition ($null -ne $signature.TimeStamperCertificate) "Installer Authenticode signature has no RFC-3161 timestamp."
 }
 
+function ConvertTo-WindowsCommandLineArgument {
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Argument
+    )
+
+    if ($Argument.Length -eq 0) {
+        return '""'
+    }
+    if ($Argument -notmatch '[\s"]') {
+        return $Argument
+    }
+
+    # Start-Process accepts a single command-line string on Windows PowerShell.
+    # Escape quotes and trailing backslashes according to Windows argv rules so
+    # installer paths containing spaces, apostrophes, or ampersands stay intact.
+    $quoted = $Argument -replace '(\\*)"', '$1$1\"'
+    $quoted = $quoted -replace '(\\*)$', '$1$1'
+    return '"' + $quoted + '"'
+}
+
 function Invoke-CaveViewerInstaller {
     param(
         [Parameter(Mandatory = $true)][string]$Path,
@@ -110,10 +130,12 @@ function Invoke-CaveViewerInstaller {
         [Parameter(Mandatory = $true)][string]$Description
     )
 
-    & $Path @Arguments
-    $commandSucceeded = $?
-    if (-not $commandSucceeded) {
-        throw "$Description failed."
+    $commandLine = (@($Arguments | ForEach-Object {
+        ConvertTo-WindowsCommandLineArgument -Argument $_
+    }) -join " ")
+    $process = Start-Process -FilePath $Path -ArgumentList $commandLine -Wait -PassThru
+    if ($process.ExitCode -ne 0) {
+        throw "$Description failed with installer exit code $($process.ExitCode)."
     }
 }
 
