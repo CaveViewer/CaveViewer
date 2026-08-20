@@ -46,6 +46,7 @@ def import_and_cache(
     chunk_size: float | None = None,
     cache_dir: str | None = None,
     max_upload_group_mb: float | None = None,
+    obj_scan_throttle_seconds: float | None = None,
     obj_import_batch_faces: int | None = None,
     obj_bucket_workers: int | None = None,
     resume_required: bool = False,
@@ -99,6 +100,8 @@ def import_and_cache(
         "bucket_workers": obj_bucket_workers,
         "max_upload_group_mb": max_upload_group_mb,
     }
+    if obj_scan_throttle_seconds is not None:
+        build_options["obj_scan_throttle_seconds"] = obj_scan_throttle_seconds
     if resume_required:
         build_options["resume_required"] = True
     return chunker.build_cache_incremental_obj(
@@ -160,8 +163,11 @@ def import_and_cache_any(
     chunk_size: float | None = None,
     cache_dir: str | None = None,
     max_upload_group_mb: float | None = None,
+    obj_scan_throttle_seconds: float | None = None,
     obj_import_batch_faces: int | None = None,
     obj_bucket_workers: int | None = None,
+    chunk_build_workers: int | None = None,
+    chunk_build_reserved_cpus: int | None = None,
     resume_required: bool = False,
 ) -> str:
     """Dispatch a model descriptor to the correct parser/cache path."""
@@ -181,6 +187,10 @@ def import_and_cache_any(
             "obj_import_batch_faces": obj_import_batch_faces,
             "obj_bucket_workers": obj_bucket_workers,
         }
+        if obj_scan_throttle_seconds is not None:
+            import_options["obj_scan_throttle_seconds"] = (
+                obj_scan_throttle_seconds
+            )
         if resume_required:
             import_options["resume_required"] = True
         return import_and_cache(
@@ -292,16 +302,18 @@ def import_and_cache_any(
         target_cache_dir,
         staged_asset_bytes=chunker.cache_assets_size(texture_assets),
     )
-    return chunker.build_cache(
-        source_path,
-        mesh,
-        materials,
-        progress_cb=cache_progress,
-        cache_dir=target_cache_dir,
-        assets=texture_assets,
-        chunk_size=active_chunk_size,
-        max_upload_group_mb=max_upload_group_mb,
-    )
+    build_options = {
+        "progress_cb": cache_progress,
+        "cache_dir": target_cache_dir,
+        "assets": texture_assets,
+        "chunk_size": active_chunk_size,
+        "max_upload_group_mb": max_upload_group_mb,
+    }
+    if chunk_build_workers is not None:
+        build_options["chunk_build_workers"] = chunk_build_workers
+    if chunk_build_reserved_cpus is not None:
+        build_options["chunk_build_reserved_cpus"] = chunk_build_reserved_cpus
+    return chunker.build_cache(source_path, mesh, materials, **build_options)
 
 
 def file_texture_assets(materials: dict, textures_dir: str):

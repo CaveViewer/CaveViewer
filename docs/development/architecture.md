@@ -57,11 +57,13 @@ CLI override, primary variable, legacy alias, and built-in order. Packaging and
 development-shell variables are intentionally excluded from the application
 snapshot.
 
-The registry is introduced before consumer migration. Existing callers still
-read their legacy environment paths until the follow-up runtime-settings
-consumer branch passes typed snapshots through the application, GUI, and worker
-composition roots. This avoids a partial migration changing startup behavior or
-using global environment mutation as configuration transport.
+`caveviewer.app` owns a `RuntimeSettingsSession` for the interactive process.
+It replaces its snapshot after a successful Preferences save and passes the
+current immutable value to platform policy, splash composition, Map Library,
+viewer launch, and import-child requests. Narrow serializable subsections own
+worker transport; workers never depend on a parent changing `os.environ` after
+they start. The benchmark entry point follows the same composition path rather
+than exporting saved Preferences into process state.
 
 ## Route primitives
 

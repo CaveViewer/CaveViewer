@@ -55,6 +55,19 @@ def preferences_file() -> str:
 def load_preferences(
     preferences_path: str | os.PathLike[str] | None = None,
 ) -> Preferences:
+    return resolve_preferences(load_saved_preference_values(preferences_path))
+
+
+def load_saved_preference_values(
+    preferences_path: str | os.PathLike[str] | None = None,
+) -> dict[str, object]:
+    """Return the un-resolved persisted preference payload.
+
+    Application composition needs the raw payload so the runtime-settings
+    resolver can preserve ``saved preference > environment > built-in``
+    provenance.  The Preferences UI should continue to use
+    :func:`load_preferences`, which supplies displayable defaults.
+    """
     path = (
         Path(preferences_path)
         if preferences_path is not None
@@ -67,7 +80,7 @@ def load_preferences(
         if not isinstance(exc, FileNotFoundError):
             _LOG.warning("Could not load preferences from %s: %s", path, exc)
         payload = None
-    return resolve_preferences(payload if isinstance(payload, Mapping) else None)
+    return dict(payload) if isinstance(payload, Mapping) else {}
 
 
 def save_preferences(
@@ -104,8 +117,3 @@ def save_preferences(
         raise PreferencesSaveError(
             f"Could not save preferences to {path}."
         ) from exc
-
-
-def apply_preferences_to_env(preferences: Preferences) -> None:
-    for env_var, value in preference_env_updates(preferences).items():
-        os.environ[env_var] = value

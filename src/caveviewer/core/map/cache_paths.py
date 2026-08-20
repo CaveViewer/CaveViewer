@@ -104,12 +104,37 @@ class MapCacheLocator:
             return False
 
 
-def map_cache_candidates(source_path: str) -> tuple[str, ...]:
-    return tuple(str(path) for path in MapCacheLocator().candidates(source_path))
+def map_cache_candidates(
+    source_path: str,
+    *,
+    environ: Mapping[str, str] | None = None,
+    platform_name: str | None = None,
+) -> tuple[str, ...]:
+    """Return cache candidates from explicit storage inputs when supplied."""
+
+    return tuple(
+        str(path)
+        for path in MapCacheLocator(
+            environ=environ,
+            platform_name=platform_name,
+        ).candidates(source_path)
+    )
 
 
-def map_cache_build_dir(source_path: str) -> str:
-    return str(MapCacheLocator().build_cache_dir(source_path))
+def map_cache_build_dir(
+    source_path: str,
+    *,
+    environ: Mapping[str, str] | None = None,
+    platform_name: str | None = None,
+) -> str:
+    """Return the generated build location from explicit storage inputs."""
+
+    return str(
+        MapCacheLocator(
+            environ=environ,
+            platform_name=platform_name,
+        ).build_cache_dir(source_path)
+    )
 
 
 def map_texture_dir(

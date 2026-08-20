@@ -23,6 +23,7 @@ def resolve_window_backend_plan(
     *,
     environ: Mapping[str, str] | None = None,
     platform_name: str | None = None,
+    requested_window_system: str | None = None,
 ) -> WindowBackendPlan:
     """Return the pure Linux X11/Wayland attempt order for one launch.
 
@@ -32,7 +33,11 @@ def resolve_window_backend_plan(
     """
     environment = os.environ if environ is None else environ
     resolved_platform_name = sys.platform if platform_name is None else platform_name
-    raw_mode = environment.get(WINDOW_SYSTEM_ENV_VAR, "auto").strip().lower()
+    raw_mode = (
+        str(requested_window_system).strip().lower()
+        if requested_window_system is not None
+        else environment.get(WINDOW_SYSTEM_ENV_VAR, "auto").strip().lower()
+    )
     try:
         mode = WindowSystem(raw_mode or WindowSystem.AUTO.value)
     except ValueError as exc:

@@ -112,9 +112,24 @@ def recommend_max_texture_dimension(
     material_to_file: dict,
     gpu_memory_bytes: int | None,
     gpu_target_fraction: float,
+    *,
+    configured_limit: int | None = None,
+    use_environment_override: bool = True,
 ) -> int | None:
     """Choose a decode-time texture cap for the whole map."""
-    explicit_raw_value = os.environ.get(TEXTURE_MAX_SIZE_ENV_VAR)
+    if configured_limit is not None:
+        explicit_limit = parse_texture_dimension_limit(str(configured_limit))
+        if explicit_limit is not None:
+            _LOG.info(
+                "Texture max dimension cap selected from composed runtime settings: %d px.",
+                explicit_limit,
+            )
+            return explicit_limit
+
+    if not use_environment_override:
+        explicit_raw_value = None
+    else:
+        explicit_raw_value = os.environ.get(TEXTURE_MAX_SIZE_ENV_VAR)
     explicit_limit = parse_texture_dimension_limit(explicit_raw_value)
     if explicit_limit is not None:
         _LOG.info(

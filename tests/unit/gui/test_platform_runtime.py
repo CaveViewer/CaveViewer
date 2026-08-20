@@ -24,12 +24,16 @@ from caveviewer.core.capabilities import (
     WindowBackendPlan,
     WindowSystem,
 )
+from caveviewer.core.preferences import runtime_settings
 from caveviewer.gui.features import FeatureDecision, FeatureId, FeatureState
 from caveviewer.gui.platform import runtime
 from caveviewer.gui.platform.factory import get_platform_adapter
 from caveviewer.gui.platform.linux import LinuxSplashPlatformAdapter
 from caveviewer.gui.platform.probes.recording import VideoRecordingTarget
-from caveviewer.gui.platform.probes.updates import select_update_profile
+from caveviewer.gui.platform.probes.updates import (
+    build_update_configuration,
+    select_update_profile,
+)
 from caveviewer.gui.platform.runtime import create_platform_runtime
 from caveviewer.gui.platform.update_package_reveal import (
     LinuxUpdatePackageRevealAdapter,
@@ -219,6 +223,80 @@ def test_runtime_resolves_environment_only_when_it_is_composed(monkeypatch):
     )
     assert FeatureId.UPDATE_PACKAGE_REVEAL in runtime.feature_gates.decisions
     assert FeatureId.VIDEO_RECORDING not in runtime.feature_gates.decisions
+
+
+def test_runtime_uses_composed_snapshot_for_update_and_window_policy(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv("CAVEVIEWER_UPDATE_BRANCH", "process-branch")
+    snapshot = runtime_settings.resolve_runtime_settings(
+        environ={
+            "CAVEVIEWER_UPDATE_BRANCH": "snapshot-branch",
+            "CAVEVIEWER_WINDOW_SYSTEM": "x11",
+        },
+        platform=runtime_settings.RuntimePlatformFacts(
+            platform_name="linux",
+            os_name="posix",
+            home=tmp_path,
+        ),
+    )
+    captured = {}
+
+    def probe(*, platform_name=None, requested_window_system=None):
+        captured["platform_name"] = platform_name
+        captured["requested_window_system"] = requested_window_system
+        return CapabilityResult.available(
+            ViewerLaunchTarget(
+                ViewerLaunchRoute.GLFW_MODERNGL,
+                WindowBackendPlan(WindowSystem.X11, (WindowSystem.X11,)),
+            ),
+            reason_code="viewer_launch_glfw_route_available",
+        )
+
+    monkeypatch.setattr(runtime, "probe_viewer_launch", probe)
+    platform_runtime = create_platform_runtime(
+        platform_adapter=FakePlatformAdapter(),
+        desktop_services=object(),
+        runtime_settings=snapshot,
+        environment={"CAVEVIEWER_UPDATE_BRANCH": "ignored-legacy-input"},
+        platform_name="linux",
+        machine="x86_64",
+    )
+
+    platform_runtime.viewer_launch_capability()
+
+    assert platform_runtime.runtime_settings is snapshot
+    assert platform_runtime.update_configuration.branch == "snapshot-branch"
+    assert captured == {
+        "platform_name": "linux",
+        "requested_window_system": "x11",
+    }
+
+
+def test_snapshot_keeps_a_custom_update_profile_default_when_not_overridden(
+    tmp_path,
+):
+    snapshot = runtime_settings.resolve_runtime_settings(
+        environ={},
+        platform=runtime_settings.RuntimePlatformFacts(
+            platform_name="linux",
+            os_name="posix",
+            home=tmp_path,
+        ),
+    )
+    profile = replace(
+        select_update_profile(platform_name="linux", machine="x86_64"),
+        default_repository="Example/Fork",
+    )
+
+    configuration = build_update_configuration(
+        profile,
+        runtime_settings=snapshot,
+    )
+
+    assert configuration.repository == "Example/Fork"
+    assert configuration.source is CapabilitySource.DETECTED
 
 
 def test_runtime_disables_unsupported_update_targets_before_network_work():

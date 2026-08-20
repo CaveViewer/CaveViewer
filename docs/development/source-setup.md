@@ -328,6 +328,69 @@ All variables are optional. Set them in your shell before launching or prefix th
 CAVEVIEWER_LOG_LEVEL=DEBUG ./run_caveviewer.sh
 ```
 
+### Application runtime reference
+
+The following table is generated from
+`core.preferences.runtime_settings.RUNTIME_SETTING_SPECS`. Do not edit its
+contents by hand; the unit test keeps the marked block synchronized with the
+registry. Packaging and development-shell variables remain documented in the
+sections below because they are deliberately excluded from the application
+runtime snapshot.
+
+<!-- BEGIN RUNTIME_SETTINGS_TABLE -->
+| Variable | Category | Default | Description |
+| --- | --- | --- | --- |
+| `CAVEVIEWER_MEMORY_UTILIZATION_TARGET` | persisted preference | saved preference or platform default | Target percent of available RAM for loaded chunks. |
+| `CAVEVIEWER_GPU_MEMORY_UTILIZATION_TARGET` | persisted preference | saved preference or platform default | Target percent of GPU memory for texture and geometry residency. |
+| `CAVEVIEWER_GPU_MEMORY_GB` | persisted preference | saved preference or platform default | Manual GPU memory ceiling in GB. |
+| `CAVEVIEWER_IO_WORKERS` | persisted preference | saved preference or platform default | Max chunk-loading worker threads. |
+| `CAVEVIEWER_IO_RESERVED_CPUS` | persisted preference | saved preference or platform default | Logical CPUs reserved from loading. |
+| `CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME` | persisted preference | saved preference or platform default | Max ready chunks uploaded each frame. |
+| `CAVEVIEWER_UPLOAD_GROUPS_PER_FRAME` | persisted preference | saved preference or platform default | Max render-thread upload slices from one ready chunk. |
+| `CAVEVIEWER_UPLOAD_TIME_BUDGET_MS` | persisted preference | saved preference or platform default | Target milliseconds spent uploading chunks each frame. |
+| `CAVEVIEWER_CHUNK_SIZE_METERS` | persisted preference | saved preference or platform default | Unitless chunk edge length for new caches. |
+| `CAVEVIEWER_MAX_UPLOAD_GROUP_MB` | persisted preference | saved preference or platform default | Maximum VBO payload size for dense chunk groups, in MB. |
+| `CAVEVIEWER_OBJ_SCAN_THROTTLE_MS` | persisted preference | saved preference or platform default | Milliseconds paused while scanning .obj files. |
+| `CAVEVIEWER_OBJ_IMPORT_BATCH_FACES` | persisted preference | saved preference or platform default | Thousands of triangulated faces per batch. |
+| `CAVEVIEWER_CHUNK_BUILD_WORKERS` | persisted preference | saved preference or platform default | Max cache-building worker threads. |
+| `CAVEVIEWER_CHUNK_BUILD_RESERVED_CPUS` | persisted preference | saved preference or platform default | Logical CPUs reserved from cache build. |
+| `CAVEVIEWER_RECORDING_DIR` | persisted preference | saved preference or platform default | Where saved recordings are stored. |
+| `CAVEVIEWER_MAP_LIBRARY_DIR` | persisted preference | saved preference or platform default | Where CaveViewer stores downloaded Map Library maps. |
+| `CAVEVIEWER_HOME` | environment | _(unset)_ | Optional absolute portable storage root. |
+| `CAVEVIEWER_MAP_CACHE_DIR` | environment | _(unset)_ | Optional absolute root for generated map caches. |
+| `CAVEVIEWER_APP_ICON` | environment | _(unset)_ | Optional custom application icon path. |
+| `CAVEVIEWER_LOG_LEVEL` | environment | `INFO` | Application logging verbosity. |
+| `CAVEVIEWER_FORCE_STARTUP_FOCUS` | environment | `False` | Whether a viewer may request foreground focus at startup. |
+| `CAVEVIEWER_FORCE_UPDATE` | environment | `False` | Whether update presentation is forced for local testing. |
+| `CAVEVIEWER_GITHUB_REPO` | environment | `CaveViewer/CaveViewer` | GitHub owner/repository used for update configuration. |
+| `CAVEVIEWER_UPDATE_BRANCH` | environment | `main` | Git branch used to derive the default update manifest URL. |
+| `CAVEVIEWER_UPDATE_CHANNEL` | environment | `stable` | Update manifest channel. |
+| `CAVEVIEWER_UPDATE_MANIFEST_URL` | environment | _(unset)_ | Optional full URL overriding the platform-derived update manifest. |
+| `CAVEVIEWER_UPDATE_MANIFEST_SIGNATURE_URL` | environment | _(unset)_ | Optional full URL overriding the update-manifest signature location. |
+| `CAVEVIEWER_IMPORT_NICE` | environment | `5` | Best-effort positive niceness increment for import worker processes. |
+| `CAVEVIEWER_IO_NICE` | environment | `5` | Best-effort positive niceness increment for streaming workers. |
+| `CAVEVIEWER_OBJ_BUCKET_WORKERS` | environment | `2` | Maximum worker count for incremental OBJ bucket preparation. |
+| `CAVEVIEWER_MAX_TEXTURE_SIZE` | environment | _(unset)_ | Optional maximum texture dimension in pixels before decode. |
+| `CAVEVIEWER_NAVIGATION_GUARD` | environment | `True` | Keep free-fly navigation near occupied map chunks. |
+| `CAVEVIEWER_NAVIGATION_GUARD_RADIUS_CELLS` | environment | `2` | Number of cells around occupied map chunks that remain navigable. |
+| `CAVEVIEWER_FFMPEG` | environment | _(unset)_ | Optional explicit ffmpeg executable used by recording. |
+| `CAVEVIEWER_RECORDING_FPS` | environment | `30` | Target MP4 recording frame rate. |
+| `CAVEVIEWER_RECORDING_MAX_HEIGHT` | environment | `720` | Maximum encoded recording height in pixels. |
+| `CAVEVIEWER_RECORDING_CRF` | environment | `23` | H.264 recording quality value. |
+| `CAVEVIEWER_TEXTURE_RESIDENT_CACHE_MB` | environment | _(unset)_ | Optional resident GPU texture-cache cap in MiB. |
+| `CAVEVIEWER_TEXT_AA_MODE` | environment | derived from runtime inputs | FreeType text anti-aliasing mode. |
+| `CAVEVIEWER_TK_SCALE` | environment | _(unset)_ | Optional Tk display scaling override. |
+| `CAVEVIEWER_UI_FONT` | environment | _(unset)_ | Optional font path for the OpenGL text renderer. |
+| `CAVEVIEWER_UI_TEXT_SCALE` | environment | `1.28` | Base scale for FreeType-rendered viewer overlay text. |
+| `CAVEVIEWER_VIEWER_UI_SCALE` | environment | _(unset)_ | Optional viewer HUD scale; unset keeps automatic sizing. |
+| `CAVEVIEWER_VSYNC` | environment | `True` | Whether the viewer waits for vertical sync. |
+| `CAVEVIEWER_WINDOW_SYSTEM` | environment | `auto` | Requested Linux viewer window-system route. |
+| `CAVEVIEWER_MAP_LIBRARY_REPO` / `CAVEVIEWER_SAMPLE_MAPS_REPO` | environment | `CaveViewer/CaveViewer` | GitHub owner/repository used by the Map Library source. |
+| `CAVEVIEWER_MAP_LIBRARY_RELEASE_TAG` / `CAVEVIEWER_SAMPLE_DATA_TAG` | environment | `sample-data` | Release tag used by the Map Library source. |
+| `CAVEVIEWER_MAP_LIBRARY_API_URL` / `CAVEVIEWER_SAMPLE_MAPS_API_URL` | environment | derived from runtime inputs | GitHub release API URL used by the Map Library source. |
+| `CAVEVIEWER_MAP_LIBRARY_CATALOG_ASSET_NAME` | environment | `caveviewer-map-library.v1.json` | Catalog asset name used by the Map Library source. |
+<!-- END RUNTIME_SETTINGS_TABLE -->
+
 ### Development & Launch
 
 | Variable | Default | Description |
@@ -607,16 +670,16 @@ worker counts while honoring reserved logical CPUs and owns the shared RAM
 admission cutoff. Both pools start with one worker and admit at most one more
 after completed work has been measured; they stay at their current concurrency
 when system RAM utilization reaches 80% or current availability cannot be
-measured. Only immutable, validated
-`Preferences` snapshots may cross into
-persistence or the runtime environment. Invalid saved or environment values
-fall back independently to that field's valid default, so one stale value does
-not discard the rest of the configuration. Preferences are saved through an
-atomic temporary-file replacement; a write failure remains visible in the
-embedded Preferences panel and does not alter the previous preferences file.
-The runtime registry is intentionally introduced before callers are migrated:
-the current direct environment reads remain compatibility paths until the
-application composition root can pass one typed snapshot into each consumer.
+measured. Only immutable, validated `Preferences` snapshots may cross into
+persistence. The application-owned `RuntimeSettingsSession` resolves saved
+values, environment values, and command-line overrides into one immutable
+runtime snapshot; a successful Preferences save replaces that snapshot for
+later viewer or Map Library actions without mutating the process environment.
+Invalid saved or environment values fall back independently to that field's
+valid default, so one stale value does not discard the rest of the
+configuration. Preferences are saved through an atomic temporary-file
+replacement; a write failure remains visible in the embedded Preferences panel
+and does not alter the previous preferences file.
 
 First-time map imports are isolated from the viewer event loop by
 `src/caveviewer/gui/import_process.py`. The viewer process keeps OpenGL/window

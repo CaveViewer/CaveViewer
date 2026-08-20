@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from caveviewer.core.preferences import runtime_settings as settings
@@ -302,3 +304,85 @@ def test_runtime_snapshot_is_immutable_and_exposes_mutable_value_copy(tmp_path):
         value=24,
         source=settings.SettingSource.ENVIRONMENT,
     )
+
+
+def test_typed_runtime_subsections_capture_worker_viewer_and_storage_inputs(
+    tmp_path,
+):
+    portable_home = tmp_path / "portable"
+    snapshot = _resolve(
+        tmp_path,
+        preferences={
+            "chunk_size_meters": "12.5",
+            "obj_scan_throttle_ms": "4",
+            "upload_chunks_per_frame": "3",
+            "recording_dir": str(tmp_path / "recordings"),
+            "map_library_dir": str(tmp_path / "maps"),
+        },
+        environ={
+            "CAVEVIEWER_HOME": str(portable_home),
+            "CAVEVIEWER_MAP_CACHE_DIR": str(tmp_path / "cache-root"),
+            "CAVEVIEWER_IMPORT_NICE": "8",
+            "CAVEVIEWER_IO_NICE": "4",
+            "CAVEVIEWER_GPU_MEMORY_GB": "6.5",
+            "CAVEVIEWER_MAX_TEXTURE_SIZE": "4096",
+            "CAVEVIEWER_VSYNC": "no",
+            "CAVEVIEWER_MAP_LIBRARY_REPO": "Example/Maps",
+        },
+    )
+
+    import_settings = snapshot.import_configuration()
+    streaming_settings = snapshot.streaming_configuration()
+    viewer_settings = snapshot.viewer_configuration()
+    map_library_settings = snapshot.map_library_configuration()
+
+    assert import_settings.chunk_size_meters == 12.5
+    assert import_settings.obj_scan_throttle_seconds == 0.004
+    assert import_settings.import_nice_increment == 8
+    assert import_settings.map_cache_dir == str(tmp_path / "cache-root")
+    assert streaming_settings.gpu_memory_gb == 6.5
+    assert streaming_settings.io_nice_increment == 4
+    assert streaming_settings.upload_chunks_per_frame == 3
+    assert viewer_settings.max_texture_dimension == 4096
+    assert viewer_settings.vsync is False
+    assert viewer_settings.recording.directory == str(tmp_path / "recordings")
+    assert map_library_settings.directory == str(tmp_path / "maps")
+    assert map_library_settings.repository == "Example/Maps"
+    assert map_library_settings.data_directory == str(portable_home / "data")
+    assert map_library_settings.cache_directory == str(portable_home / "cache")
+
+
+def test_runtime_settings_session_copies_process_inputs_and_replaces_preferences(
+    tmp_path,
+):
+    environment = {"CAVEVIEWER_UPDATE_BRANCH": "captured-branch"}
+    session = settings.RuntimeSettingsSession(
+        preferences={"io_workers": "4"},
+        environ=environment,
+        cli_overrides=None,
+        platform=_platform(tmp_path),
+    )
+    initial_snapshot = session.snapshot
+    environment["CAVEVIEWER_UPDATE_BRANCH"] = "mutated-after-composition"
+
+    replacement_snapshot = session.replace_preferences({"io_workers": "6"})
+
+    assert initial_snapshot["io_workers"] == 4
+    assert replacement_snapshot["io_workers"] == 6
+    assert replacement_snapshot["update_branch"] == "captured-branch"
+    assert replacement_snapshot is session.snapshot
+
+
+def test_source_setup_runtime_table_matches_registry():
+    document = (
+        Path(__file__).resolve().parents[3]
+        / "docs"
+        / "development"
+        / "source-setup.md"
+    ).read_text(encoding="utf-8")
+    start_marker = "<!-- BEGIN RUNTIME_SETTINGS_TABLE -->"
+    end_marker = "<!-- END RUNTIME_SETTINGS_TABLE -->"
+    start = document.index(start_marker) + len(start_marker)
+    end = document.index(end_marker, start)
+
+    assert document[start:end].strip() == settings.render_runtime_environment_table()

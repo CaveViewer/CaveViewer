@@ -14,6 +14,10 @@ from dataclasses import dataclass
 from typing import Mapping
 
 from caveviewer.core.capabilities import CapabilityResult, CapabilitySource
+from caveviewer.core.preferences.runtime_settings import (
+    RuntimeSettings,
+    SettingSource,
+)
 from caveviewer.gui.update_signature import default_manifest_signature_url
 
 
@@ -373,6 +377,7 @@ def build_update_configuration(
     update_profile: UpdateProfile,
     *,
     environment: Mapping[str, str] | None = None,
+    runtime_settings: RuntimeSettings | None = None,
 ) -> UpdateConfiguration:
     """Resolve update settings when the runtime is composed, never at import.
 
@@ -380,6 +385,12 @@ def build_update_configuration(
     disable update checking by setting a manifest or signature URL to blank,
     but they cannot make an unsupported profile eligible.
     """
+    if runtime_settings is not None:
+        return _build_update_configuration_from_runtime_settings(
+            update_profile,
+            runtime_settings,
+        )
+
     values = environment if environment is not None else os.environ
     overridden = False
 
@@ -434,6 +445,71 @@ def build_update_configuration(
         source=(
             CapabilitySource.USER_OVERRIDE
             if overridden
+            else CapabilitySource.DETECTED
+        ),
+    )
+
+
+def _build_update_configuration_from_runtime_settings(
+    update_profile: UpdateProfile,
+    runtime_settings: RuntimeSettings,
+) -> UpdateConfiguration:
+    """Build update policy from the composed snapshot, not process globals."""
+
+    def runtime_text(key: str, default: str = "") -> tuple[str, bool]:
+        if runtime_settings.source(key) is SettingSource.BUILT_IN:
+            return default, False
+        value = runtime_settings[key]
+        return (
+            default if value is None else _clean(value),
+            True,
+        )
+
+    repository, repository_overridden = runtime_text(
+        "github_repository",
+        update_profile.default_repository,
+    )
+    branch, branch_overridden = runtime_text("update_branch", "main")
+    branch = branch or "main"
+    manifest_channel, channel_overridden = runtime_text("update_channel", "stable")
+    manifest_channel = (manifest_channel or "stable").lower()
+    if manifest_channel not in _VALID_MANIFEST_CHANNELS:
+        manifest_channel = "stable"
+
+    default_manifest_url = update_profile.default_manifest_url(
+        repository,
+        branch,
+        manifest_channel,
+    )
+    manifest_url, manifest_url_overridden = runtime_text(
+        "update_manifest_url",
+        default_manifest_url,
+    )
+    default_signature_url = (
+        default_manifest_signature_url(manifest_url) if manifest_url else ""
+    )
+    manifest_signature_url, signature_overridden = runtime_text(
+        "update_manifest_signature_url",
+        default_signature_url,
+    )
+
+    return UpdateConfiguration(
+        repository=repository,
+        branch=branch,
+        manifest_channel=manifest_channel,
+        manifest_url=manifest_url,
+        manifest_signature_url=manifest_signature_url,
+        source=(
+            CapabilitySource.USER_OVERRIDE
+            if any(
+                (
+                    repository_overridden,
+                    branch_overridden,
+                    channel_overridden,
+                    manifest_url_overridden,
+                    signature_overridden,
+                )
+            )
             else CapabilitySource.DETECTED
         ),
     )

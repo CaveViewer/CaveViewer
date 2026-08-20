@@ -36,10 +36,7 @@ from typing import TYPE_CHECKING, Callable
 
 from caveviewer.version import APP_NAME, APP_VERSION
 from caveviewer.core.diagnostics.logging import get_logger
-from caveviewer.gui.preferences import (
-    apply_preferences_to_env as _apply_preferences_to_env,
-    load_preferences as _load_preferences,
-)
+from caveviewer.core.preferences.runtime_settings import RuntimeSettings
 from caveviewer.gui.preferences_dialog import PreferencesPanel
 from caveviewer.gui.dpi_utils import (
     apply_tk_scaling,
@@ -310,7 +307,11 @@ def _refresh_tk_font_tokens() -> None:
     )
 
 
-def _activate_presentation_profile(profile: PresentationProfile) -> None:
+def _activate_presentation_profile(
+    profile: PresentationProfile,
+    *,
+    app_icon_path: str | None = None,
+) -> None:
     """Apply a runtime profile to legacy splash rendering tokens.
 
     The splash remains module-oriented for Tk callbacks, but each visible
@@ -326,7 +327,9 @@ def _activate_presentation_profile(profile: PresentationProfile) -> None:
 
     _PRESENTATION_PROFILE = profile
     _SPLASH_LAYOUT_POLICY = profile.splash_layout
-    _APP_ICON_PATH = _resolve_asset_path(_SPLASH_LAYOUT_POLICY.app_icon_resource_name)
+    _APP_ICON_PATH = app_icon_path or _resolve_asset_path(
+        _SPLASH_LAYOUT_POLICY.app_icon_resource_name
+    )
     _WINDOWS_SPLASH_LAYOUT = _SPLASH_LAYOUT_POLICY.windows_layout
     _LINUX_SPLASH_LAYOUT = _SPLASH_LAYOUT_POLICY.linux_layout
     _UI_FONT_FAMILY = profile.ui_font_family
@@ -964,6 +967,8 @@ def show_splash_screen(
     update_manager: UpdateManager,
     desktop_services: DesktopServices | None = None,
     platform_runtime: PlatformRuntime | None = None,
+    runtime_settings_provider: Callable[[], RuntimeSettings] | None = None,
+    on_preferences_saved: Callable[[object], object] | None = None,
 ) -> str | None:
     """
     Shows the launch splash screen and blocks until the person either
@@ -981,12 +986,54 @@ def show_splash_screen(
             if platform_runtime is not None
             else get_desktop_services()
         )
+    runtime_settings = (
+        runtime_settings_provider()
+        if runtime_settings_provider is not None
+        else getattr(platform_runtime, "runtime_settings", None)
+    )
+
+    def current_runtime_settings() -> RuntimeSettings | None:
+        return (
+            runtime_settings_provider()
+            if runtime_settings_provider is not None
+            else runtime_settings
+        )
+
+    def current_map_library_configuration():
+        """Resolve Map Library inputs from the latest application snapshot."""
+        from caveviewer.gui.standard_library_maps import (
+            default_map_library_configuration,
+            map_library_configuration_from_runtime_settings,
+        )
+
+        active_settings = current_runtime_settings()
+        if active_settings is None:
+            return default_map_library_configuration()
+        return map_library_configuration_from_runtime_settings(
+            active_settings.map_library_configuration()
+        )
+
+    def current_import_runtime_settings():
+        """Return the latest child-process settings for a Map Library rebuild."""
+
+        active_settings = current_runtime_settings()
+        if active_settings is None:
+            return None
+        return active_settings.import_configuration()
+
+    viewer_settings = (
+        runtime_settings.viewer_configuration()
+        if runtime_settings is not None
+        else None
+    )
     presentation_profile = _presentation_profile_for_runtime(platform_runtime)
     presentation_actions_adapter = _presentation_actions_adapter_for_runtime(
         platform_runtime
     )
-    _activate_presentation_profile(presentation_profile)
-    _apply_preferences_to_env(_load_preferences())
+    _activate_presentation_profile(
+        presentation_profile,
+        app_icon_path=(viewer_settings.app_icon if viewer_settings is not None else None),
+    )
 
     configure_process_dpi_awareness(
         presentation_actions_adapter=presentation_actions_adapter
@@ -995,12 +1042,20 @@ def show_splash_screen(
         tk,
         presentation_profile=presentation_profile,
     )
-    apply_tk_scaling(root, presentation_profile=presentation_profile)
+    apply_tk_scaling(
+        root,
+        presentation_profile=presentation_profile,
+        scale_override=(viewer_settings.tk_scale if viewer_settings is not None else None),
+    )
     _configure_runtime_tk_fonts(
         root,
         presentation_profile=presentation_profile,
     )
-    splash_scale = tk_display_scale(root, presentation_profile=presentation_profile)
+    splash_scale = tk_display_scale(
+        root,
+        presentation_profile=presentation_profile,
+        scale_override=(viewer_settings.tk_scale if viewer_settings is not None else None),
+    )
     if _LINUX_SPLASH_LAYOUT:
         try:
             _LOG.info(
@@ -1358,7 +1413,9 @@ def show_splash_screen(
                 lambda _event, cb=callback: _invoke_and_break(cb),
             )
 
-    def _on_preferences_applied(_preferences) -> None:
+    def _on_preferences_applied(preferences) -> None:
+        if on_preferences_saved is not None:
+            on_preferences_saved(preferences)
         workflow = map_library_workflow_ref[0]
         if workflow is None:
             return
@@ -1366,7 +1423,9 @@ def show_splash_screen(
             default_map_library_install_dir,
         )
 
-        workflow.set_map_library_root_dir(default_map_library_install_dir())
+        workflow.set_map_library_root_dir(
+            default_map_library_install_dir(current_map_library_configuration())
+        )
 
     def _show_map_library_surface() -> None:
         """Reveal the existing Map Library without rebuilding its catalog."""
@@ -1848,14 +1907,19 @@ def show_splash_screen(
         _LOG.warning("Could not load bundled cave metadata: %s", exc)
         cave_metadata_catalog = None
 
+    from caveviewer.gui.map_library_sources import MapLibraryCatalogService
     from caveviewer.gui.standard_library_maps import (
+        GitHubReleaseMapLibrarySource,
         default_map_library_install_dir,
         load_initial_standard_library_catalog,
     )
 
-    map_library_root_dir = default_map_library_install_dir()
+    map_library_configuration = current_map_library_configuration()
+    map_library_root_dir = default_map_library_install_dir(map_library_configuration)
     recent_map_paths = _load_library_recent_map_paths()
-    standard_library_maps = load_initial_standard_library_catalog()
+    standard_library_maps = load_initial_standard_library_catalog(
+        map_library_configuration
+    )
     map_library_controller = MapLibraryController(standard_library_maps)
     map_library_panel = MapLibraryPanel(
         root,
@@ -1867,7 +1931,9 @@ def show_splash_screen(
         open_map_folder=on_open_map_folder,
     )
     map_library_panel_ref[0] = map_library_panel
-    cache_rebuild_controller = CacheRebuildJobController()
+    cache_rebuild_controller = CacheRebuildJobController(
+        runtime_settings_provider=current_import_runtime_settings,
+    )
 
     def _show_map_library_feedback(
         message: str,
@@ -1898,7 +1964,12 @@ def show_splash_screen(
         open_map=_open_library_map_from_splash,
         show_feedback=_show_map_library_feedback,
         logger=_LOG,
-        map_library_root_dir_provider=default_map_library_install_dir,
+        map_library_root_dir_provider=lambda: default_map_library_install_dir(
+            current_map_library_configuration()
+        ),
+        fetch_catalog=MapLibraryCatalogService(
+            (GitHubReleaseMapLibrarySource(map_library_configuration),)
+        ).fetch_catalogs,
         open_guided_dive=_open_guided_dive_from_splash,
         cache_rebuild_controller=cache_rebuild_controller,
         cave_metadata_catalog=cave_metadata_catalog,

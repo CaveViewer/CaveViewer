@@ -171,7 +171,12 @@ class ObjFaceBatch:
     material_names: list[str | None]
 
 
-def _count_prepass(obj_path: str, progress_cb=None) -> tuple[int, int, int, int]:
+def _count_prepass(
+    obj_path: str,
+    progress_cb=None,
+    *,
+    scan_throttle_seconds: float | None = None,
+) -> tuple[int, int, int, int]:
     """
     Fast first pass: count vertices/uvs/normals/faces (post-triangulation
     estimate) so we can pre-allocate numpy arrays of the right size instead
@@ -185,7 +190,11 @@ def _count_prepass(obj_path: str, progress_cb=None) -> tuple[int, int, int, int]
     last_reported_fraction = -1.0
     last_report_time = 0.0
     next_throttle_at = _SCAN_THROTTLE_INTERVAL_BYTES
-    throttle_seconds = _obj_scan_throttle_seconds()
+    throttle_seconds = (
+        _obj_scan_throttle_seconds()
+        if scan_throttle_seconds is None
+        else max(0.0, min(0.05, float(scan_throttle_seconds)))
+    )
 
     for line_number, line in _iter_text_lines(obj_path, kind="OBJ"):
         bytes_read += len(line)
@@ -289,7 +298,13 @@ def _parse_face_vertices(
     return verts
 
 
-def parse_obj_vertices(obj_path: str, progress_cb=None, preflight_cb=None) -> ObjVertexData:
+def parse_obj_vertices(
+    obj_path: str,
+    progress_cb=None,
+    preflight_cb=None,
+    *,
+    scan_throttle_seconds: float | None = None,
+) -> ObjVertexData:
     """
     Parse only OBJ vertex/UV/normal arrays.
 
@@ -303,7 +318,11 @@ def parse_obj_vertices(obj_path: str, progress_cb=None, preflight_cb=None) -> Ob
         if progress_cb:
             progress_cb(stage, _SCAN_PROGRESS_WEIGHT * max(0.0, min(1.0, frac)))
 
-    n_v, n_vt, n_vn, n_f_est = _count_prepass(obj_path, progress_cb=scan_progress)
+    n_v, n_vt, n_vn, n_f_est = _count_prepass(
+        obj_path,
+        progress_cb=scan_progress,
+        scan_throttle_seconds=scan_throttle_seconds,
+    )
 
     if preflight_cb:
         preflight_cb(n_v, n_vt, n_vn, n_f_est)

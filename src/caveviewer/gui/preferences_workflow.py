@@ -8,7 +8,6 @@ from dataclasses import dataclass
 from caveviewer.gui.preferences import (
     Preferences,
     PreferencesSaveError,
-    apply_preferences_to_env,
     load_preferences,
     save_preferences,
 )
@@ -34,23 +33,20 @@ class PreferencesDialogWorkflow:
         *,
         load_preferences_fn: Callable[[], Preferences] = load_preferences,
         save_preferences_fn: Callable[[Preferences], None] = save_preferences,
-        apply_preferences_to_env_fn: Callable[
-            [Preferences], None
-        ] = apply_preferences_to_env,
+        on_preferences_saved: Callable[[Preferences], None] | None = None,
     ) -> None:
         self._load_preferences = load_preferences_fn
         self._save_preferences = save_preferences_fn
-        self._apply_preferences_to_env = apply_preferences_to_env_fn
+        self._on_preferences_saved = on_preferences_saved
 
     def load_initial(self) -> Preferences:
-        preferences = self._load_preferences()
-        self._apply_preferences_to_env(preferences)
-        return preferences
+        return self._load_preferences()
 
     def apply(self, preferences: Preferences) -> PreferencesApplyResult:
         try:
             self._save_preferences(preferences)
         except PreferencesSaveError as exc:
             return PreferencesApplyResult(preferences=None, error=str(exc))
-        self._apply_preferences_to_env(preferences)
+        if self._on_preferences_saved is not None:
+            self._on_preferences_saved(preferences)
         return PreferencesApplyResult(preferences=preferences)

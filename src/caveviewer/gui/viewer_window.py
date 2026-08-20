@@ -36,6 +36,10 @@ from caveviewer.core.chunking import builder as chunker
 from caveviewer.core.map import slicing as map_slicing
 from caveviewer.core.hardware import gpu_memory, memory_targets, system_memory
 from caveviewer.core.diagnostics.logging import get_logger
+from caveviewer.core.preferences.runtime_settings import (
+    RuntimeSettings,
+    ViewerRuntimeSettings,
+)
 from caveviewer.core.streaming.world import StreamingWorld, StreamingConfig
 from caveviewer.gui.chunk_upload import ChunkUploadManager
 from caveviewer.gui.recording_capture import RecordingCaptureResources
@@ -296,8 +300,12 @@ def _viewer_overlay_text_scale(
     presentation_profile: PresentationProfile,
     base_scale: float,
     environ: Mapping[str, str] | None = None,
+    *,
+    configured_scale: float | None = None,
 ) -> float:
     """Return the startup text scale for FreeType-rendered viewer overlays."""
+    if configured_scale is not None:
+        return float(configured_scale)
     environment = os.environ if environ is None else environ
     raw_override = str(environment.get(_UI_TEXT_SCALE_ENV, "")).strip()
     if raw_override:
@@ -355,11 +363,33 @@ def _benchmark_render_distance_value(scenario) -> int | str:
         return str(value)
 
 
-def _benchmark_streaming_settings_snapshot(scenario) -> dict[str, object]:
+def _benchmark_streaming_settings_snapshot(
+    scenario,
+    *,
+    runtime_settings: RuntimeSettings | None = None,
+) -> dict[str, object]:
     """Return requested benchmark streaming settings that affect comparability."""
     settings: dict[str, object] = {
         "render_distance_chunks": _benchmark_render_distance_value(scenario),
     }
+    if runtime_settings is not None:
+        streaming = runtime_settings.streaming_configuration()
+        settings.update(
+            {
+                "system_ram_target_percent": streaming.memory_target_percent,
+                "gpu_memory_target_percent": streaming.gpu_memory_target_percent,
+                "gpu_memory_override_gb": streaming.gpu_memory_gb or "",
+                "texture_resident_cache_mb": (
+                    streaming.texture_resident_cache_mb or ""
+                ),
+                "io_workers": streaming.io_workers,
+                "io_reserved_cpus": streaming.io_reserved_cpus,
+                "upload_chunks_per_frame": streaming.upload_chunks_per_frame,
+                "upload_groups_per_frame": streaming.upload_groups_per_frame,
+                "upload_time_budget_ms": streaming.upload_time_budget_ms,
+            }
+        )
+        return settings
     for key, env_var in _BENCHMARK_STREAMING_ENV_FIELDS:
         settings[key] = os.environ.get(env_var, "")
     return settings
@@ -380,6 +410,8 @@ def _benchmark_streaming_settings_fingerprint(
 def _viewer_ui_scale_for_window_size(
     window_size: tuple[int, int] | None,
     environ: Mapping[str, str] | None = None,
+    *,
+    configured_scale: float | None = None,
 ) -> float:
     """Return an automatic HUD scale for the current viewer surface.
 
@@ -389,13 +421,19 @@ def _viewer_ui_scale_for_window_size(
     The environment override is for development/testing; the normal user path
     is automatic.
     """
-    environment = os.environ if environ is None else environ
-    raw_override = str(environment.get(_VIEWER_UI_SCALE_ENV, "")).strip()
-    if raw_override:
+    if configured_scale is not None:
         try:
-            return max(0.75, min(2.0, float(raw_override)))
-        except ValueError:
+            return max(0.75, min(2.0, float(configured_scale)))
+        except (TypeError, ValueError):
             pass
+    else:
+        environment = os.environ if environ is None else environ
+        raw_override = str(environment.get(_VIEWER_UI_SCALE_ENV, "")).strip()
+        if raw_override:
+            try:
+                return max(0.75, min(2.0, float(raw_override)))
+            except ValueError:
+                pass
 
     try:
         width, height = window_size or _DEFAULT_WINDOW_SIZE
@@ -627,10 +665,9 @@ class CaveViewerWindow(mglw.WindowConfig):
     # Keep aspect_ratio unlocked so manual resizing remains fully flexible.
     window_size = _DEFAULT_WINDOW_SIZE
     resizable = True
-    # Allow disabling vsync via env var -- useful on VMs where the virtual
-    # display driver can block swap_buffers() long enough to freeze the
-    # render thread and make the window appear hung during heavy imports.
-    vsync = os.environ.get("CAVEVIEWER_VSYNC", "1").strip() not in ("0", "false", "no")
+    # The launch helpers set this from the immutable runtime snapshot. Direct
+    # legacy callers retain an environment-backed fallback at launch time.
+    vsync = True
     aspect_ratio = None  # don't letterbox; we recompute from actual window size
 
     # Set on the class itself (not passed through __init__ kwargs) before
@@ -647,6 +684,7 @@ class CaveViewerWindow(mglw.WindowConfig):
     cave_benchmark_config: dict | None = None
     cave_recorded_dive_trace: recorded_dive.RecordedDiveTrace | None = None
     cave_platform_runtime: PlatformRuntime | None = None
+    cave_runtime_settings: RuntimeSettings | None = None
 
     # Alternative to the three attributes above: set THIS instead when the
     # map needs first-time import/chunking (no cache built yet) -- a dict
@@ -735,6 +773,15 @@ class CaveViewerWindow(mglw.WindowConfig):
         super().__init__(**kwargs)
         self._window_setup_complete = False
         self._platform_runtime = CaveViewerWindow.cave_platform_runtime
+        self._runtime_settings = (
+            CaveViewerWindow.cave_runtime_settings
+            or getattr(self._platform_runtime, "runtime_settings", None)
+        )
+        self._viewer_runtime_settings: ViewerRuntimeSettings | None = (
+            self._runtime_settings.viewer_configuration()
+            if self._runtime_settings is not None
+            else None
+        )
         self._platform_adapter = _platform_adapter_for_runtime(
             self._platform_runtime
         )
@@ -747,8 +794,11 @@ class CaveViewerWindow(mglw.WindowConfig):
         )
         self._set_runtime_window_icon()
 
-        force_focus_env = os.getenv(self.FORCE_STARTUP_FOCUS_ENV, "").strip().lower()
-        force_focus = force_focus_env in {"1", "true", "yes", "on"}
+        if self._viewer_runtime_settings is None:
+            force_focus_env = os.getenv(self.FORCE_STARTUP_FOCUS_ENV, "").strip().lower()
+            force_focus = force_focus_env in {"1", "true", "yes", "on"}
+        else:
+            force_focus = self._viewer_runtime_settings.force_startup_focus
         self._startup_focus_enabled = True
         if self._presentation_profile.suppress_forced_startup_focus(
             is_frozen=bool(getattr(sys, "frozen", False)),
@@ -756,17 +806,35 @@ class CaveViewerWindow(mglw.WindowConfig):
         ):
             self._startup_focus_enabled = False
 
-        # Optional env override for quick testing/tuning without code edits.
         bitmap_font.set_presentation_profile(self._presentation_profile)
+        if self._viewer_runtime_settings is None:
+            bitmap_font.clear_runtime_style()
+        else:
+            bitmap_font.configure_runtime_style(
+                font_path=self._viewer_runtime_settings.ui_font,
+                antialiasing_mode=self._viewer_runtime_settings.text_antialiasing_mode,
+            )
         bitmap_font.set_text_scale(
             _viewer_overlay_text_scale(
                 self._presentation_profile,
                 self.UI_TEXT_SCALE,
+                environ={} if self._viewer_runtime_settings is not None else None,
+                configured_scale=(
+                    self._viewer_runtime_settings.ui_text_scale_override
+                    if self._viewer_runtime_settings is not None
+                    else None
+                ),
             )
         )
         bitmap_font.set_raster_scale(_window_pixel_ratio(getattr(self, "wnd", None)))
         self._viewer_ui_scale = _viewer_ui_scale_for_window_size(
-            _viewer_ui_surface_size(getattr(self, "wnd", None), _DEFAULT_WINDOW_SIZE)
+            _viewer_ui_surface_size(getattr(self, "wnd", None), _DEFAULT_WINDOW_SIZE),
+            environ={} if self._viewer_runtime_settings is not None else None,
+            configured_scale=(
+                self._viewer_runtime_settings.viewer_ui_scale
+                if self._viewer_runtime_settings is not None
+                else None
+            ),
         )
         self._right_column_panel_scale = (
             self.RIGHT_COLUMN_PANEL_SCALE * self._viewer_ui_scale
@@ -838,7 +906,12 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._frame_active_time_s = 0.0
         self._frame_time_history: list[float] = []
         self._last_gpu_draw_ms: float | None = None
-        self._gpu_draw_timer_enabled = _env_bool("CAVEVIEWER_GPU_DRAW_TIMER", False)
+        viewer_settings = self._viewer_runtime_settings
+        self._gpu_draw_timer_enabled = (
+            _env_bool("CAVEVIEWER_GPU_DRAW_TIMER", False)
+            if viewer_settings is None
+            else viewer_settings.gpu_draw_timer
+        )
         self._streaming_frame_timing: dict | None = None
         self._benchmark_controller: BenchmarkController | None = None
         self._last_input_reset_log = 0.0
@@ -857,15 +930,35 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._slice_display_base: str | None = None
         self._slice_root_cave_name: str | None = None
         self._startup_focus_requested = False
-        self._upload_chunks_per_frame = _env_int("CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME", 1, 1, 16)
-        self._upload_groups_per_frame = _env_int("CAVEVIEWER_UPLOAD_GROUPS_PER_FRAME", 1, 1, 64)
-        self._upload_time_budget_ms = _env_float("CAVEVIEWER_UPLOAD_TIME_BUDGET_MS", 3.0, 0.5, 50.0)
+        self._upload_chunks_per_frame = (
+            _env_int("CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME", 1, 1, 16)
+            if viewer_settings is None
+            else viewer_settings.streaming.upload_chunks_per_frame
+        )
+        self._upload_groups_per_frame = (
+            _env_int("CAVEVIEWER_UPLOAD_GROUPS_PER_FRAME", 1, 1, 64)
+            if viewer_settings is None
+            else viewer_settings.streaming.upload_groups_per_frame
+        )
+        self._upload_time_budget_ms = (
+            _env_float("CAVEVIEWER_UPLOAD_TIME_BUDGET_MS", 3.0, 0.5, 50.0)
+            if viewer_settings is None
+            else viewer_settings.streaming.upload_time_budget_ms
+        )
         self._current_upload_operations_per_chunk = self._upload_groups_per_frame
         self._current_upload_time_budget_ms = self._upload_time_budget_ms
         self._vbo_upload_slice_bytes = _RENDER_UPLOAD_INITIAL_SLICE_BYTES
         self._texture_upload_slice_bytes = _RENDER_UPLOAD_INITIAL_SLICE_BYTES
-        self._navigation_guard_enabled = _env_bool("CAVEVIEWER_NAVIGATION_GUARD", True)
-        self._navigation_guard_radius_cells = _env_int("CAVEVIEWER_NAVIGATION_GUARD_RADIUS_CELLS", 2, 0, 12)
+        self._navigation_guard_enabled = (
+            _env_bool("CAVEVIEWER_NAVIGATION_GUARD", True)
+            if viewer_settings is None
+            else viewer_settings.navigation_guard
+        )
+        self._navigation_guard_radius_cells = (
+            _env_int("CAVEVIEWER_NAVIGATION_GUARD_RADIUS_CELLS", 2, 0, 12)
+            if viewer_settings is None
+            else viewer_settings.navigation_guard_radius_cells
+        )
         self._bookmarks_path: str | None = None
         self._bookmarks: viewer_bookmarks.BookmarkSlots = {}
         self._manual_dive_trace: (
@@ -887,17 +980,28 @@ class CaveViewerWindow(mglw.WindowConfig):
             tuple[int, int, int]
         ] = frozenset()
         self._recorded_dive_background_paused = False
-        self._recording_fps = _env_int("CAVEVIEWER_RECORDING_FPS", 30, 1, 60)
-        self._recording_max_height = _env_int(
-            recording.RECORDING_MAX_HEIGHT_ENV_VAR,
-            recording.RECORDING_DEFAULT_MAX_HEIGHT,
-            recording.RECORDING_MIN_OUTPUT_HEIGHT,
-            recording.RECORDING_MAX_OUTPUT_HEIGHT,
-        )
-        self._recording_crf = _env_int("CAVEVIEWER_RECORDING_CRF", 23, 0, 51)
-        self._recording_output_dir = os.path.expanduser(
-            os.getenv("CAVEVIEWER_RECORDING_DIR", os.path.join("~", "Movies", "CaveViewer"))
-        )
+        if viewer_settings is None:
+            self._recording_fps = _env_int("CAVEVIEWER_RECORDING_FPS", 30, 1, 60)
+            self._recording_max_height = _env_int(
+                recording.RECORDING_MAX_HEIGHT_ENV_VAR,
+                recording.RECORDING_DEFAULT_MAX_HEIGHT,
+                recording.RECORDING_MIN_OUTPUT_HEIGHT,
+                recording.RECORDING_MAX_OUTPUT_HEIGHT,
+            )
+            self._recording_crf = _env_int("CAVEVIEWER_RECORDING_CRF", 23, 0, 51)
+            self._recording_output_dir = os.path.expanduser(
+                os.getenv(
+                    "CAVEVIEWER_RECORDING_DIR",
+                    os.path.join("~", "Movies", "CaveViewer"),
+                )
+            )
+        else:
+            self._recording_fps = viewer_settings.recording.fps
+            self._recording_max_height = viewer_settings.recording.max_height
+            self._recording_crf = viewer_settings.recording.crf
+            self._recording_output_dir = os.path.expanduser(
+                viewer_settings.recording.directory
+            )
         self._recording_controller = RecordingStateController(
             frame_interval=1.0 / float(self._recording_fps)
         )
@@ -1241,11 +1345,22 @@ class CaveViewerWindow(mglw.WindowConfig):
     def _ensure_import_controller(self) -> MapImportController:
         controller = self.__dict__.get("_import_controller")
         if controller is None:
+            runtime_settings = getattr(self, "_runtime_settings", None)
+
+            def launch_import_process(model_descriptor: dict, textures_dir: str):
+                if runtime_settings is None:
+                    return start_import_process(model_descriptor, textures_dir)
+                return start_import_process(
+                    model_descriptor,
+                    textures_dir,
+                    runtime_settings=runtime_settings.import_configuration(),
+                )
+
             controller = MapImportController(
                 self,
                 logger=lambda: _LOG,
                 chunker=lambda: chunker,
-                start_import_process=lambda: start_import_process,
+                start_import_process=lambda: launch_import_process,
                 terminate_import_process=lambda: terminate_import_process,
                 acquire_inhibitor=lambda: self._acquire_import_inhibitor,
                 release_inhibitor=lambda: _release_desktop_inhibitor,
@@ -1468,7 +1583,12 @@ class CaveViewerWindow(mglw.WindowConfig):
 
     def _set_runtime_window_icon(self) -> None:
         """Set the native viewer-window icon when the backend exposes one."""
-        icon_path = _runtime_app_icon_path(self._active_presentation_profile())
+        viewer_settings = getattr(self, "_viewer_runtime_settings", None)
+        icon_path = (
+            viewer_settings.app_icon
+            if viewer_settings is not None and viewer_settings.app_icon
+            else _runtime_app_icon_path(self._active_presentation_profile())
+        )
         if not os.path.exists(icon_path):
             _LOG.warning(f"viewer window icon asset not found: {icon_path}")
             return
@@ -1539,17 +1659,48 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._initial_compilation_started_at = time.perf_counter()
         self._initial_compilation_logged = False
 
+        viewer_settings = self._viewer_runtime_settings
+        streaming_settings = (
+            viewer_settings.streaming if viewer_settings is not None else None
+        )
         gpu_vendor = str(self.ctx.info.get("GL_VENDOR", ""))
         gpu_memory_bytes = gpu_memory.detect_total_gpu_memory_bytes(
-            gpu_vendor, logger=_LOG
+            gpu_vendor,
+            logger=_LOG,
+            environment=(
+                (
+                    {"CAVEVIEWER_GPU_MEMORY_GB": str(streaming_settings.gpu_memory_gb)}
+                    if streaming_settings is not None
+                    and streaming_settings.gpu_memory_gb is not None
+                    else {}
+                )
+                if streaming_settings is not None
+                else None
+            ),
         )
-        gpu_target_fraction = memory_targets.parse_gpu_target_fraction(
-            os.environ.get("CAVEVIEWER_GPU_MEMORY_UTILIZATION_TARGET")
+        gpu_target_fraction = (
+            memory_targets.parse_gpu_target_fraction(
+                os.environ.get("CAVEVIEWER_GPU_MEMORY_UTILIZATION_TARGET")
+            )
+            if streaming_settings is None
+            else max(
+                0.01,
+                min(
+                    0.80,
+                    float(streaming_settings.gpu_memory_target_percent) / 100.0,
+                ),
+            )
         )
         max_texture_dimension = TextureManager.recommend_max_texture_dimension(
             self.manifest["mtl_materials"],
             gpu_memory_bytes,
             gpu_target_fraction,
+            configured_limit=(
+                viewer_settings.max_texture_dimension
+                if viewer_settings is not None
+                else None
+            ),
+            use_environment_override=viewer_settings is None,
         )
         ram_snapshot = system_memory.detect_ram_snapshot()
         max_decoded_cache_bytes = TextureManager.recommend_decoded_cache_bytes(
@@ -1561,20 +1712,32 @@ class CaveViewerWindow(mglw.WindowConfig):
                 gpu_target_fraction,
             )
         )
-        resident_texture_cap_bytes = _env_optional_mebibytes(
-            _TEXTURE_RESIDENT_CACHE_MB_ENV
+        resident_texture_cap_bytes = (
+            _env_optional_mebibytes(_TEXTURE_RESIDENT_CACHE_MB_ENV)
+            if streaming_settings is None
+            else (
+                max(1, int(streaming_settings.texture_resident_cache_mb * 1024 ** 2))
+                if streaming_settings.texture_resident_cache_mb is not None
+                else None
+            )
         )
         if resident_texture_cap_bytes is not None:
             max_resident_texture_bytes = min(
                 max_resident_texture_bytes,
                 resident_texture_cap_bytes,
             )
-            _LOG.info(
-                "Texture resident GPU LRU cache capped by %s=%s MB: %.1f MB.",
-                _TEXTURE_RESIDENT_CACHE_MB_ENV,
-                os.environ.get(_TEXTURE_RESIDENT_CACHE_MB_ENV, "").strip(),
-                max_resident_texture_bytes / (1024 ** 2),
-            )
+            if streaming_settings is None:
+                _LOG.info(
+                    "Texture resident GPU LRU cache capped by %s=%s MB: %.1f MB.",
+                    _TEXTURE_RESIDENT_CACHE_MB_ENV,
+                    os.environ.get(_TEXTURE_RESIDENT_CACHE_MB_ENV, "").strip(),
+                    max_resident_texture_bytes / (1024 ** 2),
+                )
+            else:
+                _LOG.info(
+                    "Texture resident GPU LRU cache capped by composed runtime settings: %.1f MB.",
+                    max_resident_texture_bytes / (1024 ** 2),
+                )
         gpu_geometry_budget_bytes = None
         if gpu_memory_bytes is not None and gpu_memory_bytes > 0:
             total_gpu_residency_budget_bytes = int(
@@ -1636,7 +1799,11 @@ class CaveViewerWindow(mglw.WindowConfig):
                 "Rebuild this map's reported cache directory with this version "
                 "of CaveViewer."
             )
-        configured_chunk_size = chunker.configured_chunk_size()
+        configured_chunk_size = (
+            chunker.configured_chunk_size()
+            if self._runtime_settings is None
+            else float(self._runtime_settings["chunk_size_meters"])
+        )
         _LOG.info(f"Opening map cache with manifest chunk size: {chunk_size:g}.")
         if abs(chunk_size - configured_chunk_size) > 1e-6:
             _LOG.info(
@@ -1678,6 +1845,7 @@ class CaveViewerWindow(mglw.WindowConfig):
             gpu_geometry_budget_bytes=gpu_geometry_budget_bytes,
             manifest=self.manifest,
             estimate_texture_gpu_bytes=False,
+            runtime_settings=streaming_settings,
         )
         self._log_main_thread_stall(
             "streaming world setup",
@@ -2372,7 +2540,13 @@ class CaveViewerWindow(mglw.WindowConfig):
         )
 
     def _resolve_ffmpeg_path(self) -> str | None:
-        return recording.resolve_ffmpeg_path()
+        viewer_settings = getattr(self, "_viewer_runtime_settings", None)
+        if viewer_settings is None:
+            return recording.resolve_ffmpeg_path()
+        configured_path = viewer_settings.recording.ffmpeg_path
+        if configured_path:
+            return configured_path
+        return recording.resolve_ffmpeg_path(environ={})
 
     def _recording_preflight(self) -> VideoRecordingPreflight:
         """Return one fresh recording probe paired with its policy decision."""
@@ -5066,8 +5240,15 @@ class CaveViewerWindow(mglw.WindowConfig):
 
     def _update_right_column_hud_scale(self, window_size: tuple[int, int]) -> None:
         """Keep the always-visible HUD legible as the viewer is resized."""
+        viewer_settings = getattr(self, "_viewer_runtime_settings", None)
         viewer_ui_scale = _viewer_ui_scale_for_window_size(
-            _viewer_ui_surface_size(getattr(self, "wnd", None), window_size)
+            _viewer_ui_surface_size(getattr(self, "wnd", None), window_size),
+            environ={} if viewer_settings is not None else None,
+            configured_scale=(
+                viewer_settings.viewer_ui_scale
+                if viewer_settings is not None
+                else None
+            ),
         )
         geometry_scale = self.RIGHT_COLUMN_PANEL_SCALE * viewer_ui_scale
         text_scale = (
@@ -6126,9 +6307,13 @@ class CaveViewerWindow(mglw.WindowConfig):
 
     def _slice_storage_directory(self) -> str:
         """Resolve and preflight the user-configured app-managed map storage."""
-        from caveviewer.gui.preferences import load_preferences
+        runtime_settings = getattr(self, "_runtime_settings", None)
+        if runtime_settings is None:
+            from caveviewer.gui.preferences import load_preferences
 
-        configured = str(load_preferences()["map_library_dir"]).strip()
+            configured = str(load_preferences()["map_library_dir"]).strip()
+        else:
+            configured = runtime_settings.map_library_configuration().directory
         if not configured:
             raise ValueError("The Preferences map-storage folder is not configured.")
         directory = os.path.abspath(os.path.expanduser(configured))
@@ -7496,6 +7681,7 @@ def run_viewer(
     textures_dir: str,
     recorded_dive_trace: recorded_dive.RecordedDiveTrace | None = None,
     platform_runtime: PlatformRuntime | None = None,
+    runtime_settings: RuntimeSettings | None = None,
     map_root: str | os.PathLike[str] | None = None,
 ):
     manifest = chunker.load_manifest(cache_dir)
@@ -7512,12 +7698,21 @@ def run_viewer(
     CaveViewerWindow.cave_benchmark_config = None
     CaveViewerWindow.cave_recorded_dive_trace = recorded_dive_trace
     CaveViewerWindow.cave_platform_runtime = platform_runtime
+    CaveViewerWindow.cave_runtime_settings = runtime_settings
+    CaveViewerWindow.vsync = (
+        runtime_settings.viewer_configuration().vsync
+        if runtime_settings is not None
+        else _env_bool("CAVEVIEWER_VSYNC", True)
+    )
 
     try:
         _launch_viewer_window()
     finally:
         CaveViewerWindow.cave_map_root = None
         CaveViewerWindow.cave_platform_runtime = None
+        CaveViewerWindow.cave_runtime_settings = None
+        CaveViewerWindow.vsync = True
+        bitmap_font.clear_runtime_style()
 
 
 def _cache_manifest_sha256(cache_dir: str) -> str:
@@ -7534,16 +7729,33 @@ def run_viewer_benchmark(
     textures_dir: str,
     scenario,
     output_dir: str,
+    *,
+    runtime_settings: RuntimeSettings | None = None,
 ):
     """Run a deterministic viewer benchmark against an existing chunk cache."""
     import platform as _platform
 
     summary_path = os.path.join(output_dir, "summary.json")
     manifest = chunker.load_manifest(cache_dir)
-    streaming_settings = _benchmark_streaming_settings_snapshot(scenario)
+    streaming_settings = _benchmark_streaming_settings_snapshot(
+        scenario,
+        runtime_settings=runtime_settings,
+    )
     streaming_fingerprint = _benchmark_streaming_settings_fingerprint(
         streaming_settings
     )
+    viewer_settings = (
+        runtime_settings.viewer_configuration()
+        if runtime_settings is not None
+        else None
+    )
+    benchmark_platform_runtime = None
+    if runtime_settings is not None:
+        from caveviewer.gui.platform.runtime import create_platform_runtime
+
+        benchmark_platform_runtime = create_platform_runtime(
+            runtime_settings=runtime_settings
+        )
     CaveViewerWindow.cave_cache_dir = cache_dir
     CaveViewerWindow.cave_textures_dir = textures_dir
     CaveViewerWindow.cave_map_root = None
@@ -7562,8 +7774,16 @@ def run_viewer_benchmark(
             "scenario": scenario.name,
             "scenario_fingerprint": scenario.fingerprint,
             "source_sha": os.environ.get("GITHUB_SHA")
-            or os.environ.get("CAVEVIEWER_COMMIT", ""),
-            "vsync_env": os.environ.get("CAVEVIEWER_VSYNC", ""),
+            or (
+                viewer_settings.commit_identifier
+                if viewer_settings is not None
+                else os.environ.get("CAVEVIEWER_COMMIT", "")
+            ),
+            "vsync_env": (
+                str(viewer_settings.vsync).lower()
+                if viewer_settings is not None
+                else os.environ.get("CAVEVIEWER_VSYNC", "")
+            ),
             "streaming_settings": streaming_settings,
             "streaming_settings_fingerprint": streaming_fingerprint,
             "render_distance_chunks": streaming_settings["render_distance_chunks"],
@@ -7574,25 +7794,33 @@ def run_viewer_benchmark(
             "gpu_memory_override_gb": streaming_settings["gpu_memory_override_gb"],
             "io_workers": streaming_settings["io_workers"],
             "io_reserved_cpus": streaming_settings["io_reserved_cpus"],
-            "upload_chunks_per_frame": os.environ.get(
-                "CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME", ""
-            ),
-            "upload_groups_per_frame": os.environ.get(
-                "CAVEVIEWER_UPLOAD_GROUPS_PER_FRAME", ""
-            ),
-            "upload_time_budget_ms": os.environ.get(
-                "CAVEVIEWER_UPLOAD_TIME_BUDGET_MS", ""
-            ),
+            "upload_chunks_per_frame": streaming_settings[
+                "upload_chunks_per_frame"
+            ],
+            "upload_groups_per_frame": streaming_settings[
+                "upload_groups_per_frame"
+            ],
+            "upload_time_budget_ms": streaming_settings["upload_time_budget_ms"],
         },
     }
     CaveViewerWindow.cave_recorded_dive_trace = None
-    CaveViewerWindow.cave_platform_runtime = None
+    CaveViewerWindow.cave_platform_runtime = benchmark_platform_runtime
+    CaveViewerWindow.cave_runtime_settings = runtime_settings
+    CaveViewerWindow.vsync = (
+        viewer_settings.vsync
+        if viewer_settings is not None
+        else _env_bool("CAVEVIEWER_VSYNC", True)
+    )
 
     try:
         _launch_viewer_window()
         return summary_path
     finally:
         CaveViewerWindow.cave_benchmark_config = None
+        CaveViewerWindow.cave_platform_runtime = None
+        CaveViewerWindow.cave_runtime_settings = None
+        CaveViewerWindow.vsync = True
+        bitmap_font.clear_runtime_style()
 
 
 def run_viewer_with_pending_import(
@@ -7600,6 +7828,7 @@ def run_viewer_with_pending_import(
     textures_dir: str,
     recorded_dive_trace: recorded_dive.RecordedDiveTrace | None = None,
     platform_runtime: PlatformRuntime | None = None,
+    runtime_settings: RuntimeSettings | None = None,
 ):
     """
     Launches the viewer window for a map that needs FIRST-TIME import
@@ -7628,6 +7857,12 @@ def run_viewer_with_pending_import(
     CaveViewerWindow.cave_benchmark_config = None
     CaveViewerWindow.cave_recorded_dive_trace = recorded_dive_trace
     CaveViewerWindow.cave_platform_runtime = platform_runtime
+    CaveViewerWindow.cave_runtime_settings = runtime_settings
+    CaveViewerWindow.vsync = (
+        runtime_settings.viewer_configuration().vsync
+        if runtime_settings is not None
+        else _env_bool("CAVEVIEWER_VSYNC", True)
+    )
     CaveViewerWindow.cave_pending_import = {
         "model_descriptor": model_descriptor,
         "textures_dir": textures_dir,
@@ -7647,3 +7882,6 @@ def run_viewer_with_pending_import(
         raise
     finally:
         CaveViewerWindow.cave_platform_runtime = None
+        CaveViewerWindow.cave_runtime_settings = None
+        CaveViewerWindow.vsync = True
+        bitmap_font.clear_runtime_style()

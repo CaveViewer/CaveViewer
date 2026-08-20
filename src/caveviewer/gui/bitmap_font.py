@@ -35,6 +35,9 @@ _BASE_GRID_HEIGHT = 8.5
 _TEXT_SCALE = 1.0
 _RASTER_SCALE = 1.0
 _PRESENTATION_PROFILE: PresentationProfile | None = None
+_RUNTIME_STYLE_ACTIVE = False
+_RUNTIME_FONT_PATH: str | None = None
+_RUNTIME_AA_MODE: str | None = None
 
 
 def set_presentation_profile(profile: PresentationProfile | None) -> None:
@@ -43,6 +46,36 @@ def set_presentation_profile(profile: PresentationProfile | None) -> None:
     if profile == _PRESENTATION_PROFILE:
         return
     _PRESENTATION_PROFILE = profile
+    _resolve_font_path.cache_clear()
+    _load_face.cache_clear()
+    _glyph_for.cache_clear()
+
+
+def configure_runtime_style(
+    *,
+    font_path: str | None,
+    antialiasing_mode: str,
+) -> None:
+    """Use one viewer-owned style snapshot instead of process environment."""
+
+    global _RUNTIME_STYLE_ACTIVE, _RUNTIME_FONT_PATH, _RUNTIME_AA_MODE
+    _RUNTIME_STYLE_ACTIVE = True
+    _RUNTIME_FONT_PATH = font_path
+    _RUNTIME_AA_MODE = antialiasing_mode
+    _resolve_font_path.cache_clear()
+    _load_face.cache_clear()
+    _glyph_for.cache_clear()
+
+
+def clear_runtime_style() -> None:
+    """Return direct legacy callers to their environment-backed fallback."""
+
+    global _RUNTIME_STYLE_ACTIVE, _RUNTIME_FONT_PATH, _RUNTIME_AA_MODE
+    if not _RUNTIME_STYLE_ACTIVE and _RUNTIME_FONT_PATH is None and _RUNTIME_AA_MODE is None:
+        return
+    _RUNTIME_STYLE_ACTIVE = False
+    _RUNTIME_FONT_PATH = None
+    _RUNTIME_AA_MODE = None
     _resolve_font_path.cache_clear()
     _load_face.cache_clear()
     _glyph_for.cache_clear()
@@ -106,10 +139,14 @@ def _font_pixel_height(pixel_size: float) -> int:
 
 
 def _font_candidates() -> list[str]:
-    env_font = os.getenv("CAVEVIEWER_UI_FONT")
     candidates: list[str] = []
-    if env_font:
-        candidates.append(env_font)
+    if _RUNTIME_STYLE_ACTIVE:
+        if _RUNTIME_FONT_PATH:
+            candidates.append(_RUNTIME_FONT_PATH)
+    else:
+        env_font = os.getenv("CAVEVIEWER_UI_FONT")
+        if env_font:
+            candidates.append(env_font)
 
     # The profile is pure; fontconfig lookup remains an action-time fallback.
     candidates.extend(font_candidates_for_profile(_active_presentation_profile()))
@@ -140,7 +177,11 @@ def _get_aa_target() -> int:
     FreeType-rendered overlay text smooth on high-DPI and fractional-scale
     desktops without requiring users to set environment variables.
     """
-    env = os.getenv("CAVEVIEWER_TEXT_AA_MODE", "").lower()
+    env = (
+        _RUNTIME_AA_MODE
+        if _RUNTIME_STYLE_ACTIVE
+        else os.getenv("CAVEVIEWER_TEXT_AA_MODE", "").lower()
+    )
     if not env:
         mode = _active_presentation_profile().default_text_antialiasing_mode
     else:

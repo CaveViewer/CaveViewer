@@ -18,11 +18,16 @@ from typing import Sequence
 
 from caveviewer.app import _route_moderngl_window_logging
 from caveviewer.core.diagnostics.logging import configure_logging, get_logger
+from caveviewer.core.preferences.runtime_settings import (
+    RuntimeSettings,
+    current_runtime_platform_facts,
+    resolve_runtime_settings,
+)
 from caveviewer.benchmarking.results import (
     BenchmarkConfigurationError,
     BenchmarkScenario,
 )
-from caveviewer.gui.preferences import apply_preferences_to_env, load_preferences
+from caveviewer.gui.preferences import load_saved_preference_values
 from caveviewer.version import APP_NAME, APP_VERSION
 
 
@@ -61,8 +66,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--log-level",
-        default=os.environ.get("CAVEVIEWER_LOG_LEVEL", "INFO") or "INFO",
-        help="Console/file logging level. Defaults to CAVEVIEWER_LOG_LEVEL or INFO.",
+        help="Console/file logging level. Overrides CAVEVIEWER_LOG_LEVEL.",
     )
     parser.add_argument(
         "--vsync",
@@ -82,12 +86,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     output_dir = Path(args.output_dir)
     log_file = Path(args.log_file) if args.log_file else output_dir / "benchmark.log"
-    _configure_benchmark_logging(args.log_level, log_file)
+    runtime_settings = _resolve_benchmark_runtime_settings(args)
+    _configure_benchmark_logging(str(runtime_settings["log_level"]), log_file)
     _route_moderngl_window_logging()
-    _apply_saved_preferences_to_env()
-
-    if args.vsync != "unchanged":
-        os.environ["CAVEVIEWER_VSYNC"] = "1" if args.vsync == "on" else "0"
 
     try:
         scenario = BenchmarkScenario.load(args.scenario)
@@ -110,6 +111,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 str(textures_dir),
                 scenario,
                 str(output_dir),
+                runtime_settings=runtime_settings,
             )
         )
         if not summary_path.exists():
@@ -144,10 +146,22 @@ def _configure_benchmark_logging(level: str, log_file: Path) -> None:
     logging.getLogger().addHandler(file_handler)
 
 
-def _apply_saved_preferences_to_env() -> None:
-    preferences = load_preferences()
-    apply_preferences_to_env(preferences)
-    _LOG.info("Applied saved CaveViewer preferences for benchmark runtime settings.")
+def _resolve_benchmark_runtime_settings(args) -> RuntimeSettings:
+    """Compose the benchmark's immutable settings without mutating ``environ``."""
+
+    cli_overrides: dict[str, object] = {}
+    if args.log_level:
+        cli_overrides["log_level"] = args.log_level
+    if args.vsync != "unchanged":
+        cli_overrides["vsync"] = args.vsync == "on"
+    runtime_settings = resolve_runtime_settings(
+        preferences=load_saved_preference_values(),
+        environ=os.environ,
+        cli_overrides=cli_overrides,
+        platform=current_runtime_platform_facts(),
+    )
+    _LOG.info("Resolved saved CaveViewer preferences for benchmark runtime settings.")
+    return runtime_settings
 
 
 def run() -> None:

@@ -12,7 +12,6 @@ from caveviewer.gui.preferences import (
     PreferenceSpec,
     PreferenceValueType,
     preference_placeholder_text,
-    apply_preferences_to_env,
     load_preferences,
     save_preferences,
 )
@@ -243,7 +242,6 @@ class PreferencesPanel:
         self.workflow = PreferencesDialogWorkflow(
             load_preferences_fn=load_preferences,
             save_preferences_fn=save_preferences,
-            apply_preferences_to_env_fn=apply_preferences_to_env,
         )
         self.preferences = self.workflow.load_initial()
         self.form = PreferencesFormController(self.preferences)
@@ -1015,7 +1013,6 @@ class PreferencesPanel:
         if workflow is None:
             workflow = PreferencesDialogWorkflow(
                 save_preferences_fn=save_preferences,
-                apply_preferences_to_env_fn=apply_preferences_to_env,
             )
         result = workflow.apply(preferences)
         if not result.succeeded:

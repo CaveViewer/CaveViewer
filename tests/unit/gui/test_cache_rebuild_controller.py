@@ -5,6 +5,7 @@ from __future__ import annotations
 import queue
 from pathlib import Path
 
+from caveviewer.core.preferences.runtime_settings import ImportRuntimeSettings
 from caveviewer.gui.cache_rebuild_controller import (
     CacheRebuildFailed,
     CacheRebuildJobController,
@@ -144,6 +145,32 @@ def test_controller_passes_resume_requirement_to_import_child():
             },
         )
     ]
+
+
+def test_controller_uses_latest_explicit_import_runtime_settings():
+    handle = _FakeHandle()
+    calls = []
+    settings = ImportRuntimeSettings(
+        map_cache_dir="/cache-root",
+        chunk_size_meters=12.5,
+        max_upload_group_mb=16.0,
+        obj_scan_throttle_seconds=0.0,
+        obj_import_batch_faces=200_000,
+        obj_bucket_workers=2,
+        chunk_build_workers=1,
+        chunk_build_reserved_cpus=2,
+        import_nice_increment=5,
+    )
+    controller = CacheRebuildJobController(
+        start_process=lambda descriptor, textures_dir, **options: (
+            calls.append((descriptor, textures_dir, options)) or handle
+        ),
+        runtime_settings_provider=lambda: settings,
+    )
+
+    controller.start(_target())
+
+    assert calls[0][2]["runtime_settings"] is settings
 
 
 def test_controller_reports_abnormal_child_exit_as_failure():

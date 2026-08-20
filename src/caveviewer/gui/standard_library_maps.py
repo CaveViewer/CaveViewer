@@ -25,6 +25,7 @@ from typing import Callable, Optional
 
 from caveviewer.core.json_io import load_bounded_json
 from caveviewer.core.diagnostics.logging import get_logger
+from caveviewer.core.preferences.runtime_settings import MapLibraryRuntimeSettings
 from caveviewer.gui.download_transport import DownloadCancelled, download_file
 from caveviewer.gui.map_library_sources import (
     GITHUB_RELEASE_MAP_SOURCE_ID,
@@ -94,6 +95,53 @@ _SOURCE_MAP_LIBRARY_DIRNAME = ".caveviewer-map-library-sources"
 _MAP_LIBRARY_CONFIG_LOGGED = False
 
 
+@dataclass(frozen=True, slots=True)
+class MapLibraryConfiguration:
+    """One explicit Map Library storage and release-source configuration."""
+
+    directory: str
+    storage_home: str | None
+    data_directory: str
+    cache_directory: str
+    repository: str
+    release_tag: str
+    api_url: str
+    catalog_asset_name: str
+
+
+def map_library_configuration_from_runtime_settings(
+    settings: MapLibraryRuntimeSettings,
+) -> MapLibraryConfiguration:
+    """Adapt the core-owned runtime subsection at the GUI source boundary."""
+
+    return MapLibraryConfiguration(
+        directory=settings.directory,
+        storage_home=settings.storage_home,
+        data_directory=settings.data_directory,
+        cache_directory=settings.cache_directory,
+        repository=settings.repository,
+        release_tag=settings.release_tag,
+        api_url=settings.api_url,
+        catalog_asset_name=settings.catalog_asset_name,
+    )
+
+
+def default_map_library_configuration() -> MapLibraryConfiguration:
+    """Return the legacy direct-call configuration while callers migrate."""
+
+    storage_home = os.environ.get("CAVEVIEWER_HOME", "").strip() or None
+    storage_paths = resolve_application_paths()
+    return MapLibraryConfiguration(
+        directory=_configured_map_library_install_dir(),
+        storage_home=storage_home,
+        data_directory=str(storage_paths.data_dir),
+        cache_directory=str(storage_paths.cache_dir),
+        repository=_MAP_LIBRARY_REPO,
+        release_tag=_MAP_LIBRARY_RELEASE_TAG,
+        api_url=_TAGGED_RELEASE_API_URL,
+        catalog_asset_name=_MAP_LIBRARY_CATALOG_ASSET_NAME,
+    )
+
 @dataclass
 class StandardLibraryMapInfo:
     display_name: str
@@ -146,9 +194,14 @@ class GitHubReleaseMapLibrarySource:
     source_id = GITHUB_RELEASE_MAP_SOURCE_ID
     display_name = "CaveViewer Maps"
 
+    def __init__(self, configuration: MapLibraryConfiguration | None = None) -> None:
+        self._configuration = configuration
+
     def fetch_catalog(self) -> MapCatalogRefresh:
         """Fetch one GitHub-backed catalog without involving Tk."""
-        return fetch_standard_library_catalog_refresh()
+        if self._configuration is None:
+            return fetch_standard_library_catalog_refresh()
+        return fetch_standard_library_catalog_refresh(self._configuration)
 
 
 def bundled_standard_library_catalog() -> list[StandardLibraryMapInfo]:
@@ -165,18 +218,24 @@ def bundled_standard_library_catalog() -> list[StandardLibraryMapInfo]:
     )
 
 
-def load_initial_standard_library_catalog() -> list[StandardLibraryMapInfo]:
+def load_initial_standard_library_catalog(
+    configuration: MapLibraryConfiguration | None = None,
+) -> list[StandardLibraryMapInfo]:
     """Return the best local catalog for initial splash rendering."""
-    cached_catalog = _load_cached_standard_library_catalog()
+    configuration = configuration or default_map_library_configuration()
+    cached_catalog = _load_cached_standard_library_catalog(configuration)
     if cached_catalog:
         return cached_catalog
     return bundled_standard_library_catalog()
 
 
-def default_map_library_install_dir() -> str:
+def default_map_library_install_dir(
+    configuration: MapLibraryConfiguration | None = None,
+) -> str:
     """Return the configured folder for first-time map-library downloads."""
-    install_dir = Path(_configured_map_library_install_dir())
-    legacy_dirs = _default_legacy_map_library_dirs()
+    configuration = configuration or default_map_library_configuration()
+    install_dir = Path(configuration.directory)
+    legacy_dirs = _default_legacy_map_library_dirs(configuration)
 
     if install_dir.exists() and not install_dir.is_dir():
         for legacy_dir in legacy_dirs:
@@ -216,9 +275,11 @@ def _configured_map_library_install_dir() -> str:
     return load_preferences()["map_library_dir"]
 
 
-def _default_legacy_map_library_dirs() -> tuple[Path, Path]:
+def _default_legacy_map_library_dirs(
+    configuration: MapLibraryConfiguration,
+) -> tuple[Path, Path]:
     """Return app-managed map-library paths used before the Downloads default."""
-    data_dir = resolve_application_paths().data_dir
+    data_dir = Path(configuration.data_directory)
     return (
         data_dir / MAP_LIBRARY_DIRNAME,
         data_dir / _LEGACY_MAP_LIBRARY_DIRNAME,
@@ -296,14 +357,16 @@ def _merge_legacy_map_library_directory(source: Path, destination: Path) -> None
         )
 
 
-def _catalog_cache_path() -> Path:
+def _catalog_cache_path(configuration: MapLibraryConfiguration) -> Path:
     """Return the last-successful remote catalog cache file."""
-    return resolve_application_paths().cache_dir / _MAP_LIBRARY_CATALOG_CACHE_FILE
+    return Path(configuration.cache_directory) / _MAP_LIBRARY_CATALOG_CACHE_FILE
 
 
-def _load_cached_standard_library_catalog() -> list[StandardLibraryMapInfo]:
+def _load_cached_standard_library_catalog(
+    configuration: MapLibraryConfiguration,
+) -> list[StandardLibraryMapInfo]:
     """Return cached remote map metadata, or an empty list when unavailable."""
-    cache_path = _catalog_cache_path()
+    cache_path = _catalog_cache_path(configuration)
     if not cache_path.is_file():
         return []
     try:
@@ -323,9 +386,10 @@ def _load_cached_standard_library_catalog() -> list[StandardLibraryMapInfo]:
 
 def _save_cached_standard_library_catalog(
     maps: list[StandardLibraryMapInfo],
+    configuration: MapLibraryConfiguration,
 ) -> None:
     """Persist remote map metadata without temporary download URLs."""
-    cache_path = _catalog_cache_path()
+    cache_path = _catalog_cache_path(configuration)
     try:
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         write_text_atomic(
@@ -360,7 +424,9 @@ def _maps_without_download_info(
     ]
 
 
-def _fallback_maps_with_no_download_info() -> list[StandardLibraryMapInfo]:
+def _fallback_maps_with_no_download_info(
+    configuration: MapLibraryConfiguration,
+) -> list[StandardLibraryMapInfo]:
     """
     Return the best local catalog for network failures.
 
@@ -369,7 +435,9 @@ def _fallback_maps_with_no_download_info() -> list[StandardLibraryMapInfo]:
     checks local disk independently, so already-downloaded entries can still
     open while offline.
     """
-    return _maps_without_download_info(load_initial_standard_library_catalog())
+    return _maps_without_download_info(
+        load_initial_standard_library_catalog(configuration)
+    )
 
 
 def _read_json_url(url: str, *, accept: str, max_bytes: int):
@@ -680,6 +748,7 @@ def _enrich_catalog_with_release_assets(
 
 def _remote_catalog_from_release_assets(
     assets_by_name: dict[str, dict],
+    configuration: MapLibraryConfiguration,
 ) -> tuple[list[StandardLibraryMapInfo], str | None, bool]:
     """
     Return catalog entries, an optional warning, and whether remote metadata won.
@@ -688,7 +757,7 @@ def _remote_catalog_from_release_assets(
     asset is published, CaveViewer preserves bundled metadata for known zips
     and infers rows for additional release zip assets.
     """
-    catalog_asset = assets_by_name.get(_MAP_LIBRARY_CATALOG_ASSET_NAME)
+    catalog_asset = assets_by_name.get(configuration.catalog_asset_name)
     catalog_url = (
         catalog_asset.get("browser_download_url")
         if isinstance(catalog_asset, dict)
@@ -719,13 +788,14 @@ def _remote_catalog_from_release_assets(
         TypeError,
     ) as exc:
         return (
-            load_initial_standard_library_catalog(),
+            load_initial_standard_library_catalog(configuration),
             f"Got an unexpected map library catalog: {exc}",
             False,
         )
 
 
 def _fetch_github_standard_library_catalog(
+    configuration: MapLibraryConfiguration,
 ) -> tuple[list[StandardLibraryMapInfo], str | None, bool]:
     """
     Fetch the GitHub-hosted map catalog and release asset download details.
@@ -738,22 +808,22 @@ def _fetch_github_standard_library_catalog(
     Cached and bundled maps are non-authoritative fallbacks when GitHub cannot
     be reached or the response is invalid.
     """
-    _log_map_library_config_once()
+    _log_map_library_config_once(configuration)
 
     try:
         data = _read_json_url(
-            _TAGGED_RELEASE_API_URL,
+            configuration.api_url,
             accept="application/vnd.github+json",
             max_bytes=_MAX_RELEASE_METADATA_BYTES,
         )
     except urllib.error.HTTPError as e:
         if e.code == 404:
             error_msg = (
-                f"No map library release found for tag {_MAP_LIBRARY_RELEASE_TAG!r}."
+                f"No map library release found for tag {configuration.release_tag!r}."
             )
         else:
             error_msg = f"GitHub returned an error (HTTP {e.code})."
-        return _fallback_maps_with_no_download_info(), error_msg, False
+        return _fallback_maps_with_no_download_info(configuration), error_msg, False
     except urllib.error.URLError as e:
         # URLError is a catch-all for "the request itself failed to
         # complete" -- it does NOT specifically mean "no internet
@@ -777,10 +847,10 @@ def _fetch_github_standard_library_catalog(
                 "Couldn't reach GitHub right now. This may be a temporary "
                 "network issue -- try again in a moment."
             )
-        return _fallback_maps_with_no_download_info(), error_msg, False
+        return _fallback_maps_with_no_download_info(configuration), error_msg, False
     except (json.JSONDecodeError, UnicodeDecodeError, ValueError, KeyError, TypeError) as e:
         return (
-            _fallback_maps_with_no_download_info(),
+            _fallback_maps_with_no_download_info(configuration),
             f"Got an unexpected response from GitHub: {e}",
             False,
         )
@@ -789,22 +859,26 @@ def _fetch_github_standard_library_catalog(
         assets_by_name = _release_assets_by_name(data)
     except TypeError as exc:
         return (
-            _fallback_maps_with_no_download_info(),
+            _fallback_maps_with_no_download_info(configuration),
             f"Got an unexpected response from GitHub: {exc}",
             False,
         )
     catalog, catalog_error, remote_manifest_loaded = _remote_catalog_from_release_assets(
-        assets_by_name
+        assets_by_name,
+        configuration,
     )
     results = _enrich_catalog_with_release_assets(catalog, assets_by_name)
     if remote_manifest_loaded:
-        _save_cached_standard_library_catalog(results)
+        _save_cached_standard_library_catalog(results, configuration)
     return results, catalog_error, remote_manifest_loaded
 
 
-def fetch_standard_library_catalog_refresh() -> MapCatalogRefresh:
+def fetch_standard_library_catalog_refresh(
+    configuration: MapLibraryConfiguration | None = None,
+) -> MapCatalogRefresh:
     """Fetch the GitHub release through the source-neutral catalog contract."""
-    maps, error, authoritative = _fetch_github_standard_library_catalog()
+    configuration = configuration or default_map_library_configuration()
+    maps, error, authoritative = _fetch_github_standard_library_catalog(configuration)
     return MapCatalogRefresh(
         source_id=GITHUB_RELEASE_MAP_SOURCE_ID,
         maps=tuple(maps),
@@ -814,35 +888,18 @@ def fetch_standard_library_catalog_refresh() -> MapCatalogRefresh:
     )
 
 
-def _log_map_library_config_once() -> None:
+def _log_map_library_config_once(configuration: MapLibraryConfiguration) -> None:
     global _MAP_LIBRARY_CONFIG_LOGGED
     if _MAP_LIBRARY_CONFIG_LOGGED:
         return
 
     _MAP_LIBRARY_CONFIG_LOGGED = True
     _LOG.info(
-        "Map library source env: CAVEVIEWER_MAP_LIBRARY_API_URL=%r, "
-        "CAVEVIEWER_MAP_LIBRARY_REPO=%r, "
-        "CAVEVIEWER_MAP_LIBRARY_RELEASE_TAG=%r, "
-        "CAVEVIEWER_MAP_LIBRARY_CATALOG_ASSET_NAME=%r",
-        os.environ.get("CAVEVIEWER_MAP_LIBRARY_API_URL"),
-        os.environ.get("CAVEVIEWER_MAP_LIBRARY_REPO"),
-        os.environ.get("CAVEVIEWER_MAP_LIBRARY_RELEASE_TAG"),
-        os.environ.get("CAVEVIEWER_MAP_LIBRARY_CATALOG_ASSET_NAME"),
-    )
-    _LOG.info(
-        "Map library source legacy env: CAVEVIEWER_SAMPLE_MAPS_API_URL=%r, "
-        "CAVEVIEWER_SAMPLE_MAPS_REPO=%r, CAVEVIEWER_SAMPLE_DATA_TAG=%r",
-        os.environ.get("CAVEVIEWER_SAMPLE_MAPS_API_URL"),
-        os.environ.get("CAVEVIEWER_SAMPLE_MAPS_REPO"),
-        os.environ.get("CAVEVIEWER_SAMPLE_DATA_TAG"),
-    )
-    _LOG.info(
         "Map library source resolved: api_url=%r, repo=%r, tag=%r, catalog=%r",
-        _TAGGED_RELEASE_API_URL,
-        _MAP_LIBRARY_REPO,
-        _MAP_LIBRARY_RELEASE_TAG,
-        _MAP_LIBRARY_CATALOG_ASSET_NAME,
+        configuration.api_url,
+        configuration.repository,
+        configuration.release_tag,
+        configuration.catalog_asset_name,
     )
 
 
