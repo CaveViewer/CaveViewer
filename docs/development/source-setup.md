@@ -463,9 +463,12 @@ the default Authenticode policy or the explicit unsigned-community policy
 instead presents `Install and restart <version>` immediately. Its explicit
 click downloads the EXE, starts the
 handoff after promotion, and the splash exits only after the installer process
-starts. A cancellation request only signals the manager worker; it cleans
-staging output and returns to the available update without affecting an already
-verified package.
+starts. That click is the consent boundary: the Inno Setup progress window
+remains visible, but its suppressible messages use their declared defaults so a
+normal update needs no second confirmation. Windows-owned trust warnings remain
+user-controlled. A cancellation request only signals the manager worker; it
+cleans staging output and returns to the available update without affecting an
+already verified package.
 While a splash window is visible, it is the foreground update surface and
 suppresses duplicate desktop notifications for update progress or completion.
 If a download finishes after that surface closes, desktop notifications remain

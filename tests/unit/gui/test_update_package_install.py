@@ -79,6 +79,7 @@ def test_windows_adapter_rechecks_a_special_character_path_then_uses_distinct_ar
                 str(resolved_artifact),
                 "/SP-",
                 "/SILENT",
+                "/SUPPRESSMSGBOXES",
                 "/NORESTART",
                 f"/LOG={update_root / 'installer-2.0.0.log'}",
                 "--update",

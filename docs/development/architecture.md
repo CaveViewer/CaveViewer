@@ -750,11 +750,14 @@ valid Authenticode chain, exact signed publisher, and RFC-3161 timestamp. The
 only unsigned alternative is the signed-manifest `unsigned-community` policy,
 which has no declared Authenticode publisher and still requires the manifest
 signature, package hash, size, provenance marker, and explicit user action.
-It then uses a distinct argument vector to start `CaveViewerSetup.exe /SP- /SILENT /NORESTART /LOG=... --update
---wait-pid <pid> --expected-version <version>`. The installer owns the bounded
-wait, new-payload verification, provenance update, and relaunch. A failure
-returns the manager to `READY`; the Tk splash closes only after the detached
-installer process has started.
+It then uses a distinct argument vector to start `CaveViewerSetup.exe /SP-
+/SILENT /SUPPRESSMSGBOXES /NORESTART /LOG=... --update --wait-pid <pid>
+--expected-version <version>`. The explicit splash action is the user-consent
+boundary; Inno Setup retains a visible progress window but requires no further
+answer during the normal handoff. Windows-owned trust prompts remain outside
+this contract. The installer owns the bounded wait, new-payload verification,
+provenance update, and relaunch. A failure returns the manager to `READY`; the
+Tk splash closes only after the detached installer process has started.
 
 ## Updates and release assets
 
