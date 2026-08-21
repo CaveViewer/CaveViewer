@@ -131,6 +131,7 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../.." && pwd)"
 source "$repo_root/scripts/common/version.sh"
 source "$repo_root/scripts/common/github.sh"
+source "$repo_root/scripts/common/release_channel.sh"
 source "$script_dir/architecture.sh"
 macos_arch="$(cv_resolve_macos_arch "$macos_arch")"
 version_file="$repo_root/src/caveviewer/version.py"
@@ -138,6 +139,8 @@ macos_packages_dir="$repo_root/dist/macos/packages"
 macos_metadata_dir="$repo_root/dist/macos/metadata"
 manifest_channel="stable"
 $pre_release && manifest_channel="prerelease"
+export CAVEVIEWER_BUILD_RELEASE_CHANNEL="$manifest_channel"
+cv_prepare_release_metadata "$repo_root" >/dev/null
 update_manifest_path="$repo_root/updates/macos/$macos_arch/$manifest_channel.json"
 update_manifest_signature_path="$update_manifest_path.sig"
 
@@ -206,6 +209,15 @@ if [ ! -f "$app_meta_path" ]; then
   exit 1
 fi
 
+macos_build_venv="${CAVEVIEWER_MACOS_BUILD_VENV:-$repo_root/.venv-macos-build}"
+metadata_python="$macos_build_venv/bin/python"
+if [ ! -x "$metadata_python" ]; then
+  metadata_python="python3"
+fi
+"$metadata_python" "$repo_root/scripts/common/verify_release_channel.py" \
+  --metadata-file "$app_meta_path" \
+  --expected-release-channel "$manifest_channel"
+
 if gh release view "$tag" --repo "$repo" >/dev/null 2>&1; then
   echo "Release $tag already exists; uploading/replacing assets"
   gh release upload "$tag" "$app_dmg_path" "$app_meta_path" --repo "$repo" --clobber
@@ -242,7 +254,6 @@ echo "macOS metadata URL: $meta_asset_url"
 
 signing_python="${CAVEVIEWER_RELEASE_SIGNING_PYTHON:-}"
 if [ -z "$signing_python" ]; then
-  macos_build_venv="${CAVEVIEWER_MACOS_BUILD_VENV:-$repo_root/.venv-macos-build}"
   if [ -x "$macos_build_venv/bin/python" ]; then
     signing_python="$macos_build_venv/bin/python"
   elif [ -x "$repo_root/.venv-dev/bin/python" ]; then

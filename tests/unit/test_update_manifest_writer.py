@@ -136,6 +136,7 @@ def test_writer_generates_platform_aliases_and_escaped_json(
     assert payload["download_url"] == download_url
     assert payload["download_size_bytes"] == len(artifact_contents)
     assert payload["sha256"] == expected_sha256
+    assert payload["release_channel"] == "stable"
     assert payload["release_notes"] == notes
     assert payload[aliases[0]] == download_url
     assert payload[aliases[1]] == len(artifact_contents)
@@ -276,6 +277,7 @@ def test_writer_generates_an_explicit_unsigned_community_windows_manifest(
     assert completed.returncode == 0, completed.stderr
     payload = json.loads(output.read_text(encoding="utf-8"))
     assert payload["authenticode_status"] == "unsigned-community"
+    assert payload["release_channel"] == "stable"
     assert "authenticode_certificate_subject" not in payload
 
 

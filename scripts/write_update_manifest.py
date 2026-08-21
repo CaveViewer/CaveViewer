@@ -112,6 +112,7 @@ def _manifest_payload(args: argparse.Namespace, size_bytes: int, sha256: str) ->
         "latest_version": args.version,
         "download_url": args.download_url,
         "download_size_bytes": size_bytes,
+        "release_channel": args.channel,
         "release_notes": args.notes,
         "sha256": sha256,
     }

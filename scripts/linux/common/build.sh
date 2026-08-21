@@ -9,6 +9,7 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../../.." && pwd)"
+source "$repo_root/scripts/common/release_channel.sh"
 
 print_usage() {
   cat <<'EOF'
@@ -64,6 +65,9 @@ venv_dir="${CAVEVIEWER_LINUX_BUILD_VENV:-$linux_venv_default}"
 spec_file="$repo_root/packaging/pyinstaller/CaveViewer.spec"
 dist_app_dir="$repo_root/dist/linux/$linux_dist_arch/app"
 work_dir="$repo_root/build/pyinstaller/linux/$linux_dist_arch"
+
+cv_prepare_release_metadata "$repo_root" >/dev/null
+release_metadata_path="$CAVEVIEWER_RELEASE_METADATA_PATH"
 
 # python-build-standalone: Python binaries compiled against glibc 2.17 so the
 # bundled libpython3.12.so won't require the build host's newer glibc. The
@@ -320,6 +324,7 @@ CAVEVIEWER_APP_ICON="" \
   --add-data "$repo_root/src/caveviewer/resources/images:caveviewer/resources/images" \
   --add-data "$repo_root/src/caveviewer/resources/release_signing_public_key.pem:caveviewer/resources" \
   --add-data "$repo_root/src/caveviewer/resources/cave_metadata_catalog.v1.json:caveviewer/resources" \
+  --add-data "$release_metadata_path:caveviewer/resources" \
   --add-data "$repo_root/LICENSE:." \
   --add-data "$repo_root/THIRD_PARTY_NOTICES.md:." \
   "$repo_root/src/caveviewer/__main__.py"
@@ -329,6 +334,12 @@ if [ ! -d "$app_dir" ]; then
   echo "Error: build completed but app directory not found at $app_dir"
   exit 1
 fi
+bundled_release_metadata="$(find "$app_dir" -type f -path '*caveviewer/resources/release_metadata.v1.json' -print -quit)"
+if [ -z "$bundled_release_metadata" ]; then
+  echo "Error: Linux app bundle is missing embedded release metadata." >&2
+  exit 1
+fi
+cv_verify_release_metadata "$bundled_release_metadata" "$(cv_release_channel)"
 
 echo "Build complete: $app_dir"
 echo "Note: CaveViewer/ is an intermediate build artifact."

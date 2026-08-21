@@ -116,12 +116,15 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../.." && pwd)"
 source "$repo_root/scripts/common/version.sh"
 source "$repo_root/scripts/common/github.sh"
+source "$repo_root/scripts/common/release_channel.sh"
 
 version_file="$repo_root/src/caveviewer/version.py"
 windows_packages_dir="$repo_root/dist/windows/packages"
 windows_metadata_dir="$repo_root/dist/windows/metadata"
 manifest_channel="stable"
 $pre_release && manifest_channel="prerelease"
+export CAVEVIEWER_BUILD_RELEASE_CHANNEL="$manifest_channel"
+cv_prepare_release_metadata "$repo_root" >/dev/null
 update_manifest_path="$repo_root/updates/windows/$manifest_channel.json"
 update_manifest_signature_path="$update_manifest_path.sig"
 
@@ -207,7 +210,8 @@ fi
 "$metadata_python" "$metadata_verifier" \
   --artifact-file "$app_exe_path" \
   --metadata-file "$app_meta_path" \
-  --update-metadata-file "$app_update_meta_path"
+  --update-metadata-file "$app_update_meta_path" \
+  --release-channel "$manifest_channel"
 authenticode_certificate_subject="$(
   "$metadata_python" -c \
     'import json, sys; value = json.load(open(sys.argv[1], encoding="utf-8")).get("authenticode_certificate_subject"); isinstance(value, str) and value.strip() or sys.exit("Error: Windows update metadata has no Authenticode certificate subject."); print(value.strip())' \

@@ -25,6 +25,7 @@ from caveviewer.core.capabilities import (
     WindowSystem,
 )
 from caveviewer.core.preferences import runtime_settings
+from caveviewer.core.release_metadata import ReleaseMetadata, ReleaseMetadataSource
 from caveviewer.gui.features import FeatureDecision, FeatureId, FeatureState
 from caveviewer.gui.platform import runtime
 from caveviewer.gui.platform.factory import get_platform_adapter
@@ -220,6 +221,7 @@ def test_runtime_resolves_environment_only_when_it_is_composed(monkeypatch):
     assert runtime.automatic_update_target is runtime.automatic_update_capability.value
     assert runtime.automatic_update_target is not None
     assert runtime.automatic_update_target.install_channel == "linux_app"
+    assert runtime.automatic_update_target.manifest_channel == "prerelease"
     assert runtime.automatic_update_decision.state is FeatureState.ENABLED
     assert (
         runtime.static_feature_decision(FeatureId.AUTOMATIC_UPDATE)
@@ -314,6 +316,35 @@ def test_snapshot_keeps_a_custom_update_profile_default_when_not_overridden(
 
     assert configuration.repository == "Example/Fork"
     assert configuration.source is CapabilitySource.DETECTED
+
+
+def test_runtime_uses_the_embedded_release_channel_without_an_override(tmp_path):
+    snapshot = runtime_settings.resolve_runtime_settings(
+        environ={},
+        platform=runtime_settings.RuntimePlatformFacts(
+            platform_name="linux",
+            os_name="posix",
+            home=tmp_path,
+            release_metadata=ReleaseMetadata(
+                "prerelease", ReleaseMetadataSource.BUNDLED
+            ),
+        ),
+    )
+
+    platform_runtime = create_platform_runtime(
+        platform_adapter=FakePlatformAdapter(),
+        desktop_services=object(),
+        runtime_settings=snapshot,
+        platform_name="linux",
+        machine="x86_64",
+    )
+
+    assert platform_runtime.update_configuration.manifest_channel == "prerelease"
+    assert platform_runtime.update_configuration.manifest_url.endswith(
+        "/updates/linux/x86_64/prerelease.json"
+    )
+    assert platform_runtime.automatic_update_target is not None
+    assert platform_runtime.automatic_update_target.manifest_channel == "prerelease"
 
 
 def test_runtime_disables_unsupported_update_targets_before_network_work():

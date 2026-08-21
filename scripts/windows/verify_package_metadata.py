@@ -25,6 +25,9 @@ def main() -> int:
     parser.add_argument("--metadata-file", type=Path, required=True)
     parser.add_argument("--update-metadata-file", type=Path, required=True)
     parser.add_argument(
+        "--release-channel", choices=("stable", "prerelease"), required=True
+    )
+    parser.add_argument(
         "--allow-unsigned-community",
         action="store_true",
         help="Accept only the explicit unsigned-community release policy.",
@@ -61,6 +64,7 @@ def main() -> int:
         "authenticode_required": not args.allow_unsigned_community,
         "authenticode_status": expected_status,
         "entrypoint": "CaveViewerSetup.exe",
+        "release_channel": args.release_channel,
         "size_bytes": artifact.stat().st_size,
         "sha256": artifact_sha256,
     }
@@ -112,6 +116,7 @@ def main() -> int:
         "download_size_bytes_windows_exe": artifact.stat().st_size,
         "install_channel": "windows_installer",
         "latest_version": payload.get("version"),
+        "release_channel": args.release_channel,
         "sha256": artifact_sha256,
         "sha256_windows_exe": artifact_sha256,
     }

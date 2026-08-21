@@ -47,6 +47,7 @@ def test_application_uses_src_package_layout():
         PACKAGE_ROOT / "core" / "chunking" / "staging.py",
         PACKAGE_ROOT / "core" / "chunking" / "upload.py",
         PACKAGE_ROOT / "core" / "diagnostics" / "logging.py",
+        PACKAGE_ROOT / "core" / "release_metadata.py",
         PACKAGE_ROOT / "core" / "mesh" / "obj.py",
         PACKAGE_ROOT / "core" / "mesh" / "glb.py",
         PACKAGE_ROOT / "core" / "navigation" / "__init__.py",
@@ -189,6 +190,8 @@ def test_packaging_consumers_reference_migrated_paths():
     assert "caveviewer/resources/shaders" in pyinstaller_spec
     assert "cave_metadata_catalog.v1.json" in pyinstaller_spec
     assert "cave_metadata_catalog.v1.json" in linux_builder
+    assert "release_metadata.v1.json" in pyinstaller_spec
+    assert "release_metadata.v1.json" in linux_builder
 
 
 def test_pyproject_declares_src_package_and_entry_point():

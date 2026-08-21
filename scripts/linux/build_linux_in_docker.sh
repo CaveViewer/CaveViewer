@@ -199,6 +199,7 @@ for arch in "${archs[@]}"; do
     --platform "$platform" \
     -e "CAVEVIEWER_LINUX_DOCKER_BUILD=1" \
     -e "CAVEVIEWER_LINUX_BUILD_VENV=$linux_build_venv_in_container" \
+    -e "CAVEVIEWER_BUILD_RELEASE_CHANNEL=${CAVEVIEWER_BUILD_RELEASE_CHANNEL:-stable}" \
     -v "$repo_root:/workspace" \
     -w /workspace \
     "$image_name" \

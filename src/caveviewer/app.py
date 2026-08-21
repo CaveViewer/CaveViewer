@@ -668,6 +668,17 @@ def main():
     _LOG.info("=" * 60)
     _LOG.info(f"  {APP_NAME} {__version__}")
     _LOG.info("=" * 60)
+    release_metadata = platform_facts.release_metadata
+    _LOG.info(
+        "Release metadata: channel=%s, source=%s%s",
+        release_metadata.release_channel,
+        release_metadata.source.value,
+        (
+            f", detail={release_metadata.diagnostic}"
+            if release_metadata.diagnostic
+            else ""
+        ),
+    )
     if _update_branch:
         _LOG.info("Using update branch override: %s", _update_branch)
 

@@ -8,6 +8,7 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../.." && pwd)"
 source "$script_dir/../common/python.sh"
+source "$script_dir/../common/release_channel.sh"
 
 print_usage() {
   cat <<'EOF'
@@ -43,6 +44,9 @@ logo_png="$repo_root/src/caveviewer/resources/images/app_icon_macos.png"
 icon_work_dir="$work_dir/iconset"
 iconset_dir="$icon_work_dir/CaveViewer.iconset"
 icon_icns="$icon_work_dir/CaveViewer.icns"
+
+cv_prepare_release_metadata "$repo_root" >/dev/null
+release_metadata_path="$CAVEVIEWER_RELEASE_METADATA_PATH"
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
   echo "Error: this script must be run on macOS."
@@ -110,6 +114,7 @@ rm -f "$icon_icns"
 iconutil -c icns "$iconset_dir" -o "$icon_icns"
 
 CAVEVIEWER_APP_ICON="$icon_icns" \
+CAVEVIEWER_RELEASE_METADATA_PATH="$release_metadata_path" \
 "$venv_dir/bin/python" -m PyInstaller --clean --noconfirm \
   --distpath "$dist_app_dir" \
   --workpath "$work_dir" \
@@ -120,6 +125,12 @@ if [ ! -d "$app_path" ]; then
   echo "Error: build completed but app not found at $app_path"
   exit 1
 fi
+bundled_release_metadata="$(find "$app_path" -type f -path '*caveviewer/resources/release_metadata.v1.json' -print -quit)"
+if [ -z "$bundled_release_metadata" ]; then
+  echo "Error: macOS app bundle is missing embedded release metadata." >&2
+  exit 1
+fi
+cv_verify_release_metadata "$bundled_release_metadata" "$(cv_release_channel)"
 
 echo "Build complete: $app_path"
 echo "App icon source: $logo_png"

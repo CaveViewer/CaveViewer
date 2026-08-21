@@ -15,6 +15,9 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$ExpectedVersion,
 
+    [ValidateSet("stable", "prerelease")]
+    [string]$ExpectedReleaseChannel = "stable",
+
     [string]$ExpectedCertificateSubject = "",
 
     [switch]$AllowUnsigned,
@@ -73,6 +76,7 @@ function Assert-PackageMetadata {
         [Parameter(Mandatory = $true)][string]$PackageMetadataPath,
         [Parameter(Mandatory = $true)][string]$UpdatePath,
         [Parameter(Mandatory = $true)][string]$Version,
+        [Parameter(Mandatory = $true)][string]$ReleaseChannel,
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$CertificateSubject,
         [Parameter(Mandatory = $true)][string]$ExpectedAuthenticodeStatus,
         [Parameter(Mandatory = $true)][string]$ExpectedPackageType
@@ -89,10 +93,12 @@ function Assert-PackageMetadata {
     Assert-Condition ($packageMetadata.package_type -eq $ExpectedPackageType) "Package metadata has the wrong package type."
     Assert-Condition ([int64]$packageMetadata.size_bytes -eq [int64]$item.Length) "Package metadata has the wrong installer size."
     Assert-Condition ($packageMetadata.sha256 -eq $digest) "Package metadata has the wrong installer SHA-256."
+    Assert-Condition ($packageMetadata.release_channel -eq $ReleaseChannel) "Package metadata has the wrong release channel."
     Assert-Condition ($updateMetadata.latest_version -eq $Version) "Update metadata has the wrong version."
     Assert-Condition ([int64]$updateMetadata.download_size_bytes_windows_exe -eq [int64]$item.Length) "Update metadata has the wrong EXE size."
     Assert-Condition ($updateMetadata.sha256_windows_exe -eq $digest) "Update metadata has the wrong EXE SHA-256."
     Assert-Condition ($updateMetadata.install_channel -eq "windows_installer") "Update metadata has the wrong install channel."
+    Assert-Condition ($updateMetadata.release_channel -eq $ReleaseChannel) "Update metadata has the wrong release channel."
 
     if ($ExpectedAuthenticodeStatus -ne "verified") {
         Assert-Condition ($packageMetadata.authenticode_status -eq $ExpectedAuthenticodeStatus) "Unsigned smoke metadata has the wrong Authenticode status."
@@ -242,7 +248,7 @@ if ($markerExisted) {
 
 try {
     New-Item -ItemType Directory -Path $temporaryRoot -Force | Out-Null
-    Assert-PackageMetadata -Path $installerPath -PackageMetadataPath $metadataPath -UpdatePath $updateMetadataPath -Version $ExpectedVersion -CertificateSubject $ExpectedCertificateSubject -ExpectedAuthenticodeStatus $expectedAuthenticodeStatus -ExpectedPackageType $expectedPackageType
+    Assert-PackageMetadata -Path $installerPath -PackageMetadataPath $metadataPath -UpdatePath $updateMetadataPath -Version $ExpectedVersion -ReleaseChannel $ExpectedReleaseChannel -CertificateSubject $ExpectedCertificateSubject -ExpectedAuthenticodeStatus $expectedAuthenticodeStatus -ExpectedPackageType $expectedPackageType
     Assert-InstallerSignature -Path $installerPath -CertificateSubject $ExpectedCertificateSubject -UnsignedAllowed $unsignedAllowed
 
     Invoke-CaveViewerInstaller -Path $installerPath -Description "Initial installer verification" -Arguments @(
@@ -259,6 +265,11 @@ try {
     $installedExecutable = Join-Path $installedPayload "CaveViewer.exe"
     Assert-Condition (Test-Path -LiteralPath $installedExecutable -PathType Leaf) "Initial installer did not produce the expected frozen executable."
     Assert-Condition (Test-Path -LiteralPath $initialLogPath -PathType Leaf) "Initial installer did not produce its log."
+    $installedReleaseMetadataFiles = @(Get-ChildItem -LiteralPath $installedPayload -Filter "release_metadata.v1.json" -File -Recurse)
+    Assert-Condition ($installedReleaseMetadataFiles.Count -eq 1) "Initial installer did not produce exactly one embedded release metadata resource."
+    $installedReleaseMetadata = Get-Content -LiteralPath $installedReleaseMetadataFiles[0].FullName -Raw | ConvertFrom-Json
+    Assert-Condition ($installedReleaseMetadata.schema_version -eq 1) "Installed release metadata has the wrong schema version."
+    Assert-Condition ($installedReleaseMetadata.release_channel -eq $ExpectedReleaseChannel) "Installed release metadata has the wrong release channel."
 
     $waitProcess = Start-Process -FilePath "$env:SystemRoot\System32\cmd.exe" -ArgumentList @("/d", "/c", "ping -n 3 127.0.0.1 > nul") -WindowStyle Hidden -PassThru
     $updateStarted = Get-Date

@@ -211,6 +211,11 @@ jobs:
                   raise SystemExit(f"Manifest version does not match APP_VERSION: {manifest_path}")
               if not re.fullmatch(r"\d+(?:\.\d+)+", current_version):
                   raise SystemExit(f"Manifest version is not numeric and dotted: {manifest_path}")
+              declared_release_channel = manifest.get("release_channel")
+              if declared_release_channel is not None and declared_release_channel != Path(manifest_path).stem:
+                  raise SystemExit(
+                      f"Manifest release_channel does not match its path: {manifest_path}"
+                  )
               download_url = manifest.get("download_url")
               if (
                   not isinstance(download_url, str)
