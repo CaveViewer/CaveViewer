@@ -142,10 +142,10 @@ def test_windows_release_workflow_builds_the_unsigned_community_exe():
     assert "CAVEVIEWER_WINDOWS_SIGNING_RUNNER" not in workflow
     assert "CAVEVIEWER_WINDOWS_SIGNING_CERTIFICATE_SUBJECT" not in workflow
     assert "CAVEVIEWER_WINDOWS_TIMESTAMP_URL" not in workflow
-    assert (
-        "published Windows installers currently require the unsigned community policy"
-        in workflow
-    )
+    dispatch_contract = workflow.split("  workflow_call:", 1)[0]
+    assert "allow_unsigned_windows_community" not in dispatch_contract
+    assert "Publish the unsigned Windows installer EXE" in dispatch_contract
+    assert "inputs.publish || inputs.allow_unsigned_windows_community" in workflow
     assert "SMOKE_UNSIGNED_COMMUNITY" in workflow
     assert "AllowUnsignedCommunity" in workflow
     assert (
@@ -401,8 +401,7 @@ def test_all_platform_release_workflow_builds_platforms_in_parallel_then_finaliz
         assert "source_sha: ${{ github.sha }}" in job_block
         if job_name == "windows":
             assert (
-                "allow_unsigned_windows_community: ${{ inputs.publish && "
-                "inputs.allow_unsigned_windows_community }}"
+                "allow_unsigned_windows_community: ${{ inputs.publish }}"
             ) in job_block
             assert "require_signed_installer:" not in job_block
         else:
@@ -418,10 +417,11 @@ def test_all_platform_release_workflow_builds_platforms_in_parallel_then_finaliz
     assert "platforms: all" in finalizer
     assert "source_sha: ${{ github.sha }}" in finalizer
     assert "target_branch: ${{ github.ref_name }}" in finalizer
-    assert "allow_unsigned_windows_community: ${{ inputs.allow_unsigned_windows_community }}" in finalizer
+    assert "allow_unsigned_windows_community: ${{ inputs.publish }}" in finalizer
     assert "inputs.publish && !cancelled()" in finalizer
-    assert "validate-windows-publish-policy" in finalizer
-    assert "needs.validate-windows-publish-policy.result != 'failure'" in finalizer
+    dispatch_contract = workflow.split("\njobs:\n", 1)[0]
+    assert "allow_unsigned_windows_community" not in dispatch_contract
+    assert "validate-windows-publish-policy" not in workflow
     for job_name, _called_workflow in job_contracts:
         assert f"      - {job_name}\n" in finalizer
 
