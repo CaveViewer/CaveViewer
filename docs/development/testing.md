@@ -162,7 +162,9 @@ classification—runs the full suite. The existing required check jobs still run
 as lightweight successful jobs for the metadata case, so protected `main`
 remains mergeable without weakening its PR rule. Do not replace this with a
 workflow-level path filter: GitHub leaves required checks pending when an
-entire workflow is skipped. Malformed release metadata fails the lightweight
+entire workflow is skipped. Release metadata validation also runs in material
+pull requests, so unrelated source changes cannot hide a malformed version,
+AppStream entry, or update manifest. Malformed release metadata fails the
 validation and cannot silently bypass the source suite.
 
 The single release finalizer commits all requested manifests back to the

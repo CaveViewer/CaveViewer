@@ -178,6 +178,29 @@ for a complete release.
    notes, and other release metadata changes alone do not require the source
    suites to run again.
 
+### Release branch hygiene
+
+Treat a "publish: true" run as a durable release operation, not a build trial:
+it creates or updates the GitHub Release and writes the version, AppStream, and
+signed update-manifest metadata. Use "publish: false" until the candidate is
+ready to publish.
+
+Do not publish successive versions from a long-lived integration branch. After
+publishing from a non-main branch, merge its release-metadata pull request into
+main, then rebase that branch from main (or start a new release branch) before
+publishing again. The finalizer rejects a non-main target whose version,
+AppStream, or update metadata differs from origin/main; this prevents multiple
+unmerged AppStream release entries from accumulating in one pull request.
+
+An intentionally partial platform publish may be resumed with the same version:
+the finalizer permits that only when the branch has exactly one new AppStream
+release record and it matches the requested version. It rejects a different
+version or multiple unmerged release records.
+
+If a release is withdrawn, remove or revert the matching source metadata as
+well as the GitHub Release and tag. Deleting a GitHub Release or tag alone does
+not change the tracked release metadata.
+
 By default, the workflow runs the shared Essential Tests gate once, then fans
 out four package jobs from the same immutable source revision:
 

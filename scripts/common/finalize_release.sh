@@ -303,23 +303,63 @@ if $selected_macos_x86_64; then
   verify_package_release_channel "$macos_x86_64_meta_path"
 fi
 
+ensure_target_branch_at_expected_source() {
+  local observed_remote_sha
+  observed_remote_sha="$(
+    git -C "$repo_root" ls-remote --heads origin "refs/heads/$target_branch" |
+      awk '{print $1}'
+  )"
+  if [ -z "$observed_remote_sha" ]; then
+    echo "Error: target branch not found on origin: $target_branch"
+    exit 1
+  fi
+  if [ "$observed_remote_sha" != "$resolved_expected_sha" ]; then
+    echo "Error: origin/$target_branch moved from $resolved_expected_sha to $observed_remote_sha while packages were building."
+    echo "Restart the release so every artifact and metadata commit use one source revision."
+    exit 1
+  fi
+}
+
+ensure_release_metadata_is_reconciled() {
+  if [ "$target_branch" = "main" ]; then
+    return
+  fi
+
+  git -C "$repo_root" fetch --no-tags origin \
+    "refs/heads/main:refs/remotes/origin/main"
+  if git -C "$repo_root" diff --quiet "origin/main" "$resolved_expected_sha" -- \
+    src/caveviewer/version.py \
+    packaging/linux/io.github.caveviewer.caveviewer.metainfo.xml \
+    updates; then
+    return
+  fi
+
+  # A same-version partial platform publish can be resumed. Any different
+  # version or more than one unmerged AppStream record must reach main first.
+  local unmerged_release_versions
+  unmerged_release_versions="$(
+    git -C "$repo_root" diff --unified=0 "origin/main" "$resolved_expected_sha" -- \
+      packaging/linux/io.github.caveviewer.caveviewer.metainfo.xml |
+      awk -F '"' '/^\+.*<release version="/ { print $2 }'
+  )"
+  if [ "$current_version" = "$normalized_version" ] &&
+    [ "$unmerged_release_versions" = "$normalized_version" ]; then
+    return
+  fi
+
+  echo "Error: target branch '$target_branch' has release metadata not reconciled with origin/main."
+  echo "Merge the existing release metadata into main, then rebase the target branch before publishing another release."
+  exit 1
+}
+
 resolved_expected_sha="$(git -C "$repo_root" rev-parse "${expected_source_sha}^{commit}")"
 current_sha="$(git -C "$repo_root" rev-parse HEAD)"
 if [ "$current_sha" != "$resolved_expected_sha" ]; then
   echo "Error: checked-out source $current_sha does not match expected source $resolved_expected_sha."
   exit 1
 fi
-
-remote_sha="$(git -C "$repo_root" ls-remote --heads origin "refs/heads/$target_branch" | awk '{print $1}')"
-if [ -z "$remote_sha" ]; then
-  echo "Error: target branch not found on origin: $target_branch"
-  exit 1
-fi
-if [ "$remote_sha" != "$resolved_expected_sha" ]; then
-  echo "Error: origin/$target_branch moved from $resolved_expected_sha to $remote_sha while packages were building."
-  echo "Restart the release so every artifact and metadata commit use one source revision."
-  exit 1
-fi
+ensure_target_branch_at_expected_source
+ensure_release_metadata_is_reconciled
 
 if ! git -C "$repo_root" diff --quiet || ! git -C "$repo_root" diff --cached --quiet; then
   echo "Error: tracked files changed before release finalization."
