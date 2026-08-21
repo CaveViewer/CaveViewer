@@ -12,13 +12,19 @@ from caveviewer.core.preferences.schema import (
     PreferenceDefaultContext,
     preference_defaults,
 )
+from caveviewer.core.release_metadata import ReleaseMetadata, ReleaseMetadataSource
 
 
-def _platform(tmp_path, *, platform_name: str = "linux"):
+def _platform(tmp_path, *, platform_name: str = "linux", release_metadata=None):
     return settings.RuntimePlatformFacts(
         platform_name=platform_name,
         os_name="nt" if platform_name.startswith("win") else "posix",
         home=tmp_path,
+        release_metadata=(
+            release_metadata
+            if release_metadata is not None
+            else ReleaseMetadata("stable", ReleaseMetadataSource.SOURCE_DEFAULT)
+        ),
     )
 
 
@@ -29,12 +35,17 @@ def _resolve(
     environ=None,
     cli_overrides=None,
     platform_name="linux",
+    release_metadata=None,
 ):
     return settings.resolve_runtime_settings(
         preferences=preferences,
         environ={} if environ is None else environ,
         cli_overrides=cli_overrides,
-        platform=_platform(tmp_path, platform_name=platform_name),
+        platform=_platform(
+            tmp_path,
+            platform_name=platform_name,
+            release_metadata=release_metadata,
+        ),
     )
 
 
@@ -213,6 +224,42 @@ def test_empty_update_url_is_an_explicit_environment_override(tmp_path):
 
     assert snapshot["update_manifest_url"] == ""
     assert snapshot.source("update_manifest_url") is settings.SettingSource.ENVIRONMENT
+
+
+def test_update_channel_defaults_to_embedded_release_metadata_and_allows_override(
+    tmp_path,
+):
+    embedded_prerelease = ReleaseMetadata(
+        "prerelease", ReleaseMetadataSource.BUNDLED
+    )
+
+    default_snapshot = _resolve(
+        tmp_path,
+        release_metadata=embedded_prerelease,
+    )
+    override_snapshot = _resolve(
+        tmp_path,
+        environ={"CAVEVIEWER_UPDATE_CHANNEL": "stable"},
+        release_metadata=embedded_prerelease,
+    )
+    invalid_override_snapshot = _resolve(
+        tmp_path,
+        environ={"CAVEVIEWER_UPDATE_CHANNEL": "preview"},
+        release_metadata=embedded_prerelease,
+    )
+
+    assert default_snapshot["update_channel"] == "prerelease"
+    assert default_snapshot.source("update_channel") is settings.SettingSource.BUILT_IN
+    assert override_snapshot["update_channel"] == "stable"
+    assert override_snapshot.source("update_channel") is settings.SettingSource.ENVIRONMENT
+    assert invalid_override_snapshot["update_channel"] == "prerelease"
+    assert invalid_override_snapshot.source("update_channel") is settings.SettingSource.BUILT_IN
+    assert invalid_override_snapshot.issues[-1] == settings.RuntimeSettingIssue(
+        key="update_channel",
+        source=settings.SettingSource.ENVIRONMENT,
+        raw_value="preview",
+        message="expected one of: prerelease, stable",
+    )
 
 
 def test_platform_facts_control_dynamic_defaults_without_reading_process_environment(

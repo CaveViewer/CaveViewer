@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from typing import Callable, Optional, TypeAlias
 
 from caveviewer.core.diagnostics.logging import get_logger
+from caveviewer.core.release_metadata import VALID_RELEASE_CHANNELS
 from caveviewer.gui.download_transport import download_file
 from caveviewer.gui.platform.tls_trust import (
     TlsTrustAdapter,
@@ -181,6 +182,34 @@ def _parse_update_manifest(
         return UpdateCheckFailed(
             current_version=current_version,
             error="Update manifest has an invalid latest_version.",
+        )
+
+    declared_release_channel = data.get("release_channel")
+    if declared_release_channel is not None:
+        if not isinstance(declared_release_channel, str):
+            return UpdateCheckFailed(
+                current_version=current_version,
+                error="Update manifest has an invalid release_channel.",
+            )
+        normalized_release_channel = declared_release_channel.strip().lower()
+        if normalized_release_channel not in VALID_RELEASE_CHANNELS:
+            return UpdateCheckFailed(
+                current_version=current_version,
+                error="Update manifest has an invalid release_channel.",
+            )
+        if normalized_release_channel != update_target.manifest_channel:
+            return UpdateCheckFailed(
+                current_version=current_version,
+                error=(
+                    "Update manifest release_channel does not match the selected "
+                    "update channel."
+                ),
+            )
+    else:
+        _LOG.warning(
+            "Update manifest has no release_channel; accepting the legacy manifest "
+            "for selected channel=%s.",
+            update_target.manifest_channel,
         )
 
     download_url = _first_non_empty_str(
@@ -349,7 +378,7 @@ def _check_for_update_target(
     package_kind_for_url: Callable[[str], str],
 ) -> UpdateCheckOutcome:
     """Perform a manifest check using only a typed configured target."""
-    resolved_channel = update_target.install_channel
+    resolved_channel = update_target.manifest_channel
 
     try:
         _LOG.info(

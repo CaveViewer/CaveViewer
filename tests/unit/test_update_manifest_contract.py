@@ -51,6 +51,10 @@ def test_signed_update_manifests_follow_the_release_contract(manifest: Path):
     _assert_common_contract(manifest, payload)
 
     relative_path = manifest.relative_to(UPDATES_ROOT)
+    # Existing signed manifests remain valid during the staged rollout. New
+    # writers always add this field and its path is the expected channel.
+    if "release_channel" in payload:
+        assert payload["release_channel"] == relative_path.stem
     download_url = payload["download_url"]
     download_size_bytes = payload["download_size_bytes"]
     sha256 = payload["sha256"]

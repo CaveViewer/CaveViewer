@@ -371,7 +371,7 @@ runtime snapshot.
 | `CAVEVIEWER_FORCE_UPDATE` | environment | `False` | Whether update presentation is forced for local testing. |
 | `CAVEVIEWER_GITHUB_REPO` | environment | `CaveViewer/CaveViewer` | GitHub owner/repository used for update configuration. |
 | `CAVEVIEWER_UPDATE_BRANCH` | environment | `main` | Git branch used to derive the default update manifest URL. |
-| `CAVEVIEWER_UPDATE_CHANNEL` | environment | `stable` | Update manifest channel. |
+| `CAVEVIEWER_UPDATE_CHANNEL` | environment | derived from runtime inputs | Update manifest channel; defaults to the channel embedded in the package. |
 | `CAVEVIEWER_UPDATE_MANIFEST_URL` | environment | _(unset)_ | Optional full URL overriding the platform-derived update manifest. |
 | `CAVEVIEWER_UPDATE_MANIFEST_SIGNATURE_URL` | environment | _(unset)_ | Optional full URL overriding the update-manifest signature location. |
 | `CAVEVIEWER_IMPORT_NICE` | environment | `5` | Best-effort positive niceness increment for import worker processes. |
@@ -418,7 +418,7 @@ runtime snapshot.
 |---|---|---|
 | `CAVEVIEWER_GITHUB_REPO` | `CaveViewer/CaveViewer` | The GitHub `owner/repo` used to build the default update manifest URL and map-library API URL. Override when running a fork or testing a package from Terminal. |
 | `CAVEVIEWER_UPDATE_BRANCH` | `main` | Git branch used when deriving the default `raw.githubusercontent.com` update manifest URL. Also available as `--update-branch <branch>` for update testing from a non-`main` branch. Ignored when `CAVEVIEWER_UPDATE_MANIFEST_URL` is set. |
-| `CAVEVIEWER_UPDATE_CHANNEL` | `stable` | Update manifest channel used when deriving the default manifest URL. Accepted values: `stable`, `prerelease`. Ignored when `CAVEVIEWER_UPDATE_MANIFEST_URL` is set. |
+| `CAVEVIEWER_UPDATE_CHANNEL` | embedded package channel | Deliberate developer/testing override for the update manifest channel used when deriving the default manifest URL. Accepted values: `stable`, `prerelease`. A source checkout and a historical package without metadata safely default to `stable`. Ignored when `CAVEVIEWER_UPDATE_MANIFEST_URL` is set. |
 | `CAVEVIEWER_UPDATE_MANIFEST_URL` | _(derived from repo)_ | Full URL to the JSON update manifest. Overrides the default `raw.githubusercontent.com` path. Useful for pointing at a staging manifest or a custom server. |
 | `CAVEVIEWER_UPDATE_MANIFEST_SIGNATURE_URL` | `<manifest-url>.sig` | Full URL to the base64 Ed25519 signature for the update manifest. |
 | `CAVEVIEWER_FORCE_UPDATE` | `0` | Set to `1` (or `true`/`yes`) to enter the update-available state regardless of the manifest version. Also available as `--force-update`. For testing the update UI without waiting for the CDN cache or changing version numbers. |
@@ -496,18 +496,18 @@ also requires a safe writable cache destination: the source map's `_cache`
 directory by default, or an absolute `CAVEVIEWER_MAP_CACHE_DIR` override.
 
 Default update checks read committed main-branch manifests, not GitHub's
-latest-release or prerelease metadata. macOS uses
-`updates/macos/<arm64|x86_64>/stable.json` and selects the running process
-architecture, so a Rosetta-launched x86_64 build continues on the Intel update
-channel. Linux distribution is x86_64-only and reads
-`updates/linux/x86_64/stable.json`; Linux ARM64 builds do not receive automatic
-updates. Stable publish runs update and sign `stable.json`.
-Prerelease publish runs update the separate `prerelease.json` channel, leaving
-`stable.json` unchanged, and mark a newly created GitHub release as a
-prerelease. Uploading to an existing tag does not change that tag's
-prerelease/latest status. For debugging, explicit environment variables can
-point a source run or packaged app launched from Terminal at another branch or
-manifest URL.
+latest-release metadata. A frozen package selects its own `stable` or
+`prerelease` channel through embedded release metadata: macOS uses
+`updates/macos/<arm64|x86_64>/<channel>.json` and selects the running process
+architecture, so a Rosetta-launched x86_64 build stays on the Intel channel.
+Linux distribution is x86_64-only and uses
+`updates/linux/x86_64/<channel>.json`; Linux ARM64 builds do not receive
+automatic updates. A source checkout and historical package without embedded
+metadata use `stable`. Stable publish updates and signs `stable.json`;
+prerelease publish updates the separate `prerelease.json`, leaving stable
+unchanged and marking a newly created GitHub release as prerelease. For
+debugging, explicit environment variables can point a source run or packaged
+app launched from Terminal at another branch, channel, or manifest URL.
 
 Prerelease branch testing can use the derived prerelease manifest URL after the
 selected branch contains the matching platform manifest and signature. For
@@ -759,6 +759,7 @@ Unless overridden, CaveViewer stores files in these locations:
 |---|---|---|
 | Preferences | `$XDG_CONFIG_HOME/caveviewer/advanced_settings.json` (`~/.config/...` fallback; legacy-compatible filename) | `~/.caveviewer/advanced_settings.json` |
 | Remembered chooser locations | `$XDG_STATE_HOME/caveviewer/` (`~/.local/state/...` fallback) | `~/.caveviewer/` |
+| Windows pre-splash diagnostics | — | `~/.caveviewer/diagnostics/startup.log` |
 | Map caches | Source map folder `/_cache` | Source map folder `/_cache` |
 | Downloaded map library | `$XDG_DOWNLOAD_DIR/` (`~/Downloads/` fallback) | `~/Downloads/` |
 
@@ -773,6 +774,12 @@ readable as legacy locations. On Linux, old `~/.caveviewer/` and
 `map_library` or `sample_maps` directories are moved into the configured
 map-library location when possible. A generated cache is self-contained:
 texture files are staged beside its chunks before the manifest becomes visible.
+
+When a Windows build consumes CPU without showing its Tk splash, read
+`%USERPROFILE%\.caveviewer\diagnostics\startup.log`. The file contains the last
+flushed startup checkpoint and, after 20 seconds without a visible splash, one
+all-thread Python traceback. A normal visible splash closes the diagnostic file
+immediately.
 Disk-space checks therefore target the filesystem that will hold the cache,
 which is normally the map's filesystem unless an explicit cache root is set.
 

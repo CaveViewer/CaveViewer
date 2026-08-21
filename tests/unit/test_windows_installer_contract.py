@@ -110,6 +110,8 @@ def test_frozen_installer_pipeline_is_per_user_and_fails_closed_without_signing(
     smoke = (WINDOWS_SCRIPTS / "smoke_installer.ps1").read_text(encoding="utf-8")
 
     assert "packaging/pyinstaller/CaveViewer.spec" in builder
+    assert "CAVEVIEWER_RELEASE_METADATA_PATH" in builder
+    assert "release_metadata.v1.json" in builder
     assert "dist/windows/app/CaveViewer" in builder
     assert "pyinstaller==6.21.0" in builder
     assert "CaveViewer.exe" in builder
@@ -134,6 +136,7 @@ def test_frozen_installer_pipeline_is_per_user_and_fails_closed_without_signing(
     assert '"/SCaveViewerSign=$inno_sign_command"' not in packager
     assert "windows_signed_installer" in metadata_writer
     assert "windows_community_installer" in metadata_writer
+    assert '"release_channel": args.release_channel' in metadata_writer
     assert "windows.zip" not in packager
 
     assert "DefaultDirName={localappdata}\\Programs\\CaveViewer" in installer
@@ -209,6 +212,8 @@ def test_package_metadata_tracks_the_final_exe_and_blocks_unsigned_publication(
         "CaveViewer",
         "--version",
         "1.2.3",
+        "--release-channel",
+        "stable",
         "--created-at-utc",
         "2026-08-20T00:00:00Z",
         "--authenticode-status",
@@ -224,12 +229,14 @@ def test_package_metadata_tracks_the_final_exe_and_blocks_unsigned_publication(
     assert package_payload["artifact_file"] == artifact.name
     assert package_payload["entrypoint"] == "CaveViewerSetup.exe"
     assert package_payload["authenticode_status"] == "verified"
+    assert package_payload["release_channel"] == "stable"
     assert (
         package_payload["authenticode_certificate_subject"]
         == "CN=CaveViewer Update Publisher"
     )
     assert update_payload["download_url_windows_exe"] == ""
     assert update_payload["authenticode_status"] == "verified"
+    assert update_payload["release_channel"] == "stable"
     assert (
         update_payload["authenticode_certificate_subject"]
         == "CN=CaveViewer Update Publisher"
@@ -245,12 +252,34 @@ def test_package_metadata_tracks_the_final_exe_and_blocks_unsigned_publication(
             str(metadata),
             "--update-metadata-file",
             str(update_metadata),
+            "--release-channel",
+            "stable",
         ],
         capture_output=True,
         text=True,
         check=False,
     )
     assert verified.returncode == 0, verified.stderr
+
+    wrong_channel = subprocess.run(
+        [
+            sys.executable,
+            str(verifier),
+            "--artifact-file",
+            str(artifact),
+            "--metadata-file",
+            str(metadata),
+            "--update-metadata-file",
+            str(update_metadata),
+            "--release-channel",
+            "prerelease",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert wrong_channel.returncode != 0
+    assert "release_channel" in wrong_channel.stderr
 
     command[command.index("--authenticode-status") + 1] = "unsigned-test-only"
     command[command.index("--authenticode-certificate-subject") + 1] = ""
@@ -266,6 +295,8 @@ def test_package_metadata_tracks_the_final_exe_and_blocks_unsigned_publication(
             str(metadata),
             "--update-metadata-file",
             str(update_metadata),
+            "--release-channel",
+            "stable",
         ],
         capture_output=True,
         text=True,
@@ -295,6 +326,8 @@ def test_package_metadata_tracks_the_final_exe_and_blocks_unsigned_publication(
             str(metadata),
             "--update-metadata-file",
             str(update_metadata),
+            "--release-channel",
+            "stable",
             "--allow-unsigned-community",
         ],
         capture_output=True,

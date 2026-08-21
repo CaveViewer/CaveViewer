@@ -112,6 +112,37 @@ def test_platform_release_workflows_package_immutable_source_before_finalizing()
         assert "inputs.publish" in workflow
 
 
+def test_release_channel_is_forwarded_to_all_platform_package_builds():
+    workflow_names = (
+        "windows-release.yml",
+        "linux-x86_64-release.yml",
+        "macos-arm64-release.yml",
+        "macos-x86_64-release.yml",
+    )
+
+    for workflow_name in workflow_names:
+        workflow = (WORKFLOWS_DIR / workflow_name).read_text(encoding="utf-8")
+        assert "RELEASE_PRE_RELEASE: ${{ inputs.pre_release }}" in workflow
+        assert 'release_args+=(--pre-release)' in workflow
+        assert './scripts/release.sh "${release_args[@]}"' in workflow
+
+    windows_workflow = (WORKFLOWS_DIR / "windows-release.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "ExpectedReleaseChannel = $env:SMOKE_RELEASE_CHANNEL" in windows_workflow
+
+    linux_workflow = (WORKFLOWS_DIR / "linux-x86_64-release.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "verify_release_channel.py" in linux_workflow
+    assert "release_metadata.v1.json" in linux_workflow
+    assert "dist/linux/x86_64/metadata/" in linux_workflow
+
+    for workflow_name in ("macos-arm64-release.yml", "macos-x86_64-release.yml"):
+        workflow = (WORKFLOWS_DIR / workflow_name).read_text(encoding="utf-8")
+        assert "--release-channel=\"$RELEASE_CHANNEL\"" in workflow
+
+
 def test_linux_release_workflows_build_before_packaging_on_fresh_runners():
     for workflow_name in (
         "linux-x86_64-release.yml",
@@ -445,6 +476,9 @@ def test_release_finalizer_is_the_single_shared_state_writer():
     assert finalizer.count('git -C "$repo_root" push') == 1
     assert "origin/$target_branch moved" in finalizer
     assert "--allow-unsigned-windows-community" in finalizer
+    assert "verify_package_release_channel" in finalizer
+    assert "--release-channel \"$manifest_channel\"" in finalizer
+    assert "CaveViewer-${normalized_version}-linux-x86_64.json" in finalizer
     assert 'git -C "$repo_root" commit -m "Release $tag $manifest_channel"' in finalizer
     for manifest_path in (
         "updates/windows/$manifest_channel.json",

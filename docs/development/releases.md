@@ -68,6 +68,18 @@ an optional leading `v`, and GitHub uses the tag `v<version>`.
   prerelease/latest status.
 - Stable and prerelease manifests are independent. Publishing one channel must
   not overwrite the other channel.
+- Every frozen package embeds its immutable `release_channel`. A stable package
+  follows only `stable.json`; a prerelease package follows only
+  `prerelease.json`. The package workflow sets that value from `pre_release`,
+  including package-only validation runs.
+- Versions must increase within each channel. Reissuing the same numeric
+  prerelease version does not produce an update for an existing prerelease
+  installation.
+- Existing prerelease installations made before this metadata was embedded
+  need one manual installation of the first channel-aware prerelease. They
+  currently follow `stable.json`; after that one install, later prerelease
+  updates stay automatic within `prerelease.json`. Moving from prerelease to
+  stable remains an explicit manual stable install.
 
 Published manifest paths are:
 
@@ -99,6 +111,14 @@ choose the manifest path and delegate to this writer; do not add another
 heredoc-based JSON serializer. Its canonical signed representation uses
 lexicographic JSON key order, two-space indentation, and a final LF newline.
 Release notes may contain quotes, backslashes, Unicode, and newlines.
+
+New manifests also serialize `release_channel`, which is covered by their
+Ed25519 signature and must equal the package's selected update channel before
+the client offers an artifact. The client temporarily accepts older signed
+manifests without that field as a documented compatibility window; writers
+always include it. The finalizer independently verifies every platform's
+package metadata has the same channel before it creates GitHub assets, tags,
+manifests, or metadata commits.
 
 The application checks architecture-specific manifests from the selected
 branch and channel; it does not derive updates from GitHub's “latest release”
@@ -139,8 +159,9 @@ for a complete release.
 4. Leave `publish` off for package-only validation. Actions retains each build
    as a workflow artifact, but no GitHub release or update manifest is changed.
 5. Turn `publish` on to upload assets and commit update metadata.
-6. Turn `pre_release` on only when the tag must be a GitHub prerelease and the
-   `prerelease.json` channel must be updated.
+6. Turn `pre_release` on when this is a prerelease package: it embeds the
+   prerelease subscription, updates `prerelease.json` when publishing, and
+   marks a newly created GitHub release as a prerelease.
 7. Turn `reuse_pr_validation` on only when the selected source has already
    passed its PR validation and no application, packaging, dependency, test, or
    workflow change has been made since. This skips the duplicate source test
@@ -307,7 +328,9 @@ produces all four artifacts.
 
 Before changing the application version, the dispatcher runs the complete
 pytest suite. Use `--skip-tests` only when an equivalent external gate has
-already passed. `--pre-release` is valid only with `--action=release`.
+already passed. `--pre-release` is valid with `build`, `package`, and
+`release`; it selects the prerelease metadata embedded in every resulting
+package, while `release` also marks the GitHub release as a prerelease.
 Publishing also requires an authenticated GitHub CLI and
 `CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY`.
 

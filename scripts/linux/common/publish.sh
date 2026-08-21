@@ -129,7 +129,12 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../../.." && pwd)"
 source "$repo_root/scripts/common/version.sh"
 source "$repo_root/scripts/common/github.sh"
+source "$repo_root/scripts/common/release_channel.sh"
 version_file="$repo_root/src/caveviewer/version.py"
+manifest_channel="stable"
+$pre_release && manifest_channel="prerelease"
+export CAVEVIEWER_BUILD_RELEASE_CHANNEL="$manifest_channel"
+cv_prepare_release_metadata "$repo_root" >/dev/null
 
 collect_linux_artifacts() {
   map_appimage_paths=()
@@ -227,11 +232,22 @@ else
   linux_manifest_arch_dir="x86_64"
 fi
 manifest_appimage_name="$(basename "$manifest_appimage_path")"
-manifest_channel="stable"
-$pre_release && manifest_channel="prerelease"
 update_manifest_path="$repo_root/updates/linux/$linux_manifest_arch_dir/$manifest_channel.json"
 update_manifest_signature_path="$update_manifest_path.sig"
 upload_appimage_paths=("$manifest_appimage_path")
+linux_metadata_path="$repo_root/dist/linux/$linux_manifest_arch_dir/metadata/CaveViewer-${normalized_version}-linux-${linux_manifest_arch_dir}.json"
+if [ ! -f "$linux_metadata_path" ]; then
+  echo "Error: expected Linux package metadata JSON not found: $linux_metadata_path"
+  exit 1
+fi
+linux_build_venv="${CAVEVIEWER_LINUX_BUILD_VENV:-$repo_root/.venv-linux-build}"
+metadata_python="$linux_build_venv/bin/python"
+if [ ! -x "$metadata_python" ]; then
+  metadata_python="python3"
+fi
+"$metadata_python" "$repo_root/scripts/common/verify_release_channel.py" \
+  --metadata-file "$linux_metadata_path" \
+  --expected-release-channel "$manifest_channel"
 
 if gh release view "$tag" --repo "$repo" >/dev/null 2>&1; then
   echo "Release $tag already exists; uploading/replacing assets"
@@ -262,7 +278,6 @@ CAVEVIEWER_LINUX_UPDATE_ARCH="$linux_manifest_arch_dir" \
 
 signing_python="${CAVEVIEWER_RELEASE_SIGNING_PYTHON:-}"
 if [ -z "$signing_python" ]; then
-  linux_build_venv="${CAVEVIEWER_LINUX_BUILD_VENV:-$repo_root/.venv-linux-build}"
   if [ -x "$linux_build_venv/bin/python" ]; then
     signing_python="$linux_build_venv/bin/python"
   elif [ -x "$repo_root/.venv-dev/bin/python" ]; then

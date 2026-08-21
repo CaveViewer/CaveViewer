@@ -18,10 +18,11 @@ from caveviewer.core.preferences.runtime_settings import (
     RuntimeSettings,
     SettingSource,
 )
+from caveviewer.core.release_metadata import VALID_RELEASE_CHANNELS
 from caveviewer.gui.update_signature import default_manifest_signature_url
 
 
-_VALID_MANIFEST_CHANNELS = frozenset({"stable", "prerelease"})
+_VALID_MANIFEST_CHANNELS = VALID_RELEASE_CHANNELS
 _DEFAULT_UPDATE_REPOSITORY = "CaveViewer/CaveViewer"
 _DEFAULT_UPDATE_USER_AGENT = "CaveViewer-UpdateChecker"
 _PACKAGE_KINDS_BY_CHANNEL: dict[str, frozenset[str]] = {
@@ -218,6 +219,7 @@ class UpdateTarget:
     """One fully configured signed-manifest target for the network client."""
 
     install_channel: str
+    manifest_channel: str
     manifest_url: str
     manifest_signature_url: str
     user_agent: str
@@ -226,6 +228,7 @@ class UpdateTarget:
     def __post_init__(self) -> None:
         for field_name in (
             "install_channel",
+            "manifest_channel",
             "manifest_url",
             "manifest_signature_url",
             "user_agent",
@@ -234,6 +237,13 @@ class UpdateTarget:
             if not value:
                 raise ValueError(f"update target {field_name} must be non-empty")
             object.__setattr__(self, field_name, value)
+        manifest_channel = self.manifest_channel.lower()
+        if manifest_channel not in _VALID_MANIFEST_CHANNELS:
+            raise ValueError(
+                "update target manifest_channel must be one of: "
+                + ", ".join(sorted(_VALID_MANIFEST_CHANNELS))
+            )
+        object.__setattr__(self, "manifest_channel", manifest_channel)
 
 
 def _manifest_schema(
@@ -521,10 +531,21 @@ def _build_update_configuration_from_runtime_settings(
 ) -> UpdateConfiguration:
     """Build update policy from the composed snapshot, not process globals."""
 
-    def runtime_text(key: str, default: str = "") -> tuple[str, bool]:
-        if runtime_settings.source(key) is SettingSource.BUILT_IN:
-            return default, False
+    def runtime_text(
+        key: str,
+        default: str = "",
+        *,
+        preserve_built_in_value: bool = False,
+    ) -> tuple[str, bool]:
         value = runtime_settings[key]
+        if runtime_settings.source(key) is SettingSource.BUILT_IN:
+            # Built-in values may still be composed package facts (notably the
+            # immutable embedded release channel). They are defaults rather
+            # than user overrides, but must not be discarded for a hard-coded
+            # fallback at this GUI boundary.
+            if preserve_built_in_value:
+                return (default if value is None else _clean(value)), False
+            return default, False
         return (
             default if value is None else _clean(value),
             True,
@@ -536,7 +557,11 @@ def _build_update_configuration_from_runtime_settings(
     )
     branch, branch_overridden = runtime_text("update_branch", "main")
     branch = branch or "main"
-    manifest_channel, channel_overridden = runtime_text("update_channel", "stable")
+    manifest_channel, channel_overridden = runtime_text(
+        "update_channel",
+        "stable",
+        preserve_built_in_value=True,
+    )
     manifest_channel = (manifest_channel or "stable").lower()
     if manifest_channel not in _VALID_MANIFEST_CHANNELS:
         manifest_channel = "stable"
@@ -607,6 +632,7 @@ def probe_automatic_update(
     return CapabilityResult.available(
         UpdateTarget(
             install_channel=install_channel,
+            manifest_channel=configuration.manifest_channel,
             manifest_url=configuration.manifest_url,
             manifest_signature_url=configuration.manifest_signature_url,
             user_agent=update_profile.user_agent,
