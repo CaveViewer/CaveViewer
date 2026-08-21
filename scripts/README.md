@@ -110,10 +110,13 @@ binary plus any package metadata as a workflow artifact. Linux jobs run
 consumes the intermediate app bundle.
 
 When publishing is enabled, one finalizer waits for every package, downloads
-the artifacts, uploads them to one GitHub release, writes and signs all update
-manifests, updates the application version, and pushes one commit. The package
-jobs are read-only and do not receive the release signing key. Individually
-dispatched platform workflows use the same finalizer for their one target.
+the artifacts, uploads them to one GitHub release, and verifies each remote
+asset URL, byte size, and SHA-256 through the GitHub Release API. Only then does
+it write and sign update manifests, update the application version, and push
+one commit. A failed remote verification leaves the previously committed
+manifests unchanged. The package jobs are read-only and do not receive the
+release signing key. Individually dispatched platform workflows use the same
+finalizer for their one target.
 
 When dispatching a workflow:
 

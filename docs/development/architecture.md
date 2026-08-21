@@ -450,7 +450,8 @@ remains unchanged.
 TLS trust augmentation is also a focused action adapter, not a capability gate.
 Each update-network request creates Python's normal verifying SSL context, then
 asks `TlsTrustAdapter` to add any native trust roots before it contacts a
-manifest, signature, or verified payload URL. The compatibility facade
+manifest, signature, package-availability probe, or verified payload URL. The
+compatibility facade
 preserves Windows `CA`/`ROOT` certificate-store augmentation and the empty
 default, macOS, and Linux behavior without disabling certificate verification.
 The process-global `truststore` startup compatibility path remains separate;
@@ -723,7 +724,12 @@ temporary files to be removed.
 The update checker returns one immutable outcome: `UpdateAvailable`,
 `UpdateNotAvailable`, or `UpdateCheckFailed`. Only `UpdateAvailable` contains
 an `UpdateArtifact`, whose version, HTTPS URL, package kind, positive size, and
-SHA-256 were validated before signature verification. A Windows EXE also needs
+SHA-256 were validated before signature verification. After signature
+verification, a bounded HEAD request (with a one-byte ranged-GET fallback)
+confirms that the advertised package resolves before `UpdateAvailable` can be
+returned. A missing prerelease manifest and a signed candidate whose package is
+HTTP 404 or 410 both produce `UpdateNotAvailable`; transient probe failures
+produce the quiet `UpdateCheckFailed` path. A Windows EXE also needs
 the signed `windows_installer` channel and an explicit installer policy: the
 default `verified` policy needs an exact Authenticode certificate subject,
 while `unsigned-community` must declare no publisher. `UpdateManager` stores that available outcome only for the
@@ -762,14 +768,19 @@ Windows uses `updates/windows/<channel>.json`; EXE manifests additionally bind
 the `windows_installer` channel and Authenticode certificate subject into the
 Ed25519-signed manifest. Linux distribution is x86_64-only
 and uses `updates/linux/x86_64/<channel>.json`. macOS uses architecture-specific
-`updates/macos/<arm64|x86_64>/<channel>.json` paths. Every manifest has a
-companion `.sig` file; top-level macOS manifests and signatures remain legacy
-ARM64 aliases. The update client requires a valid signature before offering a
-newer manifest. Platform build scripts generate
+`updates/macos/<arm64|x86_64>/<channel>.json` paths. Every published manifest
+has a companion `.sig` file; a platform's absent prerelease pair represents an
+empty channel. Top-level macOS manifests and signatures remain legacy ARM64
+aliases whenever that ARM64 channel exists. The update client requires a valid
+signature and a resolvable package URL before offering a newer manifest.
+Platform build scripts generate
 `caveviewer/resources/release_metadata.v1.json` under `build/`, include it in
 the frozen payload, and package metadata repeats the selected
 `release_channel`. The finalizer validates each package metadata channel before
-it performs any shared GitHub write.
+its shared GitHub write, uploads the selected assets, then verifies GitHub's
+reported asset name, HTTPS browser URL, byte size, and SHA-256. Only that
+verified API URL enters the signed manifest. A failure leaves the prior
+manifest pair unchanged even if an unadvertised release asset was uploaded.
 
 Build, package, publish, and manifest-generation workflows live under
 `scripts/`. The PyInstaller contract lives at
@@ -778,6 +789,7 @@ package and the same package-resource paths. The four platform workflows may be
 run independently. `All Platform Release` runs one shared test gate, packages
 all four targets in parallel from one immutable source revision, and hands the
 artifacts to a single finalizer. In GitHub Actions, only that finalizer creates
-the release, signs manifests, and pushes release metadata, preserving one owner
+the release, verifies its uploaded assets, signs manifests, and pushes release
+metadata, preserving one owner
 for shared mutable state. The operational contract and verification checklist
 live in [releases.md](releases.md).
