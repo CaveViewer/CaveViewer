@@ -145,18 +145,25 @@ jobs:
         env:
           RELEASE_VERSION: ${{ inputs.version }}
           RELEASE_NOTES: ${{ inputs.release_notes }}
+          RELEASE_PRE_RELEASE: ${{ inputs.pre_release }}
         run: |
-          ./scripts/release.sh \
+          release_args=(
             --target=macos-x86_64 \
             --version="$RELEASE_VERSION" \
             --notes="$RELEASE_NOTES" \
             --action=package \
             --skip-tests
+          )
+          if [ "$RELEASE_PRE_RELEASE" = "true" ]; then
+            release_args+=(--pre-release)
+          fi
+          ./scripts/release.sh "${release_args[@]}"
 
       - name: Smoke-test macOS x86_64 DMG
         env:
           RELEASE_VERSION: ${{ inputs.version }}
-        run: ./scripts/macos/smoke_dmg.sh --arch=x86_64 --version="$RELEASE_VERSION"
+          RELEASE_CHANNEL: ${{ inputs.pre_release && 'prerelease' || 'stable' }}
+        run: ./scripts/macos/smoke_dmg.sh --arch=x86_64 --version="$RELEASE_VERSION" --release-channel="$RELEASE_CHANNEL"
 
       - name: Upload macOS x86_64 DMG for testing
         uses: actions/upload-artifact@v7

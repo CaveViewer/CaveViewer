@@ -195,8 +195,11 @@ find_artifact() {
 release_assets=()
 windows_exe_path=""
 linux_x86_64_path=""
+linux_x86_64_meta_path=""
 macos_arm64_path=""
+macos_arm64_meta_path=""
 macos_x86_64_path=""
+macos_x86_64_meta_path=""
 
 # Resolve every requested artifact before creating or modifying a release. A
 # missing platform package therefore cannot leave a partially published set.
@@ -208,6 +211,7 @@ if $selected_windows; then
 fi
 if $selected_linux_x86_64; then
   linux_x86_64_path="$(find_artifact "CaveViewer-${normalized_version}-x86_64.AppImage")"
+  linux_x86_64_meta_path="$(find_artifact "CaveViewer-${normalized_version}-linux-x86_64.json")"
   release_assets+=("$linux_x86_64_path")
 fi
 if $selected_macos_arm64; then
@@ -251,11 +255,23 @@ fi
   'import sys; from pathlib import Path; from cryptography.hazmat.primitives import serialization; serialization.load_pem_private_key(Path(sys.argv[1]).read_bytes(), password=None)' \
   "$signing_key_path"
 
+release_channel_verifier="$repo_root/scripts/common/verify_release_channel.py"
+if [ ! -f "$release_channel_verifier" ]; then
+  echo "Error: package release-channel verifier is missing: $release_channel_verifier"
+  exit 1
+fi
+verify_package_release_channel() {
+  "$signing_python" "$release_channel_verifier" \
+    --metadata-file "$1" \
+    --expected-release-channel "$manifest_channel"
+}
+
 if $selected_windows; then
   windows_metadata_verify_args=(
     --artifact-file "$windows_exe_path" \
     --metadata-file "$windows_meta_path" \
-    --update-metadata-file "$windows_update_meta_path"
+    --update-metadata-file "$windows_update_meta_path" \
+    --release-channel "$manifest_channel"
   )
   if $allow_unsigned_windows_community; then
     windows_metadata_verify_args+=(--allow-unsigned-community)
@@ -275,6 +291,15 @@ if $selected_windows; then
         "$windows_update_meta_path"
     )"
   fi
+fi
+if $selected_linux_x86_64; then
+  verify_package_release_channel "$linux_x86_64_meta_path"
+fi
+if $selected_macos_arm64; then
+  verify_package_release_channel "$macos_arm64_meta_path"
+fi
+if $selected_macos_x86_64; then
+  verify_package_release_channel "$macos_x86_64_meta_path"
 fi
 
 resolved_expected_sha="$(git -C "$repo_root" rev-parse "${expected_source_sha}^{commit}")"

@@ -11,6 +11,7 @@ repo_root="$(cd "$script_dir/.." && pwd)"
 source "$script_dir/common/version.sh"
 source "$script_dir/common/artifacts.sh"
 source "$script_dir/common/python.sh"
+source "$script_dir/common/release_channel.sh"
 source "$script_dir/macos/architecture.sh"
 version_file="$repo_root/src/caveviewer/version.py"
 
@@ -36,7 +37,8 @@ Actions:
 Options:
   --rebuild            Rebuild Linux Docker image when building/packaging Linux targets
   --skip-tests         Skip the local test gate (only after an external gate passed)
-  --pre-release        Mark the GitHub release as a prerelease; only valid with --action=release
+  --pre-release        Build packages for the prerelease update channel; release
+                       actions also mark the GitHub release as a prerelease
 
 Examples:
   release.sh --target=linux-x86_64 --version=1.0.60 --notes "Alpha." --action=build
@@ -647,11 +649,6 @@ if ! is_known_action "$action"; then
   exit 1
 fi
 
-if $pre_release && [ "$action" != "release" ]; then
-  echo "Error: --pre-release is only valid with --action=release."
-  exit 1
-fi
-
 parse_target_selection "$target"
 
 if $rebuild && ! has_linux_target; then
@@ -711,6 +708,17 @@ if [ "$current_version" != "$normalized_version" ]; then
   cv_set_app_version "$version_file" "$normalized_version"
   echo "Set APP_VERSION: $current_version -> $normalized_version"
 fi
+
+build_release_channel="stable"
+if $pre_release; then
+  build_release_channel="prerelease"
+fi
+export CAVEVIEWER_BUILD_RELEASE_CHANNEL="$build_release_channel"
+release_metadata_path="$repo_root/build/$CV_RELEASE_METADATA_RESOURCE_NAME"
+cv_write_release_metadata "$release_metadata_path"
+export CAVEVIEWER_RELEASE_METADATA_PATH="$release_metadata_path"
+cv_verify_release_metadata "$release_metadata_path" "$build_release_channel"
+echo "Build release channel: $build_release_channel"
 
 set +u
 dispatch_target="$(canonical_single_target)"

@@ -118,21 +118,28 @@ jobs:
         env:
           RELEASE_VERSION: ${{ inputs.version }}
           RELEASE_NOTES: ${{ inputs.release_notes }}
+          RELEASE_PRE_RELEASE: ${{ inputs.pre_release }}
           CAVEVIEWER_ALLOW_UNSIGNED_WINDOWS_PACKAGE: "1"
           CAVEVIEWER_WINDOWS_UNSIGNED_RELEASE: ${{ (inputs.publish || inputs.allow_unsigned_windows_community) && 'community' || '' }}
           CAVEVIEWER_INNO_SETUP_COMPILER: "C:\\Program Files (x86)\\Inno Setup 6\\ISCC.exe"
         run: |
-          ./scripts/release.sh \
+          release_args=(
             --target=windows \
             --version="$RELEASE_VERSION" \
             --notes="$RELEASE_NOTES" \
             --action=package \
             --skip-tests
+          )
+          if [ "$RELEASE_PRE_RELEASE" = "true" ]; then
+            release_args+=(--pre-release)
+          fi
+          ./scripts/release.sh "${release_args[@]}"
 
       - name: Smoke-test Windows installer and update handoff
         shell: powershell
         env:
           SMOKE_VERSION: ${{ inputs.version }}
+          SMOKE_RELEASE_CHANNEL: ${{ inputs.pre_release && 'prerelease' || 'stable' }}
           SMOKE_UNSIGNED_COMMUNITY: ${{ (inputs.publish || inputs.allow_unsigned_windows_community) && 'true' || 'false' }}
         run: |
           $smokeArguments = @{
@@ -140,6 +147,7 @@ jobs:
             MetadataPath = "dist/windows/metadata/CaveViewer-$env:SMOKE_VERSION.json"
             UpdateMetadataPath = "dist/windows/metadata/CaveViewer-$env:SMOKE_VERSION.update.json"
             ExpectedVersion = $env:SMOKE_VERSION
+            ExpectedReleaseChannel = $env:SMOKE_RELEASE_CHANNEL
           }
           if ($env:SMOKE_UNSIGNED_COMMUNITY -eq "true") {
             $smokeArguments.AllowUnsignedCommunity = $true

@@ -9,6 +9,7 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../.." && pwd)"
 source "$repo_root/scripts/common/artifacts.sh"
 source "$repo_root/scripts/common/python.sh"
+source "$repo_root/scripts/common/release_channel.sh"
 source "$repo_root/scripts/common/version.sh"
 
 print_usage() {
@@ -219,6 +220,7 @@ packages_dir="$repo_root/dist/windows/packages"
 metadata_dir="$repo_root/dist/windows/metadata"
 installer_dir="$repo_root/dist/windows/installer"
 payload_dir="$repo_root/dist/windows/app/CaveViewer"
+release_channel="$(cv_release_channel)"
 
 for required_path in "$version_file" "$installer_script" "$icon_file" "$metadata_writer"; do
   if [ ! -f "$required_path" ]; then
@@ -318,6 +320,7 @@ cp "$installer_path" "$artifact_path"
   --update-output "$update_metadata_path" \
   --app-name "$app_name" \
   --version "$version" \
+  --release-channel "$release_channel" \
   --created-at-utc "$(cv_created_at_utc)" \
   --download-url "$download_url" \
   --authenticode-status "$authenticode_status" \
@@ -326,12 +329,14 @@ if $signing_enabled; then
   "$metadata_python" "$script_dir/verify_package_metadata.py" \
     --artifact-file "$artifact_path" \
     --metadata-file "$metadata_path" \
-    --update-metadata-file "$update_metadata_path"
+    --update-metadata-file "$update_metadata_path" \
+    --release-channel "$release_channel"
 elif [ "$authenticode_status" = "unsigned-community" ]; then
   "$metadata_python" "$script_dir/verify_package_metadata.py" \
     --artifact-file "$artifact_path" \
     --metadata-file "$metadata_path" \
     --update-metadata-file "$update_metadata_path" \
+    --release-channel "$release_channel" \
     --allow-unsigned-community
 fi
 

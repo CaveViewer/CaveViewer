@@ -20,6 +20,7 @@ class FakeTlsTrustAdapter:
 
 _UPDATE_TARGET = UpdateTarget(
     install_channel="windows_app",
+    manifest_channel="stable",
     manifest_url="https://updates.example/stable.json",
     manifest_signature_url="https://updates.example/stable.json.sig",
     user_agent="CaveViewer-Test",

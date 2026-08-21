@@ -9,6 +9,8 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../../.." && pwd)"
+source "$repo_root/scripts/common/artifacts.sh"
+source "$repo_root/scripts/common/release_channel.sh"
 icon_src="$repo_root/src/caveviewer/resources/images/app_icon_macos.png"
 
 print_usage() {
@@ -162,19 +164,27 @@ dist_app_dir="$repo_root/dist/linux/$linux_dist_arch/app"
 app_dir="$dist_app_dir/CaveViewer"
 appdir="$dist_app_dir/CaveViewer.AppDir"
 dist_packages_dir="$repo_root/dist/linux/$linux_dist_arch/packages"
+metadata_dir="$repo_root/dist/linux/$linux_dist_arch/metadata"
+release_channel="$(cv_release_channel)"
 
 if [ ! -d "$app_dir" ]; then
   echo "Error: app directory not found at $app_dir"
   echo "Run release.sh --target=linux-x86_64 --version=<version> --notes \"Release notes\" --action=build first."
   exit 1
 fi
+bundled_release_metadata="$(find "$app_dir" -type f -path '*caveviewer/resources/release_metadata.v1.json' -print -quit)"
+if [ -z "$bundled_release_metadata" ]; then
+  echo "Error: Linux app bundle is missing embedded release metadata." >&2
+  exit 1
+fi
+cv_verify_release_metadata "$bundled_release_metadata" "$release_channel"
 
 appimagetool_path="$(ensure_appimagetool "$appimage_arch")"
 echo "Using appimagetool: $appimagetool_path"
 
 echo "Packaging CaveViewer v$APP_VERSION..."
 
-mkdir -p "$dist_packages_dir"
+mkdir -p "$dist_packages_dir" "$metadata_dir"
 rm -rf "$appdir"
 
 output_appimage="$dist_packages_dir/CaveViewer-${APP_VERSION}-${ARCH}.AppImage"
@@ -617,12 +627,30 @@ if [ ! -f "$output_appimage" ]; then
 fi
 chmod +x "$output_appimage"
 
+artifact_name="$(basename "$output_appimage")"
+metadata_path="$metadata_dir/CaveViewer-${APP_VERSION}-linux-${linux_dist_arch}.json"
+cat > "$metadata_path" <<EOF
+{
+  "app_name": "$APP_NAME",
+  "version": "$APP_VERSION",
+  "platform": "linux",
+  "architecture": "$linux_dist_arch",
+  "artifact_file": "$artifact_name",
+  "artifact_path": "dist/linux/$linux_dist_arch/packages/$artifact_name",
+  "sha256": "$(cv_sha256 "$output_appimage")",
+  "size_bytes": $(cv_size_bytes "$output_appimage"),
+  "created_at_utc": "$(cv_created_at_utc)",
+  "release_channel": "$release_channel"
+}
+EOF
+
 echo ""
 echo "====================================================="
 echo "Package created successfully!"
 echo "====================================================="
 echo "AppDir: $appdir"
 echo "Output: $output_appimage"
+echo "Metadata: $metadata_path"
 echo "Size: $(du -h "$output_appimage" | cut -f1)"
 echo ""
 echo "To run:"

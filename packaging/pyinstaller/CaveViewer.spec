@@ -1,5 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+import json
 from pathlib import Path
 import os
 import sys
@@ -21,6 +22,49 @@ version_ns = {}
 exec((package_root / 'version.py').read_text(encoding='utf-8'), version_ns)
 app_name = version_ns.get('APP_NAME', 'CaveViewer')
 app_version = version_ns.get('APP_VERSION', '0.0.0')
+
+
+def _load_release_metadata(metadata_path: Path) -> None:
+    """Fail packaging early unless its immutable update channel is valid."""
+    if not metadata_path.is_file():
+        raise RuntimeError(
+            'CAVEVIEWER_RELEASE_METADATA_PATH does not name a file: '
+            f'{metadata_path}'
+        )
+    try:
+        payload = json.loads(metadata_path.read_text(encoding='utf-8'))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(
+            f'Could not read release metadata {metadata_path}: {exc}'
+        ) from exc
+    if (
+        not isinstance(payload, dict)
+        or type(payload.get('schema_version')) is not int
+        or payload.get('schema_version') != 1
+    ):
+        raise RuntimeError(
+            f'Release metadata must be a schema_version 1 JSON object: {metadata_path}'
+        )
+    if payload.get('release_channel') not in {'stable', 'prerelease'}:
+        raise RuntimeError(
+            'Release metadata release_channel must be stable or prerelease: '
+            f'{metadata_path}'
+        )
+
+
+release_metadata_value = os.environ.get('CAVEVIEWER_RELEASE_METADATA_PATH', '').strip()
+if release_metadata_value:
+    release_metadata_path = Path(release_metadata_value)
+else:
+    # Raw PyInstaller use remains a stable source-build package. Release and
+    # platform build scripts always supply an explicit generated resource.
+    release_metadata_path = project_root / 'build' / 'pyinstaller' / 'release_metadata.v1.json'
+    release_metadata_path.parent.mkdir(parents=True, exist_ok=True)
+    release_metadata_path.write_text(
+        '{\n  "schema_version": 1,\n  "release_channel": "stable"\n}\n',
+        encoding='utf-8',
+    )
+_load_release_metadata(release_metadata_path)
 
 hidden_imports = ['PIL._tkinter_finder', 'tkinter']
 extra_binaries = []
@@ -56,6 +100,7 @@ a = Analysis(
             str(resources_root / 'cave_metadata_catalog.v1.json'),
             'caveviewer/resources',
         ),
+        (str(release_metadata_path), 'caveviewer/resources'),
         (str(project_root / 'LICENSE'), '.'),
         (str(project_root / 'THIRD_PARTY_NOTICES.md'), '.'),
     ] + extra_datas,

@@ -18,7 +18,7 @@ import math
 import os
 import sys
 from collections.abc import Callable, Iterator, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from types import MappingProxyType
 from typing import TypeAlias
@@ -29,6 +29,11 @@ from caveviewer.core.preferences.schema import (
     PreferenceSpec,
     PreferenceValueType,
     validate_preference,
+)
+from caveviewer.core.release_metadata import (
+    ReleaseMetadata,
+    default_release_metadata,
+    load_embedded_release_metadata,
 )
 from caveviewer.storage_paths import ApplicationPaths, resolve_application_paths
 
@@ -160,11 +165,12 @@ class InvalidValuePolicy(str, Enum):
 
 @dataclass(frozen=True)
 class RuntimePlatformFacts:
-    """Stable process facts supplied once by the composition boundary."""
+    """Stable process and package facts supplied by the composition boundary."""
 
     platform_name: str
     os_name: str
     home: str | os.PathLike[str] | None = None
+    release_metadata: ReleaseMetadata = field(default_factory=default_release_metadata)
 
 
 def current_runtime_platform_facts() -> RuntimePlatformFacts:
@@ -179,6 +185,7 @@ def current_runtime_platform_facts() -> RuntimePlatformFacts:
         platform_name=sys.platform,
         os_name=os.name,
         home=os.path.expanduser("~"),
+        release_metadata=load_embedded_release_metadata(),
     )
 
 
@@ -740,6 +747,15 @@ def _map_library_api_default(
     )
 
 
+def _embedded_update_channel_default(
+    platform: RuntimePlatformFacts,
+    _resolved_values: Mapping[str, RuntimeValue],
+) -> str:
+    """Use the package-selected channel when no local override is supplied."""
+
+    return platform.release_metadata.release_channel
+
+
 RUNTIME_SETTING_SPECS = (
     *(_preference_setting(field) for field in PREFERENCE_FIELDS),
     _environment_setting(
@@ -816,10 +832,10 @@ RUNTIME_SETTING_SPECS = (
     _environment_setting(
         "update_channel",
         "CAVEVIEWER_UPDATE_CHANNEL",
-        "Update manifest channel.",
+        "Update manifest channel; defaults to the channel embedded in the package.",
         value_type=RuntimeValueType.TEXT,
         parser=_enum("stable", "prerelease"),
-        default="stable",
+        default=_embedded_update_channel_default,
         enum_values=("stable", "prerelease"),
     ),
     _environment_setting(
@@ -1097,6 +1113,8 @@ PACKAGING_OR_DEVELOPMENT_ENVIRONMENT_VARIABLES = frozenset(
         "CAVEVIEWER_DEV_VENV",
         "CAVEVIEWER_LINUX_BUILD_VENV",
         "CAVEVIEWER_MACOS_BUILD_VENV",
+        "CAVEVIEWER_BUILD_RELEASE_CHANNEL",
+        "CAVEVIEWER_RELEASE_METADATA_PATH",
         "CAVEVIEWER_PROJECT_ROOT",
     }
 )

@@ -97,10 +97,29 @@ jobs:
         run: |
           app_id="io.github.caveviewer.caveviewer"
           appimage="$(pwd)/dist/linux/x86_64/packages/CaveViewer-${SMOKE_VERSION}-x86_64.AppImage"
+          metadata="$(pwd)/dist/linux/x86_64/metadata/CaveViewer-${SMOKE_VERSION}-linux-x86_64.json"
           test -x "$appimage"
+          python3 scripts/common/verify_release_channel.py \
+            --metadata-file "$metadata" \
+            --expected-release-channel stable
 
           smoke_root="$(mktemp -d)"
-          trap 'rm -rf "$smoke_root"' EXIT
+          extracted_root="$(mktemp -d)"
+          trap 'rm -rf "$smoke_root" "$extracted_root"' EXIT
+          (
+            cd "$extracted_root"
+            "$appimage" --appimage-extract >/dev/null
+          )
+          bundled_release_metadata="$(find "$extracted_root/squashfs-root" -type f -path '*caveviewer/resources/release_metadata.v1.json' -print -quit)"
+          test -n "$bundled_release_metadata"
+          python3 - "$bundled_release_metadata" <<'PY'
+          import json
+          import sys
+
+          payload = json.load(open(sys.argv[1], encoding="utf-8"))
+          if payload != {"schema_version": 1, "release_channel": "stable"}:
+              raise SystemExit(f"Unexpected embedded release metadata: {payload!r}")
+          PY
           export HOME="$smoke_root/home"
           export XDG_DATA_HOME="$smoke_root/xdg-data"
           export XDG_RUNTIME_DIR="$smoke_root/runtime"
@@ -136,6 +155,8 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: CaveViewer-${{ env.SMOKE_VERSION }}-linux-x86_64-package-smoke
-          path: dist/linux/x86_64/packages/CaveViewer-${{ env.SMOKE_VERSION }}-x86_64.AppImage
+          path: |
+            dist/linux/x86_64/packages/CaveViewer-${{ env.SMOKE_VERSION }}-x86_64.AppImage
+            dist/linux/x86_64/metadata/CaveViewer-${{ env.SMOKE_VERSION }}-linux-x86_64.json
           if-no-files-found: error
           retention-days: 7

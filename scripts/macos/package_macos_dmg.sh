@@ -9,6 +9,7 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../.." && pwd)"
 source "$repo_root/scripts/common/version.sh"
 source "$repo_root/scripts/common/artifacts.sh"
+source "$repo_root/scripts/common/release_channel.sh"
 source "$script_dir/architecture.sh"
 version_file="$repo_root/src/caveviewer/version.py"
 app_bundle="$repo_root/dist/macos/app/CaveViewer.app"
@@ -95,6 +96,14 @@ if [ ! -d "$app_bundle" ]; then
   exit 1
 fi
 
+release_channel="$(cv_release_channel)"
+bundled_release_metadata="$(find "$app_bundle" -type f -path '*caveviewer/resources/release_metadata.v1.json' -print -quit)"
+if [ -z "$bundled_release_metadata" ]; then
+  echo "Error: app bundle is missing embedded release metadata." >&2
+  exit 1
+fi
+cv_verify_release_metadata "$bundled_release_metadata" "$release_channel"
+
 if [ ! -f "$readme_path" ]; then
   echo "Error: README not found at $readme_path"
   exit 1
@@ -166,7 +175,8 @@ cat > "$meta_path" <<EOF
   "sha256": "$sha256",
   "size_bytes": $size_bytes,
   "created_at_utc": "$created_at_utc",
-  "download_url": "$download_url"
+  "download_url": "$download_url",
+  "release_channel": "$release_channel"
 }
 EOF
 

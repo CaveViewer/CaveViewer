@@ -48,6 +48,14 @@ process environment. Each resolved value retains provenance (`built_in`,
 `preferences`, `environment`, or `cli`) and rejected fall-back values are
 returned as immutable issues for the composition boundary to report.
 
+`caveviewer.core.release_metadata` is a separate core-only boundary for the
+immutable release metadata frozen into a package. It validates the small
+versioned resource and supplies a safe stable fallback for source checkouts or
+historical packages. `caveviewer.app` loads it once into `RuntimePlatformFacts`;
+runtime settings then use that injected value as the built-in update-channel
+default. The loader does not import GUI, Tk, OpenGL, platform adapters, or the
+application entry point.
+
 `PreferenceSpec` remains the sole authority for persisted setting validation,
 ranges, conversion, and built-in defaults. Runtime entries reference those
 specifications instead of duplicating their metadata. Persisted settings retain
@@ -390,7 +398,10 @@ user agent, accepted package kinds, and signed-manifest field aliases.
 Environment and CLI-derived overrides turn that profile into an
 `UpdateConfiguration`; `probe_automatic_update()` then produces an immutable
 `UpdateTarget` only when both manifest endpoints are configured and the target
-is supported. `UpdateManager` requires that composed runtime: its default
+is supported. The target carries both the existing install channel and the
+expected manifest channel; the checker accepts a declared signed
+`release_channel` only when it matches that expected channel (while accepting
+legacy manifests without the field during the migration window). `UpdateManager` requires that composed runtime: its default
 checker and downloader calls use the target and focused
 `TlsTrustAdapter`, so the update path does not consult `SplashPlatformAdapter`
 for release policy or manifest parsing.
@@ -754,7 +765,11 @@ and uses `updates/linux/x86_64/<channel>.json`. macOS uses architecture-specific
 `updates/macos/<arm64|x86_64>/<channel>.json` paths. Every manifest has a
 companion `.sig` file; top-level macOS manifests and signatures remain legacy
 ARM64 aliases. The update client requires a valid signature before offering a
-newer manifest.
+newer manifest. Platform build scripts generate
+`caveviewer/resources/release_metadata.v1.json` under `build/`, include it in
+the frozen payload, and package metadata repeats the selected
+`release_channel`. The finalizer validates each package metadata channel before
+it performs any shared GitHub write.
 
 Build, package, publish, and manifest-generation workflows live under
 `scripts/`. The PyInstaller contract lives at

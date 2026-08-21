@@ -37,6 +37,7 @@ def _copy_release_files(destination: Path) -> None:
         "scripts/common/artifacts.sh",
         "scripts/common/finalize_release.sh",
         "scripts/common/github.sh",
+        "scripts/common/verify_release_channel.py",
         "scripts/common/version.sh",
         "scripts/linux/common/update_manifest.sh",
         "scripts/macos/architecture.sh",
@@ -60,14 +61,13 @@ def _write_release_artifacts(
     version: str,
     *,
     community_windows: bool = False,
+    release_channel: str = "stable",
 ) -> None:
     artifact_names = (
         f"CaveViewer-{version}-windows.exe",
         f"CaveViewer-{version}-x86_64.AppImage",
         f"CaveViewer-{version}-macos-arm64.dmg",
-        f"CaveViewer-{version}-macos-arm64.json",
         f"CaveViewer-{version}-macos-x86_64.dmg",
-        f"CaveViewer-{version}-macos-x86_64.json",
     )
     artifacts_dir.mkdir()
     for index, artifact_name in enumerate(artifact_names):
@@ -90,6 +90,7 @@ def _write_release_artifacts(
         ),
         "sha256": hashlib.sha256(windows_artifact.read_bytes()).hexdigest(),
         "size_bytes": windows_artifact.stat().st_size,
+        "release_channel": release_channel,
         "version": version,
     }
     if not community_windows:
@@ -111,6 +112,7 @@ def _write_release_artifacts(
         "download_url_windows_exe": "",
         "install_channel": "windows_installer",
         "latest_version": version,
+        "release_channel": release_channel,
         "sha256": hashlib.sha256(windows_artifact.read_bytes()).hexdigest(),
         "sha256_windows_exe": hashlib.sha256(windows_artifact.read_bytes()).hexdigest(),
     }
@@ -120,6 +122,15 @@ def _write_release_artifacts(
         )
     (artifacts_dir / f"CaveViewer-{version}.update.json").write_text(
         json.dumps(windows_update_metadata, sort_keys=True),
+        encoding="utf-8",
+    )
+    for architecture in ("arm64", "x86_64"):
+        (artifacts_dir / f"CaveViewer-{version}-macos-{architecture}.json").write_text(
+            json.dumps({"release_channel": release_channel}, sort_keys=True),
+            encoding="utf-8",
+        )
+    (artifacts_dir / f"CaveViewer-{version}-linux-x86_64.json").write_text(
+        json.dumps({"release_channel": release_channel}, sort_keys=True),
         encoding="utf-8",
     )
 
@@ -171,6 +182,74 @@ def test_finalizer_rejects_incomplete_artifacts_before_creating_a_release(
 
     assert completed.returncode == 1
     assert "CaveViewer-9.9.9.json" in completed.stderr
+    assert gh_log.read_text(encoding="utf-8").splitlines() == ["auth status"]
+
+
+def test_finalizer_rejects_a_package_channel_mismatch_before_publication(
+    tmp_path: Path,
+):
+    working_repository = tmp_path / "working"
+    artifacts_dir = tmp_path / "artifacts"
+    fake_bin = tmp_path / "bin"
+    gh_log = tmp_path / "gh.log"
+    private_key_path = tmp_path / "release-key.pem"
+    version = "9.9.9"
+
+    working_repository.mkdir()
+    _copy_release_files(working_repository)
+    artifacts_dir.mkdir()
+    (artifacts_dir / f"CaveViewer-{version}-x86_64.AppImage").write_bytes(
+        b"Linux AppImage fixture"
+    )
+    (artifacts_dir / f"CaveViewer-{version}-linux-x86_64.json").write_text(
+        json.dumps({"release_channel": "prerelease"}), encoding="utf-8"
+    )
+
+    fake_bin.mkdir()
+    fake_gh = fake_bin / "gh"
+    fake_gh.write_text(
+        "#!/usr/bin/env bash\n"
+        "printf '%s\\n' \"$*\" >> \"$GH_LOG\"\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+    private_key = Ed25519PrivateKey.generate()
+    private_key_path.write_bytes(
+        private_key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption(),
+        )
+    )
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{fake_bin}{os.pathsep}{env['PATH']}",
+            "GH_LOG": str(gh_log),
+            "CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY": str(private_key_path),
+            "CAVEVIEWER_RELEASE_SIGNING_PYTHON": sys.executable,
+        }
+    )
+    completed = subprocess.run(
+        [
+            str(working_repository / "scripts/common/finalize_release.sh"),
+            "--platforms=linux-x86_64",
+            f"--version={version}",
+            "--notes=Channel mismatch",
+            f"--artifacts-dir={artifacts_dir}",
+            "--target-branch=main",
+            "--expected-source-sha=deadbeef",
+        ],
+        cwd=working_repository,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    assert "release_channel does not match" in completed.stderr
     assert gh_log.read_text(encoding="utf-8").splitlines() == ["auth status"]
 
 
@@ -263,7 +342,10 @@ def test_finalizer_publishes_all_assets_and_pushes_one_signed_metadata_commit(
         command for command in commands if command.startswith("release create ")
     )
     for artifact in artifacts_dir.iterdir():
+        if artifact.name == f"CaveViewer-{version}-linux-x86_64.json":
+            continue
         assert str(artifact) in release_create
+    assert str(artifacts_dir / f"CaveViewer-{version}-linux-x86_64.json") not in release_create
 
     pushed_sha = _run(
         "git", "--git-dir", origin_repository, "rev-parse", "refs/heads/main", cwd=tmp_path
@@ -300,6 +382,7 @@ def test_finalizer_publishes_all_assets_and_pushes_one_signed_metadata_commit(
 
         manifest = working_repository / manifest_path
         manifest_payload = json.loads(manifest.read_text(encoding="utf-8"))
+        assert manifest_payload["release_channel"] == "stable"
         assert manifest_payload["release_notes"] == release_notes
         assert manifest_payload["download_url"].startswith(
             f"https://github.com/example/CaveViewer/releases/download/v{version}/"

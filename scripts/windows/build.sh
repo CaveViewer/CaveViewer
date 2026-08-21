@@ -7,6 +7,7 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../.." && pwd)"
 source "$repo_root/scripts/common/python.sh"
+source "$repo_root/scripts/common/release_channel.sh"
 
 print_usage() {
   cat <<'EOF'
@@ -86,6 +87,9 @@ payload_dir="$dist_app_dir/CaveViewer"
 work_dir="$repo_root/build/pyinstaller/windows"
 build_python="${CAVEVIEWER_WINDOWS_BUILD_PYTHON:-}"
 
+cv_prepare_release_metadata "$repo_root" >/dev/null
+release_metadata_path="$CAVEVIEWER_RELEASE_METADATA_PATH"
+
 for required_path in "$version_file" "$spec_file" "$icon_file"; do
   if [ ! -f "$required_path" ]; then
     echo "Error: required Windows build input is missing: $required_path" >&2
@@ -114,6 +118,7 @@ rm -rf "$payload_dir" "$work_dir"
 mkdir -p "$dist_app_dir" "$work_dir"
 
 CAVEVIEWER_APP_ICON="$(windows_path "$icon_file")" \
+CAVEVIEWER_RELEASE_METADATA_PATH="$(windows_path "$release_metadata_path")" \
 "$build_python" -m PyInstaller --clean --noconfirm \
   --distpath "$(windows_path "$dist_app_dir")" \
   --workpath "$(windows_path "$work_dir")" \
@@ -137,5 +142,11 @@ if ! find "$payload_dir" -type f -name 'release_signing_public_key.pem' -print -
   echo "Error: frozen payload is missing the update-signing public key." >&2
   exit 1
 fi
+bundled_release_metadata="$(find "$payload_dir" -type f -path '*caveviewer/resources/release_metadata.v1.json' -print -quit)"
+if [ -z "$bundled_release_metadata" ]; then
+  echo "Error: frozen payload is missing embedded release metadata." >&2
+  exit 1
+fi
+cv_verify_release_metadata "$bundled_release_metadata" "$(cv_release_channel)"
 
 echo "Built frozen Windows payload: $payload_dir"

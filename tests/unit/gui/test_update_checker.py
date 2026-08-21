@@ -30,6 +30,7 @@ class FakeTlsTrustAdapter:
 def update_target():
     return UpdateTarget(
         install_channel="windows_app",
+        manifest_channel="stable",
         manifest_url="https://updates.example/stable.json",
         manifest_signature_url="https://updates.example/stable.json.sig",
         user_agent="CaveViewer-Target-Test",
@@ -117,10 +118,59 @@ def test_manifest_parser_returns_a_complete_artifact_for_a_newer_update(
     assert parsed.package_kind == "zip"
 
 
+def test_manifest_release_channel_must_match_the_target_channel(update_target):
+    manifest = {
+        "latest_version": "2.0.0",
+        "release_channel": "prerelease",
+        "windows_app_url": "https://updates.example/CaveViewer.zip",
+        "windows_app_size": 123,
+        "windows_app_sha256": "A" * 64,
+    }
+
+    rejected = update_checker._parse_update_manifest(
+        "1.0.0",
+        manifest,
+        update_target=update_target,
+        package_kind_for_url=lambda _url: "zip",
+    )
+    manifest["release_channel"] = "stable"
+    accepted = update_checker._parse_update_manifest(
+        "1.0.0",
+        manifest,
+        update_target=update_target,
+        package_kind_for_url=lambda _url: "zip",
+    )
+
+    assert isinstance(rejected, update_checker.UpdateCheckFailed)
+    assert "does not match" in rejected.error
+    assert isinstance(accepted, update_checker.UpdateArtifact)
+
+
+def test_manifest_without_release_channel_is_accepted_during_the_transition(
+    caplog, update_target
+):
+    with caplog.at_level(logging.WARNING, logger="caveviewer"):
+        parsed = update_checker._parse_update_manifest(
+            "1.0.0",
+            {
+                "latest_version": "2.0.0",
+                "windows_app_url": "https://updates.example/CaveViewer.zip",
+                "windows_app_size": 123,
+                "windows_app_sha256": "A" * 64,
+            },
+            update_target=update_target,
+            package_kind_for_url=lambda _url: "zip",
+        )
+
+    assert isinstance(parsed, update_checker.UpdateArtifact)
+    assert any("legacy manifest" in record.getMessage() for record in caplog.records)
+
+
 def _windows_exe_target() -> UpdateTarget:
     profile = select_update_profile(platform_name="win32", machine="AMD64")
     return UpdateTarget(
         install_channel=profile.install_channel,
+        manifest_channel="stable",
         manifest_url="https://updates.example/windows/stable.json",
         manifest_signature_url="https://updates.example/windows/stable.json.sig",
         user_agent="CaveViewer-Windows-Installer-Test",

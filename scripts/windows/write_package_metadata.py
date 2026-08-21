@@ -24,6 +24,9 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--update-output", type=Path, required=True)
     parser.add_argument("--app-name", required=True)
     parser.add_argument("--version", required=True)
+    parser.add_argument(
+        "--release-channel", choices=("stable", "prerelease"), required=True
+    )
     parser.add_argument("--created-at-utc", required=True)
     parser.add_argument("--download-url", default="")
     parser.add_argument(
@@ -106,6 +109,7 @@ def main() -> int:
             if is_community_installer
             else "windows_signed_installer"
         ),
+        "release_channel": args.release_channel,
         "sha256": sha256,
         "size_bytes": size_bytes,
         "version": args.version,
@@ -128,6 +132,7 @@ def main() -> int:
         "install_channel": "windows_installer",
         "latest_version": args.version,
         "release_notes": "",
+        "release_channel": args.release_channel,
         "sha256": sha256,
         "sha256_windows_exe": sha256,
     }

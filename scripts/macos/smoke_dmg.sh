@@ -7,11 +7,12 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../.." && pwd)"
 # shellcheck source=scripts/macos/architecture.sh
 source "$script_dir/architecture.sh"
+source "$repo_root/scripts/common/release_channel.sh"
 
 print_usage() {
   cat <<'EOF'
 Usage:
-  smoke_dmg.sh --arch=<arm64|x86_64> --version=<version>
+  smoke_dmg.sh --arch=<arm64|x86_64> --version=<version> [--release-channel=<channel>]
   smoke_dmg.sh --help
 
 Mounts and validates the canonical CaveViewer macOS DMG and metadata for the
@@ -21,6 +22,7 @@ EOF
 
 macos_arch=""
 version=""
+release_channel="stable"
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -48,6 +50,19 @@ while [ "$#" -gt 0 ]; do
         exit 1
       fi
       version="$1"
+      shift
+      ;;
+    --release-channel=*)
+      release_channel="${1#--release-channel=}"
+      shift
+      ;;
+    --release-channel)
+      shift
+      if [ "$#" -eq 0 ]; then
+        echo "Error: --release-channel requires a value." >&2
+        exit 1
+      fi
+      release_channel="$1"
       shift
       ;;
     -h|--help)
@@ -79,6 +94,14 @@ if [ -z "$version" ]; then
   exit 1
 fi
 
+case "$release_channel" in
+  stable|prerelease) ;;
+  *)
+    echo "Error: unsupported release channel '$release_channel'." >&2
+    exit 1
+    ;;
+esac
+
 if [[ "$(uname -s)" != "Darwin" ]]; then
   echo "Error: macOS DMG smoke tests must run on macOS." >&2
   exit 1
@@ -101,7 +124,7 @@ if [ ! -f "$metadata" ]; then
   exit 1
 fi
 
-python3 - "$dmg" "$metadata" "$version" "$macos_arch" <<'PY'
+python3 - "$dmg" "$metadata" "$version" "$macos_arch" "$release_channel" <<'PY'
 import hashlib
 import json
 import pathlib
@@ -111,6 +134,7 @@ dmg = pathlib.Path(sys.argv[1])
 metadata = pathlib.Path(sys.argv[2])
 version = sys.argv[3]
 architecture = sys.argv[4]
+release_channel = sys.argv[5]
 payload = json.loads(metadata.read_text(encoding="utf-8"))
 
 hasher = hashlib.sha256()
@@ -128,6 +152,7 @@ expected = {
     "artifact_path": f"dist/macos/packages/{artifact_name}",
     "sha256": hasher.hexdigest(),
     "size_bytes": dmg.stat().st_size,
+    "release_channel": release_channel,
 }
 for key, expected_value in expected.items():
     actual = payload.get(key)
@@ -198,6 +223,13 @@ test -f "$mount_dir/README.md"
 test -f "$mount_dir/LICENSE"
 test -f "$mount_dir/THIRD_PARTY_NOTICES.md"
 test -L "$mount_dir/Applications"
+
+bundled_release_metadata="$(find "$app" -type f -path '*caveviewer/resources/release_metadata.v1.json' -print -quit)"
+if [ -z "$bundled_release_metadata" ]; then
+  echo "Error: mounted app bundle is missing embedded release metadata." >&2
+  exit 1
+fi
+cv_verify_release_metadata "$bundled_release_metadata" "$release_channel"
 
 /usr/libexec/PlistBuddy -c "Print :CFBundleName" "$info" | grep -Fx "CaveViewer"
 /usr/libexec/PlistBuddy -c "Print :CFBundleDisplayName" "$info" | grep -Fx "CaveViewer"
