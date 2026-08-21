@@ -886,11 +886,44 @@ def test_preferences_panel_uses_compact_tabbed_pages():
     assert "self.tab_strip.select(page_key, notify=False)" in show_page_source
     assert "CanvasVerticalScrollbar(" in source
     assert "self.page_scrollbar.bind_mousewheel(self.page_stack)" in source
+    assert "self.dialog.update_idletasks()" not in source
+    assert "self.page_stack.grid_propagate(False)" not in source
+    assert "self._sync_feedback_wraplength(event.width)" in source
     assert "_draw_page_scrollbar_thumb" not in module_source
     assert "class PreferencesDialog" not in module_source
     assert "show_preferences_dialog" not in module_source
     assert "tk.Toplevel" not in module_source
     assert "resizable_vertical" not in module_source
+
+
+def test_preferences_feedback_wraplength_avoids_repeating_identical_geometry_work():
+    from caveviewer.gui import preferences_dialog
+
+    class _FakeLabel:
+        def __init__(self, wraplength: int) -> None:
+            self.wraplength = wraplength
+            self.configure_calls = []
+
+        def cget(self, option: str) -> str:
+            assert option == "wraplength"
+            return str(self.wraplength)
+
+        def configure(self, **options) -> None:
+            self.configure_calls.append(options)
+            self.wraplength = options["wraplength"]
+
+    panel = object.__new__(preferences_dialog.PreferencesPanel)
+    label = _FakeLabel(wraplength=120)
+    panel.error_label = label
+
+    panel._sync_feedback_wraplength(280)
+    panel._sync_feedback_wraplength(280)
+    panel._sync_feedback_wraplength(420)
+
+    assert label.configure_calls == [
+        {"wraplength": 260},
+        {"wraplength": 400},
+    ]
 
 
 def test_preferences_visual_groups_cover_each_schema_field_once():
