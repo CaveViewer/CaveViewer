@@ -109,7 +109,7 @@ def test_platform_release_workflows_package_immutable_source_before_finalizing()
         assert "Install release test dependencies" not in workflow, workflow_name
         assert "uses: ./.github/workflows/finalize-release.yml" in workflow
         assert f"platforms: {target}" in workflow
-        assert "if: ${{ inputs.publish" in workflow
+        assert "inputs.publish" in workflow
 
 
 def test_linux_release_workflows_build_before_packaging_on_fresh_runners():
@@ -126,30 +126,30 @@ def test_linux_release_workflows_build_before_packaging_on_fresh_runners():
         ), workflow_name
 
 
-def test_windows_release_workflow_builds_the_exe_on_a_signing_capable_runner():
+def test_windows_release_workflow_builds_the_unsigned_community_exe():
     workflow = (WORKFLOWS_DIR / "windows-release.yml").read_text(encoding="utf-8")
-    signed_artifact_condition = (
-        "inputs.require_signed_installer || "
-        "(inputs.publish && !inputs.allow_unsigned_windows_community)"
-    )
 
     assert "Install Inno Setup" in workflow
     assert "choco install innosetup" in workflow
     assert "Build Windows installer" in workflow
     assert "CaveViewer-${{ inputs.version }}-windows.exe" in workflow
     assert "CaveViewer-${{ inputs.version }}-windows.zip" not in workflow
+    assert "runs-on: windows-latest" in workflow
     assert "CAVEVIEWER_ALLOW_UNSIGNED_WINDOWS_PACKAGE" in workflow
     assert "CAVEVIEWER_WINDOWS_UNSIGNED_RELEASE" in workflow
-    assert "CAVEVIEWER_WINDOWS_SIGNING_RUNNER" in workflow
-    assert "CAVEVIEWER_WINDOWS_SIGNING_CERTIFICATE_SUBJECT" in workflow
-    assert "CAVEVIEWER_WINDOWS_TIMESTAMP_URL" in workflow
-    assert "require_signed_installer:" in workflow
     assert "allow_unsigned_windows_community:" in workflow
-    assert signed_artifact_condition in workflow
+    assert "require_signed_installer:" not in workflow
+    assert "CAVEVIEWER_WINDOWS_SIGNING_RUNNER" not in workflow
+    assert "CAVEVIEWER_WINDOWS_SIGNING_CERTIFICATE_SUBJECT" not in workflow
+    assert "CAVEVIEWER_WINDOWS_TIMESTAMP_URL" not in workflow
+    assert (
+        "published Windows installers currently require the unsigned community policy"
+        in workflow
+    )
     assert "SMOKE_UNSIGNED_COMMUNITY" in workflow
     assert "AllowUnsignedCommunity" in workflow
     assert (
-        "if: ${{ inputs.publish && needs.build-windows.result == 'success' }}"
+        "if: ${{ !cancelled() && inputs.publish && needs.build-windows.result == 'success' }}"
         in workflow
     )
     assert "Smoke-test Windows installer and update handoff" in workflow
@@ -401,13 +401,10 @@ def test_all_platform_release_workflow_builds_platforms_in_parallel_then_finaliz
         assert "source_sha: ${{ github.sha }}" in job_block
         if job_name == "windows":
             assert (
-                "require_signed_installer: ${{ inputs.publish && "
-                "!inputs.allow_unsigned_windows_community }}"
-            ) in job_block
-            assert (
                 "allow_unsigned_windows_community: ${{ inputs.publish && "
                 "inputs.allow_unsigned_windows_community }}"
             ) in job_block
+            assert "require_signed_installer:" not in job_block
         else:
             assert "require_signed_installer:" not in job_block
 
@@ -423,6 +420,8 @@ def test_all_platform_release_workflow_builds_platforms_in_parallel_then_finaliz
     assert "target_branch: ${{ github.ref_name }}" in finalizer
     assert "allow_unsigned_windows_community: ${{ inputs.allow_unsigned_windows_community }}" in finalizer
     assert "inputs.publish && !cancelled()" in finalizer
+    assert "validate-windows-publish-policy" in finalizer
+    assert "needs.validate-windows-publish-policy.result != 'failure'" in finalizer
     for job_name, _called_workflow in job_contracts:
         assert f"      - {job_name}\n" in finalizer
 

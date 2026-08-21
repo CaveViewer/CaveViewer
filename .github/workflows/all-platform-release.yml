@@ -24,7 +24,7 @@ on:
         type: boolean
         default: false
       allow_unsigned_windows_community:
-        description: "Publish the Windows installer unsigned for the community update flow"
+        description: "Publish the unsigned Windows community installer; Windows warnings are expected"
         required: false
         type: boolean
         default: false
@@ -48,6 +48,16 @@ jobs:
     permissions:
       contents: read
 
+  validate-windows-publish-policy:
+    if: ${{ inputs.publish && inputs.allow_unsigned_windows_community != true }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Reject unavailable signed Windows release path
+        run: |
+          echo "Error: published Windows installers currently require the unsigned community policy."
+          echo "Select 'Publish the unsigned Windows community installer; Windows warnings are expected'."
+          exit 1
+
   windows:
     name: Windows
     needs: essential-tests
@@ -62,9 +72,8 @@ jobs:
       release_notes: ${{ inputs.release_notes }}
       pre_release: ${{ inputs.pre_release }}
       publish: false
-      # Finalize Release is the single publisher. Production Windows releases
-      # are Authenticode-signed unless the explicit community policy is chosen.
-      require_signed_installer: ${{ inputs.publish && !inputs.allow_unsigned_windows_community }}
+      # Finalize Release is the single publisher. Its Windows artifact must be
+      # explicitly marked as the unsigned community installer when publishing.
       allow_unsigned_windows_community: ${{ inputs.publish && inputs.allow_unsigned_windows_community }}
       skip_essential_tests: true
       reuse_pr_validation: ${{ inputs.reuse_pr_validation }}
@@ -121,12 +130,14 @@ jobs:
   finalize-release:
     name: Finalize Release
     needs:
+      - validate-windows-publish-policy
       - windows
       - linux-x86_64
       - macos-arm64
       - macos-x86_64
     if: >-
       ${{ inputs.publish && !cancelled()
+          && needs.validate-windows-publish-policy.result != 'failure'
           && needs.windows.result == 'success'
           && needs['linux-x86_64'].result == 'success'
           && needs['macos-arm64'].result == 'success'

@@ -21,13 +21,8 @@ on:
         required: false
         type: boolean
         default: false
-      require_signed_installer:
-        description: "Build a signed installer without independently finalizing a release"
-        required: false
-        type: boolean
-        default: false
       allow_unsigned_windows_community:
-        description: "Build the explicit unsigned community installer; Windows warnings are expected"
+        description: "Publish the unsigned community installer; Windows warnings are expected"
         required: false
         type: boolean
         default: false
@@ -57,13 +52,8 @@ on:
         required: false
         type: boolean
         default: false
-      require_signed_installer:
-        description: "Build a signed installer without independently finalizing a release"
-        required: false
-        type: boolean
-        default: false
       allow_unsigned_windows_community:
-        description: "Build the explicit unsigned community installer; Windows warnings are expected"
+        description: "Publish the unsigned community installer; Windows warnings are expected"
         required: false
         type: boolean
         default: false
@@ -106,10 +96,9 @@ jobs:
   build-windows:
     needs: essential-tests
     if: ${{ !cancelled() && (inputs.skip_essential_tests == true || inputs.reuse_pr_validation == true || needs.essential-tests.result == 'success') }}
-    # Authenticode artifacts must run where the non-exportable code-signing
-    # certificate is installed. The explicit unsigned community policy is
-    # intentionally built on GitHub-hosted Windows instead.
-    runs-on: ${{ (inputs.require_signed_installer || (inputs.publish && !inputs.allow_unsigned_windows_community)) && vars.CAVEVIEWER_WINDOWS_SIGNING_RUNNER || 'windows-latest' }}
+    # Hosted releases currently use the explicit unsigned-community policy.
+    # Keep the build on GitHub-hosted Windows until Authenticode support returns.
+    runs-on: windows-latest
     permissions:
       contents: read
 
@@ -117,8 +106,9 @@ jobs:
       - name: Validate Windows installer policy
         shell: bash
         run: |
-          if [ "${{ inputs.require_signed_installer }}" = "true" ] && [ "${{ inputs.allow_unsigned_windows_community }}" = "true" ]; then
-            echo "Error: signed and unsigned community installer policies cannot be combined."
+          if [ "${{ inputs.publish }}" = "true" ] && [ "${{ inputs.allow_unsigned_windows_community }}" != "true" ]; then
+            echo "Error: published Windows installers currently require the unsigned community policy."
+            echo "Select 'Publish the unsigned community installer; Windows warnings are expected'."
             exit 1
           fi
 
@@ -142,10 +132,8 @@ jobs:
         env:
           RELEASE_VERSION: ${{ inputs.version }}
           RELEASE_NOTES: ${{ inputs.release_notes }}
-          CAVEVIEWER_ALLOW_UNSIGNED_WINDOWS_PACKAGE: ${{ inputs.allow_unsigned_windows_community && '1' || ((inputs.publish || inputs.require_signed_installer) && '0' || '1') }}
+          CAVEVIEWER_ALLOW_UNSIGNED_WINDOWS_PACKAGE: "1"
           CAVEVIEWER_WINDOWS_UNSIGNED_RELEASE: ${{ inputs.allow_unsigned_windows_community && 'community' || '' }}
-          CAVEVIEWER_WINDOWS_SIGNING_CERTIFICATE_SUBJECT: ${{ (inputs.require_signed_installer || (inputs.publish && !inputs.allow_unsigned_windows_community)) && vars.CAVEVIEWER_WINDOWS_SIGNING_CERTIFICATE_SUBJECT || '' }}
-          CAVEVIEWER_WINDOWS_TIMESTAMP_URL: ${{ (inputs.require_signed_installer || (inputs.publish && !inputs.allow_unsigned_windows_community)) && vars.CAVEVIEWER_WINDOWS_TIMESTAMP_URL || '' }}
           CAVEVIEWER_INNO_SETUP_COMPILER: "C:\\Program Files (x86)\\Inno Setup 6\\ISCC.exe"
         run: |
           ./scripts/release.sh \
@@ -159,9 +147,7 @@ jobs:
         shell: powershell
         env:
           SMOKE_VERSION: ${{ inputs.version }}
-          SMOKE_REQUIRE_SIGNATURE: ${{ (inputs.require_signed_installer || (inputs.publish && !inputs.allow_unsigned_windows_community)) && 'true' || 'false' }}
           SMOKE_UNSIGNED_COMMUNITY: ${{ inputs.allow_unsigned_windows_community && 'true' || 'false' }}
-          SMOKE_CERTIFICATE_SUBJECT: ${{ (inputs.require_signed_installer || (inputs.publish && !inputs.allow_unsigned_windows_community)) && vars.CAVEVIEWER_WINDOWS_SIGNING_CERTIFICATE_SUBJECT || '' }}
         run: |
           $smokeArguments = @{
             InstallerPath = "dist/windows/packages/CaveViewer-$env:SMOKE_VERSION-windows.exe"
@@ -169,10 +155,7 @@ jobs:
             UpdateMetadataPath = "dist/windows/metadata/CaveViewer-$env:SMOKE_VERSION.update.json"
             ExpectedVersion = $env:SMOKE_VERSION
           }
-          if ($env:SMOKE_REQUIRE_SIGNATURE -eq "true") {
-            $smokeArguments.ExpectedCertificateSubject = $env:SMOKE_CERTIFICATE_SUBJECT
-          }
-          elseif ($env:SMOKE_UNSIGNED_COMMUNITY -eq "true") {
+          if ($env:SMOKE_UNSIGNED_COMMUNITY -eq "true") {
             $smokeArguments.AllowUnsignedCommunity = $true
           }
           else {
@@ -192,7 +175,7 @@ jobs:
 
   publish-windows:
     needs: build-windows
-    if: ${{ inputs.publish && needs.build-windows.result == 'success' }}
+    if: ${{ !cancelled() && inputs.publish && needs.build-windows.result == 'success' }}
     uses: ./.github/workflows/finalize-release.yml
     permissions:
       contents: write
