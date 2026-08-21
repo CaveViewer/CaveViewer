@@ -71,11 +71,14 @@ _NUMERIC_ENTRY_WIDTH = 8
 _PLACEHOLDER_COLOR = DARK_THEME.placeholder_text
 _INLINE_FEEDBACK_PAD_X = 10
 _CONTROL_GAP_X = 10
+_MIN_HINT_WRAP_LENGTH = 200
+_HINT_WRAP_INSET = 4
 _PREFERENCE_PAGES = (
     ("streaming", "Streaming"),
     ("parsing", "Import"),
     ("storage", "Storage"),
 )
+_PREFERENCE_PAGE_KEYS = frozenset(key for key, _label in _PREFERENCE_PAGES)
 _PREFERENCE_FIELD_GROUPS = {
     "streaming": (
         (
@@ -275,13 +278,23 @@ class PreferencesPanel:
         self.page_scrollbar = None
         self.page_stack = None
         self.pages: dict[str, tk.Frame] = {}
-        self.field_page_keys: dict[str, str] = {}
+        self.page_hint_labels: dict[str, list[tk.Label]] = {}
+        self.field_page_keys: dict[str, str] = {
+            field.key: field.section for field in PREFERENCE_FIELDS
+        }
         self.active_page_key: str | None = None
         self.feedback_frame = None
         self.rendered_state: PreferencesFormState | None = None
         self.button_row = None
         self.error_label = None
         self._feedback_override: tuple[str, str] | None = None
+        self._page_layout_after_id: str | None = None
+        self._pending_page_canvas_width: int | None = None
+        self._page_canvas_window_width: int | None = None
+        self._page_scroll_region: tuple[int, int, int, int] | None = None
+        self._scrollbar_layout_state: tuple[int, int] | None = None
+        self._destroyed = False
+        self.container.bind("<Destroy>", self._on_container_destroy, add="+")
 
         self.numeric_entry_validator = self.dialog.register(
             self._is_numeric_entry_candidate
@@ -439,7 +452,6 @@ class PreferencesPanel:
     ) -> None:
         key = field.key
         value_type = field.value_type
-        self.field_page_keys[key] = field.section
         compact_path = value_type in {
             PreferenceValueType.PATH,
             PreferenceValueType.PATH_CREATE,
@@ -629,17 +641,26 @@ class PreferencesPanel:
         )
         hint_label.pack(anchor="w", fill="x", pady=(3, 0))
         if not single_line_hint:
-            text_column.bind(
-                "<Configure>",
-                lambda event, label=hint_label: self._resize_hint(event, label),
-                add="+",
-            )
+            self.page_hint_labels.setdefault(field.section, []).append(hint_label)
 
-    @staticmethod
-    def _resize_hint(event, label) -> None:
-        wraplength = max(200, event.width - 4)
-        if int(label.cget("wraplength")) != wraplength:
-            label.configure(wraplength=wraplength)
+    def _sync_active_page_hint_wraplengths(self) -> bool:
+        """Resize visible hints once per coalesced viewport layout pass."""
+        changed = False
+        for label in self.page_hint_labels.get(self.active_page_key or "", ()):
+            try:
+                available_width = int(label.master.winfo_width())
+                if available_width <= 1:
+                    continue
+                wraplength = max(
+                    _MIN_HINT_WRAP_LENGTH,
+                    available_width - _HINT_WRAP_INSET,
+                )
+                if int(label.cget("wraplength")) != wraplength:
+                    label.configure(wraplength=wraplength)
+                    changed = True
+            except tk.TclError:
+                continue
+        return changed
 
     def _sync_feedback_wraplength(self, available_width: int) -> None:
         """Resize feedback text only when its usable width actually changes."""
@@ -711,6 +732,91 @@ class PreferencesPanel:
         """Return a display-scaled gap between adjacent preference rows."""
         return self._surface_px(self._layout_policy.row_pad_y + 6)
 
+    def _on_container_destroy(self, event) -> None:
+        """Cancel the panel-owned idle layout callback during Tk teardown."""
+        if event.widget is not self.container:
+            return
+        self._destroyed = True
+        after_id = self._page_layout_after_id
+        self._page_layout_after_id = None
+        if after_id is None:
+            return
+        try:
+            self.dialog.after_cancel(after_id)
+        except tk.TclError:
+            pass
+
+    def _schedule_page_layout_sync(
+        self,
+        *,
+        viewport_width: int | None = None,
+    ) -> None:
+        """Coalesce viewport, wrapping, and scrollbar work into one idle pass."""
+        if viewport_width is not None and int(viewport_width) > 0:
+            self._pending_page_canvas_width = int(viewport_width)
+        if self._destroyed or self._page_layout_after_id is not None:
+            return
+        try:
+            self._page_layout_after_id = self.dialog.after_idle(
+                self._run_page_layout_sync
+            )
+        except tk.TclError:
+            return
+
+    def _run_page_layout_sync(self) -> None:
+        """Run one scheduled layout pass if the Preferences panel still exists."""
+        self._page_layout_after_id = None
+        if self._destroyed:
+            return
+        try:
+            if not self.container.winfo_exists():
+                return
+        except tk.TclError:
+            return
+        self._sync_page_layout()
+
+    def _sync_page_layout(self) -> None:
+        """Apply one stable canvas width, then visible text and overflow geometry."""
+        if self.page_canvas is None or self.page_canvas_window is None:
+            return
+        viewport_width = self._pending_page_canvas_width
+        self._pending_page_canvas_width = None
+        if viewport_width is None:
+            try:
+                viewport_width = int(self.page_canvas.winfo_width())
+            except tk.TclError:
+                return
+        if viewport_width <= 1:
+            return
+
+        if self._page_canvas_window_width != viewport_width:
+            try:
+                self.page_canvas.itemconfigure(
+                    self.page_canvas_window,
+                    width=viewport_width,
+                )
+            except tk.TclError:
+                return
+            self._page_canvas_window_width = viewport_width
+            # The canvas schedules child geometry after its window width changes.
+            # Measure hint columns only in the following idle pass.
+            self._schedule_page_layout_sync()
+            return
+
+        hints_changed = self._sync_active_page_hint_wraplengths()
+        if self.feedback_frame is not None:
+            try:
+                feedback_width = int(self.feedback_frame.winfo_width())
+            except tk.TclError:
+                feedback_width = 0
+            if feedback_width > 1:
+                self._sync_feedback_wraplength(feedback_width)
+        self._sync_page_scrollbar()
+        if hints_changed:
+            # Wrapping can change the requested page height. One final pass
+            # updates the scroll region after Tk propagates that new height.
+            self._schedule_page_layout_sync()
+
     def _sync_page_scrollbar(self) -> None:
         if (
             self.page_canvas is None
@@ -725,29 +831,58 @@ class PreferencesPanel:
             if active_page is not None
             else self.page_stack.winfo_reqheight()
         )
-        self.page_canvas.configure(scrollregion=(0, 0, width, content_height))
-        self.page_scrollbar.sync_overflow(content_height)
+        scroll_region = (0, 0, width, content_height)
+        if self._page_scroll_region != scroll_region:
+            self.page_canvas.configure(scrollregion=scroll_region)
+            self._page_scroll_region = scroll_region
+        layout_state = (content_height, self.page_canvas.winfo_height())
+        if self._scrollbar_layout_state != layout_state:
+            self.page_scrollbar.sync_overflow(content_height)
+            self._scrollbar_layout_state = layout_state
 
     def _resize_page_canvas_window(self, event) -> None:
-        if self.page_canvas is None or self.page_canvas_window is None:
-            return
-        self.page_canvas.itemconfigure(self.page_canvas_window, width=event.width)
-        self._sync_page_scrollbar()
+        self._schedule_page_layout_sync(viewport_width=event.width)
+
+    def _ensure_page(self, page_key: str) -> tk.Frame | None:
+        """Build one Preferences tab on first use and retain it thereafter."""
+        page = self.pages.get(page_key)
+        if page is not None:
+            return page
+        if self.page_stack is None or page_key not in _PREFERENCE_PAGE_KEYS:
+            return None
+
+        page = tk.Frame(self.page_stack, bg=_BG_COLOR)
+        self.pages[page_key] = page
+        self._render_section(page, page_key)
+        if self.page_scrollbar is not None:
+            self.page_scrollbar.bind_mousewheel(page)
+        return page
 
     def _show_page(self, page_key: str) -> None:
-        page = self.pages.get(page_key)
+        page = self._ensure_page(page_key)
         if page is None:
             return
         self.active_page_key = page_key
         for key, candidate_page in self.pages.items():
             if key == page_key:
-                candidate_page.tkraise()
+                candidate_page.grid(row=0, column=0, sticky="nsew")
+            else:
+                candidate_page.grid_remove()
         if self.tab_strip is not None:
             self.tab_strip.select(page_key, notify=False)
+        if self.form_ready and self.rendered_state is not None:
+            locked_key = (
+                self.rendered_state.invalid_key
+                if self.rendered_state.form_locked
+                else None
+            )
+            self._set_field_lock(locked_key)
         self._sync_feedback_to_current_state()
         if self.page_canvas is not None:
             self.page_canvas.yview_moveto(0)
-        self.dialog.after_idle(self._sync_page_scrollbar)
+        self._page_scroll_region = None
+        self._scrollbar_layout_state = None
+        self._schedule_page_layout_sync()
 
     def _build(self) -> None:
         surface = TopTabbedContentSurface(
@@ -825,11 +960,6 @@ class PreferencesPanel:
             expand=True,
             padx=(_INLINE_FEEDBACK_PAD_X, _INLINE_FEEDBACK_PAD_X),
         )
-        self.feedback_frame.bind(
-            "<Configure>",
-            lambda event: self._sync_feedback_wraplength(event.width),
-            add="+",
-        )
 
         self.page_scroll_shell = tk.Frame(body, bg=_BG_COLOR)
         self.page_scroll_shell.pack(side="top", fill="both", expand=True)
@@ -858,23 +988,10 @@ class PreferencesPanel:
         )
         self.page_stack.grid_rowconfigure(0, weight=1)
         self.page_stack.grid_columnconfigure(0, weight=1)
-        for page_key, _tab_label in _PREFERENCE_PAGES:
-            page = tk.Frame(self.page_stack, bg=_BG_COLOR)
-            page.grid(row=0, column=0, sticky="nsew")
-            self.pages[page_key] = page
-            self._render_section(page, page_key)
-        # Let Tk establish the canvas viewport through its normal event loop.
-        # Draining all pending geometry work here can fail to quiesce on
-        # Windows guests when resize callbacks schedule further layout work.
-        self.page_stack.bind(
-            "<Configure>",
-            lambda _event: self._sync_page_scrollbar(),
-            add="+",
-        )
         self.page_canvas.bind("<Configure>", self._resize_page_canvas_window, add="+")
-        self.page_scrollbar.bind_mousewheel(self.page_stack)
+        # Only the initial page is constructed. Other tabs are built and
+        # mousewheel-bound on first selection by ``_ensure_page``.
         self._show_page(_PREFERENCE_PAGES[0][0])
-        self._sync_page_scrollbar()
 
         self.form_ready = True
         self._render_form_state(self.form.state, focus_invalid=True)
@@ -974,6 +1091,11 @@ class PreferencesPanel:
         self._render_form_state(state, preferred_key=key)
 
     def _sync_field_value(self, key: str, value: str) -> None:
+        # A lazily constructed tab reads its value directly from the form
+        # snapshot when first shown, so an unbuilt field has no Tk variable to
+        # synchronize yet.
+        if key not in self.field_vars:
+            return
         was_rendering_state = self.rendering_state
         self.rendering_state = True
         try:

@@ -2042,10 +2042,9 @@ def show_splash_screen(
     map_library_surface.pack(fill="both", expand=True)
 
     # Keep deferred navigation surfaces out of the initial Tk geometry pass.
-    # Preferences builds a large tabbed form and drains its geometry work while
-    # it is constructed. Creating it only after the user selects Preferences
-    # keeps the first splash paint bounded, including on constrained Windows
-    # virtual machines.
+    # Preferences creates only its active tab on first use and coalesces the
+    # resulting geometry work, but it still does not belong on the critical
+    # path to the first splash paint.
 
     map_library_navigation_item.focus_set()
     root.update_idletasks()
