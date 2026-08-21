@@ -497,6 +497,8 @@ def test_release_finalizer_is_the_single_shared_state_writer():
     assert finalizer.count('gh api "repos/$repo/releases/tags/$tag"') == 1
     assert finalizer.count('git -C "$repo_root" push') == 1
     assert "origin/$target_branch moved" in finalizer
+    assert "release metadata not reconciled with origin/main" in finalizer
+    assert "refs/heads/main:refs/remotes/origin/main" in finalizer
     assert "--allow-unsigned-windows-community" in finalizer
     assert "verify_package_release_channel" in finalizer
     assert "--release-channel \"$manifest_channel\"" in finalizer
@@ -751,7 +753,12 @@ def test_essential_workflow_reuses_validation_for_release_metadata_only_prs():
     ):
         assert allowed_path in workflow
 
-    assert "Validate release metadata without source suites" in workflow
+    assert "Validate pull-request release metadata" in workflow
+    metadata_start = workflow.index("      - name: Validate pull-request release metadata")
+    metadata_end = workflow.index("\n      - name: Set up Python", metadata_start)
+    metadata_step = workflow[metadata_start:metadata_end]
+    assert "if: ${{ github.event_name == 'pull_request' }}" in metadata_step
+    assert "env.RUN_SOURCE_TESTS != 'true'" not in metadata_step
     assert 'git diff --check "$PR_BASE_SHA...$PR_HEAD_SHA"' in workflow
     assert "version.py changes more than APP_VERSION; run the source suites." in workflow
     assert "AppStream metadata changes more than one prepended release entry." in workflow

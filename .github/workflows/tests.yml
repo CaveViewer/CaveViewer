@@ -109,8 +109,8 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Validate release metadata without source suites
-        if: ${{ env.RUN_SOURCE_TESTS != 'true' }}
+      - name: Validate pull-request release metadata
+        if: ${{ github.event_name == 'pull_request' }}
         shell: bash
         env:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}

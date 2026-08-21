@@ -6,6 +6,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -293,6 +294,148 @@ def test_finalizer_rejects_a_package_channel_mismatch_before_publication(
     assert completed.returncode == 1
     assert "release_channel does not match" in completed.stderr
     assert gh_log.read_text(encoding="utf-8").splitlines() == ["auth status"]
+
+
+@pytest.mark.parametrize(
+    ("release_versions", "source_version", "requested_version", "expects_guard"),
+    [
+        (("9.9.8",), "9.9.8", "9.9.9", True),
+        (("9.9.8",), "9.9.8", "9.9.8", False),
+        (("9.9.9", "9.9.8"), "9.9.9", "9.9.9", True),
+    ],
+)
+def test_finalizer_only_allows_same_version_resume_for_unmerged_release_metadata(
+    tmp_path: Path,
+    release_versions: tuple[str, ...],
+    source_version: str,
+    requested_version: str,
+    expects_guard: bool,
+):
+    working_repository = tmp_path / "working"
+    origin_repository = tmp_path / "origin.git"
+    artifacts_dir = tmp_path / "artifacts"
+    fake_bin = tmp_path / "bin"
+    gh_log = tmp_path / "gh.log"
+    private_key_path = tmp_path / "release-key.pem"
+
+    working_repository.mkdir()
+    _copy_release_files(working_repository)
+    _write_release_artifacts(artifacts_dir, requested_version)
+
+    fake_bin.mkdir()
+    fake_gh = fake_bin / "gh"
+    fake_gh.write_text(
+        "#!/usr/bin/env bash\n"
+        "printf '%s\\n' \"$*\" >> \"$GH_LOG\"\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+    private_key = Ed25519PrivateKey.generate()
+    private_key_path.write_bytes(
+        private_key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption(),
+        )
+    )
+
+    _run("git", "init", "--bare", origin_repository, cwd=tmp_path)
+    _run("git", "init", "-b", "main", cwd=working_repository)
+    _run("git", "config", "user.name", "Release Test", cwd=working_repository)
+    _run(
+        "git", "config", "user.email", "release-test@example.invalid", cwd=working_repository
+    )
+    _run("git", "add", ".", cwd=working_repository)
+    _run("git", "commit", "-m", "Source revision", cwd=working_repository)
+    _run("git", "remote", "add", "origin", origin_repository, cwd=working_repository)
+    _run("git", "push", "-u", "origin", "main", cwd=working_repository)
+
+    _run("git", "checkout", "-b", "integration/next", cwd=working_repository)
+    metainfo_path = (
+        working_repository
+        / "packaging/linux/io.github.caveviewer.caveviewer.metainfo.xml"
+    )
+    release_entries = "".join(
+        f'    <release version="{release_version}" date="2026-01-01" />\n'
+        for release_version in release_versions
+    )
+    metainfo_path.write_text(
+        metainfo_path.read_text(encoding="utf-8").replace(
+            "  <releases>\n",
+            f"  <releases>\n{release_entries}",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    version_path = working_repository / "src/caveviewer/version.py"
+    version_path.write_text(
+        re.sub(
+            r'^APP_VERSION = "[^"]+"$',
+            f'APP_VERSION = "{source_version}"',
+            version_path.read_text(encoding="utf-8"),
+            flags=re.MULTILINE,
+        ),
+        encoding="utf-8",
+    )
+    _run(
+        "git",
+        "add",
+        str(metainfo_path.relative_to(working_repository)),
+        str(version_path.relative_to(working_repository)),
+        cwd=working_repository,
+    )
+    _run(
+        "git",
+        "commit",
+        "-m",
+        f"Release v{source_version} prerelease",
+        cwd=working_repository,
+    )
+    _run("git", "push", "-u", "origin", "integration/next", cwd=working_repository)
+    source_sha = _run("git", "rev-parse", "HEAD", cwd=working_repository)
+    _run("git", "checkout", "--detach", source_sha, cwd=working_repository)
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{fake_bin}{os.pathsep}{env['PATH']}",
+            "GH_LOG": str(gh_log),
+            "CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY": str(private_key_path),
+            "CAVEVIEWER_RELEASE_SIGNING_PYTHON": sys.executable,
+        }
+    )
+    completed = subprocess.run(
+        [
+            str(working_repository / "scripts/common/finalize_release.sh"),
+            "--platforms=all",
+            f"--version={requested_version}",
+            "--notes=Blocked release",
+            f"--artifacts-dir={artifacts_dir}",
+            "--target-branch=integration/next",
+            f"--expected-source-sha={source_sha}",
+        ],
+        cwd=working_repository,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    if expects_guard:
+        assert "release metadata not reconciled with origin/main" in completed.stdout
+    else:
+        assert "release metadata not reconciled with origin/main" not in completed.stdout
+        assert "could not determine repository" in completed.stdout
+    assert gh_log.read_text(encoding="utf-8").splitlines() == ["auth status"]
+    assert _run(
+        "git",
+        "--git-dir",
+        origin_repository,
+        "rev-parse",
+        "refs/heads/integration/next",
+        cwd=tmp_path,
+    ) == source_sha
 
 
 @pytest.mark.parametrize(
