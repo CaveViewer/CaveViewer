@@ -158,6 +158,8 @@ def test_frozen_installer_pipeline_is_per_user_and_fails_closed_without_signing(
     assert "TimeStamperCertificate" in smoke
     assert "[AllowEmptyString()][string]$CertificateSubject" in smoke
     assert "[switch]$AllowUnsignedCommunity" in smoke
+    assert "Get-OptionalJsonPropertyValue" in smoke
+    assert "PSObject.Properties[$Name]" in smoke
     assert "-ExpectedCertificateSubject is required for a signed release smoke test." in smoke
     assert "CaveViewer smoke & café O'Brien" in smoke
     assert "--expected-version" in smoke
