@@ -37,6 +37,7 @@ def _copy_release_files(destination: Path) -> None:
         "scripts/common/artifacts.sh",
         "scripts/common/finalize_release.sh",
         "scripts/common/github.sh",
+        "scripts/common/verify_release_asset.py",
         "scripts/common/verify_release_channel.py",
         "scripts/common/version.sh",
         "scripts/linux/common/update_manifest.sh",
@@ -131,6 +132,47 @@ def _write_release_artifacts(
         )
     (artifacts_dir / f"CaveViewer-{version}-linux-x86_64.json").write_text(
         json.dumps({"release_channel": release_channel}, sort_keys=True),
+        encoding="utf-8",
+    )
+
+
+def _write_release_api_response(
+    destination: Path,
+    artifacts_dir: Path,
+    version: str,
+    *,
+    corrupt_digest: bool = False,
+) -> None:
+    """Write the GitHub API shape returned after publishable assets upload."""
+    excluded_linux_metadata = f"CaveViewer-{version}-linux-x86_64.json"
+    assets = []
+    for artifact in sorted(artifacts_dir.iterdir()):
+        if artifact.name == excluded_linux_metadata:
+            continue
+        digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
+        if corrupt_digest and not assets:
+            digest = "0" * 64
+        assets.append(
+            {
+                "browser_download_url": (
+                    "https://github.com/example/CaveViewer/releases/download/"
+                    f"v{version}/{artifact.name}"
+                ),
+                "digest": f"sha256:{digest}",
+                "name": artifact.name,
+                "size": artifact.stat().st_size,
+                "state": "uploaded",
+            }
+        )
+    destination.write_text(
+        json.dumps(
+            {
+                "assets": assets,
+                "draft": False,
+                "prerelease": False,
+                "tag_name": f"v{version}",
+            }
+        ),
         encoding="utf-8",
     )
 
@@ -253,16 +295,21 @@ def test_finalizer_rejects_a_package_channel_mismatch_before_publication(
     assert gh_log.read_text(encoding="utf-8").splitlines() == ["auth status"]
 
 
-@pytest.mark.parametrize("community_windows", [False, True])
-def test_finalizer_publishes_all_assets_and_pushes_one_signed_metadata_commit(
+@pytest.mark.parametrize(
+    ("community_windows", "valid_remote_assets"),
+    [(False, True), (True, True), (False, False)],
+)
+def test_finalizer_verifies_all_assets_before_pushing_signed_metadata(
     tmp_path: Path,
     community_windows: bool,
+    valid_remote_assets: bool,
 ):
     working_repository = tmp_path / "working"
     origin_repository = tmp_path / "origin.git"
     artifacts_dir = tmp_path / "artifacts"
     fake_bin = tmp_path / "bin"
     gh_log = tmp_path / "gh.log"
+    release_json = tmp_path / "release.json"
     private_key_path = tmp_path / "release-key.pem"
     version = "9.9.9"
     release_notes = 'Parallel "release" notes\nSecond line'
@@ -274,6 +321,12 @@ def test_finalizer_publishes_all_assets_and_pushes_one_signed_metadata_commit(
         version,
         community_windows=community_windows,
     )
+    _write_release_api_response(
+        release_json,
+        artifacts_dir,
+        version,
+        corrupt_digest=not valid_remote_assets,
+    )
 
     fake_bin.mkdir()
     fake_gh = fake_bin / "gh"
@@ -281,6 +334,7 @@ def test_finalizer_publishes_all_assets_and_pushes_one_signed_metadata_commit(
         "#!/usr/bin/env bash\n"
         "printf '%s\\n' \"$*\" >> \"$GH_LOG\"\n"
         "if [ \"${1:-} ${2:-}\" = \"release view\" ]; then exit 1; fi\n"
+        "if [ \"${1:-}\" = \"api\" ]; then cat \"$GH_RELEASE_JSON\"; fi\n"
         "exit 0\n",
         encoding="utf-8",
     )
@@ -313,6 +367,7 @@ def test_finalizer_publishes_all_assets_and_pushes_one_signed_metadata_commit(
         {
             "PATH": f"{fake_bin}{os.pathsep}{env['PATH']}",
             "GH_LOG": str(gh_log),
+            "GH_RELEASE_JSON": str(release_json),
             "GH_TOKEN": "test-token",
             "CAVEVIEWER_GITHUB_REPO": "example/CaveViewer",
             "CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY": str(private_key_path),
@@ -333,7 +388,13 @@ def test_finalizer_publishes_all_assets_and_pushes_one_signed_metadata_commit(
     ]
     if community_windows:
         finalizer_args.append("--allow-unsigned-windows-community")
-    _run(*finalizer_args, cwd=working_repository, env=env)
+    completed = subprocess.run(
+        [str(arg) for arg in finalizer_args],
+        cwd=working_repository,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
 
     commands = gh_log.read_text(encoding="utf-8").splitlines()
     assert sum(command.startswith("release create ") for command in commands) == 1
@@ -341,11 +402,31 @@ def test_finalizer_publishes_all_assets_and_pushes_one_signed_metadata_commit(
     release_create = next(
         command for command in commands if command.startswith("release create ")
     )
+    release_api_command = f"api repos/example/CaveViewer/releases/tags/v{version}"
+    assert commands.index(release_create) < commands.index(release_api_command)
     for artifact in artifacts_dir.iterdir():
         if artifact.name == f"CaveViewer-{version}-linux-x86_64.json":
             continue
         assert str(artifact) in release_create
     assert str(artifacts_dir / f"CaveViewer-{version}-linux-x86_64.json") not in release_create
+
+    if not valid_remote_assets:
+        assert completed.returncode != 0
+        assert "release asset verification failed" in completed.stderr
+        assert "digest" in completed.stderr
+        assert _run("git", "rev-parse", "HEAD", cwd=working_repository) == source_sha
+        assert _run(
+            "git",
+            "--git-dir",
+            origin_repository,
+            "rev-parse",
+            "refs/heads/main",
+            cwd=tmp_path,
+        ) == source_sha
+        assert not (working_repository / "updates/windows/stable.json").exists()
+        return
+
+    assert completed.returncode == 0, completed.stderr
 
     pushed_sha = _run(
         "git", "--git-dir", origin_repository, "rev-parse", "refs/heads/main", cwd=tmp_path

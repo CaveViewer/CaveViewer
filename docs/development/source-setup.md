@@ -421,7 +421,7 @@ runtime snapshot.
 | `CAVEVIEWER_UPDATE_CHANNEL` | embedded package channel | Deliberate developer/testing override for the update manifest channel used when deriving the default manifest URL. Accepted values: `stable`, `prerelease`. A source checkout and a historical package without metadata safely default to `stable`. Ignored when `CAVEVIEWER_UPDATE_MANIFEST_URL` is set. |
 | `CAVEVIEWER_UPDATE_MANIFEST_URL` | _(derived from repo)_ | Full URL to the JSON update manifest. Overrides the default `raw.githubusercontent.com` path. Useful for pointing at a staging manifest or a custom server. |
 | `CAVEVIEWER_UPDATE_MANIFEST_SIGNATURE_URL` | `<manifest-url>.sig` | Full URL to the base64 Ed25519 signature for the update manifest. |
-| `CAVEVIEWER_FORCE_UPDATE` | `0` | Set to `1` (or `true`/`yes`) to enter the update-available state regardless of the manifest version. Also available as `--force-update`. For testing the update UI without waiting for the CDN cache or changing version numbers. |
+| `CAVEVIEWER_FORCE_UPDATE` | `0` | Set to `1` (or `true`/`yes`) to treat a valid, signed, available manifest artifact as newer regardless of its version. Also available as `--force-update`. It cannot fabricate a missing channel or make an unavailable package eligible. |
 | `CAVEVIEWER_MACOS_ARCH` | _(auto)_ | Low-level macOS packaging override. The top-level release dispatcher uses `--target=macos-arm64` or `--target=macos-x86_64`; normal app update checks detect the running process architecture automatically. |
 | `CAVEVIEWER_LINUX_UPDATE_ARCH` | `x86_64` | Linux publish helper only. Linux distribution is x86_64-only; set to `x86_64` when invoking lower-level publish helpers directly. |
 
@@ -429,10 +429,13 @@ The update checker requires manifests to be signed with the release Ed25519
 private key. The bundled public key lives at
 `src/caveviewer/resources/release_signing_public_key.pem`. Startup update
 checks read the branch/channel manifest first; if it advertises a newer version,
-the app verifies the manifest signature before offering the download. Missing or
-invalid signatures are logged as errors and do not change the splash interface.
-The release finalizer creates every requested companion `.sig` file before
-committing the manifests together. See
+the app verifies the manifest signature and confirms that the package URL
+resolves before offering the download. Missing or invalid signatures and
+unavailable packages are logged and do not expose an update action. An absent
+prerelease manifest is the normal empty-channel state and likewise leaves the
+splash unchanged. The release finalizer creates every requested companion
+`.sig` only after GitHub confirms the uploaded asset's URL, size, and SHA-256,
+then commits the manifest pairs together. See
 [`releases.md`](releases.md) for the full
 release contract.
 
@@ -508,6 +511,8 @@ prerelease publish updates the separate `prerelease.json`, leaving stable
 unchanged and marking a newly created GitHub release as prerelease. For
 debugging, explicit environment variables can point a source run or packaged
 app launched from Terminal at another branch, channel, or manifest URL.
+Until that target has a verified published prerelease, its prerelease manifest
+and signature are intentionally absent.
 
 Prerelease branch testing can use the derived prerelease manifest URL after the
 selected branch contains the matching platform manifest and signature. For
@@ -540,11 +545,13 @@ CAVEVIEWER_UPDATE_CHANNEL=prerelease \
 ./CaveViewer-<version>-x86_64.AppImage
 ```
 
-If the update checker logs `Update manifest fetch failed with HTTP 404`, the
-derived branch/channel/platform manifest URL does not exist. Either publish that
-platform's prerelease manifest to the selected branch, switch to a branch that
-has it, or use `CAVEVIEWER_UPDATE_CHANNEL=stable` if you meant to test the
-stable manifest.
+For a prerelease channel, a missing derived manifest logs `No prerelease update
+manifest is published` at info level and means no prerelease is currently
+available for that platform. Publish a real package through the finalizer,
+switch to a branch that already advertises one, or use
+`CAVEVIEWER_UPDATE_CHANNEL=stable` if you meant to test stable updates. HTTP 404
+for a stable or explicitly configured non-prerelease manifest remains a
+configuration error.
 
 If the update checker logs `Update manifest fetch failed with HTTP 429`, GitHub
 has rate-limited the unauthenticated `raw.githubusercontent.com` request. The
@@ -569,9 +576,10 @@ updates/macos/x86_64/stable.json
 updates/macos/x86_64/prerelease.json
 ```
 
-The `x86_64` files appear after the corresponding Intel channel is first
-published. Top-level `updates/macos/stable.json` and `prerelease.json` files are
-legacy ARM64 aliases. Keep each alias and signature byte-for-byte identical to
+Each prerelease pair appears only after that platform/channel is successfully
+published; an absent pair is not an error. Top-level
+`updates/macos/<channel>.json[.sig]` files are legacy ARM64 aliases when that
+ARM64 channel exists. Keep each alias and signature byte-for-byte identical to
 its `arm64/` counterpart so older installations continue receiving updates.
 
 macOS DMG assets include their architecture to prevent uploads from replacing

@@ -68,6 +68,10 @@ an optional leading `v`, and GitHub uses the tag `v<version>`.
   prerelease/latest status.
 - Stable and prerelease manifests are independent. Publishing one channel must
   not overwrite the other channel.
+- A platform/channel manifest pair exists only after that exact package has
+  been published and verified on a GitHub Release. An absent prerelease pair
+  means that no prerelease is currently available for that target; do not keep
+  or reconstruct a manifest whose release asset is missing.
 - Every frozen package embeds its immutable `release_channel`. A stable package
   follows only `stable.json`; a prerelease package follows only
   `prerelease.json`. The package workflow sets that value from `pre_release`,
@@ -81,7 +85,7 @@ an optional leading `v`, and GitHub uses the tag `v<version>`.
   updates stay automatic within `prerelease.json`. Moving from prerelease to
   stable remains an explicit manual stable install.
 
-Published manifest paths are:
+Published platform/channel pairs use these paths:
 
 ```text
 updates/windows/<stable|prerelease>.json
@@ -90,8 +94,8 @@ updates/macos/arm64/<stable|prerelease>.json
 updates/macos/x86_64/<stable|prerelease>.json
 ```
 
-Every platform publishes a matching `.json.sig` beside each manifest. macOS
-ARM64 publishing also copies the signed files to the legacy aliases at
+Every published manifest has a matching `.json.sig`. macOS ARM64 publishing
+also copies the signed files to the legacy aliases at
 `updates/macos/<stable|prerelease>.json[.sig]`. Those aliases must remain
 byte-for-byte identical to the ARM64 files. `.gitattributes` forces every
 update JSON file to use LF line endings so Git cannot rewrite signed manifest
@@ -117,15 +121,20 @@ Ed25519 signature and must equal the package's selected update channel before
 the client offers an artifact. The client temporarily accepts older signed
 manifests without that field as a documented compatibility window; writers
 always include it. The finalizer independently verifies every platform's
-package metadata has the same channel before it creates GitHub assets, tags,
-manifests, or metadata commits.
+package metadata has the same channel before it creates GitHub assets. After
+upload, it reads the GitHub Release API and verifies the exact asset name,
+published HTTPS URL, byte size, and SHA-256 before it writes manifests or a
+metadata commit.
 
 The application checks architecture-specific manifests from the selected
 branch and channel; it does not derive updates from GitHub's “latest release”
 metadata. For a newer release it requires the signed manifest to have a
 numeric dotted version, HTTPS allowed-package URL, positive integer byte size,
-and complete SHA-256 before offering its artifact. It then verifies the
-artifact size and SHA-256 while downloading.
+and complete SHA-256. After verifying the manifest signature, it probes the
+package URL and offers the artifact only when that URL resolves. A missing
+prerelease manifest, or a signed candidate whose package returns HTTP 404 or
+410, is treated as no update; the technical reason is logged. The app then
+verifies the artifact size and SHA-256 while downloading.
 
 Linux packages install the stable application ID
 `io.github.caveviewer.caveviewer`. The desktop filename, AppStream ID,
@@ -211,8 +220,12 @@ upload their binaries and package metadata as workflow artifacts; they do not
 create GitHub releases, receive the signing key, write manifests, or push
 commits. If every requested package succeeds and `publish` is enabled, the
 finalizer uses the preserved write permission to download all artifacts, create
-or update the GitHub release once, write and sign every requested manifest,
-update `src/caveviewer/version.py`, and push one metadata commit.
+or update the GitHub release once, and verify every uploaded asset against the
+GitHub Release API. Only after the remote URL, size, and SHA-256 match does it
+write and sign every requested manifest, update
+`src/caveviewer/version.py`, and push one metadata commit. A failed upload or
+remote verification therefore leaves the previously committed manifests in
+place.
 
 Every package checks out the workflow's starting commit rather than a moving
 branch head. Before publishing, the finalizer verifies that the selected branch
@@ -228,8 +241,9 @@ secret. Package-only runs do not require it.
 The GitHub release workflows do not currently offer an Authenticode signing
 path. Selecting `publish` for Windows automatically builds the same named EXE
 on `windows-latest`, marks its package metadata `unsigned-community`, and
-permits the finalizer to publish it. The finalizer still verifies the installer
-size and SHA-256, then signs the Windows update manifest with
+permits the finalizer to publish it. The finalizer verifies the installer size
+and SHA-256 locally and again against GitHub's uploaded asset metadata, then
+signs the Windows update manifest with
 `CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY`. Installed CaveViewer applications
 verify that manifest signature and require an explicit `Install and restart`
 click before launching the downloaded installer. This does not remove Windows
@@ -298,9 +312,10 @@ release.
 An all-platform build failure does not publish any platform or manifest because
 the finalizer requires all four package jobs to succeed. Inspect the retained
 workflow artifacts and correct the failure before rerunning All Platform
-Release. If a finalizer fails after publishing external release state, do not
-rerun it blindly against protected `main`: first reconcile that state through
-an auditable metadata pull request.
+Release. If upload or post-upload verification fails, GitHub may contain an
+unadvertised partial release, but the previously committed update manifest
+remains authoritative. Inspect or remove the partial assets before rerunning;
+do not manually point a manifest at them.
 
 ## Local dispatcher
 

@@ -473,12 +473,19 @@ def test_release_finalizer_is_the_single_shared_state_writer():
     assert "--allow-unsigned-windows-community" in workflow
 
     assert finalizer.count("gh release create") == 1
+    assert finalizer.count('gh api "repos/$repo/releases/tags/$tag"') == 1
     assert finalizer.count('git -C "$repo_root" push') == 1
     assert "origin/$target_branch moved" in finalizer
     assert "--allow-unsigned-windows-community" in finalizer
     assert "verify_package_release_channel" in finalizer
     assert "--release-channel \"$manifest_channel\"" in finalizer
     assert "CaveViewer-${normalized_version}-linux-x86_64.json" in finalizer
+    assert "scripts/common/verify_release_asset.py" in finalizer
+    assert finalizer.index('gh api "repos/$repo/releases/tags/$tag"') < (
+        finalizer.index("manifest_git_paths=()")
+    )
+    assert "verified_release_urls[$windows_exe_path]" in finalizer
+    assert "release_base_url" not in finalizer
     assert 'git -C "$repo_root" commit -m "Release $tag $manifest_channel"' in finalizer
     for manifest_path in (
         "updates/windows/$manifest_channel.json",
