@@ -759,6 +759,7 @@ Unless overridden, CaveViewer stores files in these locations:
 |---|---|---|
 | Preferences | `$XDG_CONFIG_HOME/caveviewer/advanced_settings.json` (`~/.config/...` fallback; legacy-compatible filename) | `~/.caveviewer/advanced_settings.json` |
 | Remembered chooser locations | `$XDG_STATE_HOME/caveviewer/` (`~/.local/state/...` fallback) | `~/.caveviewer/` |
+| Windows pre-splash diagnostics | — | `~/.caveviewer/diagnostics/startup.log` |
 | Map caches | Source map folder `/_cache` | Source map folder `/_cache` |
 | Downloaded map library | `$XDG_DOWNLOAD_DIR/` (`~/Downloads/` fallback) | `~/Downloads/` |
 
@@ -773,6 +774,12 @@ readable as legacy locations. On Linux, old `~/.caveviewer/` and
 `map_library` or `sample_maps` directories are moved into the configured
 map-library location when possible. A generated cache is self-contained:
 texture files are staged beside its chunks before the manifest becomes visible.
+
+When a Windows build consumes CPU without showing its Tk splash, read
+`%USERPROFILE%\.caveviewer\diagnostics\startup.log`. The file contains the last
+flushed startup checkpoint and, after 20 seconds without a visible splash, one
+all-thread Python traceback. A normal visible splash closes the diagnostic file
+immediately.
 Disk-space checks therefore target the filesystem that will hold the cache,
 which is normally the map's filesystem unless an explicit cache root is set.
 

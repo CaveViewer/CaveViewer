@@ -29,6 +29,12 @@ from caveviewer.core.diagnostics.application import (
     get_active_application_diagnostics,
     set_active_application_diagnostics,
 )
+from caveviewer.core.diagnostics.startup import (
+    StartupDiagnostics,
+    get_active_startup_diagnostics,
+    record_startup_stage,
+    set_active_startup_diagnostics,
+)
 from caveviewer.core.diagnostics.logging import (
     configure_logging,
     finish_console_progress_line,
@@ -80,6 +86,18 @@ def _record_application_exception(event: str, exc: BaseException, **context) -> 
             fatal=True,
             **context,
         )
+
+
+def _attach_startup_diagnostics_logging() -> None:
+    """Add the pre-splash file handler after normal root logging is configured."""
+
+    diagnostics = get_active_startup_diagnostics()
+    if diagnostics is None:
+        return
+    try:
+        diagnostics.attach_to_root_logger()
+    except Exception as error:
+        diagnostics.record_exception("startup_logging_attachment_failed", error)
 
 
 def _route_moderngl_window_logging() -> None:
@@ -595,6 +613,7 @@ def _run_map_session(
 
 
 def main():
+    record_startup_stage("app_main_entered")
     try:
         sys.argv, _update_branch = _consume_update_branch_arg(sys.argv)
     except ValueError as e:
@@ -615,8 +634,11 @@ def main():
     # The entry point owns the mutable session reference. All consumers get
     # immutable snapshots from it; Preferences saves replace the snapshot
     # rather than assigning their values into os.environ.
+    record_startup_stage("preferences_import_begin")
     from caveviewer.gui.preferences import load_saved_preference_values
+    record_startup_stage("preferences_import_complete")
 
+    record_startup_stage("runtime_settings_resolution_begin")
     platform_facts = current_runtime_platform_facts()
     logging_settings = resolve_runtime_settings(
         preferences={},
@@ -625,6 +647,9 @@ def main():
         platform=platform_facts,
     )
     configure_logging(str(logging_settings["log_level"]))
+    _attach_startup_diagnostics_logging()
+    record_startup_stage("runtime_settings_resolution_complete")
+    record_startup_stage("preferences_load_begin")
     runtime_settings_session = RuntimeSettingsSession(
         preferences=load_saved_preference_values(),
         environ=os.environ,
@@ -632,6 +657,7 @@ def main():
         platform=platform_facts,
     )
     runtime_settings = runtime_settings_session.snapshot
+    record_startup_stage("preferences_load_complete")
     _route_moderngl_window_logging()
     if os.name == "nt":
         try:
@@ -655,7 +681,9 @@ def main():
     # Every interactive viewer path receives one process-owned runtime.  CLI
     # launches skip splash/update presentation, but still need the same
     # capability probes, policy decisions, and platform adapters as GUI mode.
+    record_startup_stage("platform_runtime_import_begin")
     from caveviewer.gui.platform.runtime import create_platform_runtime
+    record_startup_stage("platform_runtime_import_complete")
 
     # CLI argument: open that path and exit when the viewer closes.
     if len(sys.argv) > 1 and sys.argv[1].strip():
@@ -670,16 +698,25 @@ def main():
     # GUI mode: show the splash screen, run the viewer, then show the
     # splash screen again so the user can open another map or exit.
     _splash_version = "0.0.0" if _force_update else __version__
+    record_startup_stage("splash_module_import_begin")
     from caveviewer.gui.splash_screen import show_splash_screen
+    record_startup_stage("splash_module_import_complete")
+    record_startup_stage("update_manager_import_begin")
     from caveviewer.gui.update_manager import UpdateManager
+    record_startup_stage("update_manager_import_complete")
 
+    record_startup_stage("platform_runtime_create_begin")
     platform_runtime = create_platform_runtime(runtime_settings=runtime_settings)
+    record_startup_stage("platform_runtime_create_complete")
+    record_startup_stage("update_manager_create_begin")
     update_manager = UpdateManager(
         current_version=_splash_version,
         platform_runtime=platform_runtime,
     )
+    record_startup_stage("update_manager_create_complete")
     try:
         while True:
+            record_startup_stage("show_splash_screen_begin")
             folder = show_splash_screen(
                 program_name=APP_NAME,
                 version=_splash_version,
@@ -707,8 +744,11 @@ def main():
         update_manager.shutdown()
 
 
-def run() -> None:
+def run(*, startup_diagnostics: StartupDiagnostics | None = None) -> None:
     """Run the application and present a best-effort fatal-error dialog."""
+    if startup_diagnostics is not None:
+        set_active_startup_diagnostics(startup_diagnostics)
+        startup_diagnostics.record("app_run_entered")
     application_diagnostics = ApplicationDiagnostics(
         metadata={
             "app_name": APP_NAME,
@@ -786,6 +826,10 @@ def run() -> None:
     finally:
         if get_active_application_diagnostics() is application_diagnostics:
             set_active_application_diagnostics(None)
+        if get_active_startup_diagnostics() is startup_diagnostics:
+            set_active_startup_diagnostics(None)
+        if startup_diagnostics is not None:
+            startup_diagnostics.close()
 
 
 def _system_exit_code(value: object) -> int | None:

@@ -37,6 +37,10 @@ from typing import TYPE_CHECKING, Callable
 
 from caveviewer.version import APP_NAME, APP_VERSION
 from caveviewer.core.diagnostics.logging import get_logger
+from caveviewer.core.diagnostics.startup import (
+    mark_startup_splash_visible,
+    record_startup_stage,
+)
 from caveviewer.core.preferences.runtime_settings import RuntimeSettings
 from caveviewer.gui.preferences_dialog import PreferencesPanel
 from caveviewer.gui.dpi_utils import (
@@ -1014,7 +1018,10 @@ def show_splash_screen(
     without picking one. Update work belongs to app.py and may outlive this
     particular splash instance.
     """
+    record_startup_stage("splash_function_entered")
+    record_startup_stage("tkinter_import_begin")
     import tkinter as tk
+    record_startup_stage("tkinter_import_complete")
 
     session = SplashSession()
     if desktop_services is None:
@@ -1072,6 +1079,7 @@ def show_splash_screen(
         app_icon_path=(viewer_settings.app_icon if viewer_settings is not None else None),
     )
 
+    record_startup_stage("splash_root_create_begin")
     configure_process_dpi_awareness(
         presentation_actions_adapter=presentation_actions_adapter
     )
@@ -1079,6 +1087,7 @@ def show_splash_screen(
         tk,
         presentation_profile=presentation_profile,
     )
+    record_startup_stage("splash_root_create_complete")
     apply_tk_scaling(
         root,
         presentation_profile=presentation_profile,
@@ -2058,6 +2067,7 @@ def show_splash_screen(
     root.geometry(f"{window_w}x{final_height}+{pos_x}+{pos_y}")
 
     root.deiconify()
+    mark_startup_splash_visible()
     root.lift()
     root.focus_force()
     # Briefly force topmost so the splash appears above the GLFW viewer window
