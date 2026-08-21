@@ -61,9 +61,14 @@ def test_signed_update_manifests_follow_the_release_contract(manifest: Path):
             assert payload["download_size_bytes_windows_exe"] == download_size_bytes
             assert payload["sha256_windows_exe"] == sha256
             assert payload["install_channel"] == "windows_installer"
-            certificate_subject = payload["authenticode_certificate_subject"]
-            assert isinstance(certificate_subject, str)
-            assert certificate_subject.strip()
+            authenticode_status = payload.get("authenticode_status", "verified")
+            assert authenticode_status in {"verified", "unsigned-community"}
+            certificate_subject = payload.get("authenticode_certificate_subject")
+            if authenticode_status == "verified":
+                assert isinstance(certificate_subject, str)
+                assert certificate_subject.strip()
+            else:
+                assert certificate_subject is None
         else:
             # Existing signed manifests retain the ZIP aliases until their
             # source-bundle clients have completed the EXE migration.

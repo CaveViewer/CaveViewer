@@ -28,7 +28,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--download-url", default="")
     parser.add_argument(
         "--authenticode-status",
-        choices=("verified", "unsigned-test-only"),
+        choices=("verified", "unsigned-community", "unsigned-test-only"),
         required=True,
     )
     parser.add_argument("--authenticode-certificate-subject", default="")
@@ -74,11 +74,11 @@ def main() -> int:
             "certificate subject"
         )
     if (
-        args.authenticode_status == "unsigned-test-only"
+        args.authenticode_status != "verified"
         and authenticode_certificate_subject
     ):
         raise ValueError(
-            "unsigned test-only Windows installer metadata must not declare an "
+            "unsigned Windows installer metadata must not declare an "
             "Authenticode certificate subject"
         )
     if download_url:
@@ -92,15 +92,20 @@ def main() -> int:
                 "download URL must be an absolute HTTPS URL ending in .exe"
             )
 
+    is_community_installer = args.authenticode_status == "unsigned-community"
     package_payload: dict[str, object] = {
         "app_name": args.app_name,
         "artifact_file": artifact_name,
         "artifact_path": f"dist/windows/packages/{artifact_name}",
-        "authenticode_required": True,
+        "authenticode_required": not is_community_installer,
         "authenticode_status": args.authenticode_status,
         "created_at_utc": args.created_at_utc,
         "entrypoint": "CaveViewerSetup.exe",
-        "package_type": "windows_signed_installer",
+        "package_type": (
+            "windows_community_installer"
+            if is_community_installer
+            else "windows_signed_installer"
+        ),
         "sha256": sha256,
         "size_bytes": size_bytes,
         "version": args.version,
@@ -114,7 +119,7 @@ def main() -> int:
 
     update_payload: dict[str, object] = {
         "app_name": args.app_name,
-        "authenticode_required": True,
+        "authenticode_required": not is_community_installer,
         "authenticode_status": args.authenticode_status,
         "download_size_bytes": size_bytes,
         "download_size_bytes_windows_exe": size_bytes,

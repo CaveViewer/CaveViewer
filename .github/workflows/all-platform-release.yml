@@ -23,6 +23,11 @@ on:
         required: false
         type: boolean
         default: false
+      allow_unsigned_windows_community:
+        description: "Publish the Windows installer unsigned for the community update flow"
+        required: false
+        type: boolean
+        default: false
       reuse_pr_validation:
         description: "Reuse successful PR validation when app/package source has not changed; skip duplicate test suites"
         required: false
@@ -57,10 +62,10 @@ jobs:
       release_notes: ${{ inputs.release_notes }}
       pre_release: ${{ inputs.pre_release }}
       publish: false
-      # Finalize Release is the single publisher, but it can only accept a
-      # release-ready signed Windows installer when the top-level release
-      # itself is publishing.
-      require_signed_installer: ${{ inputs.publish }}
+      # Finalize Release is the single publisher. Production Windows releases
+      # are Authenticode-signed unless the explicit community policy is chosen.
+      require_signed_installer: ${{ inputs.publish && !inputs.allow_unsigned_windows_community }}
+      allow_unsigned_windows_community: ${{ inputs.publish && inputs.allow_unsigned_windows_community }}
       skip_essential_tests: true
       reuse_pr_validation: ${{ inputs.reuse_pr_validation }}
       source_sha: ${{ github.sha }}
@@ -136,5 +141,6 @@ jobs:
       platforms: all
       source_sha: ${{ github.sha }}
       target_branch: ${{ github.ref_name }}
+      allow_unsigned_windows_community: ${{ inputs.allow_unsigned_windows_community }}
     secrets:
       CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY: ${{ secrets.CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY }}

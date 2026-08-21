@@ -1,4 +1,4 @@
-"""Exercise the narrow signed-EXE Windows update handoff boundary."""
+"""Exercise the narrow Windows EXE update handoff boundary."""
 
 from __future__ import annotations
 
@@ -98,6 +98,60 @@ def test_windows_adapter_rechecks_a_special_character_path_then_uses_distinct_ar
     ]
 
 
+def test_windows_adapter_hands_off_an_explicit_community_installer_after_hash_check(
+    tmp_path: Path,
+):
+    artifact, contents, digest = _installer_artifact(tmp_path)
+    verifier = RecordingAuthenticodeVerifier()
+    launches: list[tuple[list[str], dict[str, object]]] = []
+    adapter = WindowsUpdatePackageInstallerAdapter(
+        installation_probe=lambda: _registered_installation(tmp_path),
+        authenticode_verifier=verifier,
+        process_launcher=lambda command, **kwargs: launches.append((command, kwargs)),
+        update_root=tmp_path / "updates",
+    )
+
+    adapter.install_verified_package(
+        str(artifact),
+        version="2.0.0",
+        expected_size_bytes=len(contents),
+        expected_sha256=digest,
+        authenticode_certificate_subject=None,
+        authenticode_status="unsigned-community",
+        parent_process_id=4242,
+    )
+
+    assert verifier.calls == []
+    assert len(launches) == 1
+
+
+def test_windows_adapter_rejects_an_incoherent_community_authentication_contract(
+    tmp_path: Path,
+):
+    artifact, contents, digest = _installer_artifact(tmp_path)
+    verifier = RecordingAuthenticodeVerifier()
+    launches: list[object] = []
+    adapter = WindowsUpdatePackageInstallerAdapter(
+        installation_probe=lambda: _registered_installation(tmp_path),
+        authenticode_verifier=verifier,
+        process_launcher=lambda *_args, **_kwargs: launches.append(object()),
+        update_root=tmp_path / "updates",
+    )
+
+    with pytest.raises(RuntimeError, match="must not declare"):
+        adapter.install_verified_package(
+            str(artifact),
+            version="2.0.0",
+            expected_size_bytes=len(contents),
+            expected_sha256=digest,
+            authenticode_certificate_subject="CN=CaveViewer",
+            authenticode_status="unsigned-community",
+            parent_process_id=4242,
+        )
+    assert verifier.calls == []
+    assert launches == []
+
+
 def test_windows_adapter_rejects_changed_or_unsigned_inputs_before_process_launch(
     tmp_path: Path,
 ):
@@ -185,6 +239,16 @@ def test_windows_adapter_requires_registered_exe_contract_and_subject(tmp_path: 
     )
     assert registered_adapter.supports_package_kind(
         "exe", authenticode_certificate_subject="CN=CaveViewer"
+    )
+    assert registered_adapter.supports_package_kind(
+        "exe",
+        authenticode_certificate_subject=None,
+        authenticode_status="unsigned-community",
+    )
+    assert not registered_adapter.supports_package_kind(
+        "exe",
+        authenticode_certificate_subject="CN=CaveViewer",
+        authenticode_status="unsigned-community",
     )
 
 

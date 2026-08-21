@@ -114,6 +114,8 @@ def test_frozen_installer_pipeline_is_per_user_and_fails_closed_without_signing(
     assert "pyinstaller==6.21.0" in builder
     assert "CaveViewer.exe" in builder
     assert "CAVEVIEWER_ALLOW_UNSIGNED_WINDOWS_PACKAGE" in packager
+    assert "CAVEVIEWER_WINDOWS_UNSIGNED_RELEASE" in packager
+    assert "unsigned-community" in packager
     assert "production Windows packages require Authenticode signing" in packager
     assert "CAVEVIEWER_WINDOWS_SIGNING_CERTIFICATE_SUBJECT" in packager
     assert "CAVEVIEWER_WINDOWS_TIMESTAMP_URL" in packager
@@ -131,6 +133,7 @@ def test_frozen_installer_pipeline_is_per_user_and_fails_closed_without_signing(
     assert '"/DAppVersion=$version"' not in packager
     assert '"/SCaveViewerSign=$inno_sign_command"' not in packager
     assert "windows_signed_installer" in metadata_writer
+    assert "windows_community_installer" in metadata_writer
     assert "windows.zip" not in packager
 
     assert "DefaultDirName={localappdata}\\Programs\\CaveViewer" in installer
@@ -154,6 +157,7 @@ def test_frozen_installer_pipeline_is_per_user_and_fails_closed_without_signing(
     assert "Get-AuthenticodeSignature -LiteralPath" in smoke
     assert "TimeStamperCertificate" in smoke
     assert "[AllowEmptyString()][string]$CertificateSubject" in smoke
+    assert "[switch]$AllowUnsignedCommunity" in smoke
     assert "-ExpectedCertificateSubject is required for a signed release smoke test." in smoke
     assert "CaveViewer smoke & café O'Brien" in smoke
     assert "--expected-version" in smoke
@@ -267,3 +271,32 @@ def test_package_metadata_tracks_the_final_exe_and_blocks_unsigned_publication(
     )
     assert rejected.returncode != 0
     assert "unsigned-test-only" in rejected.stderr
+
+    command[command.index("--authenticode-status") + 1] = "unsigned-community"
+    completed = subprocess.run(command, capture_output=True, text=True, check=False)
+    assert completed.returncode == 0, completed.stderr
+    package_payload = json.loads(metadata.read_text(encoding="utf-8"))
+    update_payload = json.loads(update_metadata.read_text(encoding="utf-8"))
+    assert package_payload["package_type"] == "windows_community_installer"
+    assert package_payload["authenticode_required"] is False
+    assert update_payload["authenticode_required"] is False
+    assert "authenticode_certificate_subject" not in package_payload
+    assert "authenticode_certificate_subject" not in update_payload
+
+    accepted = subprocess.run(
+        [
+            sys.executable,
+            str(verifier),
+            "--artifact-file",
+            str(artifact),
+            "--metadata-file",
+            str(metadata),
+            "--update-metadata-file",
+            str(update_metadata),
+            "--allow-unsigned-community",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert accepted.returncode == 0, accepted.stderr

@@ -128,7 +128,10 @@ def test_linux_release_workflows_build_before_packaging_on_fresh_runners():
 
 def test_windows_release_workflow_builds_the_exe_on_a_signing_capable_runner():
     workflow = (WORKFLOWS_DIR / "windows-release.yml").read_text(encoding="utf-8")
-    signed_artifact_condition = "inputs.publish || inputs.require_signed_installer"
+    signed_artifact_condition = (
+        "inputs.require_signed_installer || "
+        "(inputs.publish && !inputs.allow_unsigned_windows_community)"
+    )
 
     assert "Install Inno Setup" in workflow
     assert "choco install innosetup" in workflow
@@ -136,11 +139,15 @@ def test_windows_release_workflow_builds_the_exe_on_a_signing_capable_runner():
     assert "CaveViewer-${{ inputs.version }}-windows.exe" in workflow
     assert "CaveViewer-${{ inputs.version }}-windows.zip" not in workflow
     assert "CAVEVIEWER_ALLOW_UNSIGNED_WINDOWS_PACKAGE" in workflow
+    assert "CAVEVIEWER_WINDOWS_UNSIGNED_RELEASE" in workflow
     assert "CAVEVIEWER_WINDOWS_SIGNING_RUNNER" in workflow
     assert "CAVEVIEWER_WINDOWS_SIGNING_CERTIFICATE_SUBJECT" in workflow
     assert "CAVEVIEWER_WINDOWS_TIMESTAMP_URL" in workflow
     assert "require_signed_installer:" in workflow
-    assert workflow.count(signed_artifact_condition) >= 6
+    assert "allow_unsigned_windows_community:" in workflow
+    assert signed_artifact_condition in workflow
+    assert "SMOKE_UNSIGNED_COMMUNITY" in workflow
+    assert "AllowUnsignedCommunity" in workflow
     assert (
         "if: ${{ inputs.publish && needs.build-windows.result == 'success' }}"
         in workflow
@@ -393,7 +400,14 @@ def test_all_platform_release_workflow_builds_platforms_in_parallel_then_finaliz
         assert "publish: false" in job_block
         assert "source_sha: ${{ github.sha }}" in job_block
         if job_name == "windows":
-            assert "require_signed_installer: ${{ inputs.publish }}" in job_block
+            assert (
+                "require_signed_installer: ${{ inputs.publish && "
+                "!inputs.allow_unsigned_windows_community }}"
+            ) in job_block
+            assert (
+                "allow_unsigned_windows_community: ${{ inputs.publish && "
+                "inputs.allow_unsigned_windows_community }}"
+            ) in job_block
         else:
             assert "require_signed_installer:" not in job_block
 
@@ -407,6 +421,7 @@ def test_all_platform_release_workflow_builds_platforms_in_parallel_then_finaliz
     assert "platforms: all" in finalizer
     assert "source_sha: ${{ github.sha }}" in finalizer
     assert "target_branch: ${{ github.ref_name }}" in finalizer
+    assert "allow_unsigned_windows_community: ${{ inputs.allow_unsigned_windows_community }}" in finalizer
     assert "inputs.publish && !cancelled()" in finalizer
     for job_name, _called_workflow in job_contracts:
         assert f"      - {job_name}\n" in finalizer
@@ -425,10 +440,12 @@ def test_release_finalizer_is_the_single_shared_state_writer():
     assert "CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY" in workflow
     assert "CAVEVIEWER_GITHUB_REPO: ${{ github.repository }}" in workflow
     assert "./scripts/common/finalize_release.sh" in workflow
+    assert "--allow-unsigned-windows-community" in workflow
 
     assert finalizer.count("gh release create") == 1
     assert finalizer.count('git -C "$repo_root" push') == 1
     assert "origin/$target_branch moved" in finalizer
+    assert "--allow-unsigned-windows-community" in finalizer
     assert 'git -C "$repo_root" commit -m "Release $tag $manifest_channel"' in finalizer
     for manifest_path in (
         "updates/windows/$manifest_channel.json",

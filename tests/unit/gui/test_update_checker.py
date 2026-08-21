@@ -149,6 +149,8 @@ def test_windows_exe_manifest_requires_its_installer_channel_and_signer_subject(
     assert isinstance(parsed, update_checker.UpdateArtifact)
     assert parsed.package_kind == "exe"
     assert parsed.authenticode_certificate_subject == "CN=CaveViewer Update Publisher"
+    # Older signed manifests did not have an explicit status field.
+    assert parsed.authenticode_status == "verified"
 
     manifest.pop("install_channel")
     rejected_channel = update_checker._parse_update_manifest(
@@ -170,6 +172,50 @@ def test_windows_exe_manifest_requires_its_installer_channel_and_signer_subject(
     )
     assert isinstance(rejected_subject, update_checker.UpdateCheckFailed)
     assert "Authenticode certificate subject" in rejected_subject.error
+
+
+def test_unsigned_community_windows_exe_manifest_is_explicit_and_has_no_subject():
+    target = _windows_exe_target()
+    manifest = {
+        "latest_version": "2.0.0",
+        "download_url_windows_exe": "https://updates.example/CaveViewer-2.0.0-windows.exe",
+        "download_size_bytes_windows_exe": 123,
+        "sha256_windows_exe": "A" * 64,
+        "install_channel": "windows_installer",
+        "authenticode_status": "unsigned-community",
+    }
+
+    parsed = update_checker._parse_update_manifest(
+        "1.0.0",
+        manifest,
+        update_target=target,
+        package_kind_for_url=lambda _url: "exe",
+    )
+
+    assert isinstance(parsed, update_checker.UpdateArtifact)
+    assert parsed.authenticode_status == "unsigned-community"
+    assert parsed.authenticode_certificate_subject is None
+
+    manifest["authenticode_certificate_subject"] = "CN=Unexpected Publisher"
+    rejected_subject = update_checker._parse_update_manifest(
+        "1.0.0",
+        manifest,
+        update_target=target,
+        package_kind_for_url=lambda _url: "exe",
+    )
+    assert isinstance(rejected_subject, update_checker.UpdateCheckFailed)
+    assert "must not declare" in rejected_subject.error
+
+    manifest.pop("authenticode_certificate_subject")
+    manifest["authenticode_status"] = "unsigned-test-only"
+    rejected_status = update_checker._parse_update_manifest(
+        "1.0.0",
+        manifest,
+        update_target=target,
+        package_kind_for_url=lambda _url: "exe",
+    )
+    assert isinstance(rejected_status, update_checker.UpdateCheckFailed)
+    assert "unsupported Windows installer Authenticode status" in rejected_status.error
 
 
 def test_windows_zip_manifest_remains_a_manual_migration_package_without_signer_data():

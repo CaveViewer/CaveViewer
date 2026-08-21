@@ -28,6 +28,7 @@ _TARGET_URL_SUFFIXES = {
     "macos": (".dmg",),
 }
 _MACOS_ARCHITECTURES = ("arm64", "x86_64")
+_WINDOWS_AUTHENTICODE_STATUSES = ("verified", "unsigned-community")
 
 
 class ManifestInputError(ValueError):
@@ -46,6 +47,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--channel", choices=("stable", "prerelease"), required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--architecture", choices=_MACOS_ARCHITECTURES)
+    parser.add_argument(
+        "--authenticode-status",
+        choices=_WINDOWS_AUTHENTICODE_STATUSES,
+        default="verified",
+    )
     parser.add_argument("--authenticode-certificate-subject", default="")
     args = parser.parse_args(argv)
 
@@ -116,12 +122,15 @@ def _manifest_payload(args: argparse.Namespace, size_bytes: int, sha256: str) ->
                     "authenticode_certificate_subject": (
                         args.authenticode_certificate_subject
                     ),
+                    "authenticode_status": args.authenticode_status,
                     "download_url_windows_exe": args.download_url,
                     "download_size_bytes_windows_exe": size_bytes,
                     "install_channel": "windows_installer",
                     "sha256_windows_exe": sha256,
                 }
             )
+            if args.authenticode_status == "unsigned-community":
+                payload.pop("authenticode_certificate_subject")
         else:
             payload.update(
                 {
@@ -183,15 +192,32 @@ def main(argv: list[str] | None = None) -> int:
         args.target == "windows"
         and urlparse(args.download_url).path.lower().endswith(".exe")
     )
-    if is_windows_exe and not args.authenticode_certificate_subject:
+    if (
+        is_windows_exe
+        and args.authenticode_status == "verified"
+        and not args.authenticode_certificate_subject
+    ):
         raise ManifestInputError(
             "Windows EXE update manifests require "
+            "--authenticode-certificate-subject"
+        )
+    if (
+        is_windows_exe
+        and args.authenticode_status == "unsigned-community"
+        and args.authenticode_certificate_subject
+    ):
+        raise ManifestInputError(
+            "unsigned community Windows EXE update manifests must not declare "
             "--authenticode-certificate-subject"
         )
     if not is_windows_exe and args.authenticode_certificate_subject:
         raise ManifestInputError(
             "--authenticode-certificate-subject is only valid for Windows EXE "
             "update manifests"
+        )
+    if not is_windows_exe and args.authenticode_status != "verified":
+        raise ManifestInputError(
+            "--authenticode-status is only valid for Windows EXE update manifests"
         )
     size_bytes, sha256 = _artifact_integrity(args.artifact_file)
     _write_json(args.output, _manifest_payload(args, size_bytes, sha256))

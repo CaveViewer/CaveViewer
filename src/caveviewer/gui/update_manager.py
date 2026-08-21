@@ -232,6 +232,7 @@ class UpdateManager:
                 authenticode_certificate_subject=(
                     artifact.authenticode_certificate_subject
                 ),
+                authenticode_status=artifact.authenticode_status,
             )
             label = self._update_package_installer_adapter.install_action_label()
         except Exception as error:
@@ -480,6 +481,7 @@ class UpdateManager:
                 authenticode_certificate_subject=(
                     artifact.authenticode_certificate_subject or ""
                 ),
+                authenticode_status=artifact.authenticode_status,
                 parent_process_id=os.getpid(),
                 cancellation_requested=cancel_event.is_set,
             )

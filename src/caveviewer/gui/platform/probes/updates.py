@@ -29,6 +29,9 @@ _PACKAGE_KINDS_BY_CHANNEL: dict[str, frozenset[str]] = {
     "windows_app": frozenset({"zip", "exe"}),
     "linux_app": frozenset({"appimage", "deb", "rpm", "tar.gz"}),
 }
+_VALID_INSTALLER_AUTHENTICODE_STATUSES = frozenset(
+    {"verified", "unsigned-community"}
+)
 
 
 def _clean(value: object) -> str:
@@ -59,6 +62,7 @@ class UpdateManifestSchema:
     installer_package_kind: str | None = None
     installer_channel: str | None = None
     authenticode_certificate_subject_keys: tuple[str, ...] = ()
+    installer_authenticode_statuses: frozenset[str] = frozenset({"verified"})
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -110,12 +114,34 @@ class UpdateManifestSchema:
             raise ValueError(
                 "installer package contract requires Authenticode subject keys"
             )
+        authenticode_statuses = frozenset(
+            _clean(status).lower()
+            for status in self.installer_authenticode_statuses
+            if _clean(status)
+        )
+        if installer_package_kind and not authenticode_statuses:
+            raise ValueError(
+                "installer package contract requires at least one Authenticode status"
+            )
+        unknown_statuses = (
+            authenticode_statuses - _VALID_INSTALLER_AUTHENTICODE_STATUSES
+        )
+        if unknown_statuses:
+            raise ValueError(
+                "installer package contract has unsupported Authenticode statuses: "
+                + ", ".join(sorted(unknown_statuses))
+            )
         object.__setattr__(self, "installer_package_kind", installer_package_kind or None)
         object.__setattr__(self, "installer_channel", installer_channel or None)
         object.__setattr__(
             self,
             "authenticode_certificate_subject_keys",
             subject_keys,
+        )
+        object.__setattr__(
+            self,
+            "installer_authenticode_statuses",
+            authenticode_statuses,
         )
 
 
@@ -220,6 +246,7 @@ def _manifest_schema(
     installer_package_kind: str | None = None,
     installer_channel: str | None = None,
     authenticode_certificate_subject_keys: tuple[str, ...] = (),
+    installer_authenticode_statuses: frozenset[str] = frozenset({"verified"}),
 ) -> UpdateManifestSchema:
     return UpdateManifestSchema(
         download_url_keys=download_url_keys,
@@ -230,6 +257,7 @@ def _manifest_schema(
         installer_package_kind=installer_package_kind,
         installer_channel=installer_channel,
         authenticode_certificate_subject_keys=authenticode_certificate_subject_keys,
+        installer_authenticode_statuses=installer_authenticode_statuses,
     )
 
 
@@ -323,6 +351,9 @@ def select_update_profile(
                 installer_channel="windows_installer",
                 authenticode_certificate_subject_keys=(
                     "authenticode_certificate_subject",
+                ),
+                installer_authenticode_statuses=frozenset(
+                    {"verified", "unsigned-community"}
                 ),
             ),
         )

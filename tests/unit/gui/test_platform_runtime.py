@@ -51,9 +51,9 @@ class FakeUpdatePackageStorageAdapter:
 
 class FakeUpdatePackageInstallerAdapter:
     def supports_package_kind(
-        self, _package_kind, *, authenticode_certificate_subject
+        self, _package_kind, *, authenticode_certificate_subject, authenticode_status=None
     ):
-        del authenticode_certificate_subject
+        del authenticode_certificate_subject, authenticode_status
         raise AssertionError("runtime composition must not inspect an installer")
 
     def install_action_label(self):
