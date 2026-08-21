@@ -582,6 +582,11 @@ def test_splash_linux_fonts_do_not_multiply_the_tk_default_font(monkeypatch):
 def test_splash_navigation_actions_are_keyboard_accessible_without_fallthrough():
     source = inspect.getsource(splash_screen.show_splash_screen)
     update_action_source = inspect.getsource(splash_screen._bind_update_label_action)
+    initial_layout_source = source[
+        source.index("_create_map_library_panel(map_library_surface)") : source.index(
+            "root.deiconify()"
+        )
+    ]
 
     assert "navigation_frame = tk.Frame(" in source
     assert "def _create_navigation_icon(" in source
@@ -614,8 +619,9 @@ def test_splash_navigation_actions_are_keyboard_accessible_without_fallthrough()
     assert "help_surface = tk.Frame(right_frame, bg=_BG_COLOR)" in source
     assert "about_surface = tk.Frame(right_frame, bg=_BG_COLOR)" in source
     assert "def _show_preferences_surface() -> None:" in source
-    assert "preferences_surface_required_height" in source
-    assert "_ensure_preferences_panel()" in source
+    assert "preferences_surface_required_height" not in source
+    assert "panel = _ensure_preferences_panel()" in source
+    assert "_ensure_preferences_panel()" not in initial_layout_source
     assert "map_library_surface.pack_forget()" in source
     assert "preferences_surface.pack_forget()" in source
     assert "def _show_about_surface() -> None:" in source

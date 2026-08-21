@@ -2041,25 +2041,17 @@ def show_splash_screen(
     _create_map_library_panel(map_library_surface)
     map_library_surface.pack(fill="both", expand=True)
 
-    # Measure the complete Preferences form before showing the splash. This
-    # gives every right-hand surface one stable window height instead of
-    # visibly growing the window when someone selects Preferences later.
-    _ensure_preferences_panel()
-    map_library_surface.pack_forget()
-    preferences_surface.pack(fill="both", expand=True)
-    root.update_idletasks()
-    preferences_surface_required_height = (
-        root.winfo_reqheight() + px(_SPLASH_WINDOW_EXTRA_BOTTOM_SLACK)
-    )
-    preferences_surface.pack_forget()
-    map_library_surface.pack(fill="both", expand=True)
+    # Keep deferred navigation surfaces out of the initial Tk geometry pass.
+    # Preferences builds a large tabbed form and drains its geometry work while
+    # it is constructed. Creating it only after the user selects Preferences
+    # keeps the first splash paint bounded, including on constrained Windows
+    # virtual machines.
 
     map_library_navigation_item.focus_set()
     root.update_idletasks()
     final_height = max(
         px(_SPLASH_WINDOW_MIN_HEIGHT),
         root.winfo_reqheight() + px(_SPLASH_WINDOW_EXTRA_BOTTOM_SLACK),
-        preferences_surface_required_height,
     )
     max_height = max(px(360), root.winfo_screenheight() - px(80))
     final_height = min(final_height, max_height)
