@@ -484,7 +484,14 @@ def test_release_finalizer_is_the_single_shared_state_writer():
     assert finalizer.index('gh api "repos/$repo/releases/tags/$tag"') < (
         finalizer.index("manifest_git_paths=()")
     )
-    assert "verified_release_urls[$windows_exe_path]" in finalizer
+    assert "declare -A" not in finalizer
+    for release_url in (
+        "windows_exe_release_url",
+        "linux_x86_64_release_url",
+        "macos_arm64_release_url",
+        "macos_x86_64_release_url",
+    ):
+        assert f'--download-url "${release_url}"' in finalizer
     assert "release_base_url" not in finalizer
     assert 'git -C "$repo_root" commit -m "Release $tag $manifest_channel"' in finalizer
     for manifest_path in (

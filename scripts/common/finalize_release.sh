@@ -368,14 +368,30 @@ release_json_path="$(mktemp)"
 trap 'rm -f "$release_json_path"' EXIT
 gh api "repos/$repo/releases/tags/$tag" > "$release_json_path"
 
-declare -A verified_release_urls=()
+# macOS ships Bash 3.2, which supports the indexed release-assets array but not
+# associative arrays. Keep only the verified package URLs needed by manifests
+# in explicit scalars while still verifying every uploaded release asset first.
+verified_release_url=""
+windows_exe_release_url=""
+linux_x86_64_release_url=""
+macos_arm64_release_url=""
+macos_x86_64_release_url=""
 for release_asset in "${release_assets[@]}"; do
-  verified_release_urls["$release_asset"]="$(
+  verified_release_url="$(
     "$signing_python" "$release_asset_verifier" \
       --release-json "$release_json_path" \
       --artifact "$release_asset" \
       --expected-tag "$tag"
   )"
+  if [ "$release_asset" = "$windows_exe_path" ]; then
+    windows_exe_release_url="$verified_release_url"
+  elif [ "$release_asset" = "$linux_x86_64_path" ]; then
+    linux_x86_64_release_url="$verified_release_url"
+  elif [ "$release_asset" = "$macos_arm64_path" ]; then
+    macos_arm64_release_url="$verified_release_url"
+  elif [ "$release_asset" = "$macos_x86_64_path" ]; then
+    macos_x86_64_release_url="$verified_release_url"
+  fi
 done
 echo "Verified ${#release_assets[@]} uploaded release asset(s) against GitHub metadata."
 
@@ -397,7 +413,7 @@ sign_manifest() {
 if $selected_windows; then
   windows_manifest_args=(
     --version "$normalized_version" \
-    --download-url "${verified_release_urls[$windows_exe_path]}" \
+    --download-url "$windows_exe_release_url" \
     --artifact-file "$windows_exe_path" \
     --notes "$release_notes" \
     --channel "$manifest_channel" \
@@ -417,7 +433,7 @@ if $selected_linux_x86_64; then
   CAVEVIEWER_LINUX_UPDATE_ARCH=x86_64 \
   "$repo_root/scripts/linux/common/update_manifest.sh" \
     --version "$normalized_version" \
-    --download-url "${verified_release_urls[$linux_x86_64_path]}" \
+    --download-url "$linux_x86_64_release_url" \
     --artifact-file "$linux_x86_64_path" \
     --notes "$release_notes" \
     --channel "$manifest_channel"
@@ -428,7 +444,7 @@ if $selected_macos_arm64; then
   "$repo_root/scripts/macos/update_manifest.sh" \
     --arch arm64 \
     --version "$normalized_version" \
-    --download-url "${verified_release_urls[$macos_arm64_path]}" \
+    --download-url "$macos_arm64_release_url" \
     --artifact-file "$macos_arm64_path" \
     --notes "$release_notes" \
     --channel "$manifest_channel"
@@ -448,7 +464,7 @@ if $selected_macos_x86_64; then
   "$repo_root/scripts/macos/update_manifest.sh" \
     --arch x86_64 \
     --version "$normalized_version" \
-    --download-url "${verified_release_urls[$macos_x86_64_path]}" \
+    --download-url "$macos_x86_64_release_url" \
     --artifact-file "$macos_x86_64_path" \
     --notes "$release_notes" \
     --channel "$manifest_channel"
