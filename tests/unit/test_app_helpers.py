@@ -12,6 +12,7 @@ from types import ModuleType, SimpleNamespace
 import pytest
 
 from caveviewer import app
+from caveviewer import __main__ as module_entry
 from caveviewer.core.diagnostics import logging as logging_utils
 from caveviewer.core.chunking import builder as chunker
 from caveviewer.core.preferences import runtime_settings
@@ -35,6 +36,39 @@ class _LogRecorder:
 
     def error(self, message, *args):
         self.error_messages.append(self._format(message, args))
+
+
+def test_module_entry_arms_diagnostics_before_importing_the_application(monkeypatch):
+    calls = []
+
+    class StartupDiagnosticsRecorder:
+        def record(self, stage):
+            calls.append(("record", stage))
+
+        def record_exception(self, stage, error):
+            calls.append(("record_exception", stage, type(error).__name__))
+
+        def close(self):
+            calls.append(("close",))
+
+    diagnostics = StartupDiagnosticsRecorder()
+    app_module = ModuleType("caveviewer.app")
+    app_module.run = lambda **kwargs: calls.append(("run", kwargs))
+    monkeypatch.setattr(
+        module_entry,
+        "create_startup_diagnostics",
+        lambda: diagnostics,
+    )
+    monkeypatch.setitem(sys.modules, "caveviewer.app", app_module)
+
+    module_entry.run()
+
+    assert calls == [
+        ("record", "app_import_begin"),
+        ("record", "app_import_complete"),
+        ("run", {"startup_diagnostics": diagnostics}),
+        ("close",),
+    ]
 
 
 def test_console_helpers_write_flush_and_newline(monkeypatch):

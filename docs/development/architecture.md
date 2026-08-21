@@ -155,6 +155,13 @@ until an explicit consumer binds one, so ordinary viewer sessions do not create
 cache-local diagnostic files. It can record lifecycle and bounded exception
 context without changing cache construction or manual tracing.
 
+On Windows, the module entry point also owns one short-lived
+`StartupDiagnostics` session before importing `caveviewer.app`. It writes one
+user-owned `startup.log`, records pre-splash composition checkpoints, and owns
+one 20-second all-thread traceback watchdog. The session ends immediately after
+the Tk splash is deiconified, cancelling the watchdog and closing the log; it
+does not retain a timer or verbose file logging during ordinary viewing.
+
 ## Startup and map import
 
 Core import services discover supported models and dispatch them to the OBJ or

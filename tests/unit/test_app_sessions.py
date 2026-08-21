@@ -610,6 +610,37 @@ def test_run_returns_normally_when_main_succeeds(monkeypatch):
     assert called == [True]
 
 
+def test_run_uses_and_closes_optional_startup_diagnostics(monkeypatch):
+    calls = []
+
+    class StartupDiagnosticsRecorder:
+        def record(self, stage, **context):
+            calls.append(("record", stage, context))
+
+        def attach_to_root_logger(self):
+            calls.append(("attach",))
+
+        def close(self):
+            calls.append(("close",))
+
+    diagnostics = StartupDiagnosticsRecorder()
+
+    def run_main():
+        calls.append(("main",))
+        app._attach_startup_diagnostics_logging()
+
+    monkeypatch.setattr(app, "main", run_main)
+
+    app.run(startup_diagnostics=diagnostics)
+
+    assert calls == [
+        ("record", "app_run_entered", {}),
+        ("main",),
+        ("attach",),
+        ("close",),
+    ]
+
+
 def test_run_exits_cleanly_on_keyboard_interrupt(monkeypatch):
     recorder = _LogRecorder()
     configured = []
