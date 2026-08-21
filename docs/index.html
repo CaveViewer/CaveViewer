@@ -596,6 +596,80 @@ section { position: relative; }
   color: var(--brass);
 }
 
+/* ---- contact form: help / support ---- */
+
+.contact-card {
+  background: var(--panel);
+  border: 1px solid var(--line-faint);
+  border-radius: 6px;
+  padding: 32px;
+  margin-top: 24px;
+  max-width: 640px;
+}
+
+.contact-card h3 {
+  font-family: var(--display);
+  font-weight: 600;
+  font-size: 1.15rem;
+  color: var(--chalk);
+  margin: 0 0 6px;
+}
+
+.contact-card .contact-note {
+  font-size: 0.95rem;
+  color: var(--chalk-dim);
+  margin: 0 0 22px;
+}
+
+.contact-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.contact-form label {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--brass);
+  display: block;
+  margin-bottom: 6px;
+}
+
+.contact-form input[type="text"],
+.contact-form input[type="email"],
+.contact-form textarea {
+  width: 100%;
+  font-family: var(--body);
+  font-size: 0.98rem;
+  color: var(--chalk);
+  background: var(--panel-raised);
+  border: 1px solid var(--line-faint);
+  border-radius: 4px;
+  padding: 12px 14px;
+  transition: border-color 0.15s ease;
+}
+
+.contact-form input:focus,
+.contact-form textarea:focus {
+  outline: none;
+  border-color: var(--brass);
+}
+
+.contact-form textarea {
+  resize: vertical;
+  min-height: 140px;
+}
+
+.contact-form ::placeholder {
+  color: var(--line);
+}
+
+.contact-form .btn {
+  align-self: flex-start;
+}
+
 /* ---- media / video grid ---- */
 
 .media-grid {
@@ -947,6 +1021,7 @@ section { position: relative; }
       <a href="#tuning">Preferences</a>
       <a href="#media">Media</a>
       <a href="#about">About</a>
+      <a href="#contact">Contact</a>
     </div>
     <a class="nav__cta" href="https://github.com/CaveViewer/CaveViewer/releases/latest">Download</a>
   </div>
@@ -1460,6 +1535,30 @@ section { position: relative; }
           <div class="name" style="margin-top: 14px;">magic mr_v</div>
           <div class="role">CONTRIBUTOR</div>
         </div>
+
+        <div class="contact-card" id="contact">
+          <h3>Get in touch</h3>
+          <p class="contact-note">Questions, problems opening a scan, a bug to report — or if you just want to reach out and talk to the team. Send a message and it comes straight to us.</p>
+          <form class="contact-form" action="https://formsubmit.co/azdeatherage@gmail.com" method="POST">
+            <!-- FormSubmit config -->
+            <input type="hidden" name="_subject" value="CaveViewer contact form">
+            <input type="hidden" name="_template" value="table">
+            <input type="text" name="_honey" style="display:none" tabindex="-1" autocomplete="off">
+            <div>
+              <label for="cf-name">Your name</label>
+              <input type="text" id="cf-name" name="name" placeholder="Paul" required>
+            </div>
+            <div>
+              <label for="cf-email">Your email</label>
+              <input type="email" id="cf-email" name="email" placeholder="you@example.com" required>
+            </div>
+            <div>
+              <label for="cf-message">Message</label>
+              <textarea id="cf-message" name="message" placeholder="Tell us what's on your mind — if it's a problem, include which OS and which map." required></textarea>
+            </div>
+            <button class="btn btn--primary" type="submit">Send message</button>
+          </form>
+        </div>
       </div>
     </div>
   </section>
@@ -1468,7 +1567,8 @@ section { position: relative; }
 
 <footer class="footer">
   <div class="wrap footer__inner">
-    <div>CaveViewer — free, ad-free, runs offline once installed.</div>
+    <div>CaveViewer — free, ad-free, runs offline once installed.<br>
+    Need help? <a href="#contact">Use the contact form</a>.</div>
     <div>
       <a href="https://github.com/CaveViewer/CaveViewer">GitHub</a>
       &nbsp;·&nbsp;
