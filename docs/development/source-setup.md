@@ -167,14 +167,16 @@ the application version or creating artifacts. It uses
 select another prepared Python 3.12 interpreter. The interpreter must have
 `requirements.txt` and `requirements-dev.txt` installed.
 
-GitHub also runs separate Windows, Linux, macOS ARM64, and macOS Intel package
-smoke workflows for pull requests and pushes to `main` or `release/**` when
-packaging, release scripts, runtime source, or dependency files change. They
-also run weekly and can be dispatched manually. The Windows workflow builds an
-unsigned test-only EXE on a disposable runner and validates native installer
-paths, isolated install verification, and update handoff; publishing reruns
-the same smoke on the protected signer and requires the real signature. The
-Linux workflow builds the x86_64 AppImage
+GitHub runs separate Windows, Linux, and macOS ARM64 package-smoke workflows for
+pull requests and pushes to `main` or `release/**` when packaging, release
+scripts, runtime source, or dependency files change. They also run weekly and
+can be dispatched manually. The macOS Intel package-smoke workflow is
+manual-only; dispatch it from the Actions tab on the branch that needs native
+x86_64 validation. The Windows workflow builds an unsigned test-only EXE on a
+disposable runner and validates native installer paths, isolated install
+verification, and update handoff; publishing reruns the same smoke on the
+protected signer and requires the real signature. The Linux workflow builds the
+x86_64 AppImage
 through the Docker release path, validates AppImage desktop install/uninstall
 behavior in a temporary home directory, and validates the installed
 desktop/AppStream metadata. Both macOS workflows build a native DMG through the

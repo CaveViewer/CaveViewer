@@ -258,14 +258,22 @@ Windows status.
 ## macOS package validation
 
 The ARM64 and Intel package-smoke workflows run on native GitHub-hosted runners
-and call `scripts/macos/smoke_dmg.sh`. The validator checks package metadata and
-digest, mounts the DMG read-only, verifies bundle identity and version, checks
-every bundled Mach-O file for the requested architecture and runner-local
-library references, and exercises a controlled packaged CLI error path. The
-Intel smoke workflow also runs the complete pytest suite and source CLI
-checks on `macos-15-intel` before building. The Intel release workflow does the
-same by default, and skips only those duplicate source checks when the release
-uses `reuse_pr_validation`.
+and call `scripts/macos/smoke_dmg.sh`. ARM64 validation runs automatically for
+relevant pull requests, pushes, and its weekly schedule. Intel validation is
+manual-only and must be dispatched against the branch that needs x86_64
+coverage. The validator checks package metadata and digest, mounts the DMG
+read-only, verifies bundle identity and version, checks every bundled Mach-O
+file for the requested architecture and runner-local library references, and
+exercises a controlled packaged CLI error path. The Intel smoke workflow also
+runs the complete pytest suite and source CLI checks on `macos-15-intel` before
+building. The Intel release workflow does the same by default, and skips only
+those duplicate source checks when the release uses `reuse_pr_validation`.
+
+Dispatch Intel package validation from the Actions tab or with GitHub CLI:
+
+```bash
+gh workflow run macos-x86_64-package-smoke.yml --ref <branch>
+```
 
 Run the same package validation locally after creating a native DMG:
 
