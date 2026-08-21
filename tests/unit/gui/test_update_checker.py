@@ -6,6 +6,7 @@ import json
 import logging
 import ssl
 import urllib.error
+from dataclasses import replace
 
 import pytest
 
@@ -58,6 +59,11 @@ def _set_manifest(monkeypatch, data):
         return payload
 
     monkeypatch.setattr(update_checker, "_fetch_url_bytes_for_adapter", fetch)
+    monkeypatch.setattr(
+        update_checker,
+        "_probe_update_artifact_for_adapter",
+        lambda *_args, **_kwargs: None,
+    )
     return payload, calls
 
 
@@ -357,6 +363,84 @@ def test_fetch_url_bytes_uses_headers_timeout_and_tls_context(monkeypatch):
     assert opened["context"] is ssl_context
 
 
+def test_artifact_probe_uses_head_with_headers_timeout_and_tls_context(monkeypatch):
+    opened = {}
+    ssl_context = object()
+    tls_trust_adapter = FakeTlsTrustAdapter()
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+    def urlopen(request, *, timeout, context):
+        opened.update(request=request, timeout=timeout, context=context)
+        return FakeResponse()
+
+    monkeypatch.setattr(
+        update_checker,
+        "make_ssl_context",
+        lambda *, tls_trust_adapter: ssl_context,
+    )
+    monkeypatch.setattr(update_checker.urllib.request, "urlopen", urlopen)
+
+    update_checker._probe_update_artifact_for_adapter(
+        "https://example.invalid/CaveViewer.zip",
+        headers={"User-Agent": "CaveViewer-Probe-Test"},
+        timeout=17,
+        tls_trust_adapter=tls_trust_adapter,
+    )
+
+    assert opened["request"].get_method() == "HEAD"
+    assert opened["request"].full_url == "https://example.invalid/CaveViewer.zip"
+    assert opened["request"].get_header("User-agent") == "CaveViewer-Probe-Test"
+    assert opened["timeout"] == 17
+    assert opened["context"] is ssl_context
+
+
+@pytest.mark.parametrize("head_status", [405, 501])
+def test_artifact_probe_falls_back_to_a_one_byte_get(monkeypatch, head_status):
+    requests = []
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def read(self, size):
+            assert size == 1
+            return b"x"
+
+    def urlopen(request, *, timeout, context):
+        requests.append(request)
+        if request.get_method() == "HEAD":
+            raise urllib.error.HTTPError(
+                request.full_url,
+                head_status,
+                "HEAD unsupported",
+                {},
+                None,
+            )
+        return FakeResponse()
+
+    monkeypatch.setattr(update_checker, "make_ssl_context", lambda **_kwargs: object())
+    monkeypatch.setattr(update_checker.urllib.request, "urlopen", urlopen)
+
+    update_checker._probe_update_artifact_for_adapter(
+        "https://example.invalid/CaveViewer.zip",
+        headers={"Accept": "application/octet-stream"},
+        timeout=8,
+        tls_trust_adapter=FakeTlsTrustAdapter(),
+    )
+
+    assert [request.get_method() for request in requests] == ["HEAD", "GET"]
+    assert requests[1].get_header("Range") == "bytes=0-0"
+
+
 def test_download_update_target_uses_target_user_agent_and_tls_context(
     monkeypatch,
     tmp_path,
@@ -437,6 +521,47 @@ def test_update_check_handles_manifest_http_errors(
 
     failure = _assert_failed(result)
     assert str(code) in failure.error
+
+
+def test_missing_prerelease_manifest_means_no_prerelease_is_available(
+    monkeypatch,
+    caplog,
+    update_target,
+    tls_trust_adapter,
+):
+    prerelease_target = replace(
+        update_target,
+        manifest_channel="prerelease",
+        manifest_url="https://updates.example/prerelease.json",
+        manifest_signature_url="https://updates.example/prerelease.json.sig",
+    )
+    error = urllib.error.HTTPError(
+        prerelease_target.manifest_url,
+        404,
+        "not found",
+        {},
+        None,
+    )
+    monkeypatch.setattr(
+        update_checker,
+        "_fetch_url_bytes_for_adapter",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(error),
+    )
+
+    with caplog.at_level(logging.INFO, logger="caveviewer"):
+        result = update_checker.check_for_update_target(
+            "1.0.0",
+            update_target=prerelease_target,
+            tls_trust_adapter=tls_trust_adapter,
+        )
+
+    assert isinstance(result, update_checker.UpdateNotAvailable)
+    assert result.current_version == "1.0.0"
+    assert result.latest_version is None
+    assert any(
+        "No prerelease update manifest is published" in record.getMessage()
+        for record in caplog.records
+    )
 
 
 def test_update_check_handles_network_error(
@@ -661,6 +786,13 @@ def test_newer_update_requires_valid_signature(
         "_verify_manifest_signature_required_with_target",
         lambda *_args, **_kwargs: False,
     )
+    monkeypatch.setattr(
+        update_checker,
+        "_probe_update_artifact_for_adapter",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("must not probe an artifact from an unverified manifest")
+        ),
+    )
 
     result = update_checker.check_for_update_target(
         "1.0.0",
@@ -707,6 +839,136 @@ def test_newer_signed_update_returns_validated_artifact(
     assert result.artifact.sha256 == "a" * 64
     assert result.artifact.package_kind == "zip"
     assert not hasattr(result, "release_notes")
+
+
+def test_newer_signed_update_probes_the_artifact_before_returning_it(
+    monkeypatch,
+    update_target,
+    tls_trust_adapter,
+):
+    _set_manifest(
+        monkeypatch,
+        {
+            "latest_version": "2.0.0",
+            "windows_app_url": "https://x/update.zip",
+            "windows_app_size": 123,
+            "windows_app_sha256": "a" * 64,
+        },
+    )
+    monkeypatch.setattr(
+        update_checker,
+        "_verify_manifest_signature_required_with_target",
+        lambda *_args, **_kwargs: True,
+    )
+    probes = []
+    monkeypatch.setattr(
+        update_checker,
+        "_probe_update_artifact_for_adapter",
+        lambda url, *, headers, timeout, tls_trust_adapter: probes.append(
+            (url, headers, timeout, tls_trust_adapter)
+        ),
+    )
+
+    result = update_checker.check_for_update_target(
+        "1.0.0",
+        update_target=update_target,
+        tls_trust_adapter=tls_trust_adapter,
+    )
+
+    assert isinstance(result, update_checker.UpdateAvailable)
+    assert probes == [
+        (
+            "https://x/update.zip",
+            {
+                "Accept": "application/octet-stream",
+                "User-Agent": "CaveViewer-Target-Test",
+            },
+            8,
+            tls_trust_adapter,
+        )
+    ]
+
+
+@pytest.mark.parametrize("status", [404, 410])
+def test_unavailable_signed_artifact_is_not_offered(
+    monkeypatch,
+    update_target,
+    tls_trust_adapter,
+    status,
+):
+    _set_manifest(
+        monkeypatch,
+        {
+            "latest_version": "2.0.0",
+            "windows_app_url": "https://x/update.zip",
+            "windows_app_size": 123,
+            "windows_app_sha256": "a" * 64,
+        },
+    )
+    monkeypatch.setattr(
+        update_checker,
+        "_verify_manifest_signature_required_with_target",
+        lambda *_args, **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        update_checker,
+        "_probe_update_artifact_for_adapter",
+        lambda url, **_kwargs: (_ for _ in ()).throw(
+            urllib.error.HTTPError(url, status, "unavailable", {}, None)
+        ),
+    )
+
+    result = update_checker.check_for_update_target(
+        "1.0.0",
+        update_target=update_target,
+        tls_trust_adapter=tls_trust_adapter,
+    )
+
+    assert isinstance(result, update_checker.UpdateNotAvailable)
+    assert result.latest_version == "2.0.0"
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        urllib.error.HTTPError("https://x/update.zip", 500, "failure", {}, None),
+        urllib.error.URLError("offline"),
+        OSError("TLS unavailable"),
+    ],
+)
+def test_artifact_probe_failure_suppresses_the_update(
+    monkeypatch,
+    update_target,
+    tls_trust_adapter,
+    error,
+):
+    _set_manifest(
+        monkeypatch,
+        {
+            "latest_version": "2.0.0",
+            "windows_app_url": "https://x/update.zip",
+            "windows_app_size": 123,
+            "windows_app_sha256": "a" * 64,
+        },
+    )
+    monkeypatch.setattr(
+        update_checker,
+        "_verify_manifest_signature_required_with_target",
+        lambda *_args, **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        update_checker,
+        "_probe_update_artifact_for_adapter",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(error),
+    )
+
+    result = update_checker.check_for_update_target(
+        "1.0.0",
+        update_target=update_target,
+        tls_trust_adapter=tls_trust_adapter,
+    )
+
+    _assert_failed(result)
 
 
 @pytest.mark.parametrize(

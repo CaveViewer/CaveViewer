@@ -4,11 +4,12 @@ set -euo pipefail
 # Single-writer GitHub release finalizer.
 #
 # Platform workflows only build packages and upload workflow artifacts. This
-# script runs after those independent jobs finish, verifies every requested
-# artifact before changing external state, uploads the assets in one release
-# operation, writes/signs the requested update manifests, and pushes one
-# metadata commit. Keeping these shared writes in one process is what makes the
-# expensive platform builds safe to run in parallel.
+# script runs after those independent jobs finish, validates every requested
+# artifact locally, uploads the assets in one release operation, verifies the
+# uploaded bytes through GitHub's release API, then writes/signs the requested
+# update manifests and pushes one metadata commit. Keeping these shared writes
+# in one process is what makes the expensive platform builds safe to run in
+# parallel.
 
 print_usage() {
   cat <<'EOF'
@@ -338,8 +339,63 @@ echo "Finalizing $tag from source $resolved_expected_sha"
 echo "Platforms: $platforms"
 echo "Channel: $manifest_channel"
 
+# Only touch the GitHub release after every local artifact, package metadata,
+# signing-key, source-revision, and branch preflight succeeds. Update manifests
+# remain unchanged until the uploaded assets are independently verified below.
+if gh release view "$tag" --repo "$repo" >/dev/null 2>&1; then
+  echo "Release $tag already exists; uploading/replacing the requested assets."
+  gh release upload "$tag" "${release_assets[@]}" --repo "$repo" --clobber
+else
+  echo "Creating release $tag with ${#release_assets[@]} asset(s)."
+  create_args=(
+    "$tag"
+    "${release_assets[@]}"
+    --repo "$repo"
+    --target "$resolved_expected_sha"
+    --title "$tag"
+    --notes "$release_notes"
+  )
+  $pre_release && create_args+=(--prerelease)
+  gh release create "${create_args[@]}"
+fi
+
+release_asset_verifier="$repo_root/scripts/common/verify_release_asset.py"
+if [ ! -f "$release_asset_verifier" ]; then
+  echo "Error: release asset verifier is missing: $release_asset_verifier"
+  exit 1
+fi
+release_json_path="$(mktemp)"
+trap 'rm -f "$release_json_path"' EXIT
+gh api "repos/$repo/releases/tags/$tag" > "$release_json_path"
+
+# macOS ships Bash 3.2, which supports the indexed release-assets array but not
+# associative arrays. Keep only the verified package URLs needed by manifests
+# in explicit scalars while still verifying every uploaded release asset first.
+verified_release_url=""
+windows_exe_release_url=""
+linux_x86_64_release_url=""
+macos_arm64_release_url=""
+macos_x86_64_release_url=""
+for release_asset in "${release_assets[@]}"; do
+  verified_release_url="$(
+    "$signing_python" "$release_asset_verifier" \
+      --release-json "$release_json_path" \
+      --artifact "$release_asset" \
+      --expected-tag "$tag"
+  )"
+  if [ "$release_asset" = "$windows_exe_path" ]; then
+    windows_exe_release_url="$verified_release_url"
+  elif [ "$release_asset" = "$linux_x86_64_path" ]; then
+    linux_x86_64_release_url="$verified_release_url"
+  elif [ "$release_asset" = "$macos_arm64_path" ]; then
+    macos_arm64_release_url="$verified_release_url"
+  elif [ "$release_asset" = "$macos_x86_64_path" ]; then
+    macos_x86_64_release_url="$verified_release_url"
+  fi
+done
+echo "Verified ${#release_assets[@]} uploaded release asset(s) against GitHub metadata."
+
 manifest_git_paths=()
-release_base_url="https://github.com/$repo/releases/download/$tag"
 
 sign_manifest() {
   local manifest_path="$1"
@@ -357,7 +413,7 @@ sign_manifest() {
 if $selected_windows; then
   windows_manifest_args=(
     --version "$normalized_version" \
-    --download-url "$release_base_url/$(basename "$windows_exe_path")" \
+    --download-url "$windows_exe_release_url" \
     --artifact-file "$windows_exe_path" \
     --notes "$release_notes" \
     --channel "$manifest_channel" \
@@ -377,7 +433,7 @@ if $selected_linux_x86_64; then
   CAVEVIEWER_LINUX_UPDATE_ARCH=x86_64 \
   "$repo_root/scripts/linux/common/update_manifest.sh" \
     --version "$normalized_version" \
-    --download-url "$release_base_url/$(basename "$linux_x86_64_path")" \
+    --download-url "$linux_x86_64_release_url" \
     --artifact-file "$linux_x86_64_path" \
     --notes "$release_notes" \
     --channel "$manifest_channel"
@@ -388,7 +444,7 @@ if $selected_macos_arm64; then
   "$repo_root/scripts/macos/update_manifest.sh" \
     --arch arm64 \
     --version "$normalized_version" \
-    --download-url "$release_base_url/$(basename "$macos_arm64_path")" \
+    --download-url "$macos_arm64_release_url" \
     --artifact-file "$macos_arm64_path" \
     --notes "$release_notes" \
     --channel "$manifest_channel"
@@ -408,7 +464,7 @@ if $selected_macos_x86_64; then
   "$repo_root/scripts/macos/update_manifest.sh" \
     --arch x86_64 \
     --version "$normalized_version" \
-    --download-url "$release_base_url/$(basename "$macos_x86_64_path")" \
+    --download-url "$macos_x86_64_release_url" \
     --artifact-file "$macos_x86_64_path" \
     --notes "$release_notes" \
     --channel "$manifest_channel"
@@ -418,25 +474,6 @@ fi
 if [ "$current_version" != "$normalized_version" ]; then
   cv_set_app_version "$version_file" "$normalized_version"
   echo "Set APP_VERSION: $current_version -> $normalized_version"
-fi
-
-# Only touch the GitHub release after every local artifact, manifest, signature,
-# version, and branch preflight succeeds.
-if gh release view "$tag" --repo "$repo" >/dev/null 2>&1; then
-  echo "Release $tag already exists; uploading/replacing the requested assets."
-  gh release upload "$tag" "${release_assets[@]}" --repo "$repo" --clobber
-else
-  echo "Creating release $tag with ${#release_assets[@]} asset(s)."
-  create_args=(
-    "$tag"
-    "${release_assets[@]}"
-    --repo "$repo"
-    --target "$resolved_expected_sha"
-    --title "$tag"
-    --notes "$release_notes"
-  )
-  $pre_release && create_args+=(--prerelease)
-  gh release create "${create_args[@]}"
 fi
 
 git -C "$repo_root" add \

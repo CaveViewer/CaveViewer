@@ -19,6 +19,16 @@ SHA256_PATTERN = re.compile(r"[0-9a-f]{64}\Z")
 MANIFEST_PATHS = tuple(sorted(UPDATES_ROOT.glob("**/*.json")))
 
 
+def test_update_manifests_and_signatures_are_complete_pairs():
+    manifest_paths = set(UPDATES_ROOT.glob("**/*.json"))
+    signed_manifest_paths = {
+        signature.with_suffix("")
+        for signature in UPDATES_ROOT.glob("**/*.json.sig")
+    }
+
+    assert manifest_paths == signed_manifest_paths
+
+
 def _assert_common_contract(manifest: Path, payload: dict[str, object]) -> None:
     latest_version = payload.get("latest_version")
     assert isinstance(latest_version, str)
