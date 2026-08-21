@@ -205,8 +205,7 @@ Ed25519 private key used for update manifests. Only the finalizer receives this
 secret. Package-only runs do not require it.
 
 The GitHub release workflows do not currently offer an Authenticode signing
-path. For a Windows publication, select the
-`allow_unsigned_windows_community` option. It builds the same named EXE
+path. Selecting `publish` for Windows automatically builds the same named EXE
 on `windows-latest`, marks its package metadata `unsigned-community`, and
 permits the finalizer to publish it. The finalizer still verifies the installer
 size and SHA-256, then signs the Windows update manifest with

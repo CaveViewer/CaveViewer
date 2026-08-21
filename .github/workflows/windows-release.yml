@@ -17,12 +17,7 @@ on:
         type: boolean
         default: false
       publish:
-        description: "Publish the Windows installer EXE to the GitHub release"
-        required: false
-        type: boolean
-        default: false
-      allow_unsigned_windows_community:
-        description: "Publish the unsigned community installer; Windows warnings are expected"
+        description: "Publish the unsigned Windows installer EXE to the GitHub release; Windows warnings are expected"
         required: false
         type: boolean
         default: false
@@ -48,12 +43,12 @@ on:
         type: boolean
         default: false
       publish:
-        description: "Publish the Windows installer EXE to the GitHub release"
+        description: "Publish the unsigned Windows installer EXE to the GitHub release; Windows warnings are expected"
         required: false
         type: boolean
         default: false
       allow_unsigned_windows_community:
-        description: "Publish the unsigned community installer; Windows warnings are expected"
+        description: "Mark a package as unsigned-community when publication is finalized by the calling workflow"
         required: false
         type: boolean
         default: false
@@ -103,15 +98,6 @@ jobs:
       contents: read
 
     steps:
-      - name: Validate Windows installer policy
-        shell: bash
-        run: |
-          if [ "${{ inputs.publish }}" = "true" ] && [ "${{ inputs.allow_unsigned_windows_community }}" != "true" ]; then
-            echo "Error: published Windows installers currently require the unsigned community policy."
-            echo "Select 'Publish the unsigned community installer; Windows warnings are expected'."
-            exit 1
-          fi
-
       - name: Check out repository
         uses: actions/checkout@v7
         with:
@@ -133,7 +119,7 @@ jobs:
           RELEASE_VERSION: ${{ inputs.version }}
           RELEASE_NOTES: ${{ inputs.release_notes }}
           CAVEVIEWER_ALLOW_UNSIGNED_WINDOWS_PACKAGE: "1"
-          CAVEVIEWER_WINDOWS_UNSIGNED_RELEASE: ${{ inputs.allow_unsigned_windows_community && 'community' || '' }}
+          CAVEVIEWER_WINDOWS_UNSIGNED_RELEASE: ${{ (inputs.publish || inputs.allow_unsigned_windows_community) && 'community' || '' }}
           CAVEVIEWER_INNO_SETUP_COMPILER: "C:\\Program Files (x86)\\Inno Setup 6\\ISCC.exe"
         run: |
           ./scripts/release.sh \
@@ -147,7 +133,7 @@ jobs:
         shell: powershell
         env:
           SMOKE_VERSION: ${{ inputs.version }}
-          SMOKE_UNSIGNED_COMMUNITY: ${{ inputs.allow_unsigned_windows_community && 'true' || 'false' }}
+          SMOKE_UNSIGNED_COMMUNITY: ${{ (inputs.publish || inputs.allow_unsigned_windows_community) && 'true' || 'false' }}
         run: |
           $smokeArguments = @{
             InstallerPath = "dist/windows/packages/CaveViewer-$env:SMOKE_VERSION-windows.exe"
@@ -186,6 +172,6 @@ jobs:
       platforms: windows
       source_sha: ${{ inputs.source_sha || github.sha }}
       target_branch: ${{ github.ref_name }}
-      allow_unsigned_windows_community: ${{ inputs.allow_unsigned_windows_community }}
+      allow_unsigned_windows_community: ${{ inputs.publish || inputs.allow_unsigned_windows_community }}
     secrets:
       CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY: ${{ secrets.CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY }}

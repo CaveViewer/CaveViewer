@@ -19,12 +19,7 @@ on:
         type: boolean
         default: false
       publish:
-        description: "Publish every platform artifact to the GitHub release"
-        required: false
-        type: boolean
-        default: false
-      allow_unsigned_windows_community:
-        description: "Publish the unsigned Windows community installer; Windows warnings are expected"
+        description: "Publish every platform artifact; the Windows installer is unsigned and Windows warnings are expected"
         required: false
         type: boolean
         default: false
@@ -48,16 +43,6 @@ jobs:
     permissions:
       contents: read
 
-  validate-windows-publish-policy:
-    if: ${{ inputs.publish && inputs.allow_unsigned_windows_community != true }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: Reject unavailable signed Windows release path
-        run: |
-          echo "Error: published Windows installers currently require the unsigned community policy."
-          echo "Select 'Publish the unsigned Windows community installer; Windows warnings are expected'."
-          exit 1
-
   windows:
     name: Windows
     needs: essential-tests
@@ -72,9 +57,9 @@ jobs:
       release_notes: ${{ inputs.release_notes }}
       pre_release: ${{ inputs.pre_release }}
       publish: false
-      # Finalize Release is the single publisher. Its Windows artifact must be
-      # explicitly marked as the unsigned community installer when publishing.
-      allow_unsigned_windows_community: ${{ inputs.publish && inputs.allow_unsigned_windows_community }}
+      # Finalize Release is the single publisher. Mark the package as unsigned
+      # community only when the complete release will be published.
+      allow_unsigned_windows_community: ${{ inputs.publish }}
       skip_essential_tests: true
       reuse_pr_validation: ${{ inputs.reuse_pr_validation }}
       source_sha: ${{ github.sha }}
@@ -130,14 +115,12 @@ jobs:
   finalize-release:
     name: Finalize Release
     needs:
-      - validate-windows-publish-policy
       - windows
       - linux-x86_64
       - macos-arm64
       - macos-x86_64
     if: >-
       ${{ inputs.publish && !cancelled()
-          && needs.validate-windows-publish-policy.result != 'failure'
           && needs.windows.result == 'success'
           && needs['linux-x86_64'].result == 'success'
           && needs['macos-arm64'].result == 'success'
@@ -152,6 +135,6 @@ jobs:
       platforms: all
       source_sha: ${{ github.sha }}
       target_branch: ${{ github.ref_name }}
-      allow_unsigned_windows_community: ${{ inputs.allow_unsigned_windows_community }}
+      allow_unsigned_windows_community: ${{ inputs.publish }}
     secrets:
       CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY: ${{ secrets.CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY }}
