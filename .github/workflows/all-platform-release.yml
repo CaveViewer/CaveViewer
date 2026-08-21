@@ -57,6 +57,10 @@ jobs:
       release_notes: ${{ inputs.release_notes }}
       pre_release: ${{ inputs.pre_release }}
       publish: false
+      # Finalize Release is the single publisher, but it can only accept a
+      # release-ready signed Windows installer when the top-level release
+      # itself is publishing.
+      require_signed_installer: ${{ inputs.publish }}
       skip_essential_tests: true
       reuse_pr_validation: ${{ inputs.reuse_pr_validation }}
       source_sha: ${{ github.sha }}
