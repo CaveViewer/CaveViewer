@@ -128,6 +128,7 @@ def test_linux_release_workflows_build_before_packaging_on_fresh_runners():
 
 def test_windows_release_workflow_builds_the_exe_on_a_signing_capable_runner():
     workflow = (WORKFLOWS_DIR / "windows-release.yml").read_text(encoding="utf-8")
+    signed_artifact_condition = "inputs.publish || inputs.require_signed_installer"
 
     assert "Install Inno Setup" in workflow
     assert "choco install innosetup" in workflow
@@ -138,6 +139,12 @@ def test_windows_release_workflow_builds_the_exe_on_a_signing_capable_runner():
     assert "CAVEVIEWER_WINDOWS_SIGNING_RUNNER" in workflow
     assert "CAVEVIEWER_WINDOWS_SIGNING_CERTIFICATE_SUBJECT" in workflow
     assert "CAVEVIEWER_WINDOWS_TIMESTAMP_URL" in workflow
+    assert "require_signed_installer:" in workflow
+    assert workflow.count(signed_artifact_condition) >= 6
+    assert (
+        "if: ${{ inputs.publish && needs.build-windows.result == 'success' }}"
+        in workflow
+    )
     assert "Smoke-test Windows installer and update handoff" in workflow
     assert "smoke_installer.ps1" in workflow
     assert workflow.index("Smoke-test Windows installer and update handoff") < workflow.index(
@@ -385,6 +392,10 @@ def test_all_platform_release_workflow_builds_platforms_in_parallel_then_finaliz
         assert "permissions:\n      contents: write" in job_block
         assert "publish: false" in job_block
         assert "source_sha: ${{ github.sha }}" in job_block
+        if job_name == "windows":
+            assert "require_signed_installer: ${{ inputs.publish }}" in job_block
+        else:
+            assert "require_signed_installer:" not in job_block
 
     assert job_positions == sorted(job_positions)
     for input_name in ("version", "release_notes", "pre_release"):
