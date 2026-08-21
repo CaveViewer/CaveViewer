@@ -15,7 +15,7 @@ print_usage() {
 Usage:
   finalize_release.sh --platforms=<targets> --version=<version> --notes=<notes> \
     --artifacts-dir=<path> --target-branch=<branch> --expected-source-sha=<sha> \
-    [--pre-release]
+    [--pre-release] [--allow-unsigned-windows-community]
   finalize_release.sh --help
 
 Targets:
@@ -32,6 +32,7 @@ artifacts_dir=""
 target_branch=""
 expected_source_sha=""
 pre_release=false
+allow_unsigned_windows_community=false
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -79,6 +80,10 @@ while [ "$#" -gt 0 ]; do
       ;;
     --pre-release)
       pre_release=true
+      shift
+      ;;
+    --allow-unsigned-windows-community)
+      allow_unsigned_windows_community=true
       shift
       ;;
     -h|--help)
@@ -168,6 +173,11 @@ for requested_platform in "${requested_platforms[@]}"; do
   select_platform "${requested_platform// /}"
 done
 
+if $allow_unsigned_windows_community && ! $selected_windows; then
+  echo "Error: --allow-unsigned-windows-community requires the windows platform."
+  exit 1
+fi
+
 find_artifact() {
   local filename="$1"
   local matches=()
@@ -242,15 +252,29 @@ fi
   "$signing_key_path"
 
 if $selected_windows; then
-  "$signing_python" "$repo_root/scripts/windows/verify_package_metadata.py" \
+  windows_metadata_verify_args=(
     --artifact-file "$windows_exe_path" \
     --metadata-file "$windows_meta_path" \
     --update-metadata-file "$windows_update_meta_path"
-  windows_authenticode_certificate_subject="$(
+  )
+  if $allow_unsigned_windows_community; then
+    windows_metadata_verify_args+=(--allow-unsigned-community)
+  fi
+  "$signing_python" "$repo_root/scripts/windows/verify_package_metadata.py" \
+    "${windows_metadata_verify_args[@]}"
+  windows_authenticode_status="$(
     "$signing_python" -c \
-      'import json, sys; value = json.load(open(sys.argv[1], encoding="utf-8")).get("authenticode_certificate_subject"); isinstance(value, str) and value.strip() or sys.exit("Error: Windows update metadata has no Authenticode certificate subject."); print(value.strip())' \
+      'import json, sys; value = json.load(open(sys.argv[1], encoding="utf-8")).get("authenticode_status"); isinstance(value, str) and value.strip() or sys.exit("Error: Windows update metadata has no Authenticode status."); print(value.strip())' \
       "$windows_update_meta_path"
   )"
+  windows_authenticode_certificate_subject=""
+  if ! $allow_unsigned_windows_community; then
+    windows_authenticode_certificate_subject="$(
+      "$signing_python" -c \
+        'import json, sys; value = json.load(open(sys.argv[1], encoding="utf-8")).get("authenticode_certificate_subject"); isinstance(value, str) and value.strip() or sys.exit("Error: Windows update metadata has no Authenticode certificate subject."); print(value.strip())' \
+        "$windows_update_meta_path"
+    )"
+  fi
 fi
 
 resolved_expected_sha="$(git -C "$repo_root" rev-parse "${expected_source_sha}^{commit}")"
@@ -306,13 +330,21 @@ sign_manifest() {
 }
 
 if $selected_windows; then
-  "$repo_root/scripts/windows/update_manifest.sh" \
+  windows_manifest_args=(
     --version "$normalized_version" \
     --download-url "$release_base_url/$(basename "$windows_exe_path")" \
     --artifact-file "$windows_exe_path" \
     --notes "$release_notes" \
     --channel "$manifest_channel" \
-    --authenticode-certificate-subject "$windows_authenticode_certificate_subject"
+    --authenticode-status "$windows_authenticode_status"
+  )
+  if [ -n "$windows_authenticode_certificate_subject" ]; then
+    windows_manifest_args+=(
+      --authenticode-certificate-subject "$windows_authenticode_certificate_subject"
+    )
+  fi
+  "$repo_root/scripts/windows/update_manifest.sh" \
+    "${windows_manifest_args[@]}"
   sign_manifest "$repo_root/updates/windows/$manifest_channel.json"
 fi
 

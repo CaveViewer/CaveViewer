@@ -11,6 +11,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
@@ -53,7 +55,12 @@ def _copy_release_files(destination: Path) -> None:
         shutil.copy2(source, target)
 
 
-def _write_release_artifacts(artifacts_dir: Path, version: str) -> None:
+def _write_release_artifacts(
+    artifacts_dir: Path,
+    version: str,
+    *,
+    community_windows: bool = False,
+) -> None:
     artifact_names = (
         f"CaveViewer-{version}-windows.exe",
         f"CaveViewer-{version}-x86_64.AppImage",
@@ -71,23 +78,33 @@ def _write_release_artifacts(artifacts_dir: Path, version: str) -> None:
     windows_artifact = artifacts_dir / f"CaveViewer-{version}-windows.exe"
     windows_metadata = {
         "artifact_file": windows_artifact.name,
-        "authenticode_certificate_subject": "CN=CaveViewer Test Publisher",
-        "authenticode_required": True,
-        "authenticode_status": "verified",
+        "authenticode_required": not community_windows,
+        "authenticode_status": (
+            "unsigned-community" if community_windows else "verified"
+        ),
         "entrypoint": "CaveViewerSetup.exe",
-        "package_type": "windows_signed_installer",
+        "package_type": (
+            "windows_community_installer"
+            if community_windows
+            else "windows_signed_installer"
+        ),
         "sha256": hashlib.sha256(windows_artifact.read_bytes()).hexdigest(),
         "size_bytes": windows_artifact.stat().st_size,
         "version": version,
     }
+    if not community_windows:
+        windows_metadata["authenticode_certificate_subject"] = (
+            "CN=CaveViewer Test Publisher"
+        )
     (artifacts_dir / f"CaveViewer-{version}.json").write_text(
         json.dumps(windows_metadata, sort_keys=True),
         encoding="utf-8",
     )
     windows_update_metadata = {
-        "authenticode_certificate_subject": "CN=CaveViewer Test Publisher",
-        "authenticode_required": True,
-        "authenticode_status": "verified",
+        "authenticode_required": not community_windows,
+        "authenticode_status": (
+            "unsigned-community" if community_windows else "verified"
+        ),
         "download_size_bytes": windows_artifact.stat().st_size,
         "download_size_bytes_windows_exe": windows_artifact.stat().st_size,
         "download_url": "",
@@ -97,6 +114,10 @@ def _write_release_artifacts(artifacts_dir: Path, version: str) -> None:
         "sha256": hashlib.sha256(windows_artifact.read_bytes()).hexdigest(),
         "sha256_windows_exe": hashlib.sha256(windows_artifact.read_bytes()).hexdigest(),
     }
+    if not community_windows:
+        windows_update_metadata["authenticode_certificate_subject"] = (
+            "CN=CaveViewer Test Publisher"
+        )
     (artifacts_dir / f"CaveViewer-{version}.update.json").write_text(
         json.dumps(windows_update_metadata, sort_keys=True),
         encoding="utf-8",
@@ -153,8 +174,10 @@ def test_finalizer_rejects_incomplete_artifacts_before_creating_a_release(
     assert gh_log.read_text(encoding="utf-8").splitlines() == ["auth status"]
 
 
+@pytest.mark.parametrize("community_windows", [False, True])
 def test_finalizer_publishes_all_assets_and_pushes_one_signed_metadata_commit(
     tmp_path: Path,
+    community_windows: bool,
 ):
     working_repository = tmp_path / "working"
     origin_repository = tmp_path / "origin.git"
@@ -167,7 +190,11 @@ def test_finalizer_publishes_all_assets_and_pushes_one_signed_metadata_commit(
 
     working_repository.mkdir()
     _copy_release_files(working_repository)
-    _write_release_artifacts(artifacts_dir, version)
+    _write_release_artifacts(
+        artifacts_dir,
+        version,
+        community_windows=community_windows,
+    )
 
     fake_bin.mkdir()
     fake_gh = fake_bin / "gh"
@@ -215,7 +242,7 @@ def test_finalizer_publishes_all_assets_and_pushes_one_signed_metadata_commit(
     )
     finalizer = working_repository / "scripts" / "common" / "finalize_release.sh"
 
-    _run(
+    finalizer_args: list[str | Path] = [
         finalizer,
         "--platforms=all",
         f"--version={version}",
@@ -224,9 +251,10 @@ def test_finalizer_publishes_all_assets_and_pushes_one_signed_metadata_commit(
         f"--artifacts-dir={artifacts_dir}",
         "--target-branch=main",
         f"--expected-source-sha={source_sha}",
-        cwd=working_repository,
-        env=env,
-    )
+    ]
+    if community_windows:
+        finalizer_args.append("--allow-unsigned-windows-community")
+    _run(*finalizer_args, cwd=working_repository, env=env)
 
     commands = gh_log.read_text(encoding="utf-8").splitlines()
     assert sum(command.startswith("release create ") for command in commands) == 1
@@ -278,10 +306,15 @@ def test_finalizer_publishes_all_assets_and_pushes_one_signed_metadata_commit(
         )
         if manifest_path == "updates/windows/stable.json":
             assert manifest_payload["install_channel"] == "windows_installer"
-            assert (
-                manifest_payload["authenticode_certificate_subject"]
-                == "CN=CaveViewer Test Publisher"
-            )
+            if community_windows:
+                assert manifest_payload["authenticode_status"] == "unsigned-community"
+                assert "authenticode_certificate_subject" not in manifest_payload
+            else:
+                assert manifest_payload["authenticode_status"] == "verified"
+                assert (
+                    manifest_payload["authenticode_certificate_subject"]
+                    == "CN=CaveViewer Test Publisher"
+                )
         assert b"\r\n" not in manifest.read_bytes()
         signature = base64.b64decode(
             manifest.with_name(f"{manifest.name}.sig").read_text(encoding="ascii").strip(),

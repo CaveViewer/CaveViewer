@@ -2,7 +2,8 @@
 set -euo pipefail
 
 # Build the single Windows installer release artifact from the frozen payload.
-# Production packages fail closed unless Authenticode signing is available.
+# Production packages fail closed unless Authenticode signing is available or a
+# deliberately selected unsigned community-release policy is in effect.
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../.." && pwd)"
@@ -21,8 +22,10 @@ Builds CaveViewer-<version>-windows.exe from the frozen Windows payload.
 The default production contract requires both
 CAVEVIEWER_WINDOWS_SIGNING_CERTIFICATE_SUBJECT and
 CAVEVIEWER_WINDOWS_TIMESTAMP_URL. Set
-CAVEVIEWER_ALLOW_UNSIGNED_WINDOWS_PACKAGE=1 only for non-publishing package
-validation; unsigned metadata is explicitly rejected by release finalization.
+CAVEVIEWER_ALLOW_UNSIGNED_WINDOWS_PACKAGE=1 only for package validation, or
+combine it with CAVEVIEWER_WINDOWS_UNSIGNED_RELEASE=community for the explicit
+unsigned community-release policy. Release finalization rejects every other
+unsigned package status.
 EOF
 }
 
@@ -157,10 +160,18 @@ fi
 certificate_subject="${CAVEVIEWER_WINDOWS_SIGNING_CERTIFICATE_SUBJECT:-}"
 timestamp_url="${CAVEVIEWER_WINDOWS_TIMESTAMP_URL:-}"
 allow_unsigned="${CAVEVIEWER_ALLOW_UNSIGNED_WINDOWS_PACKAGE:-0}"
+unsigned_release="${CAVEVIEWER_WINDOWS_UNSIGNED_RELEASE:-}"
 case "$allow_unsigned" in
   0|1) ;;
   *)
     echo "Error: CAVEVIEWER_ALLOW_UNSIGNED_WINDOWS_PACKAGE must be 0 or 1." >&2
+    exit 1
+    ;;
+esac
+case "$unsigned_release" in
+  ""|community) ;;
+  *)
+    echo "Error: CAVEVIEWER_WINDOWS_UNSIGNED_RELEASE must be empty or 'community'." >&2
     exit 1
     ;;
 esac
@@ -174,16 +185,27 @@ if [ -n "$certificate_subject" ] && [ "${timestamp_url#https://}" = "$timestamp_
   echo "Error: CAVEVIEWER_WINDOWS_TIMESTAMP_URL must use HTTPS." >&2
   exit 1
 fi
+if [ -n "$certificate_subject" ] && [ -n "$unsigned_release" ]; then
+  echo "Error: Authenticode signing and CAVEVIEWER_WINDOWS_UNSIGNED_RELEASE cannot be combined." >&2
+  exit 1
+fi
+if [ -n "$unsigned_release" ] && [ "$allow_unsigned" != "1" ]; then
+  echo "Error: CAVEVIEWER_WINDOWS_UNSIGNED_RELEASE=community requires CAVEVIEWER_ALLOW_UNSIGNED_WINDOWS_PACKAGE=1." >&2
+  exit 1
+fi
 
 signing_enabled=false
 authenticode_status="unsigned-test-only"
 if [ -n "$certificate_subject" ]; then
   signing_enabled=true
   authenticode_status="verified"
+elif [ "$unsigned_release" = "community" ]; then
+  authenticode_status="unsigned-community"
 elif [ "$allow_unsigned" != "1" ]; then
   echo "Error: production Windows packages require Authenticode signing." >&2
   echo "Set CAVEVIEWER_WINDOWS_SIGNING_CERTIFICATE_SUBJECT and CAVEVIEWER_WINDOWS_TIMESTAMP_URL on a protected signing host." >&2
-  echo "For non-publishing package validation only, set CAVEVIEWER_ALLOW_UNSIGNED_WINDOWS_PACKAGE=1." >&2
+  echo "For package validation, set CAVEVIEWER_ALLOW_UNSIGNED_WINDOWS_PACKAGE=1." >&2
+  echo "For an explicitly configured unsigned community release, also set CAVEVIEWER_WINDOWS_UNSIGNED_RELEASE=community." >&2
   exit 1
 fi
 
@@ -305,6 +327,12 @@ if $signing_enabled; then
     --artifact-file "$artifact_path" \
     --metadata-file "$metadata_path" \
     --update-metadata-file "$update_metadata_path"
+elif [ "$authenticode_status" = "unsigned-community" ]; then
+  "$metadata_python" "$script_dir/verify_package_metadata.py" \
+    --artifact-file "$artifact_path" \
+    --metadata-file "$metadata_path" \
+    --update-metadata-file "$update_metadata_path" \
+    --allow-unsigned-community
 fi
 
 echo "Packaged Windows installer: $artifact_path"

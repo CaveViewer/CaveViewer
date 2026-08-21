@@ -455,8 +455,10 @@ separate `Retry` action. A normal ready update remains a single footer label:
 after three seconds, `Update ready` becomes the focused platform action that
 reveals the already verified package: `Show in Finder` on macOS, `Show in
 Explorer` for a Windows ZIP migration package, or `Open Download Folder` on
-Linux. A registered signed Windows EXE instead presents `Install and restart
-<version>` immediately. Its explicit click downloads the EXE, starts the
+Linux. A registered Windows EXE whose signed update manifest declares either
+the default Authenticode policy or the explicit unsigned-community policy
+instead presents `Install and restart <version>` immediately. Its explicit
+click downloads the EXE, starts the
 handoff after promotion, and the splash exits only after the installer process
 starts. A cancellation request only signals the manager worker; it cleans
 staging output and returns to the available update without affecting an already
@@ -474,10 +476,13 @@ removes the temporary staging directory.
 A verified package is atomically promoted through a hidden temporary sibling.
 macOS, Linux, and Windows ZIP migration packages go to `~/Downloads` and stay
 manual: a visible splash makes one automatic reveal attempt and retains a
-manual platform action. A signed Windows EXE from a registered frozen Inno
-Setup installation goes to `%LOCALAPPDATA%\CaveViewer\updates` instead. The
-handoff rechecks size/SHA-256 and Authenticode status, exact publisher, and
-timestamp immediately before it starts the installer with distinct arguments.
+manual platform action. A Windows EXE from a registered frozen Inno Setup
+installation goes to `%LOCALAPPDATA%\CaveViewer\updates` instead. The handoff
+always rechecks size/SHA-256. The default verified policy also rechecks
+Authenticode status, exact publisher, and timestamp; the explicit
+unsigned-community policy instead relies on the already verified signed
+manifest and requires no publisher. It then starts the installer with distinct
+arguments.
 The installer validates `--expected-version`, waits at most five minutes for
 `--wait-pid`, verifies the new payload, records its per-user provenance marker,
 and relaunches it. A source/ZIP launch has no marker and must use the manual

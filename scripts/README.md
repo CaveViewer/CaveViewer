@@ -165,8 +165,14 @@ Windows payload builds and installer packages require a native Windows host.
 `scripts/windows/build.sh` creates the frozen one-folder payload and
 `scripts/windows/package.sh` wraps it in `CaveViewer-<version>-windows.exe`.
 Production packages require an Authenticode certificate in the protected
-Windows signer; `CAVEVIEWER_ALLOW_UNSIGNED_WINDOWS_PACKAGE=1` is limited to
-non-publishing package validation and its metadata is rejected by finalization.
+Windows signer. `CAVEVIEWER_ALLOW_UNSIGNED_WINDOWS_PACKAGE=1` alone is limited
+to non-publishing package validation. Combining it with
+`CAVEVIEWER_WINDOWS_UNSIGNED_RELEASE=community` creates the explicit
+`unsigned-community` package policy, which GitHub release finalization accepts
+only when its matching workflow input is enabled. It keeps the same
+`CaveViewer-<version>-windows.exe` filename and produces expected Windows
+unknown-publisher warnings. All other unsigned metadata is rejected by
+finalization.
 `scripts/windows/smoke_installer.ps1` validates the native per-user install and
 update handoff. The disposable package-smoke workflow permits only an unsigned
 test artifact; publishing reruns it with the expected certificate subject and

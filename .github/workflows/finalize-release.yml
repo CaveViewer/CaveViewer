@@ -29,6 +29,11 @@ on:
         description: "Branch that receives the single release metadata commit"
         required: true
         type: string
+      allow_unsigned_windows_community:
+        description: "Accept only explicit unsigned-community Windows package metadata"
+        required: false
+        type: boolean
+        default: false
     secrets:
       CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY:
         description: "Private key used to sign published update manifests"
@@ -97,6 +102,7 @@ jobs:
           RELEASE_SOURCE_SHA: ${{ inputs.source_sha }}
           RELEASE_TARGET_BRANCH: ${{ inputs.target_branch }}
           PRE_RELEASE: ${{ inputs.pre_release }}
+          ALLOW_UNSIGNED_WINDOWS_COMMUNITY: ${{ inputs.allow_unsigned_windows_community }}
         run: |
           finalize_args=(
             --platforms="$RELEASE_PLATFORMS"
@@ -108,5 +114,8 @@ jobs:
           )
           if [ "$PRE_RELEASE" = "true" ]; then
             finalize_args+=(--pre-release)
+          fi
+          if [ "$ALLOW_UNSIGNED_WINDOWS_COMMUNITY" = "true" ]; then
+            finalize_args+=(--allow-unsigned-windows-community)
           fi
           ./scripts/common/finalize_release.sh "${finalize_args[@]}"

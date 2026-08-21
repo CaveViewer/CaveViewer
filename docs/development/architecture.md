@@ -706,8 +706,9 @@ The update checker returns one immutable outcome: `UpdateAvailable`,
 `UpdateNotAvailable`, or `UpdateCheckFailed`. Only `UpdateAvailable` contains
 an `UpdateArtifact`, whose version, HTTPS URL, package kind, positive size, and
 SHA-256 were validated before signature verification. A Windows EXE also needs
-the signed `windows_installer` channel and an exact Authenticode certificate
-subject. `UpdateManager` stores that available outcome only for the
+the signed `windows_installer` channel and an explicit installer policy: the
+default `verified` policy needs an exact Authenticode certificate subject,
+while `unsigned-community` must declare no publisher. `UpdateManager` stores that available outcome only for the
 download/retry workflow and passes its non-optional artifact to the worker.
 Release notes remain a published manifest field but are not carried through the
 manager or splash without a designed UI. The immutable update snapshot carries
@@ -720,9 +721,12 @@ Linux asks the desktop portal to reveal its package with a containing-folder
 fallback. The sole execution boundary is `WindowsUpdatePackageInstallerAdapter`.
 It is available only to a frozen EXE whose exact executable path matches the
 per-user Inno Setup provenance marker. After an explicit splash action it
-rehashes the private EXE, requires a valid Authenticode chain, exact signed
-publisher, and RFC-3161 timestamp, then uses a distinct argument vector to
-start `CaveViewerSetup.exe /SP- /SILENT /NORESTART /LOG=... --update
+rehashes the private EXE. The default `verified` policy additionally requires a
+valid Authenticode chain, exact signed publisher, and RFC-3161 timestamp. The
+only unsigned alternative is the signed-manifest `unsigned-community` policy,
+which has no declared Authenticode publisher and still requires the manifest
+signature, package hash, size, provenance marker, and explicit user action.
+It then uses a distinct argument vector to start `CaveViewerSetup.exe /SP- /SILENT /NORESTART /LOG=... --update
 --wait-pid <pid> --expected-version <version>`. The installer owns the bounded
 wait, new-payload verification, provenance update, and relaunch. A failure
 returns the manager to `READY`; the Tk splash closes only after the detached

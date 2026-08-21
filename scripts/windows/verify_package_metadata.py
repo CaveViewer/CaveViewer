@@ -19,11 +19,16 @@ def _sha256(path: Path) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Verify signed CaveViewer Windows installer metadata."
+        description="Verify release-ready CaveViewer Windows installer metadata."
     )
     parser.add_argument("--artifact-file", type=Path, required=True)
     parser.add_argument("--metadata-file", type=Path, required=True)
     parser.add_argument("--update-metadata-file", type=Path, required=True)
+    parser.add_argument(
+        "--allow-unsigned-community",
+        action="store_true",
+        help="Accept only the explicit unsigned-community release policy.",
+    )
     args = parser.parse_args()
 
     artifact = args.artifact_file
@@ -43,11 +48,18 @@ def main() -> int:
         )
     artifact_sha256 = _sha256(artifact)
 
+    expected_status = (
+        "unsigned-community" if args.allow_unsigned_community else "verified"
+    )
     expected = {
         "artifact_file": artifact.name,
-        "package_type": "windows_signed_installer",
-        "authenticode_required": True,
-        "authenticode_status": "verified",
+        "package_type": (
+            "windows_community_installer"
+            if args.allow_unsigned_community
+            else "windows_signed_installer"
+        ),
+        "authenticode_required": not args.allow_unsigned_community,
+        "authenticode_status": expected_status,
         "entrypoint": "CaveViewerSetup.exe",
         "size_bytes": artifact.stat().st_size,
         "sha256": artifact_sha256,
@@ -64,12 +76,20 @@ def main() -> int:
         )
 
     certificate_subject = payload.get("authenticode_certificate_subject")
-    if not isinstance(certificate_subject, str) or not certificate_subject.strip():
+    if args.allow_unsigned_community:
+        if certificate_subject:
+            raise SystemExit(
+                "Error: unsigned community Windows installer metadata must not "
+                "declare an Authenticode certificate subject"
+            )
+        certificate_subject = ""
+    elif not isinstance(certificate_subject, str) or not certificate_subject.strip():
         raise SystemExit(
             "Error: Windows installer metadata is not release-ready: "
             "authenticode_certificate_subject is missing"
         )
-    certificate_subject = certificate_subject.strip()
+    else:
+        certificate_subject = certificate_subject.strip()
 
     try:
         update_payload = json.loads(
@@ -86,8 +106,8 @@ def main() -> int:
             f"{args.update_metadata_file}"
         )
     expected_update = {
-        "authenticode_required": True,
-        "authenticode_status": "verified",
+        "authenticode_required": not args.allow_unsigned_community,
+        "authenticode_status": expected_status,
         "download_size_bytes": artifact.stat().st_size,
         "download_size_bytes_windows_exe": artifact.stat().st_size,
         "install_channel": "windows_installer",
@@ -104,7 +124,13 @@ def main() -> int:
         "download_url_windows_exe"
     ):
         update_mismatches.append("download URL aliases differ")
-    if update_payload.get("authenticode_certificate_subject") != certificate_subject:
+    update_certificate_subject = update_payload.get("authenticode_certificate_subject")
+    if args.allow_unsigned_community:
+        if update_certificate_subject:
+            update_mismatches.append(
+                "unsigned community update metadata declares an Authenticode certificate subject"
+            )
+    elif update_certificate_subject != certificate_subject:
         update_mismatches.append("Authenticode certificate subjects differ")
     if update_mismatches:
         raise SystemExit(

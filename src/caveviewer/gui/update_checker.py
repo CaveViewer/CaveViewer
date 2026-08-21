@@ -53,6 +53,7 @@ class UpdateArtifact:
     sha256: str
     package_kind: str
     authenticode_certificate_subject: str | None = None
+    authenticode_status: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -236,6 +237,7 @@ def _parse_update_manifest(
         )
 
     authenticode_certificate_subject: str | None = None
+    authenticode_status: str | None = None
     manifest_schema = update_target.manifest_schema
     if package_kind == manifest_schema.installer_package_kind:
         declared_channel = str(data.get("install_channel") or "").strip().lower()
@@ -247,11 +249,29 @@ def _parse_update_manifest(
                     "installer channel."
                 ),
             )
+        declared_authenticode_status = str(
+            data.get("authenticode_status") or "verified"
+        ).strip().lower()
+        if (
+            declared_authenticode_status
+            not in manifest_schema.installer_authenticode_statuses
+        ):
+            return UpdateCheckFailed(
+                current_version=current_version,
+                error=(
+                    "Update manifest has an unsupported Windows installer "
+                    "Authenticode status."
+                ),
+            )
+        authenticode_status = declared_authenticode_status
         authenticode_certificate_subject = _first_non_empty_str(
             data,
             manifest_schema.authenticode_certificate_subject_keys,
         )
-        if not authenticode_certificate_subject:
+        if (
+            authenticode_status == "verified"
+            and not authenticode_certificate_subject
+        ):
             return UpdateCheckFailed(
                 current_version=current_version,
                 error=(
@@ -259,6 +279,19 @@ def _parse_update_manifest(
                     "subject for its Windows installer."
                 ),
             )
+        if (
+            authenticode_status == "unsigned-community"
+            and authenticode_certificate_subject
+        ):
+            return UpdateCheckFailed(
+                current_version=current_version,
+                error=(
+                    "Unsigned community Windows installer metadata must not "
+                    "declare an Authenticode certificate subject."
+                ),
+            )
+        if authenticode_status == "unsigned-community":
+            authenticode_certificate_subject = None
 
     return UpdateArtifact(
         version=latest_tag,
@@ -267,6 +300,7 @@ def _parse_update_manifest(
         sha256=download_sha256,
         package_kind=package_kind,
         authenticode_certificate_subject=authenticode_certificate_subject,
+        authenticode_status=authenticode_status,
     )
 
 

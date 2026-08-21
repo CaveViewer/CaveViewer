@@ -145,6 +145,7 @@ def test_writer_generates_platform_aliases_and_escaped_json(
         assert payload["architecture"] == architecture
     if authenticode_certificate_subject is not None:
         assert payload["install_channel"] == "windows_installer"
+        assert payload["authenticode_status"] == "verified"
         assert (
             payload["authenticode_certificate_subject"]
             == authenticode_certificate_subject
@@ -243,4 +244,67 @@ def test_writer_rejects_a_windows_exe_without_its_authenticode_subject(tmp_path:
 
     assert completed.returncode == 2
     assert "--authenticode-certificate-subject" in completed.stderr
+    assert not output.exists()
+
+
+def test_writer_generates_an_explicit_unsigned_community_windows_manifest(
+    tmp_path: Path,
+):
+    artifact = tmp_path / "CaveViewer-1.2.3-windows.exe"
+    artifact.write_bytes(b"community installer fixture")
+    output = tmp_path / "updates" / "stable.json"
+
+    completed = _run_writer(
+        "--target",
+        "windows",
+        "--version",
+        "1.2.3",
+        "--download-url",
+        "https://downloads.example/CaveViewer-1.2.3-windows.exe",
+        "--artifact-file",
+        artifact,
+        "--notes",
+        "Release notes",
+        "--channel",
+        "stable",
+        "--authenticode-status",
+        "unsigned-community",
+        "--output",
+        output,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert payload["authenticode_status"] == "unsigned-community"
+    assert "authenticode_certificate_subject" not in payload
+
+
+def test_writer_rejects_a_community_manifest_that_declares_a_publisher(tmp_path: Path):
+    artifact = tmp_path / "CaveViewer-1.2.3-windows.exe"
+    artifact.write_bytes(b"community installer fixture")
+    output = tmp_path / "updates" / "stable.json"
+
+    completed = _run_writer(
+        "--target",
+        "windows",
+        "--version",
+        "1.2.3",
+        "--download-url",
+        "https://downloads.example/CaveViewer-1.2.3-windows.exe",
+        "--artifact-file",
+        artifact,
+        "--notes",
+        "Release notes",
+        "--channel",
+        "stable",
+        "--authenticode-status",
+        "unsigned-community",
+        "--authenticode-certificate-subject",
+        "CN=Unexpected Publisher",
+        "--output",
+        output,
+    )
+
+    assert completed.returncode == 2
+    assert "must not declare" in completed.stderr
     assert not output.exists()

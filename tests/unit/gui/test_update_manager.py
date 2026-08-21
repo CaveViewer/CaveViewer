@@ -86,12 +86,26 @@ class FakeUpdatePackageInstallerAdapter:
         self.calls = []
 
     def supports_package_kind(
-        self, package_kind, *, authenticode_certificate_subject
+        self,
+        package_kind,
+        *,
+        authenticode_certificate_subject,
+        authenticode_status=None,
     ):
         return (
             self.supported
             and package_kind == "exe"
-            and authenticode_certificate_subject == "CN=CaveViewer Update Publisher"
+            and (
+                (
+                    authenticode_status in (None, "verified")
+                    and authenticode_certificate_subject
+                    == "CN=CaveViewer Update Publisher"
+                )
+                or (
+                    authenticode_status == "unsigned-community"
+                    and not authenticode_certificate_subject
+                )
+            )
         )
 
     def install_action_label(self):
@@ -179,6 +193,7 @@ def _available_exe_outcome(payload: bytes):
             sha256=hashlib.sha256(payload).hexdigest(),
             package_kind="exe",
             authenticode_certificate_subject="CN=CaveViewer Update Publisher",
+            authenticode_status="verified",
         ),
     )
 
@@ -263,7 +278,47 @@ def test_explicit_windows_install_action_downloads_then_hands_off_a_verified_exe
             arguments["authenticode_certificate_subject"]
             == "CN=CaveViewer Update Publisher"
         )
+        assert arguments["authenticode_status"] == "verified"
         assert arguments["parent_process_id"] > 0
+    finally:
+        manager.shutdown()
+
+
+def test_explicit_windows_install_action_accepts_a_manifest_verified_community_exe(
+    tmp_path,
+):
+    payload = b"unsigned community Windows installer fixture"
+    installer_adapter = FakeUpdatePackageInstallerAdapter()
+
+    def download_update(_url, _size, destination, **_kwargs):
+        Path(destination).write_bytes(payload)
+
+    community_outcome = UpdateAvailable(
+        current_version="1.0.63",
+        artifact=UpdateArtifact(
+            version="1.0.64",
+            download_url="https://example.invalid/CaveViewer-1.0.64-windows.exe",
+            size_bytes=len(payload),
+            sha256=hashlib.sha256(payload).hexdigest(),
+            package_kind="exe",
+            authenticode_status="unsigned-community",
+        ),
+    )
+    manager, _adapter = _checked_manager(
+        tmp_path,
+        download_update,
+        outcome=community_outcome,
+        installer_adapter=installer_adapter,
+    )
+    try:
+        assert manager.snapshot().install_action_label == "Install and restart"
+        assert manager.start_installation()
+        assert manager.wait_for_background_task(1)
+        assert manager.install_downloaded_update()
+        assert manager.wait_for_background_task(1)
+        _payload_path, arguments = installer_adapter.calls[0]
+        assert arguments["authenticode_certificate_subject"] == ""
+        assert arguments["authenticode_status"] == "unsigned-community"
     finally:
         manager.shutdown()
 

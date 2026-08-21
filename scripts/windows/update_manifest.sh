@@ -6,7 +6,7 @@ set -euo pipefail
 # size, SHA-256, and release notes for the in-app update client.
 #
 # Usage:
-#   update_manifest.sh --version=<version> --download-url=<windows_package_url> --artifact-file=<windows_package_file> --authenticode-certificate-subject=<subject> [--notes=<release_notes>] [--channel=<stable|prerelease>]
+#   update_manifest.sh --version=<version> --download-url=<windows_package_url> --artifact-file=<windows_package_file> [--authenticode-status=<verified|unsigned-community>] [--authenticode-certificate-subject=<subject>] [--notes=<release_notes>] [--channel=<stable|prerelease>]
 # Example:
 #   update_manifest.sh --version=1.0.1 \
 #     --download-url="https://github.com/<owner>/CaveViewer/releases/download/v1.0.1/CaveViewer-1.0.1-windows.exe" \
@@ -16,7 +16,7 @@ set -euo pipefail
 print_usage() {
   cat <<'EOF'
 Usage:
-  update_manifest.sh --version=<version> --download-url=<url> --artifact-file=<path> --authenticode-certificate-subject=<subject> [--notes=<release_notes>] [--channel=<stable|prerelease>]
+  update_manifest.sh --version=<version> --download-url=<url> --artifact-file=<path> [--authenticode-status=<verified|unsigned-community>] [--authenticode-certificate-subject=<subject>] [--notes=<release_notes>] [--channel=<stable|prerelease>]
 EOF
 }
 
@@ -26,6 +26,7 @@ windows_package_file=""
 release_notes=""
 channel="stable"
 authenticode_certificate_subject=""
+authenticode_status="verified"
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --version=*) version="${1#--version=}" ; shift ;;
@@ -70,6 +71,13 @@ while [ "$#" -gt 0 ]; do
       authenticode_certificate_subject="$1"
       shift
       ;;
+    --authenticode-status=*) authenticode_status="${1#--authenticode-status=}" ; shift ;;
+    --authenticode-status)
+      shift
+      if [ "$#" -eq 0 ]; then echo "Error: --authenticode-status requires a value."; exit 1; fi
+      authenticode_status="$1"
+      shift
+      ;;
     -h|--help)
       print_usage
       exit 0
@@ -87,8 +95,8 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-if [ -z "$version" ] || [ -z "$windows_package_url" ] || [ -z "$windows_package_file" ] || [ -z "$authenticode_certificate_subject" ]; then
-  echo "Error: --version, --download-url, --artifact-file, and --authenticode-certificate-subject are required."
+if [ -z "$version" ] || [ -z "$windows_package_url" ] || [ -z "$windows_package_file" ]; then
+  echo "Error: --version, --download-url, and --artifact-file are required."
   print_usage
   exit 1
 fi
@@ -99,6 +107,24 @@ case "$channel" in
   stable|prerelease) ;;
   *)
     echo "Error: invalid --channel '$channel' (expected stable or prerelease)"
+    exit 1
+    ;;
+esac
+case "$authenticode_status" in
+  verified)
+    if [ -z "$authenticode_certificate_subject" ]; then
+      echo "Error: --authenticode-certificate-subject is required when --authenticode-status=verified."
+      exit 1
+    fi
+    ;;
+  unsigned-community)
+    if [ -n "$authenticode_certificate_subject" ]; then
+      echo "Error: unsigned community manifests must not declare an Authenticode certificate subject."
+      exit 1
+    fi
+    ;;
+  *)
+    echo "Error: invalid --authenticode-status '$authenticode_status' (expected verified or unsigned-community)"
     exit 1
     ;;
 esac
@@ -120,5 +146,6 @@ fi
   --artifact-file "$windows_package_file" \
   --notes "$release_notes" \
   --channel "$channel" \
+  --authenticode-status "$authenticode_status" \
   --authenticode-certificate-subject "$authenticode_certificate_subject" \
   --output "$manifest_path"

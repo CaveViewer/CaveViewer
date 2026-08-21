@@ -11,13 +11,16 @@ CaveViewer publishes four user-installable artifacts from four GitHub workflows:
 
 | Target | Workflow | Runner | User artifact |
 |---|---|---|---|
-| `windows` | `Windows Release` | `windows-latest` for package validation; configured protected Windows signer for publishing | `CaveViewer-<version>-windows.exe` |
+| `windows` | `Windows Release` | `windows-latest` for package validation and the explicit community policy; configured protected Windows signer for Authenticode releases | `CaveViewer-<version>-windows.exe` |
 | `linux-x86_64` | `Linux x86_64 Release` | `ubuntu-latest` | `CaveViewer-<version>-x86_64.AppImage` |
 | `macos-arm64` | `macOS ARM64 Release` | `macos-15` | `CaveViewer-<version>-macos-arm64.dmg` |
 | `macos-x86_64` | `macOS x86_64 Release` | `macos-15-intel` | `CaveViewer-<version>-macos-x86_64.dmg` |
 
-The Windows release asset is a signed installer EXE. It embeds a PyInstaller
-one-folder CaveViewer payload, installs per-user under
+The Windows release asset keeps the single familiar
+`CaveViewer-<version>-windows.exe` name. By default it is an Authenticode-signed
+installer EXE; the explicit community policy publishes the same asset unsigned
+and Windows warnings are expected. It embeds a PyInstaller one-folder
+CaveViewer payload, installs per-user under
 `%LOCALAPPDATA%\Programs\CaveViewer`, and keeps user state at the compatible
 `%USERPROFILE%\.caveviewer` location. The installer adds a versioned payload
 directory only after copying a complete frozen payload, verifies a controlled
@@ -28,11 +31,14 @@ provenance and relaunches the new application. The asset name is versioned for
 release integrity, while the embedded installer entrypoint is
 `CaveViewerSetup.exe`.
 
-`Windows Package Smoke` exercises the unsigned mechanical contract on a
+`Windows Package Smoke` exercises the unsigned test-only mechanical contract on a
 disposable Windows runner, including paths with spaces, Unicode, apostrophes,
 and ampersands, isolated noninteractive installation, and the update wait
-handoff. A publishing `Windows Release` reruns that smoke on the protected
-signer, where it requires the expected Authenticode publisher and timestamp.
+handoff. A signed publishing `Windows Release` reruns that smoke on the
+protected signer, where it requires the expected Authenticode publisher and
+timestamp. An unsigned community publishing run uses the same smoke coverage
+on a GitHub-hosted Windows runner but requires the exact
+`unsigned-community` metadata policy instead.
 
 The legacy Windows `launch.bat`/`setup.ps1` source helpers remain available for
 developers and migration support only; they are not included in the new
@@ -208,9 +214,23 @@ Windows runner must be configured through the non-secret repository variables
 key must exist only in that protected runner's current-user certificate store.
 The package step signs frozen PE payload binaries, installer, and uninstaller
 with SHA-256 and an RFC-3161 timestamp, then verifies them before calculating
-the release digest. Hosted package-only runs may create an explicitly
-`unsigned-test-only` artifact for mechanical validation, but the finalizer and
-local publisher reject that metadata so it cannot be published.
+the release digest.
+
+For the small-community distribution path, `Windows Release` and `All Platform
+Release` also expose `allow_unsigned_windows_community`. Set it only together
+with `publish`. That choice builds the same named EXE on `windows-latest`,
+marks its package metadata `unsigned-community`, and permits the finalizer to
+publish it. The finalizer still verifies the installer size and SHA-256, then
+signs the Windows update manifest with `CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY`.
+Installed CaveViewer applications verify that manifest signature and require an
+explicit `Install and restart` click before launching the downloaded installer.
+This does not remove Windows SmartScreen or unknown-publisher warnings; users
+must accept those warnings until the project obtains Authenticode signing.
+
+Hosted package-only runs may create an explicitly `unsigned-test-only` artifact
+for mechanical validation, but the finalizer and local publisher reject that
+metadata so it cannot be published. The finalizer accepts no other unsigned
+Windows status.
 
 ## macOS package validation
 
@@ -326,6 +346,9 @@ Publishing also requires an authenticated GitHub CLI and
   migration packages remain reveal-only. On a signed Windows installer build,
   also exercise `Install and restart`: validate the publisher/timestamp,
   update wait/version contract, controlled payload verification, and relaunch.
+  On an unsigned community Windows build, confirm the manifest reports
+  `unsigned-community`, the package hash is accepted, the Windows warning is
+  expected, and the same update wait/version and relaunch contract succeeds.
   Report any platform that was not tested directly.
 - Validate the rendered Linux desktop file with `desktop-file-validate` and the
   metainfo file with `appstreamcli validate --no-net --pedantic`.

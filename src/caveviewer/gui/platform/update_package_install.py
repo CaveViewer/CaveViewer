@@ -1,8 +1,11 @@
-"""Verify and launch a signed Windows installer after explicit user consent.
+"""Verify and launch a Windows installer after explicit user consent.
 
 The update manager owns lifecycle state; this focused platform adapter owns the
-Windows-only provenance check, Authenticode verification, and detached process
-handoff.  It never fetches a manifest or downloads a package.
+Windows-only provenance check, package-integrity verification, and detached
+process handoff. Verified installers additionally require Authenticode. An
+unsigned community installer is allowed only after the caller has verified the
+signed update manifest that explicitly selected that policy. It never fetches
+a manifest or downloads a package.
 """
 
 from __future__ import annotations
@@ -28,6 +31,8 @@ _WINDOWS_INSTALLATION_KEY = r"Software\CaveViewer\Installation"
 _WINDOWS_INSTALLER_CHANNEL = "windows_installer"
 _WINDOWS_INSTALLER_EXE = "CaveViewer.exe"
 _AUTHENTICODE_TIMEOUT_SECONDS = 20
+_AUTHENTICODE_VERIFIED = "verified"
+_AUTHENTICODE_UNSIGNED_COMMUNITY = "unsigned-community"
 _POWERSHELL_SIGNATURE_SCRIPT = " ".join(
     (
         "$ErrorActionPreference = 'Stop';",
@@ -46,6 +51,27 @@ _POWERSHELL_SIGNATURE_SCRIPT = " ".join(
 )
 
 
+def _normalized_authenticode_status(value: str | None) -> str:
+    """Use the legacy signed policy when an older manifest omits the field."""
+    normalized = str(value or _AUTHENTICODE_VERIFIED).strip().lower()
+    return normalized or _AUTHENTICODE_VERIFIED
+
+
+def _is_supported_authenticode_contract(
+    authenticode_status: str | None,
+    authenticode_certificate_subject: str | None,
+) -> bool:
+    """Return whether one explicit installer-authentication mode is coherent."""
+    normalized_status = _normalized_authenticode_status(authenticode_status)
+    normalized_subject = str(authenticode_certificate_subject or "").strip()
+    return (
+        normalized_status == _AUTHENTICODE_VERIFIED and bool(normalized_subject)
+    ) or (
+        normalized_status == _AUTHENTICODE_UNSIGNED_COMMUNITY
+        and not normalized_subject
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class WindowsInstallerInstallation:
     """The verified per-user installation that may perform an EXE handoff."""
@@ -62,6 +88,7 @@ class UpdatePackageInstallerAdapter(Protocol):
         package_kind: str,
         *,
         authenticode_certificate_subject: str | None,
+        authenticode_status: str | None = None,
     ) -> bool:
         """Return whether the package may use this process's install handoff."""
 
@@ -75,11 +102,12 @@ class UpdatePackageInstallerAdapter(Protocol):
         version: str,
         expected_size_bytes: int,
         expected_sha256: str,
-        authenticode_certificate_subject: str,
+        authenticode_certificate_subject: str | None,
+        authenticode_status: str | None = None,
         parent_process_id: int,
         cancellation_requested: Callable[[], bool] | None = None,
     ) -> None:
-        """Recheck and start a detached signed installer handoff."""
+        """Recheck and start a detached installer handoff."""
 
 
 class AuthenticodeVerifier(Protocol):
@@ -147,7 +175,13 @@ class PowerShellAuthenticodeVerifier:
 
 
 class WindowsUpdatePackageInstallerAdapter:
-    """Start only a rechecked signed EXE from the installed Windows channel."""
+    """Start only a rechecked EXE from the registered Windows install channel.
+
+    ``verified`` installers must pass Authenticode validation. The explicit
+    ``unsigned-community`` mode skips that platform signature only after the
+    caller has cryptographically verified the release manifest and supplied
+    the downloaded file's expected size and SHA-256.
+    """
 
     def __init__(
         self,
@@ -169,11 +203,15 @@ class WindowsUpdatePackageInstallerAdapter:
         package_kind: str,
         *,
         authenticode_certificate_subject: str | None,
+        authenticode_status: str | None = None,
     ) -> bool:
         """Allow automatic handoff only from the registered frozen installation."""
         return (
             str(package_kind).strip().lower() == "exe"
-            and bool(str(authenticode_certificate_subject or "").strip())
+            and _is_supported_authenticode_contract(
+                authenticode_status,
+                authenticode_certificate_subject,
+            )
             and self._installation_probe() is not None
         )
 
@@ -188,7 +226,8 @@ class WindowsUpdatePackageInstallerAdapter:
         version: str,
         expected_size_bytes: int,
         expected_sha256: str,
-        authenticode_certificate_subject: str,
+        authenticode_certificate_subject: str | None,
+        authenticode_status: str | None = None,
         parent_process_id: int,
         cancellation_requested: Callable[[], bool] | None = None,
     ) -> None:
@@ -206,7 +245,10 @@ class WindowsUpdatePackageInstallerAdapter:
         payload = Path(payload_path).expanduser().resolve(strict=False)
         normalized_version = str(version).strip()
         normalized_sha256 = str(expected_sha256).strip().lower()
-        normalized_subject = str(authenticode_certificate_subject).strip()
+        normalized_subject = str(authenticode_certificate_subject or "").strip()
+        normalized_authenticode_status = _normalized_authenticode_status(
+            authenticode_status
+        )
         try:
             normalized_size = int(expected_size_bytes)
             process_id = int(parent_process_id)
@@ -223,13 +265,28 @@ class WindowsUpdatePackageInstallerAdapter:
             character not in "0123456789abcdef" for character in normalized_sha256
         ):
             raise RuntimeError("The verified update has an invalid SHA-256.")
-        if not normalized_subject:
+        if (
+            normalized_authenticode_status == _AUTHENTICODE_VERIFIED
+            and not normalized_subject
+        ):
             raise RuntimeError("The verified update has no Authenticode publisher.")
+        if (
+            normalized_authenticode_status == _AUTHENTICODE_UNSIGNED_COMMUNITY
+            and normalized_subject
+        ):
+            raise RuntimeError(
+                "The unsigned community update must not declare an Authenticode publisher."
+            )
+        if normalized_authenticode_status not in {
+            _AUTHENTICODE_VERIFIED,
+            _AUTHENTICODE_UNSIGNED_COMMUNITY,
+        }:
+            raise RuntimeError("The verified update has an unsupported installer policy.")
         if process_id <= 0:
             raise RuntimeError("The current CaveViewer process ID is invalid.")
         if payload.suffix.lower() != ".exe":
             raise RuntimeError(
-                "Automatic Windows installation supports only a verified EXE installer."
+                "Automatic Windows installation supports only an EXE installer."
             )
         if not payload.is_file():
             raise RuntimeError(f"The verified update package is unavailable: {payload}")
@@ -242,10 +299,11 @@ class WindowsUpdatePackageInstallerAdapter:
                 "The verified update package changed after download and will not be installed."
             )
 
-        self._authenticode_verifier.verify(
-            payload,
-            expected_certificate_subject=normalized_subject,
-        )
+        if normalized_authenticode_status == _AUTHENTICODE_VERIFIED:
+            self._authenticode_verifier.verify(
+                payload,
+                expected_certificate_subject=normalized_subject,
+            )
         if cancellation_requested is not None and cancellation_requested():
             raise UpdateInstallationCancelled("Update installation was cancelled.")
         self._update_root.mkdir(parents=True, exist_ok=True)
@@ -270,6 +328,7 @@ class WindowsUpdatePackageInstallerAdapter:
             creationflags=_DETACHED_PROCESS | _CREATE_NEW_PROCESS_GROUP,
         )
 
+
 class UnsupportedUpdatePackageInstallerAdapter:
     """Fail closed on platforms or install modes without an EXE handoff contract."""
 
@@ -278,9 +337,10 @@ class UnsupportedUpdatePackageInstallerAdapter:
         package_kind: str,
         *,
         authenticode_certificate_subject: str | None,
+        authenticode_status: str | None = None,
     ) -> bool:
         """Declare that no package is executable through this adapter."""
-        del package_kind, authenticode_certificate_subject
+        del package_kind, authenticode_certificate_subject, authenticode_status
         return False
 
     def install_action_label(self) -> str:
@@ -294,7 +354,8 @@ class UnsupportedUpdatePackageInstallerAdapter:
         version: str,
         expected_size_bytes: int,
         expected_sha256: str,
-        authenticode_certificate_subject: str,
+        authenticode_certificate_subject: str | None,
+        authenticode_status: str | None = None,
         parent_process_id: int,
         cancellation_requested: Callable[[], bool] | None = None,
     ) -> None:
@@ -304,6 +365,7 @@ class UnsupportedUpdatePackageInstallerAdapter:
             expected_size_bytes,
             expected_sha256,
             authenticode_certificate_subject,
+            authenticode_status,
             parent_process_id,
             cancellation_requested,
         )
@@ -317,7 +379,7 @@ def create_update_package_installer_adapter(
     *,
     platform_name: str | None = None,
 ) -> UpdatePackageInstallerAdapter:
-    """Compose the signed-EXE handoff only for Windows processes."""
+    """Compose the Windows EXE handoff only for Windows processes."""
     normalized_platform = str(platform_name or sys.platform).strip().lower()
     if normalized_platform.startswith("win"):
         return WindowsUpdatePackageInstallerAdapter()

@@ -17,7 +17,9 @@ param(
 
     [string]$ExpectedCertificateSubject = "",
 
-    [switch]$AllowUnsigned
+    [switch]$AllowUnsigned,
+
+    [switch]$AllowUnsignedCommunity
 )
 
 # Native Windows installer smoke coverage. This script deliberately keeps every
@@ -56,7 +58,8 @@ function Assert-PackageMetadata {
         [Parameter(Mandatory = $true)][string]$UpdatePath,
         [Parameter(Mandatory = $true)][string]$Version,
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$CertificateSubject,
-        [Parameter(Mandatory = $true)][bool]$UnsignedAllowed
+        [Parameter(Mandatory = $true)][string]$ExpectedAuthenticodeStatus,
+        [Parameter(Mandatory = $true)][string]$ExpectedPackageType
     )
 
     $packageMetadata = Get-Content -LiteralPath $PackageMetadataPath -Raw | ConvertFrom-Json
@@ -65,7 +68,7 @@ function Assert-PackageMetadata {
     $digest = Get-ArtifactDigest -Path $Path
 
     Assert-Condition ($packageMetadata.artifact_file -eq $item.Name) "Package metadata names a different installer."
-    Assert-Condition ($packageMetadata.package_type -eq "windows_signed_installer") "Package metadata has the wrong package type."
+    Assert-Condition ($packageMetadata.package_type -eq $ExpectedPackageType) "Package metadata has the wrong package type."
     Assert-Condition ([int64]$packageMetadata.size_bytes -eq [int64]$item.Length) "Package metadata has the wrong installer size."
     Assert-Condition ($packageMetadata.sha256 -eq $digest) "Package metadata has the wrong installer SHA-256."
     Assert-Condition ($updateMetadata.latest_version -eq $Version) "Update metadata has the wrong version."
@@ -73,9 +76,15 @@ function Assert-PackageMetadata {
     Assert-Condition ($updateMetadata.sha256_windows_exe -eq $digest) "Update metadata has the wrong EXE SHA-256."
     Assert-Condition ($updateMetadata.install_channel -eq "windows_installer") "Update metadata has the wrong install channel."
 
-    if ($UnsignedAllowed) {
-        Assert-Condition ($packageMetadata.authenticode_status -eq "unsigned-test-only") "Unsigned smoke metadata must be marked unsigned-test-only."
-        Assert-Condition ($updateMetadata.authenticode_status -eq "unsigned-test-only") "Unsigned update metadata must be marked unsigned-test-only."
+    if ($ExpectedAuthenticodeStatus -ne "verified") {
+        Assert-Condition ($packageMetadata.authenticode_status -eq $ExpectedAuthenticodeStatus) "Unsigned smoke metadata has the wrong Authenticode status."
+        Assert-Condition ($updateMetadata.authenticode_status -eq $ExpectedAuthenticodeStatus) "Unsigned update metadata has the wrong Authenticode status."
+        if ($ExpectedAuthenticodeStatus -eq "unsigned-community") {
+            Assert-Condition ($packageMetadata.authenticode_required -eq $false) "Community installer metadata must not require Authenticode."
+            Assert-Condition ($updateMetadata.authenticode_required -eq $false) "Community update metadata must not require Authenticode."
+            Assert-Condition ([string]::IsNullOrWhiteSpace([string]$packageMetadata.authenticode_certificate_subject)) "Community installer metadata must not declare an Authenticode publisher."
+            Assert-Condition ([string]::IsNullOrWhiteSpace([string]$updateMetadata.authenticode_certificate_subject)) "Community update metadata must not declare an Authenticode publisher."
+        }
         return
     }
 
@@ -168,7 +177,22 @@ function Restore-InstallationMarker {
     }
 }
 
-if (-not $AllowUnsigned -and [string]::IsNullOrWhiteSpace($ExpectedCertificateSubject)) {
+if ($AllowUnsigned -and $AllowUnsignedCommunity) {
+    throw "-AllowUnsigned and -AllowUnsignedCommunity cannot be combined."
+}
+
+$unsignedAllowed = [bool]($AllowUnsigned -or $AllowUnsignedCommunity)
+$expectedAuthenticodeStatus = "verified"
+$expectedPackageType = "windows_signed_installer"
+if ($AllowUnsigned) {
+    $expectedAuthenticodeStatus = "unsigned-test-only"
+}
+elseif ($AllowUnsignedCommunity) {
+    $expectedAuthenticodeStatus = "unsigned-community"
+    $expectedPackageType = "windows_community_installer"
+}
+
+if (-not $unsignedAllowed -and [string]::IsNullOrWhiteSpace($ExpectedCertificateSubject)) {
     throw "-ExpectedCertificateSubject is required for a signed release smoke test."
 }
 
@@ -200,8 +224,8 @@ if ($markerExisted) {
 
 try {
     New-Item -ItemType Directory -Path $temporaryRoot -Force | Out-Null
-    Assert-PackageMetadata -Path $installerPath -PackageMetadataPath $metadataPath -UpdatePath $updateMetadataPath -Version $ExpectedVersion -CertificateSubject $ExpectedCertificateSubject -UnsignedAllowed ([bool]$AllowUnsigned)
-    Assert-InstallerSignature -Path $installerPath -CertificateSubject $ExpectedCertificateSubject -UnsignedAllowed ([bool]$AllowUnsigned)
+    Assert-PackageMetadata -Path $installerPath -PackageMetadataPath $metadataPath -UpdatePath $updateMetadataPath -Version $ExpectedVersion -CertificateSubject $ExpectedCertificateSubject -ExpectedAuthenticodeStatus $expectedAuthenticodeStatus -ExpectedPackageType $expectedPackageType
+    Assert-InstallerSignature -Path $installerPath -CertificateSubject $ExpectedCertificateSubject -UnsignedAllowed $unsignedAllowed
 
     Invoke-CaveViewerInstaller -Path $installerPath -Description "Initial installer verification" -Arguments @(
         "/SP-",

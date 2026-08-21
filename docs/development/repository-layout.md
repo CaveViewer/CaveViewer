@@ -68,7 +68,7 @@ src/caveviewer/gui/platform/presentation_actions.py focused native presentation-
 src/caveviewer/gui/platform/directory_selection.py shared action-time directory-picker authorization
 src/caveviewer/gui/platform/update_package_reveal.py focused verified-package reveal facade
 src/caveviewer/gui/platform/update_package_storage.py focused verified-package storage facade
-src/caveviewer/gui/platform/update_package_install.py focused signed Windows EXE handoff facade
+src/caveviewer/gui/platform/update_package_install.py focused Windows EXE handoff facade
 src/caveviewer/gui/platform/windows_update_paths.py Windows user-owned update/log locations
 src/caveviewer/gui/platform/recording_process.py focused recording-encoder startup facade
 src/caveviewer/gui/platform/tls_trust.py       focused native TLS-trust augmentation facade
