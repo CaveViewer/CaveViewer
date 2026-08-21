@@ -51,6 +51,22 @@ function Get-ArtifactDigest {
     return (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant()
 }
 
+function Get-OptionalJsonPropertyValue {
+    param(
+        [Parameter(Mandatory = $true)][psobject]$Object,
+        [Parameter(Mandatory = $true)][string]$Name
+    )
+
+    # ConvertFrom-Json omits absent keys from its PSCustomObject. Looking up
+    # through PSObject.Properties remains safe under Set-StrictMode, unlike
+    # direct property access such as $Object.$Name.
+    $property = $Object.PSObject.Properties[$Name]
+    if ($null -eq $property) {
+        return ""
+    }
+    return $property.Value
+}
+
 function Assert-PackageMetadata {
     param(
         [Parameter(Mandatory = $true)][string]$Path,
@@ -66,6 +82,8 @@ function Assert-PackageMetadata {
     $updateMetadata = Get-Content -LiteralPath $UpdatePath -Raw | ConvertFrom-Json
     $item = Get-Item -LiteralPath $Path
     $digest = Get-ArtifactDigest -Path $Path
+    $packageCertificateSubject = Get-OptionalJsonPropertyValue -Object $packageMetadata -Name "authenticode_certificate_subject"
+    $updateCertificateSubject = Get-OptionalJsonPropertyValue -Object $updateMetadata -Name "authenticode_certificate_subject"
 
     Assert-Condition ($packageMetadata.artifact_file -eq $item.Name) "Package metadata names a different installer."
     Assert-Condition ($packageMetadata.package_type -eq $ExpectedPackageType) "Package metadata has the wrong package type."
@@ -82,8 +100,8 @@ function Assert-PackageMetadata {
         if ($ExpectedAuthenticodeStatus -eq "unsigned-community") {
             Assert-Condition ($packageMetadata.authenticode_required -eq $false) "Community installer metadata must not require Authenticode."
             Assert-Condition ($updateMetadata.authenticode_required -eq $false) "Community update metadata must not require Authenticode."
-            Assert-Condition ([string]::IsNullOrWhiteSpace([string]$packageMetadata.authenticode_certificate_subject)) "Community installer metadata must not declare an Authenticode publisher."
-            Assert-Condition ([string]::IsNullOrWhiteSpace([string]$updateMetadata.authenticode_certificate_subject)) "Community update metadata must not declare an Authenticode publisher."
+            Assert-Condition ([string]::IsNullOrWhiteSpace([string]$packageCertificateSubject)) "Community installer metadata must not declare an Authenticode publisher."
+            Assert-Condition ([string]::IsNullOrWhiteSpace([string]$updateCertificateSubject)) "Community update metadata must not declare an Authenticode publisher."
         }
         return
     }
