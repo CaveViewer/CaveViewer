@@ -21,6 +21,16 @@ def test_arm64_manifests_match_signed_legacy_compatibility_aliases():
         arm_manifest = MACOS_UPDATES / "arm64" / f"{channel}.json"
         arm_signature = MACOS_UPDATES / "arm64" / f"{channel}.json.sig"
 
+        paths = (legacy_manifest, legacy_signature, arm_manifest, arm_signature)
+        if channel == "stable":
+            assert all(path.exists() for path in paths)
+        else:
+            assert all(path.exists() for path in paths) or not any(
+                path.exists() for path in paths
+            )
+        if not arm_manifest.exists():
+            continue
+
         assert arm_manifest.read_bytes() == legacy_manifest.read_bytes()
         assert arm_signature.read_bytes() == legacy_signature.read_bytes()
 

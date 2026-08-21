@@ -258,9 +258,6 @@ def test_package_smoke_workflows_are_read_only_and_non_publishing():
         workflow = (WORKFLOWS_DIR / workflow_name).read_text(encoding="utf-8")
         assert f"name: {display_name}" in workflow
         assert "workflow_dispatch:" in workflow
-        assert "schedule:" in workflow
-        assert "pull_request:" in workflow
-        assert "push:" in workflow
         assert "permissions:\n  contents: read" in workflow
         assert f"runs-on: {runner}" in workflow
         assert target in workflow
@@ -291,6 +288,30 @@ def test_package_smoke_workflows_are_read_only_and_non_publishing():
     assert "Run complete Intel test suite" in intel_workflow
     assert "python -m pytest -p no:cacheprovider -q" in intel_workflow
     assert "Run Intel CLI smoke checks" in intel_workflow
+
+
+def test_package_smoke_trigger_policy_keeps_macos_intel_manual_only():
+    automatic_workflows = (
+        "linux-package-smoke.yml",
+        "macos-arm64-package-smoke.yml",
+        "windows-package-smoke.yml",
+    )
+    for workflow_name in automatic_workflows:
+        trigger_contract = (WORKFLOWS_DIR / workflow_name).read_text(
+            encoding="utf-8"
+        ).split("\npermissions:\n", 1)[0]
+        assert "workflow_dispatch:" in trigger_contract
+        assert "schedule:" in trigger_contract
+        assert "pull_request:" in trigger_contract
+        assert "push:" in trigger_contract
+
+    intel_trigger_contract = (
+        WORKFLOWS_DIR / "macos-x86_64-package-smoke.yml"
+    ).read_text(encoding="utf-8").split("\npermissions:\n", 1)[0]
+    assert "workflow_dispatch:" in intel_trigger_contract
+    assert "schedule:" not in intel_trigger_contract
+    assert "pull_request:" not in intel_trigger_contract
+    assert "push:" not in intel_trigger_contract
 
 
 @requires_executable_shell_scripts
@@ -473,12 +494,26 @@ def test_release_finalizer_is_the_single_shared_state_writer():
     assert "--allow-unsigned-windows-community" in workflow
 
     assert finalizer.count("gh release create") == 1
+    assert finalizer.count('gh api "repos/$repo/releases/tags/$tag"') == 1
     assert finalizer.count('git -C "$repo_root" push') == 1
     assert "origin/$target_branch moved" in finalizer
     assert "--allow-unsigned-windows-community" in finalizer
     assert "verify_package_release_channel" in finalizer
     assert "--release-channel \"$manifest_channel\"" in finalizer
     assert "CaveViewer-${normalized_version}-linux-x86_64.json" in finalizer
+    assert "scripts/common/verify_release_asset.py" in finalizer
+    assert finalizer.index('gh api "repos/$repo/releases/tags/$tag"') < (
+        finalizer.index("manifest_git_paths=()")
+    )
+    assert "declare -A" not in finalizer
+    for release_url in (
+        "windows_exe_release_url",
+        "linux_x86_64_release_url",
+        "macos_arm64_release_url",
+        "macos_x86_64_release_url",
+    ):
+        assert f'--download-url "${release_url}"' in finalizer
+    assert "release_base_url" not in finalizer
     assert 'git -C "$repo_root" commit -m "Release $tag $manifest_channel"' in finalizer
     for manifest_path in (
         "updates/windows/$manifest_channel.json",
@@ -747,7 +782,6 @@ def test_release_metadata_changes_do_not_start_package_smoke_workflows():
     for workflow_name in (
         "linux-package-smoke.yml",
         "macos-arm64-package-smoke.yml",
-        "macos-x86_64-package-smoke.yml",
     ):
         workflow = (WORKFLOWS_DIR / workflow_name).read_text(encoding="utf-8")
 

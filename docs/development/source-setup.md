@@ -167,14 +167,16 @@ the application version or creating artifacts. It uses
 select another prepared Python 3.12 interpreter. The interpreter must have
 `requirements.txt` and `requirements-dev.txt` installed.
 
-GitHub also runs separate Windows, Linux, macOS ARM64, and macOS Intel package
-smoke workflows for pull requests and pushes to `main` or `release/**` when
-packaging, release scripts, runtime source, or dependency files change. They
-also run weekly and can be dispatched manually. The Windows workflow builds an
-unsigned test-only EXE on a disposable runner and validates native installer
-paths, isolated install verification, and update handoff; publishing reruns
-the same smoke on the protected signer and requires the real signature. The
-Linux workflow builds the x86_64 AppImage
+GitHub runs separate Windows, Linux, and macOS ARM64 package-smoke workflows for
+pull requests and pushes to `main` or `release/**` when packaging, release
+scripts, runtime source, or dependency files change. They also run weekly and
+can be dispatched manually. The macOS Intel package-smoke workflow is
+manual-only; dispatch it from the Actions tab on the branch that needs native
+x86_64 validation. The Windows workflow builds an unsigned test-only EXE on a
+disposable runner and validates native installer paths, isolated install
+verification, and update handoff; publishing reruns the same smoke on the
+protected signer and requires the real signature. The Linux workflow builds the
+x86_64 AppImage
 through the Docker release path, validates AppImage desktop install/uninstall
 behavior in a temporary home directory, and validates the installed
 desktop/AppStream metadata. Both macOS workflows build a native DMG through the
@@ -421,7 +423,7 @@ runtime snapshot.
 | `CAVEVIEWER_UPDATE_CHANNEL` | embedded package channel | Deliberate developer/testing override for the update manifest channel used when deriving the default manifest URL. Accepted values: `stable`, `prerelease`. A source checkout and a historical package without metadata safely default to `stable`. Ignored when `CAVEVIEWER_UPDATE_MANIFEST_URL` is set. |
 | `CAVEVIEWER_UPDATE_MANIFEST_URL` | _(derived from repo)_ | Full URL to the JSON update manifest. Overrides the default `raw.githubusercontent.com` path. Useful for pointing at a staging manifest or a custom server. |
 | `CAVEVIEWER_UPDATE_MANIFEST_SIGNATURE_URL` | `<manifest-url>.sig` | Full URL to the base64 Ed25519 signature for the update manifest. |
-| `CAVEVIEWER_FORCE_UPDATE` | `0` | Set to `1` (or `true`/`yes`) to enter the update-available state regardless of the manifest version. Also available as `--force-update`. For testing the update UI without waiting for the CDN cache or changing version numbers. |
+| `CAVEVIEWER_FORCE_UPDATE` | `0` | Set to `1` (or `true`/`yes`) to treat a valid, signed, available manifest artifact as newer regardless of its version. Also available as `--force-update`. It cannot fabricate a missing channel or make an unavailable package eligible. |
 | `CAVEVIEWER_MACOS_ARCH` | _(auto)_ | Low-level macOS packaging override. The top-level release dispatcher uses `--target=macos-arm64` or `--target=macos-x86_64`; normal app update checks detect the running process architecture automatically. |
 | `CAVEVIEWER_LINUX_UPDATE_ARCH` | `x86_64` | Linux publish helper only. Linux distribution is x86_64-only; set to `x86_64` when invoking lower-level publish helpers directly. |
 
@@ -429,10 +431,13 @@ The update checker requires manifests to be signed with the release Ed25519
 private key. The bundled public key lives at
 `src/caveviewer/resources/release_signing_public_key.pem`. Startup update
 checks read the branch/channel manifest first; if it advertises a newer version,
-the app verifies the manifest signature before offering the download. Missing or
-invalid signatures are logged as errors and do not change the splash interface.
-The release finalizer creates every requested companion `.sig` file before
-committing the manifests together. See
+the app verifies the manifest signature and confirms that the package URL
+resolves before offering the download. Missing or invalid signatures and
+unavailable packages are logged and do not expose an update action. An absent
+prerelease manifest is the normal empty-channel state and likewise leaves the
+splash unchanged. The release finalizer creates every requested companion
+`.sig` only after GitHub confirms the uploaded asset's URL, size, and SHA-256,
+then commits the manifest pairs together. See
 [`releases.md`](releases.md) for the full
 release contract.
 
@@ -460,9 +465,12 @@ the default Authenticode policy or the explicit unsigned-community policy
 instead presents `Install and restart <version>` immediately. Its explicit
 click downloads the EXE, starts the
 handoff after promotion, and the splash exits only after the installer process
-starts. A cancellation request only signals the manager worker; it cleans
-staging output and returns to the available update without affecting an already
-verified package.
+starts. That click is the consent boundary: the Inno Setup progress window
+remains visible, but its suppressible messages use their declared defaults so a
+normal update needs no second confirmation. Windows-owned trust warnings remain
+user-controlled. A cancellation request only signals the manager worker; it
+cleans staging output and returns to the available update without affecting an
+already verified package.
 While a splash window is visible, it is the foreground update surface and
 suppresses duplicate desktop notifications for update progress or completion.
 If a download finishes after that surface closes, desktop notifications remain
@@ -508,6 +516,8 @@ prerelease publish updates the separate `prerelease.json`, leaving stable
 unchanged and marking a newly created GitHub release as prerelease. For
 debugging, explicit environment variables can point a source run or packaged
 app launched from Terminal at another branch, channel, or manifest URL.
+Until that target has a verified published prerelease, its prerelease manifest
+and signature are intentionally absent.
 
 Prerelease branch testing can use the derived prerelease manifest URL after the
 selected branch contains the matching platform manifest and signature. For
@@ -540,11 +550,13 @@ CAVEVIEWER_UPDATE_CHANNEL=prerelease \
 ./CaveViewer-<version>-x86_64.AppImage
 ```
 
-If the update checker logs `Update manifest fetch failed with HTTP 404`, the
-derived branch/channel/platform manifest URL does not exist. Either publish that
-platform's prerelease manifest to the selected branch, switch to a branch that
-has it, or use `CAVEVIEWER_UPDATE_CHANNEL=stable` if you meant to test the
-stable manifest.
+For a prerelease channel, a missing derived manifest logs `No prerelease update
+manifest is published` at info level and means no prerelease is currently
+available for that platform. Publish a real package through the finalizer,
+switch to a branch that already advertises one, or use
+`CAVEVIEWER_UPDATE_CHANNEL=stable` if you meant to test stable updates. HTTP 404
+for a stable or explicitly configured non-prerelease manifest remains a
+configuration error.
 
 If the update checker logs `Update manifest fetch failed with HTTP 429`, GitHub
 has rate-limited the unauthenticated `raw.githubusercontent.com` request. The
@@ -569,9 +581,10 @@ updates/macos/x86_64/stable.json
 updates/macos/x86_64/prerelease.json
 ```
 
-The `x86_64` files appear after the corresponding Intel channel is first
-published. Top-level `updates/macos/stable.json` and `prerelease.json` files are
-legacy ARM64 aliases. Keep each alias and signature byte-for-byte identical to
+Each prerelease pair appears only after that platform/channel is successfully
+published; an absent pair is not an error. Top-level
+`updates/macos/<channel>.json[.sig]` files are legacy ARM64 aliases when that
+ARM64 channel exists. Keep each alias and signature byte-for-byte identical to
 its `arm64/` counterpart so older installations continue receiving updates.
 
 macOS DMG assets include their architecture to prevent uploads from replacing

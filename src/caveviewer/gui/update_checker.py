@@ -67,10 +67,10 @@ class UpdateAvailable:
 
 @dataclass(frozen=True, slots=True)
 class UpdateNotAvailable:
-    """A successfully checked manifest that does not advertise a newer version."""
+    """A checked channel that does not currently advertise an available update."""
 
     current_version: str
-    latest_version: str
+    latest_version: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -360,11 +360,20 @@ def check_for_update_target(
             fetch_url_bytes=fetch_url_bytes,
         )
 
+    def probe_download_url(url: str, headers: dict[str, str], timeout: int) -> None:
+        _probe_update_artifact_for_adapter(
+            url,
+            headers=headers,
+            timeout=timeout,
+            tls_trust_adapter=tls_trust_adapter,
+        )
+
     return _check_for_update_target(
         current_version,
         update_target=update_target,
         fetch_url_bytes=fetch_url_bytes,
         verify_manifest_signature=verify_manifest_signature,
+        probe_download_url=probe_download_url,
         package_kind_for_url=detect_update_package_kind,
     )
 
@@ -375,6 +384,7 @@ def _check_for_update_target(
     update_target: UpdateTarget,
     fetch_url_bytes: Callable[[str, dict[str, str], int], bytes],
     verify_manifest_signature: Callable[[bytes], bool],
+    probe_download_url: Callable[[str, dict[str, str], int], None],
     package_kind_for_url: Callable[[str], str],
 ) -> UpdateCheckOutcome:
     """Perform a manifest check using only a typed configured target."""
@@ -402,6 +412,13 @@ def _check_for_update_target(
         if not isinstance(data, dict):
             raise TypeError("the manifest root must be a JSON object")
     except urllib.error.HTTPError as e:
+        if e.code == 404 and resolved_channel == "prerelease":
+            _LOG.info(
+                "No prerelease update manifest is published for this target: "
+                "manifest_url=%s",
+                update_target.manifest_url,
+            )
+            return UpdateNotAvailable(current_version=current_version)
         _LOG.error("Update manifest fetch failed with HTTP %s.", e.code)
         if e.code == 404:
             error_msg = (
@@ -468,17 +485,65 @@ def _check_for_update_target(
         artifact.size_bytes,
         bool(artifact.sha256),
     )
+    if not verify_manifest_signature(manifest_bytes):
+        return UpdateCheckFailed(
+            current_version=current_version,
+            error="Update manifest signature could not be verified.",
+        )
+
+    try:
+        probe_download_url(
+            artifact.download_url,
+            {
+                "Accept": "application/octet-stream",
+                "User-Agent": update_target.user_agent,
+            },
+            _REQUEST_TIMEOUT_SECONDS,
+        )
+    except urllib.error.HTTPError as e:
+        if e.code in {404, 410}:
+            _LOG.warning(
+                "Signed update manifest points to an unavailable package: "
+                "latest_version=%s, status=%s, download_url=%s",
+                artifact.version,
+                e.code,
+                artifact.download_url,
+            )
+            return UpdateNotAvailable(
+                current_version=current_version,
+                latest_version=artifact.version,
+            )
+        _LOG.warning(
+            "Update package availability check failed: status=%s, download_url=%s",
+            e.code,
+            artifact.download_url,
+        )
+        return UpdateCheckFailed(
+            current_version=current_version,
+            error=f"Update package server returned an error (HTTP {e.code}).",
+        )
+    except (urllib.error.URLError, OSError) as e:
+        _LOG.warning(
+            "Update package availability check failed for %s: %s",
+            artifact.download_url,
+            e,
+        )
+        return UpdateCheckFailed(
+            current_version=current_version,
+            error="Couldn't confirm that the update package is available.",
+        )
+
+    _LOG.info(
+        "Update package is available: latest_version=%s, download_url=%s",
+        artifact.version,
+        artifact.download_url,
+    )
     _LOG.info(
         "Update check complete: update_available=%s, current_version=%s, latest_version=%s",
         True,
         current_version,
         artifact.version,
     )
-    if not verify_manifest_signature(manifest_bytes):
-        return UpdateCheckFailed(
-            current_version=current_version,
-            error="Update manifest signature could not be verified.",
-        )
 
     return UpdateAvailable(
         current_version=current_version,
@@ -501,6 +566,40 @@ def _fetch_url_bytes_for_adapter(
         context=make_ssl_context(tls_trust_adapter=tls_trust_adapter),
     ) as response:
         return response.read()
+
+
+def _probe_update_artifact_for_adapter(
+    url: str,
+    *,
+    headers: dict[str, str],
+    timeout: int,
+    tls_trust_adapter: TlsTrustAdapter,
+) -> None:
+    """Confirm that a signed manifest's package URL resolves without downloading it."""
+    ssl_context = make_ssl_context(tls_trust_adapter=tls_trust_adapter)
+    head_request = urllib.request.Request(url, headers=headers, method="HEAD")
+    try:
+        with urllib.request.urlopen(
+            head_request,
+            timeout=timeout,
+            context=ssl_context,
+        ):
+            return
+    except urllib.error.HTTPError as error:
+        if error.code not in {405, 501}:
+            raise
+
+    # Some object stores reject HEAD even though the artifact is available. A
+    # one-byte ranged GET gives those hosts a bounded compatibility fallback.
+    range_headers = dict(headers)
+    range_headers["Range"] = "bytes=0-0"
+    range_request = urllib.request.Request(url, headers=range_headers, method="GET")
+    with urllib.request.urlopen(
+        range_request,
+        timeout=timeout,
+        context=ssl_context,
+    ) as response:
+        response.read(1)
 
 
 def _verify_manifest_signature_required_with_target(

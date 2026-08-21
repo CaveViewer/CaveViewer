@@ -308,10 +308,14 @@ class WindowsUpdatePackageInstallerAdapter:
             raise UpdateInstallationCancelled("Update installation was cancelled.")
         self._update_root.mkdir(parents=True, exist_ok=True)
         log_path = self._update_root / f"installer-{_safe_version(normalized_version)}.log"
+        # The in-app action is the user's consent boundary. Suppress Inno's
+        # own message boxes so the normal handoff needs no second confirmation;
+        # Windows-controlled trust prompts remain outside this process.
         command = [
             str(payload),
             "/SP-",
             "/SILENT",
+            "/SUPPRESSMSGBOXES",
             "/NORESTART",
             f"/LOG={log_path}",
             "--update",

@@ -853,6 +853,9 @@ def test_preferences_panel_uses_compact_tabbed_pages():
     show_page_source = inspect.getsource(
         preferences_dialog.PreferencesPanel._show_page
     )
+    ensure_page_source = inspect.getsource(
+        preferences_dialog.PreferencesPanel._ensure_page
+    )
     render_field_source = inspect.getsource(
         preferences_dialog.PreferencesPanel._render_field
     )
@@ -876,8 +879,10 @@ def test_preferences_panel_uses_compact_tabbed_pages():
     assert "_render_guided_dive_disclaimer" not in module_source
     assert "compact_path = value_type in {" in render_field_source
     assert "entry.grid(row=0, column=0, sticky=\"ew\")" in render_field_source
-    assert "grid_remove()" not in show_page_source
-    assert "candidate_page.tkraise()" in show_page_source
+    assert "grid_remove()" in show_page_source
+    assert "candidate_page.tkraise()" not in show_page_source
+    assert "self._ensure_page(page_key)" in show_page_source
+    assert "self._render_section(page, page_key)" in ensure_page_source
     assert "self.page_canvas.yview_moveto(0)" in show_page_source
     assert "self.button_row.pack(" in source
     assert "self.page_scroll_shell.pack(side=\"top\", fill=\"both\", expand=True)" in source
@@ -885,15 +890,204 @@ def test_preferences_panel_uses_compact_tabbed_pages():
     assert "on_selected=self._show_page" in source
     assert "self.tab_strip.select(page_key, notify=False)" in show_page_source
     assert "CanvasVerticalScrollbar(" in source
-    assert "self.page_scrollbar.bind_mousewheel(self.page_stack)" in source
+    assert "self.page_scrollbar.bind_mousewheel(page)" in ensure_page_source
+    assert "for page_key, _tab_label in _PREFERENCE_PAGES" not in source
+    assert "text_column.bind(" not in render_field_source
+    assert "self.feedback_frame.bind(" not in source
+    assert "self._schedule_page_layout_sync()" in show_page_source
     assert "self.dialog.update_idletasks()" not in source
     assert "self.page_stack.grid_propagate(False)" not in source
-    assert "self._sync_feedback_wraplength(event.width)" in source
     assert "_draw_page_scrollbar_thumb" not in module_source
     assert "class PreferencesDialog" not in module_source
     assert "show_preferences_dialog" not in module_source
     assert "tk.Toplevel" not in module_source
     assert "resizable_vertical" not in module_source
+
+
+def test_preferences_pages_are_constructed_once_on_first_selection(monkeypatch):
+    from caveviewer.gui import preferences_dialog
+
+    created = []
+    rendered = []
+    mousewheel_bound = []
+
+    class _FakePage:
+        def __init__(self, parent, **options) -> None:
+            self.parent = parent
+            self.options = options
+            created.append(self)
+
+    panel = object.__new__(preferences_dialog.PreferencesPanel)
+    panel.pages = {}
+    panel.page_stack = object()
+    panel.page_scrollbar = SimpleNamespace(
+        bind_mousewheel=lambda page: mousewheel_bound.append(page)
+    )
+    panel._render_section = lambda page, key: rendered.append((page, key))
+    monkeypatch.setattr(preferences_dialog.tk, "Frame", _FakePage)
+
+    assert panel._ensure_page("unknown") is None
+    page = panel._ensure_page("parsing")
+
+    assert panel._ensure_page("parsing") is page
+    assert created == [page]
+    assert rendered == [(page, "parsing")]
+    assert mousewheel_bound == [page]
+
+
+def test_preferences_page_switch_maps_only_the_selected_page():
+    from caveviewer.gui import preferences_dialog
+
+    class _FakePage:
+        def __init__(self) -> None:
+            self.grid_calls = []
+            self.remove_calls = 0
+
+        def grid(self, **options) -> None:
+            self.grid_calls.append(options)
+
+        def grid_remove(self) -> None:
+            self.remove_calls += 1
+
+    streaming_page = _FakePage()
+    parsing_page = _FakePage()
+    tab_selections = []
+    scroll_positions = []
+    layout_requests = []
+    panel = object.__new__(preferences_dialog.PreferencesPanel)
+    panel.pages = {
+        "streaming": streaming_page,
+        "parsing": parsing_page,
+    }
+    panel._ensure_page = lambda key: panel.pages.get(key)
+    panel.active_page_key = "streaming"
+    panel.tab_strip = SimpleNamespace(
+        select=lambda key, notify: tab_selections.append((key, notify))
+    )
+    panel.form_ready = False
+    panel.rendered_state = None
+    panel._sync_feedback_to_current_state = lambda: None
+    panel.page_canvas = SimpleNamespace(
+        yview_moveto=lambda position: scroll_positions.append(position)
+    )
+    panel._page_scroll_region = (0, 0, 10, 10)
+    panel._scrollbar_layout_state = (10, 10)
+    panel._schedule_page_layout_sync = lambda: layout_requests.append(True)
+
+    panel._show_page("parsing")
+
+    assert panel.active_page_key == "parsing"
+    assert streaming_page.remove_calls == 1
+    assert streaming_page.grid_calls == []
+    assert parsing_page.grid_calls == [
+        {"row": 0, "column": 0, "sticky": "nsew"}
+    ]
+    assert tab_selections == [("parsing", False)]
+    assert scroll_positions == [0]
+    assert panel._page_scroll_region is None
+    assert panel._scrollbar_layout_state is None
+    assert layout_requests == [True]
+
+
+def test_preferences_layout_requests_are_coalesced_and_cancelled_on_destroy():
+    from caveviewer.gui import preferences_dialog
+
+    callbacks = []
+    cancelled = []
+    panel = object.__new__(preferences_dialog.PreferencesPanel)
+    panel._destroyed = False
+    panel._page_layout_after_id = None
+    panel._pending_page_canvas_width = None
+    panel.dialog = SimpleNamespace(
+        after_idle=lambda callback: callbacks.append(callback) or "layout-1",
+        after_cancel=lambda after_id: cancelled.append(after_id),
+    )
+    panel.container = object()
+
+    panel._schedule_page_layout_sync(viewport_width=320)
+    panel._schedule_page_layout_sync(viewport_width=640)
+
+    assert len(callbacks) == 1
+    assert panel._pending_page_canvas_width == 640
+    assert panel._page_layout_after_id == "layout-1"
+
+    panel._on_container_destroy(SimpleNamespace(widget=panel.container))
+
+    assert panel._destroyed is True
+    assert panel._page_layout_after_id is None
+    assert cancelled == ["layout-1"]
+
+
+def test_preferences_layout_waits_for_canvas_width_before_measuring_hints():
+    from caveviewer.gui import preferences_dialog
+
+    class _FakeCanvas:
+        def __init__(self) -> None:
+            self.itemconfigure_calls = []
+
+        def itemconfigure(self, item, **options) -> None:
+            self.itemconfigure_calls.append((item, options))
+
+        def winfo_width(self) -> int:
+            return 480
+
+    canvas = _FakeCanvas()
+    page_window = object()
+    scheduled = []
+    scrollbar_syncs = []
+    panel = object.__new__(preferences_dialog.PreferencesPanel)
+    panel.page_canvas = canvas
+    panel.page_canvas_window = page_window
+    panel._pending_page_canvas_width = 480
+    panel._page_canvas_window_width = None
+    panel._schedule_page_layout_sync = lambda: scheduled.append(True)
+
+    panel._sync_page_layout()
+
+    assert canvas.itemconfigure_calls == [(page_window, {"width": 480})]
+    assert scheduled == [True]
+
+    scheduled.clear()
+    panel._sync_active_page_hint_wraplengths = lambda: True
+    panel.feedback_frame = None
+    panel._sync_page_scrollbar = lambda: scrollbar_syncs.append(True)
+    panel._sync_page_layout()
+
+    assert scrollbar_syncs == [True]
+    assert scheduled == [True]
+
+
+def test_preferences_hint_wrapping_only_updates_the_active_page():
+    from caveviewer.gui import preferences_dialog
+
+    class _FakeLabel:
+        def __init__(self, width: int, wraplength: int) -> None:
+            self.master = SimpleNamespace(winfo_width=lambda: width)
+            self.wraplength = wraplength
+            self.configure_calls = []
+
+        def cget(self, option: str) -> str:
+            assert option == "wraplength"
+            return str(self.wraplength)
+
+        def configure(self, **options) -> None:
+            self.configure_calls.append(options)
+            self.wraplength = options["wraplength"]
+
+    active_label = _FakeLabel(width=360, wraplength=520)
+    hidden_label = _FakeLabel(width=700, wraplength=520)
+    panel = object.__new__(preferences_dialog.PreferencesPanel)
+    panel.active_page_key = "streaming"
+    panel.page_hint_labels = {
+        "streaming": [active_label],
+        "parsing": [hidden_label],
+    }
+
+    assert panel._sync_active_page_hint_wraplengths() is True
+    assert panel._sync_active_page_hint_wraplengths() is False
+
+    assert active_label.configure_calls == [{"wraplength": 356}]
+    assert hidden_label.configure_calls == []
 
 
 def test_preferences_feedback_wraplength_avoids_repeating_identical_geometry_work():
