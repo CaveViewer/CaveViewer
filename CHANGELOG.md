@@ -2,6 +2,21 @@
 
 All notable changes to this project are documented in this file.
 
+## Release 1.0.83
+
+- Windows now installs through a per-user setup program. Installed copies can
+  download a verified update, choose **Install and restart**, and safely launch
+  the new version; older ZIP installations keep the manual migration path.
+- Updates are more dependable across platforms, with clearer status messages,
+  cancellation, atomic package handling, and correct stable/prerelease channel
+  behavior.
+- Startup and Preferences are smoother on Windows: the splash screen stays
+  responsive while Preferences initializes, and its layout no longer stalls.
+- Simplified runtime settings and viewer-startup coordination, and removed
+  obsolete navigation-certificate cache work to keep cache handling leaner.
+- Strengthened Windows, macOS, and Linux package/release checks, including
+  verified update metadata and on-demand macOS Intel smoke coverage.
+
 ## Release 1.0.78
 
 - Added a new Help area in the main window with an easy-to-scan reference for
