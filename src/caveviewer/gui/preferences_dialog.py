@@ -641,6 +641,17 @@ class PreferencesPanel:
         if int(label.cget("wraplength")) != wraplength:
             label.configure(wraplength=wraplength)
 
+    def _sync_feedback_wraplength(self, available_width: int) -> None:
+        """Resize feedback text only when its usable width actually changes."""
+        if self.error_label is None:
+            return
+        wraplength = max(
+            120,
+            int(available_width) - 2 * _INLINE_FEEDBACK_PAD_X,
+        )
+        if int(self.error_label.cget("wraplength")) != wraplength:
+            self.error_label.configure(wraplength=wraplength)
+
     def _choose_directory(self, key: str, title: str) -> None:
         preflight = directory_selection_preflight(
             self.desktop_services,
@@ -816,9 +827,7 @@ class PreferencesPanel:
         )
         self.feedback_frame.bind(
             "<Configure>",
-            lambda event: self.error_label.config(
-                wraplength=max(120, event.width - 2 * _INLINE_FEEDBACK_PAD_X)
-            ),
+            lambda event: self._sync_feedback_wraplength(event.width),
             add="+",
         )
 
@@ -854,18 +863,9 @@ class PreferencesPanel:
             page.grid(row=0, column=0, sticky="nsew")
             self.pages[page_key] = page
             self._render_section(page, page_key)
-        self.dialog.update_idletasks()
-        max_page_width = max(
-            (page.winfo_reqwidth() for page in self.pages.values()),
-            default=1,
-        )
-        max_page_height = max(
-            (page.winfo_reqheight() for page in self.pages.values()),
-            default=1,
-        )
-        self.page_stack.configure(width=max_page_width, height=max_page_height)
-        self.page_canvas.configure(width=max_page_width, height=max_page_height)
-        self.page_stack.grid_propagate(False)
+        # Let Tk establish the canvas viewport through its normal event loop.
+        # Draining all pending geometry work here can fail to quiesce on
+        # Windows guests when resize callbacks schedule further layout work.
         self.page_stack.bind(
             "<Configure>",
             lambda _event: self._sync_page_scrollbar(),
