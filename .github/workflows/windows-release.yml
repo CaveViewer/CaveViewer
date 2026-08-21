@@ -17,7 +17,7 @@ on:
         type: boolean
         default: false
       publish:
-        description: "Publish the signed Windows installer EXE to the GitHub release"
+        description: "Publish the Windows installer EXE to the GitHub release"
         required: false
         type: boolean
         default: false
@@ -53,7 +53,7 @@ on:
         type: boolean
         default: false
       publish:
-        description: "Publish the signed Windows installer EXE to the GitHub release"
+        description: "Publish the Windows installer EXE to the GitHub release"
         required: false
         type: boolean
         default: false
