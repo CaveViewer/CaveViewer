@@ -839,9 +839,14 @@ def main():
 
     # GUI mode: show the splash screen, run the viewer, then show the
     # splash screen again so the user can open another map or exit.
-    _splash_version = "0.0.0" if _force_update else display_version(
-        __version__,
-        release_metadata.release_channel,
+    _update_version = "0.0.0" if _force_update else __version__
+    _splash_version = (
+        _update_version
+        if _force_update
+        else display_version(
+            __version__,
+            release_metadata.release_channel,
+        )
     )
     record_startup_stage("splash_module_import_begin")
     from caveviewer.gui.splash_screen import show_splash_screen
@@ -855,7 +860,7 @@ def main():
     record_startup_stage("platform_runtime_create_complete")
     record_startup_stage("update_manager_create_begin")
     update_manager = UpdateManager(
-        current_version=_splash_version,
+        current_version=_update_version,
         platform_runtime=platform_runtime,
     )
     record_startup_stage("update_manager_create_complete")

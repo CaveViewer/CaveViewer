@@ -13,6 +13,11 @@ import pytest
 
 from caveviewer import app
 from caveviewer.core.chunking import builder as chunker
+from caveviewer.core.preferences.runtime_settings import RuntimePlatformFacts
+from caveviewer.core.release_metadata import (
+    ReleaseMetadata,
+    ReleaseMetadataSource,
+)
 from caveviewer.gui.manual_dive_trace import MANUAL_DIVE_TRACE_SCHEMA_VERSION
 from caveviewer.gui.platform import runtime as platform_runtime_module
 from caveviewer.gui.platform.app_identity import tk_root_options
@@ -605,6 +610,36 @@ def test_main_force_update_environment_exits_when_splash_is_closed(monkeypatch):
 
     assert versions == ["0.0.0"]
     assert recorder.info_messages[-1] == "No folder selected. Exiting."
+
+
+def test_preview_display_badge_is_not_used_for_update_version_comparison(
+    monkeypatch,
+):
+    _recorder, _configured = _prepare_main(monkeypatch)
+    managers = _install_update_manager_module(monkeypatch)
+    splash_versions = []
+    monkeypatch.setattr(app.sys, "argv", ["caveviewer"])
+    monkeypatch.setattr(
+        app,
+        "current_runtime_platform_facts",
+        lambda: RuntimePlatformFacts(
+            platform_name="win32",
+            os_name="nt",
+            release_metadata=ReleaseMetadata(
+                release_channel="preview",
+                source=ReleaseMetadataSource.BUNDLED,
+            ),
+        ),
+    )
+    _install_splash_module(
+        monkeypatch,
+        lambda **kwargs: splash_versions.append(kwargs["version"]) or None,
+    )
+
+    app.main()
+
+    assert splash_versions == [f"{app.__version__} Preview"]
+    assert managers[0].current_version == app.__version__
 
 
 def test_main_reopens_splash_after_a_map_session(monkeypatch):
