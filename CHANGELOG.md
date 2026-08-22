@@ -2,6 +2,18 @@
 
 All notable changes to this project are documented in this file.
 
+## Release 1.0.90
+
+- The startup splash now remains visible for at least two seconds, avoiding a
+  distracting flash on machines that initialize CaveViewer quickly.
+- Update downloads keep the lower-left status area at two rows, with progress
+  and cancellation presented together instead of shifting the layout.
+- Update messages are shorter and no longer repeat whether the installed build
+  uses the stable or preview channel.
+- Older prerelease installations can once again discover current Preview
+  updates without bringing the retired channel name back into the current UI
+  or release tools.
+
 ## Release 1.0.83
 
 - Windows now installs through a per-user setup program. Installed copies can
