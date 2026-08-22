@@ -896,7 +896,6 @@ class PreferencesPanel:
             px=self._surface_px,
             tab_style=TopTabStripStyle(
                 background_color=_BG_COLOR,
-                baseline_color=DARK_THEME.entry_border,
                 active_color=_BUTTON_BG,
                 inactive_color=_INSTRUCTION_COLOR,
                 focus_color=DARK_THEME.entry_focus_border,

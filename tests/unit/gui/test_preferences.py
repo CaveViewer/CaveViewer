@@ -1230,7 +1230,7 @@ def test_preferences_page_uses_the_shared_canvas_scrollbar():
     assert "vertical_scroll_units" not in source
 
 
-def test_preferences_tabs_use_the_shared_underline_navigation_pattern():
+def test_preferences_tabs_use_the_shared_text_navigation_pattern():
     from caveviewer.gui import preferences_dialog
 
     source = inspect.getsource(preferences_dialog.PreferencesPanel)

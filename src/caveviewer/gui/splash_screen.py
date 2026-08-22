@@ -183,13 +183,11 @@ _SUBTITLE_COLOR = DARK_THEME.body_text
 _INSTRUCTION_COLOR = DARK_THEME.secondary_text
 _BUTTON_BG = DARK_THEME.primary_button
 _BUTTON_BORDER_COLOR = DARK_THEME.primary_button_border
-_BORDER_COLOR = DARK_THEME.border
 # Navigation uses a location marker rather than a button treatment.  The
 # background shift stays deliberately quiet; the amber rail and stronger label
 # carry the selected-state meaning.
 _NAVIGATION_ACTIVE_BG = DARK_THEME.panel
 _NAVIGATION_HOVER_BG = DARK_THEME.entry_background
-_NAVIGATION_ACTIVE_INDICATOR = DARK_THEME.primary_button
 # Keep navigation entries distinct without making the rail read as a stack of
 # separate cards. This shared spacing also scales with the active display.
 _NAVIGATION_ITEM_GAP = 8
@@ -462,7 +460,6 @@ def _help_panel_style() -> HelpPanelStyle:
         keycap_text_color=DARK_THEME.body_text,
         action_color=DARK_THEME.body_text,
         detail_color=DARK_THEME.secondary_text,
-        tab_baseline_color=_LIBRARY_PANEL_BORDER_COLOR,
         content_pad_x=_PRESENTATION_PROFILE.preferences_dialog_layout.body_pad_x,
         tab_font=_TYPOGRAPHY.body_strong,
         section_font=_TYPOGRAPHY.section,
@@ -1153,11 +1150,13 @@ def show_splash_screen(
     left_frame.pack(side="left", fill="y")
     left_frame.pack_propagate(False)
 
-    divider = tk.Frame(content_frame, bg=_BORDER_COLOR, width=1)
-    divider.pack(side="left", fill="y", padx=(px(14), px(18)), pady=px(10))
-
     right_frame = tk.Frame(content_frame, bg=_BG_COLOR)
-    right_frame.pack(side="left", fill="both", expand=True)
+    right_frame.pack(
+        side="left",
+        fill="both",
+        expand=True,
+        padx=(px(32), 0),
+    )
     map_library_surface = tk.Frame(right_frame, bg=_BG_COLOR)
     preferences_surface = tk.Frame(right_frame, bg=_BG_COLOR)
     help_surface = tk.Frame(right_frame, bg=_BG_COLOR)
@@ -1770,14 +1769,8 @@ def show_splash_screen(
     ):
         """Create one keyboard-accessible action in the persistent nav rail."""
         item_row = tk.Frame(navigation_frame, bg=_BG_COLOR)
-        indicator = tk.Frame(
-            item_row,
-            bg=_NAVIGATION_ACTIVE_INDICATOR if selected else _BG_COLOR,
-            width=px(3),
-        )
-        indicator.pack(side="left", fill="y")
         icon = _create_navigation_icon(item_row, icon_name)
-        icon.pack(side="left", padx=(px(10), px(7)))
+        icon.pack(side="left", padx=(px(13), px(7)))
         item = tk.Label(
             item_row,
             text=text,
@@ -1806,13 +1799,6 @@ def show_splash_screen(
                 _NAVIGATION_HOVER_BG if active else _BG_COLOR
             )
             item_row.config(bg=background)
-            indicator.config(
-                bg=(
-                    _NAVIGATION_ACTIVE_INDICATOR
-                    if state["selected"]
-                    else background
-                )
-            )
             item.config(
                 bg=background,
                 fg=(

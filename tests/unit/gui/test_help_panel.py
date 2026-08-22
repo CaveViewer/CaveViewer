@@ -121,7 +121,7 @@ def test_help_panel_uses_a_quiet_table_without_card_borders():
     assert 'text="Help"' not in create_source
     assert "TopTabbedContentSurface(" in create_source
     assert "highlightbackground" not in create_source
-    assert "tab_baseline_color" in create_source
+    assert "baseline_color" not in create_source
     assert "canvas.create_line(" not in row_source
 
 

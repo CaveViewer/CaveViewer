@@ -151,7 +151,6 @@ class HelpPanelStyle:
     keycap_text_color: str
     action_color: str
     detail_color: str
-    tab_baseline_color: str
     content_pad_x: int
     tab_font: tuple
     section_font: tuple
@@ -213,7 +212,6 @@ class HelpPanel:
             px=self._px,
             tab_style=TopTabStripStyle(
                 background_color=style.background_color,
-                baseline_color=style.tab_baseline_color,
                 active_color=style.tab_active_color,
                 inactive_color=style.section_color,
                 focus_color=style.tab_focus_color,

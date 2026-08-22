@@ -655,10 +655,8 @@ def test_splash_navigation_actions_are_keyboard_accessible_without_fallthrough()
     assert "def _create_navigation_icon(" in source
     assert "def _create_navigation_item(" in source
     assert "item_row = tk.Frame(navigation_frame, bg=_BG_COLOR)" in source
-    assert "indicator = tk.Frame(" in source
     assert "icon = _create_navigation_icon(item_row, icon_name)" in source
     assert "_bind_activation(icon, callback)" in source
-    assert "_NAVIGATION_ACTIVE_INDICATOR" in source
     assert "font=_TYPOGRAPHY.body_strong if selected else _TYPOGRAPHY.body" in source
     assert "takefocus=True" in source
     assert 'label.bind("<Return>", invoke)' in update_action_source
@@ -912,7 +910,7 @@ def test_splash_map_library_uses_navigation_and_an_overflow_cue():
     assert "highlightthickness=0" in source
     assert "panel_border_color=_LIBRARY_PANEL_BORDER_COLOR" in style_source
     assert 'left_frame = tk.Frame(content_frame, bg=_BG_COLOR, width=px(220))' in source
-    assert 'divider.pack(side="left", fill="y", padx=(px(14), px(18)), pady=px(10))' in source
+    assert 'padx=(px(32), 0)' in source
     assert 'panel.pack(fill="both", expand=True, pady=self._px(14))' in panel_source
     assert "title_font=_TYPOGRAPHY.body_strong" in style_source
     assert "body_font=_TYPOGRAPHY.body" in style_source

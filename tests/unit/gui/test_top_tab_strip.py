@@ -1,4 +1,4 @@
-"""Exercise deterministic state changes for the shared underline-tab strip."""
+"""Exercise deterministic state changes for the shared text-tab strip."""
 
 from __future__ import annotations
 
@@ -48,14 +48,12 @@ def test_tab_strip_selects_the_active_label_and_notifies_its_owner():
     strip._active_key = "streaming"
     strip._style = TopTabStripStyle(
         background_color="#101018",
-        baseline_color="#292b35",
         active_color="#f0ad22",
         inactive_color="#a9abb8",
         focus_color="#f0ad22",
         font=("TkDefaultFont", 12, "bold"),
     )
     strip._tab_labels = {tab.key: _FakeWidget() for tab in _TABS}
-    strip._indicators = {tab.key: _FakeWidget() for tab in _TABS}
     selected = []
     strip._on_selected = selected.append
 
@@ -65,8 +63,6 @@ def test_tab_strip_selects_the_active_label_and_notifies_its_owner():
     assert selected == ["storage"]
     assert strip._tab_labels["storage"].configurations[-1] == {"fg": "#f0ad22"}
     assert strip._tab_labels["streaming"].configurations[-1] == {"fg": "#a9abb8"}
-    assert strip._indicators["storage"].configurations[-1] == {"bg": "#f0ad22"}
-    assert strip._indicators["streaming"].configurations[-1] == {"bg": "#101018"}
 
 
 def test_tabbed_content_surface_defines_one_standard_content_gap():
