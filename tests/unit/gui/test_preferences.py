@@ -602,7 +602,8 @@ def test_obj_import_batch_preference_maps_thousands_to_faces_env(
 def test_preferences_panel_uses_extracted_settings_logic():
     from caveviewer.gui import preferences_dialog, preferences_form, splash_screen
 
-    assert preferences_dialog._NUMERIC_ENTRY_WIDTH == 8
+    assert preferences_dialog._NUMERIC_ENTRY_WIDTH == 6
+    assert preferences_dialog._SCROLLBAR_GUTTER_X == 18
     assert preferences_dialog._CONTROL_GAP_X == 10
     assert preferences_dialog.PREFERENCE_FIELDS is settings.PREFERENCE_FIELDS
     assert (

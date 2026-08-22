@@ -67,7 +67,8 @@ _PANEL_COLOR = DARK_THEME.panel
 _BUTTON_BG = DARK_THEME.primary_button
 _BUTTON_BORDER_COLOR = DARK_THEME.primary_button_border
 
-_NUMERIC_ENTRY_WIDTH = 8
+_NUMERIC_ENTRY_WIDTH = 6
+_SCROLLBAR_GUTTER_X = 18
 _PLACEHOLDER_COLOR = DARK_THEME.placeholder_text
 _INLINE_FEEDBACK_PAD_X = 10
 _CONTROL_GAP_X = 10
@@ -978,7 +979,12 @@ class PreferencesPanel:
             px=self._surface_px,
             style=CanvasScrollbarStyle(background_color=_BG_COLOR),
         )
-        self.page_scrollbar.mount_grid(row=0, column=1, sticky="ns")
+        self.page_scrollbar.mount_grid(
+            row=0,
+            column=1,
+            sticky="ns",
+            padx=(self._surface_px(_SCROLLBAR_GUTTER_X), 0),
+        )
 
         self.page_stack = tk.Frame(self.page_canvas, bg=_BG_COLOR)
         self.page_canvas_window = self.page_canvas.create_window(
