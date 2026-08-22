@@ -1266,8 +1266,6 @@ def show_splash_screen(
         padx=px(14),
         pady=(0, px(14)),
     )
-    update_progress_width = px(192)
-
     last_update_presentation: list[_UpdatePresentation | None] = [None]
     map_library_workflow_ref: list[MapLibraryWorkflow | None] = [None]
     map_library_panel_ref: list[MapLibraryPanel | None] = [None]
@@ -1327,16 +1325,63 @@ def show_splash_screen(
         anchor="w",
     )
 
-    update_progress_canvas = tk.Canvas(
+    update_cancel_button_size = px(24)
+    update_cancel_button = tk.Canvas(
         update_cluster,
-        width=update_progress_width,
-        height=4,
+        width=update_cancel_button_size,
+        height=update_cancel_button_size,
         bg=_BG_COLOR,
-        highlightthickness=0,
+        borderwidth=0,
+        highlightthickness=1,
+        highlightbackground=_BG_COLOR,
+        highlightcolor=_BUTTON_BG,
+        cursor="hand2",
+        takefocus=True,
     )
-    _update_progress_bar = update_progress_canvas.create_rectangle(
-        0, 0, 0, 4, fill=_BUTTON_BG, width=0
-    )
+
+    def _invoke_update_cancel(_event=None):
+        _invoke_update_action(update_manager, _UpdateAction.CANCEL)
+        return "break"
+
+    for sequence in ("<Button-1>", "<Return>", "<space>"):
+        update_cancel_button.bind(sequence, _invoke_update_cancel)
+
+    def _draw_update_cancel_button(progress_fraction: float) -> None:
+        """Draw the map-download stop/progress pattern in the update row."""
+        update_cancel_button.delete("all")
+        size = update_cancel_button_size
+        inset = px(3)
+        track_color = DARK_THEME.entry_background
+        update_cancel_button.create_oval(
+            inset,
+            inset,
+            size - inset,
+            size - inset,
+            outline=track_color,
+            width=max(1, px(2)),
+        )
+        clamped = max(0.0, min(1.0, float(progress_fraction)))
+        update_cancel_button.create_arc(
+            inset,
+            inset,
+            size - inset,
+            size - inset,
+            start=90,
+            extent=-360 * clamped,
+            style="arc",
+            outline=_BUTTON_BG,
+            width=max(1, px(2)),
+        )
+        stop_half_size = max(2, px(3))
+        center = size / 2
+        update_cancel_button.create_rectangle(
+            center - stop_half_size,
+            center - stop_half_size,
+            center + stop_half_size,
+            center + stop_half_size,
+            fill=_BUTTON_BG,
+            outline="",
+        )
 
     def _set_update_cluster_visible(visible: bool) -> None:
         if visible:
@@ -1349,24 +1394,21 @@ def show_splash_screen(
         """Pack only the update controls relevant to the current state."""
         update_label.pack_forget()
         update_action_label.pack_forget()
-        update_progress_canvas.pack_forget()
+        update_cancel_button.pack_forget()
 
         if presentation.status_text:
-            update_label.pack(anchor="w", fill="x")
+            update_label.pack(side="left", anchor="w", fill="x", expand=True)
         if (
             presentation.action_text
             and not presentation.action_replaces_status_after_delay
         ):
-            update_action_label.pack(
-                anchor="w",
-                pady=(px(2) if presentation.status_text else 0, 0),
-            )
+            if presentation.action == _UpdateAction.CANCEL:
+                _draw_update_cancel_button(presentation.progress_fraction)
+                update_cancel_button.pack(side="right", padx=(px(6), 0))
+            else:
+                update_action_label.pack(side="left", anchor="w")
         if presentation.progress_visible:
-            update_progress_canvas.config(bg=DARK_THEME.entry_background)
-            update_progress_canvas.pack(anchor="w", pady=(px(5), 0))
-        else:
-            update_progress_canvas.config(bg=_BG_COLOR)
-            update_progress_canvas.coords(_update_progress_bar, 0, 0, 0, 4)
+            _draw_update_cancel_button(presentation.progress_fraction)
 
         _set_update_cluster_visible(
             bool(
@@ -1377,16 +1419,6 @@ def show_splash_screen(
                 )
                 or presentation.progress_visible
             )
-        )
-
-    def _set_progress(frac: float):
-        clamped = max(0.0, min(1.0, float(frac)))
-        update_progress_canvas.coords(
-            _update_progress_bar,
-            0,
-            0,
-            int(update_progress_width * clamped),
-            4,
         )
 
     def _show_delayed_update_action(presentation: _UpdatePresentation) -> None:
@@ -1414,7 +1446,6 @@ def show_splash_screen(
             presentation.action,
         )
         _layout_update_cluster(presentation)
-        _set_progress(presentation.progress_fraction)
         if presentation.action_replaces_status_after_delay:
             session.schedule_after(
                 root,

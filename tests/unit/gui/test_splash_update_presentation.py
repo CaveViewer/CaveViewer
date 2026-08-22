@@ -813,7 +813,6 @@ def test_splash_navigation_uses_a_quiet_rail_and_lower_app_status():
     assert "masthead_icon_label" not in source
     assert 'navigation_frame.pack(fill="x", pady=(px(22), 0))' in source
     assert "app_status_frame = tk.Frame(left_frame, bg=_BG_COLOR)" in source
-    assert "update_progress_width = px(192)" in source
     assert 'text=f"Version {version}"' in source
     assert 'version_label.pack(anchor="w")' in source
     assert "update_cluster = tk.Frame(app_status_frame, bg=_BG_COLOR)" in source
@@ -829,10 +828,15 @@ def test_splash_navigation_uses_a_quiet_rail_and_lower_app_status():
     assert "def _show_delayed_update_action(" in source
     assert "show_delayed_action=True" in source
     assert "update_cluster.pack_forget()" in source
-    assert "update_progress_canvas.pack_forget()" in source
+    assert "update_cancel_button.pack_forget()" in source
+    assert 'update_label.pack(side="left", anchor="w", fill="x", expand=True)' in source
+    assert 'update_cancel_button.pack(side="right", padx=(px(6), 0))' in source
+    assert "def _draw_update_cancel_button(progress_fraction: float)" in source
+    assert "extent=-360 * clamped" in source
+    assert "update_progress_canvas" not in source
     footer_action_source = source[
         source.index("update_action_label = tk.Label(") : source.index(
-            "update_progress_canvas = tk.Canvas("
+            "update_cancel_button = tk.Canvas("
         )
     ]
     assert "font=_TYPOGRAPHY.supporting" in footer_action_source
