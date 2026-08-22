@@ -167,8 +167,28 @@ def test_map_session_reports_prebuilt_viewer_failure(tmp_path, monkeypatch):
     (tmp_path / chunker.MANIFEST_NAME).write_text("{}", encoding="utf-8")
     recorder = _LogRecorder()
     printed = []
+    shown = []
+    runtime_stages = []
+    runtime_errors = []
     monkeypatch.setattr(app, "_LOG", recorder)
     monkeypatch.setattr(traceback, "print_exc", lambda: printed.append(True))
+    monkeypatch.setattr(
+        app,
+        "_show_viewer_launch_error",
+        lambda error: shown.append(str(error)),
+    )
+    monkeypatch.setattr(
+        app,
+        "record_runtime_stage",
+        lambda stage, **context: runtime_stages.append((stage, context)),
+    )
+    monkeypatch.setattr(
+        app,
+        "record_runtime_exception",
+        lambda stage, error, **context: runtime_errors.append(
+            (stage, str(error), context)
+        ),
+    )
     monkeypatch.setattr(chunker, "cache_chunk_size", lambda _path: 8.0)
     monkeypatch.setattr(chunker, "configured_chunk_size", lambda: 8.0)
 
@@ -183,6 +203,18 @@ def test_map_session_reports_prebuilt_viewer_failure(tmp_path, monkeypatch):
     assert raised.value.code == 1
     assert "OpenGL unavailable" in recorder.error_messages[-1]
     assert printed == [True]
+    assert shown == ["OpenGL unavailable"]
+    assert [stage for stage, _context in runtime_stages] == [
+        "map_session_selected",
+        "viewer_session_launch_requested",
+    ]
+    assert runtime_errors == [
+        (
+            "viewer_session_exception",
+            "OpenGL unavailable",
+            {"cache_dir": str(tmp_path)},
+        )
+    ]
 
 
 def test_map_session_opens_obj_with_existing_cache(tmp_path, monkeypatch):
@@ -388,6 +420,7 @@ def test_map_session_reports_source_viewer_failures(
     descriptor = {"format": "glb", "glb_path": str(tmp_path / "map.glb")}
     recorder = _LogRecorder()
     printed = []
+    shown = []
     monkeypatch.setattr(app, "_LOG", recorder)
     monkeypatch.setattr(app, "find_model_file", lambda _folder: descriptor)
     monkeypatch.setattr(chunker, "cache_is_valid", lambda _path: cache_is_valid)
@@ -395,6 +428,11 @@ def test_map_session_reports_source_viewer_failures(
     monkeypatch.setattr(chunker, "cache_chunk_size", lambda _path: 8.0)
     monkeypatch.setattr(chunker, "configured_chunk_size", lambda: 8.0)
     monkeypatch.setattr(traceback, "print_exc", lambda: printed.append(True))
+    monkeypatch.setattr(
+        app,
+        "_show_viewer_launch_error",
+        lambda error: shown.append(str(error)),
+    )
 
     def fail_viewer(*_args, **_kwargs):
         raise RuntimeError("viewer failed")
@@ -409,6 +447,7 @@ def test_map_session_reports_source_viewer_failures(
     assert raised.value.code == 1
     assert "viewer failed" in recorder.error_messages[-1]
     assert printed == [True]
+    assert shown == ["viewer failed"]
 
 
 def _prepare_main(monkeypatch):
@@ -610,6 +649,182 @@ def test_run_returns_normally_when_main_succeeds(monkeypatch):
     assert called == [True]
 
 
+def test_app_forwards_session_events_to_active_diagnostics():
+    calls = []
+
+    class DiagnosticsRecorder:
+        def record(self, event, **payload):
+            calls.append(("event", event, payload))
+
+        def record_exception(self, event, error_type, error, traceback, **context):
+            calls.append(
+                (
+                    "exception",
+                    event,
+                    error_type,
+                    str(error),
+                    traceback,
+                    context,
+                )
+            )
+
+    diagnostics = DiagnosticsRecorder()
+    previous = app.get_active_application_diagnostics()
+    app.set_active_application_diagnostics(diagnostics)
+    error = RuntimeError("OpenGL unavailable")
+    try:
+        app._record_application_event("viewer_launch_requested", cache_dir="/cache")
+        app._record_application_exception(
+            "viewer_launch_failed",
+            error,
+            cache_dir="/cache",
+        )
+    finally:
+        app.set_active_application_diagnostics(previous)
+
+    assert calls == [
+        ("event", "viewer_launch_requested", {"cache_dir": "/cache"}),
+        (
+            "exception",
+            "viewer_launch_failed",
+            RuntimeError,
+            "OpenGL unavailable",
+            error.__traceback__,
+            {"fatal": True, "cache_dir": "/cache"},
+        ),
+    ]
+
+
+def test_runtime_diagnostics_attach_and_viewer_error_include_log_path(
+    tmp_path,
+    monkeypatch,
+):
+    calls = []
+    dialog_calls = []
+
+    class RuntimeDiagnosticsRecorder:
+        def __init__(self):
+            self.path = tmp_path / "viewer-session.log"
+
+        def attach_to_root_logger(self):
+            calls.append("attach")
+
+        def enable_fault_handler(self):
+            calls.append("fault_handler")
+
+    class FakeRoot:
+        def withdraw(self):
+            dialog_calls.append("withdraw")
+
+    def create_root(**options):
+        dialog_calls.append(("root", options))
+        return FakeRoot()
+
+    def show_error(message, *, parent):
+        dialog_calls.append(("error", message, parent))
+
+    tkinter = ModuleType("tkinter")
+    tkinter.Tk = create_root
+    monkeypatch.setitem(sys.modules, "tkinter", tkinter)
+    from caveviewer.gui import notifications
+
+    monkeypatch.setattr(notifications, "show_error", show_error)
+
+    diagnostics = RuntimeDiagnosticsRecorder()
+    previous = app.get_active_runtime_diagnostics()
+    app.set_active_runtime_diagnostics(diagnostics)
+    try:
+        app._attach_runtime_diagnostics_logging()
+        app._show_viewer_launch_error(RuntimeError("OpenGL unavailable"))
+    finally:
+        app.set_active_runtime_diagnostics(previous)
+
+    assert calls == ["attach", "fault_handler"]
+    assert dialog_calls[0] == ("root", tk_root_options())
+    assert dialog_calls[1] == "withdraw"
+    assert dialog_calls[2][0] == "error"
+    assert "OpenGL unavailable" in dialog_calls[2][1]
+    assert str(diagnostics.path) in dialog_calls[2][1]
+    assert dialog_calls[2][2].__class__ is FakeRoot
+
+
+def test_runtime_diagnostics_records_attachment_failure():
+    calls = []
+
+    class RuntimeDiagnosticsRecorder:
+        def attach_to_root_logger(self):
+            raise RuntimeError("log path unavailable")
+
+        def enable_fault_handler(self):
+            raise AssertionError("fault handler must not be enabled after attach failure")
+
+        def record_exception(self, event, error):
+            calls.append((event, str(error)))
+
+    diagnostics = RuntimeDiagnosticsRecorder()
+    previous = app.get_active_runtime_diagnostics()
+    app.set_active_runtime_diagnostics(diagnostics)
+    try:
+        app._attach_runtime_diagnostics_logging()
+    finally:
+        app.set_active_runtime_diagnostics(previous)
+
+    assert calls == [("runtime_logging_attachment_failed", "log path unavailable")]
+
+
+def test_show_viewer_launch_error_does_not_mask_dialog_failure(monkeypatch):
+    tkinter = ModuleType("tkinter")
+
+    def create_root(**_options):
+        raise RuntimeError("no display")
+
+    tkinter.Tk = create_root
+    monkeypatch.setitem(sys.modules, "tkinter", tkinter)
+
+    app._show_viewer_launch_error(RuntimeError("OpenGL unavailable"))
+
+
+def test_run_binds_windows_runtime_diagnostics_to_application_events(
+    tmp_path,
+    monkeypatch,
+):
+    calls = []
+
+    class RuntimeDiagnosticsRecorder:
+        path = tmp_path / "viewer-session-test.log"
+        jsonl_path = tmp_path / "viewer-session-test.jsonl"
+
+        def record(self, stage, **context):
+            calls.append(("record", stage, context))
+
+        def close(self):
+            calls.append(("close",))
+
+    diagnostics = RuntimeDiagnosticsRecorder()
+    monkeypatch.setattr(
+        app,
+        "create_runtime_diagnostics",
+        lambda **_kwargs: diagnostics,
+    )
+    monkeypatch.setattr(app, "main", lambda: calls.append(("main",)))
+
+    app.run()
+
+    records = [
+        json.loads(line)
+        for line in diagnostics.jsonl_path.read_text(encoding="utf-8").splitlines()
+    ]
+    bound = next(
+        record
+        for record in records
+        if record["event"] == "application_diagnostics_bound"
+    )
+    assert bound["runtime_log_path"] == str(diagnostics.path)
+    assert calls[0][0:2] == ("record", "app_run_entered")
+    assert ("main",) in calls
+    assert calls[-1] == ("close",)
+
+
 def test_run_uses_and_closes_optional_startup_diagnostics(monkeypatch):
     calls = []
 
@@ -659,6 +874,53 @@ def test_run_exits_cleanly_on_keyboard_interrupt(monkeypatch):
     assert configured == [True]
     assert recorder.info_messages == [f"{app.APP_NAME} interrupted by user."]
     assert recorder.error_messages == []
+
+
+def test_run_finalizes_application_diagnostics_before_reraising_system_exit(
+    monkeypatch,
+):
+    calls = []
+
+    class ApplicationDiagnosticsRecorder:
+        session_id = "session-test"
+
+        def __init__(self, *, metadata):
+            calls.append(("created", metadata))
+
+        def install_hooks(self, *, install_signals):
+            calls.append(("install_hooks", install_signals))
+
+        def finalize(self, **outcome):
+            calls.append(("finalize", outcome))
+
+    def exit_main():
+        raise SystemExit("restart requested")
+
+    monkeypatch.setattr(app, "ApplicationDiagnostics", ApplicationDiagnosticsRecorder)
+    monkeypatch.setattr(app, "create_runtime_diagnostics", lambda **_kwargs: None)
+    monkeypatch.setattr(app, "main", exit_main)
+
+    with pytest.raises(SystemExit) as raised:
+        app.run()
+
+    assert raised.value.code == "restart requested"
+    assert ("install_hooks", True) in calls
+    assert (
+        "finalize",
+        {
+            "outcome": "system_exit",
+            "exit_code": 1,
+            "reason": "sys_exit",
+        },
+    ) in calls
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [(None, 0), (7, 7), ("restart requested", 1)],
+)
+def test_system_exit_code_normalizes_supported_exit_values(value, expected):
+    assert app._system_exit_code(value) == expected
 
 
 @pytest.mark.parametrize("dialog_fails", [False, True])

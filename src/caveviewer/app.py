@@ -29,6 +29,14 @@ from caveviewer.core.diagnostics.application import (
     get_active_application_diagnostics,
     set_active_application_diagnostics,
 )
+from caveviewer.core.diagnostics.runtime import (
+    RuntimeDiagnostics,
+    create_runtime_diagnostics,
+    get_active_runtime_diagnostics,
+    record_runtime_exception,
+    record_runtime_stage,
+    set_active_runtime_diagnostics,
+)
 from caveviewer.core.diagnostics.startup import (
     StartupDiagnostics,
     get_active_startup_diagnostics,
@@ -98,6 +106,47 @@ def _attach_startup_diagnostics_logging() -> None:
         diagnostics.attach_to_root_logger()
     except Exception as error:
         diagnostics.record_exception("startup_logging_attachment_failed", error)
+
+
+def _attach_runtime_diagnostics_logging() -> None:
+    """Persist post-splash logs and native faults once logging is configured."""
+
+    diagnostics = get_active_runtime_diagnostics()
+    if diagnostics is None:
+        return
+    try:
+        diagnostics.attach_to_root_logger()
+        diagnostics.enable_fault_handler()
+    except Exception as error:
+        diagnostics.record_exception("runtime_logging_attachment_failed", error)
+
+
+def _runtime_diagnostics_hint() -> str:
+    """Return a concise diagnostic-file hint for a user-visible fatal error."""
+
+    diagnostics = get_active_runtime_diagnostics()
+    if diagnostics is None:
+        return ""
+    return f"\n\nDiagnostic log:\n{diagnostics.path}"
+
+
+def _show_viewer_launch_error(error: BaseException) -> None:
+    """Show a best-effort explanation for a viewer failure with no console."""
+
+    message = (
+        "CaveViewer could not start the 3D viewer.\n\n"
+        f"{error}{_runtime_diagnostics_hint()}"
+    )
+    try:
+        import tkinter as tk
+        from caveviewer.gui.platform import tk_root_options
+        from caveviewer.gui.notifications import show_error
+
+        root = tk.Tk(**tk_root_options())
+        root.withdraw()
+        show_error(message, parent=root)
+    except Exception:
+        pass
 
 
 def _route_moderngl_window_logging() -> None:
@@ -452,6 +501,16 @@ def _run_map_session(
     selected_is_file = os.path.isfile(selected_path)
     folder = os.path.dirname(selected_path) if selected_is_file else selected_path
     _LOG.info(f"Selected map path: {selected_path}")
+    _record_application_event(
+        "map_session_selected",
+        selected_path=selected_path,
+        selected_is_file=selected_is_file,
+    )
+    record_runtime_stage(
+        "map_session_selected",
+        selected_path=selected_path,
+        selected_is_file=selected_is_file,
+    )
 
     try:
         model_descriptor = find_model_file(selected_path)
@@ -485,8 +544,25 @@ def _run_map_session(
                     viewer_kwargs["platform_runtime"] = platform_runtime
                 if runtime_settings is not None:
                     viewer_kwargs["runtime_settings"] = runtime_settings
+                _record_application_event(
+                    "viewer_session_launch_requested",
+                    launch_mode="prebuilt_cache",
+                    cache_dir=_prebuilt_cache,
+                    map_root=folder,
+                )
+                record_runtime_stage(
+                    "viewer_session_launch_requested",
+                    launch_mode="prebuilt_cache",
+                    cache_dir=_prebuilt_cache,
+                    map_root=folder,
+                )
                 run_viewer(_prebuilt_cache, **viewer_kwargs)
                 _record_application_event(
+                    "viewer_session_returned",
+                    outcome="window_closed",
+                    cache_dir=_prebuilt_cache,
+                )
+                record_runtime_stage(
                     "viewer_session_returned",
                     outcome="window_closed",
                     cache_dir=_prebuilt_cache,
@@ -501,7 +577,13 @@ def _run_map_session(
                     cache_dir=_prebuilt_cache,
                     exc=launch_err,
                 )
+                record_runtime_exception(
+                    "viewer_session_exception",
+                    launch_err,
+                    cache_dir=_prebuilt_cache,
+                )
                 _LOG.error(f"Error starting viewer: {launch_err}")
+                _show_viewer_launch_error(launch_err)
                 import traceback
                 traceback.print_exc()
                 sys.exit(1)
@@ -556,8 +638,25 @@ def _run_map_session(
                     chunker.load_manifest(cache_dir),
                 )
                 viewer_kwargs["recorded_dive_trace"] = recorded_dive_trace
+            _record_application_event(
+                "viewer_session_launch_requested",
+                launch_mode="existing_cache",
+                cache_dir=cache_dir,
+                map_root=folder,
+            )
+            record_runtime_stage(
+                "viewer_session_launch_requested",
+                launch_mode="existing_cache",
+                cache_dir=cache_dir,
+                map_root=folder,
+            )
             run_viewer(cache_dir, **viewer_kwargs)
             _record_application_event(
+                "viewer_session_returned",
+                outcome="window_closed",
+                cache_dir=cache_dir,
+            )
+            record_runtime_stage(
                 "viewer_session_returned",
                 outcome="window_closed",
                 cache_dir=cache_dir,
@@ -572,7 +671,13 @@ def _run_map_session(
                 cache_dir=cache_dir,
                 exc=e,
             )
+            record_runtime_exception(
+                "viewer_session_exception",
+                e,
+                cache_dir=cache_dir,
+            )
             _LOG.error(f"Error starting viewer: {e}")
+            _show_viewer_launch_error(e)
             import traceback
             traceback.print_exc()
             sys.exit(1)
@@ -593,8 +698,25 @@ def _run_map_session(
                 viewer_kwargs["runtime_settings"] = runtime_settings
             if recorded_dive_trace is not None:
                 viewer_kwargs["recorded_dive_trace"] = recorded_dive_trace
+            _record_application_event(
+                "viewer_session_launch_requested",
+                launch_mode="pending_import",
+                cache_dir=None,
+                map_root=folder,
+            )
+            record_runtime_stage(
+                "viewer_session_launch_requested",
+                launch_mode="pending_import",
+                cache_dir=None,
+                map_root=folder,
+            )
             run_viewer_with_pending_import(model_descriptor, **viewer_kwargs)
             _record_application_event(
+                "viewer_session_returned",
+                outcome="window_closed",
+                cache_dir=None,
+            )
+            record_runtime_stage(
                 "viewer_session_returned",
                 outcome="window_closed",
                 cache_dir=None,
@@ -606,7 +728,13 @@ def _run_map_session(
                 cache_dir=None,
                 exc=e,
             )
+            record_runtime_exception(
+                "viewer_session_exception",
+                e,
+                cache_dir=None,
+            )
             _LOG.error(f"Error starting viewer: {e}")
+            _show_viewer_launch_error(e)
             import traceback
             traceback.print_exc()
             sys.exit(1)
@@ -647,6 +775,7 @@ def main():
         platform=platform_facts,
     )
     configure_logging(str(logging_settings["log_level"]))
+    _attach_runtime_diagnostics_logging()
     _attach_startup_diagnostics_logging()
     record_startup_stage("runtime_settings_resolution_complete")
     record_startup_stage("preferences_load_begin")
@@ -768,6 +897,20 @@ def run(*, startup_diagnostics: StartupDiagnostics | None = None) -> None:
             "platform": sys.platform,
         }
     )
+    runtime_diagnostics: RuntimeDiagnostics | None = create_runtime_diagnostics(
+        session_id=application_diagnostics.session_id,
+    )
+    if runtime_diagnostics is not None:
+        set_active_runtime_diagnostics(runtime_diagnostics)
+        application_diagnostics.bind_path(
+            runtime_diagnostics.jsonl_path,
+            runtime_log_path=str(runtime_diagnostics.path),
+        )
+        runtime_diagnostics.record(
+            "app_run_entered",
+            app_name=APP_NAME,
+            app_version=APP_VERSION,
+        )
     set_active_application_diagnostics(application_diagnostics)
     application_diagnostics.install_hooks(install_signals=True)
     try:
@@ -777,6 +920,7 @@ def run(*, startup_diagnostics: StartupDiagnostics | None = None) -> None:
         main()
     except KeyboardInterrupt:
         configure_logging()
+        _attach_runtime_diagnostics_logging()
         _LOG.info("%s interrupted by user.", APP_NAME)
         application_diagnostics.record(
             "application_interrupted",
@@ -799,9 +943,13 @@ def run(*, startup_diagnostics: StartupDiagnostics | None = None) -> None:
         raise
     except Exception as e:
         import traceback
-        user_error = f"{APP_NAME} encountered a fatal error:\n\n{e}"
+        user_error = (
+            f"{APP_NAME} encountered a fatal error:\n\n{e}"
+            f"{_runtime_diagnostics_hint()}"
+        )
         error_msg = f"{user_error}\n\nTraceback:\n{traceback.format_exc()}"
         configure_logging()
+        _attach_runtime_diagnostics_logging()
         _LOG.error(error_msg)
         application_diagnostics.record_exception(
             "application_uncaught_exception",
@@ -810,7 +958,7 @@ def run(*, startup_diagnostics: StartupDiagnostics | None = None) -> None:
             e.__traceback__,
             fatal=True,
         )
-        
+
         # Try to show error dialog if GUI is available
         try:
             import tkinter as tk
@@ -837,6 +985,13 @@ def run(*, startup_diagnostics: StartupDiagnostics | None = None) -> None:
     finally:
         if get_active_application_diagnostics() is application_diagnostics:
             set_active_application_diagnostics(None)
+        if runtime_diagnostics is not None:
+            try:
+                runtime_diagnostics.close()
+            except Exception:
+                pass
+        if get_active_runtime_diagnostics() is runtime_diagnostics:
+            set_active_runtime_diagnostics(None)
         if get_active_startup_diagnostics() is startup_diagnostics:
             set_active_startup_diagnostics(None)
         if startup_diagnostics is not None:
