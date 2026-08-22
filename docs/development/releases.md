@@ -163,6 +163,61 @@ downloaded update packages.
 Use [`.github/workflows/all-platform-release.yml`](../../.github/workflows/all-platform-release.yml)
 for a complete release.
 
+### One-action Preview promotion
+
+Use **Preview Release Promotion** when a validated feature branch is ready to
+become the next Preview. The selected source may be any pushed feature branch;
+all package publication still occurs exclusively from `release/next`.
+
+From a local checkout of the branch to release, one command starts the entire
+promotion:
+
+```bash
+gh workflow run preview-release-promotion.yml \
+  --ref main \
+  -f source_branch="$(git branch --show-current)" \
+  -f release_notes="Describe this Preview"
+```
+
+The Actions UI provides the same `source_branch` and `release_notes` inputs.
+When the workflow itself is selected from a feature branch that already
+contains it, `source_branch` may be left blank and the selected branch is used.
+Running from `main` with an explicit source branch works for branches created
+before this workflow existed.
+
+The promotion is Preview-only and performs one strictly ordered sequence:
+
+1. Confirm `release/next` has no release metadata still missing from `main`.
+2. Merge current `main` into the source branch, open or reuse its pull request
+   into `main`, explicitly run the required PR-aware checks, and merge it only
+   after success.
+3. Merge the resulting `main` into `release/next` and push that exact source.
+4. Choose one greater patch version from the current application version and
+   all existing numeric GitHub release tags (including tags without a release).
+5. Dispatch **All Platform Release** on `release/next` with `preview`, `publish`,
+   and `reuse_pr_validation` enabled, then wait for the complete run.
+6. Open or reuse the `release/next` metadata pull request into `main`, run the
+   lightweight PR-aware metadata validation, and merge it only after success.
+
+Every mutation follows a successful preflight or workflow. A failed source PR
+check leaves both protected branches unchanged. A failed package workflow
+leaves its failure visible in **All Platform Release** and does not create the
+metadata PR. A failed metadata check leaves that PR open for inspection. Rerun
+the promotion only after correcting the reported failure. The repository-wide
+promotion concurrency group prevents two Preview promotions from overlapping.
+
+The workflow intentionally rejects `main` and `release/next` as source-branch
+inputs. It also refuses to begin while `release/next` differs from `main`; merge
+the preceding release-metadata PR first. This prevents two release versions
+from accumulating on the long-lived release branch.
+
+The workflow token needs `actions: write`, `contents: write`, and
+`pull-requests: write`; these permissions are declared narrowly in the workflow.
+No personal access token is required. Bot-created PRs do not rely on recursive
+PR events: the promotion explicitly dispatches **Essential Tests** with the PR
+base/head pair, waits for the required check contexts on that commit, and only
+then requests the protected merge.
+
 1. Open **Actions → All Platform Release → Run workflow**.
 2. Select the source branch explicitly. For a production release this is
    normally `main`.
