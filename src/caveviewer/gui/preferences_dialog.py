@@ -293,7 +293,7 @@ class PreferencesPanel:
         self._page_canvas_window_width: int | None = None
         self._page_scroll_region: tuple[int, int, int, int] | None = None
         self._scrollbar_layout_state: tuple[int, int] | None = None
-        self._page_configured_widths: dict[str, int] = {}
+        self._page_configured_sizes: dict[str, tuple[int, int]] = {}
         self._destroyed = False
         self.container.bind("<Destroy>", self._on_container_destroy, add="+")
         self.container.bind("<Map>", self._on_container_mapped, add="+")
@@ -683,9 +683,10 @@ class PreferencesPanel:
 
     def _hint_width_for_page(self, page_key: str) -> int | None:
         """Return one stable description width from the final page width."""
-        page_width = getattr(self, "_page_configured_widths", {}).get(page_key)
-        if page_width is None or page_width <= 1:
+        page_size = getattr(self, "_page_configured_sizes", {}).get(page_key)
+        if page_size is None or page_size[0] <= 1:
             return None
+        page_width = page_size[0]
         control_widths: list[int] = []
         for key, entry in self.field_entries.items():
             if self.field_page_keys.get(key) != page_key:
@@ -900,7 +901,11 @@ class PreferencesPanel:
         page = tk.Frame(self.page_stack, bg=_BG_COLOR)
         page.bind(
             "<Configure>",
-            lambda event, key=page_key: self._on_page_configured(key, event.width),
+            lambda event, key=page_key: self._on_page_configured(
+                key,
+                event.width,
+                event.height,
+            ),
             add="+",
         )
         self.pages[page_key] = page
@@ -909,14 +914,18 @@ class PreferencesPanel:
             self.page_scrollbar.bind_mousewheel(page)
         return page
 
-    def _on_page_configured(self, page_key: str, width: int) -> None:
-        """Rewrap once when the active page reaches each distinct width."""
-        width = int(width)
-        if width <= 1 or self._page_configured_widths.get(page_key) == width:
+    def _on_page_configured(self, page_key: str, width: int, height: int) -> None:
+        """Rewrap on width changes and resync overflow on height changes."""
+        size = (int(width), int(height))
+        previous_size = self._page_configured_sizes.get(page_key)
+        if size[0] <= 1 or size[1] <= 1 or previous_size == size:
             return
-        self._page_configured_widths[page_key] = width
-        if page_key == self.active_page_key and self._sync_active_page_hint_wraplengths():
-            self._schedule_page_layout_sync()
+        self._page_configured_sizes[page_key] = size
+        if page_key != self.active_page_key:
+            return
+        if previous_size is None or previous_size[0] != size[0]:
+            self._sync_active_page_hint_wraplengths()
+        self._schedule_page_layout_sync()
 
     def _show_page(self, page_key: str) -> None:
         page = self._ensure_page(page_key)
@@ -1267,5 +1276,5 @@ class PreferencesPanel:
         self._page_canvas_window_width = None
         self._page_scroll_region = None
         self._scrollbar_layout_state = None
-        self._page_configured_widths.clear()
+        self._page_configured_sizes.clear()
         self._schedule_page_layout_sync()
