@@ -1166,11 +1166,22 @@ def show_splash_screen(
         expand=True,
         padx=(px(32), 0),
     )
+    right_frame.grid_rowconfigure(0, weight=1)
+    right_frame.grid_columnconfigure(0, weight=1)
     map_library_surface = tk.Frame(right_frame, bg=_BG_COLOR)
     preferences_surface = tk.Frame(right_frame, bg=_BG_COLOR)
     help_surface = tk.Frame(right_frame, bg=_BG_COLOR)
     about_surface = tk.Frame(right_frame, bg=_BG_COLOR)
     cave_metadata_surface = tk.Frame(right_frame, bg=_BG_COLOR)
+    for surface in (
+        map_library_surface,
+        preferences_surface,
+        help_surface,
+        about_surface,
+        cave_metadata_surface,
+    ):
+        surface.grid(row=0, column=0, sticky="nsew")
+    map_library_surface.tkraise()
 
     navigation_frame = tk.Frame(left_frame, bg=_BG_COLOR)
     navigation_frame.pack(fill="x", pady=(px(22), 0))
@@ -1502,11 +1513,7 @@ def show_splash_screen(
     def _show_map_library_surface() -> None:
         """Reveal the existing Map Library without rebuilding its catalog."""
         if active_surface[0] != "map_library":
-            preferences_surface.pack_forget()
-            help_surface.pack_forget()
-            about_surface.pack_forget()
-            cave_metadata_surface.pack_forget()
-            map_library_surface.pack(fill="both", expand=True)
+            map_library_surface.tkraise()
             active_surface[0] = "map_library"
         _set_active_navigation("Map Library")
         panel = map_library_panel_ref[0]
@@ -1561,11 +1568,7 @@ def show_splash_screen(
     def _show_preferences_surface() -> None:
         panel = _ensure_preferences_panel()
         if active_surface[0] != "preferences":
-            map_library_surface.pack_forget()
-            help_surface.pack_forget()
-            about_surface.pack_forget()
-            cave_metadata_surface.pack_forget()
-            preferences_surface.pack(fill="both", expand=True)
+            preferences_surface.tkraise()
             active_surface[0] = "preferences"
         _set_active_navigation("Preferences")
         panel.focus_content()
@@ -1590,11 +1593,7 @@ def show_splash_screen(
     def _show_help_surface() -> None:
         panel = _ensure_help_panel()
         if active_surface[0] != "help":
-            map_library_surface.pack_forget()
-            preferences_surface.pack_forget()
-            about_surface.pack_forget()
-            cave_metadata_surface.pack_forget()
-            help_surface.pack(fill="both", expand=True)
+            help_surface.tkraise()
             active_surface[0] = "help"
         _set_active_navigation("Help")
         panel.focus_content()
@@ -1634,11 +1633,7 @@ def show_splash_screen(
     def _show_about_surface() -> None:
         _ensure_about_surface()
         if active_surface[0] != "about":
-            map_library_surface.pack_forget()
-            preferences_surface.pack_forget()
-            help_surface.pack_forget()
-            cave_metadata_surface.pack_forget()
-            about_surface.pack(fill="both", expand=True)
+            about_surface.tkraise()
             active_surface[0] = "about"
         _set_active_navigation("About")
 
@@ -1949,11 +1944,7 @@ def show_splash_screen(
         )
         panel.create()
         if active_surface[0] != "cave_metadata":
-            map_library_surface.pack_forget()
-            preferences_surface.pack_forget()
-            help_surface.pack_forget()
-            about_surface.pack_forget()
-            cave_metadata_surface.pack(fill="both", expand=True)
+            cave_metadata_surface.tkraise()
             active_surface[0] = "cave_metadata"
         _set_active_navigation("Map Library")
         panel.focus_content()
@@ -2040,7 +2031,7 @@ def show_splash_screen(
         map_library_workflow.populate_panel(parent, recent_map_paths)
 
     _create_map_library_panel(map_library_surface)
-    map_library_surface.pack(fill="both", expand=True)
+    map_library_surface.tkraise()
 
     # Keep deferred navigation surfaces out of the initial Tk geometry pass.
     # Preferences creates only its active tab on first use and coalesces the
@@ -2059,6 +2050,10 @@ def show_splash_screen(
     root.geometry(f"{window_w}x{final_height}+{pos_x}+{pos_y}")
 
     root.deiconify()
+    # Build Preferences behind the visible Map Library after the first paint.
+    # Its mapped surface already has final geometry, so the first user-visible
+    # switch needs only one z-order change and no pack/forget reflow.
+    root.after_idle(_ensure_preferences_panel)
     mark_startup_splash_visible()
     root.lift()
     root.focus_force()

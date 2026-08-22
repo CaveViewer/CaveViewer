@@ -683,8 +683,11 @@ def test_splash_navigation_actions_are_keyboard_accessible_without_fallthrough()
     assert "preferences_surface_required_height" not in source
     assert "panel = _ensure_preferences_panel()" in source
     assert "_ensure_preferences_panel()" not in initial_layout_source
-    assert "map_library_surface.pack_forget()" in source
-    assert "preferences_surface.pack_forget()" in source
+    assert "map_library_surface.pack_forget()" not in source
+    assert "preferences_surface.pack_forget()" not in source
+    assert 'surface.grid(row=0, column=0, sticky="nsew")' in source
+    assert "preferences_surface.tkraise()" in source
+    assert "root.after_idle(_ensure_preferences_panel)" in source
     assert "def _show_about_surface() -> None:" in source
     assert "def _ensure_help_panel() -> HelpPanel:" in source
     assert "def _show_help_surface() -> None:" in source
