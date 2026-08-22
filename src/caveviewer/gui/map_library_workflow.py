@@ -465,8 +465,8 @@ class MapLibraryWorkflow:
     def close(self) -> None:
         """Close transient UI and request a resumable active rebuild pause."""
         self.panel.close_active_menu()
-        self.cancel_active_download_for_close()
-        self.cancel_catalog_fetch_for_close()
+        self.download_workflow.close()
+        self.catalog_workflow.close()
         self.request_cache_rebuild_pause(for_close=True)
 
     def set_map_library_root_dir(self, map_library_root_dir: str) -> None:
@@ -810,7 +810,7 @@ class MapLibraryWorkflow:
 
         assert isinstance(started, CacheRebuildStarted)
         self._show_active_cache_rebuild(active)
-        self.schedule_cache_rebuild_poll()
+        self.cache_rebuild_workflow.schedule_poll()
 
     def _fresh_cache_rebuild_preflight(
         self,
@@ -874,17 +874,6 @@ class MapLibraryWorkflow:
         self.panel.set_row_metadata(active.row_widgets, "Pausing cache rebuild…")
         self.panel.refresh_row_overflow(active.row_widgets)
         return True
-
-    def schedule_cache_rebuild_poll(self) -> None:
-        """Schedule a non-blocking child-event poll while a rebuild is active."""
-        try:
-            self.cache_rebuild_workflow.schedule_poll()
-        except tk.TclError:
-            self.request_cache_rebuild_pause()
-
-    def poll_cache_rebuild(self) -> None:
-        """Apply latest rebuild updates on the Tk thread and continue polling."""
-        self.cache_rebuild_workflow.poll()
 
     def _apply_cache_rebuild_updates(self, updates: tuple[Any, ...]) -> None:
         """Render typed updates delivered by the rebuild lifecycle owner."""
@@ -1436,14 +1425,6 @@ class MapLibraryWorkflow:
         if self.splash_exists():
             self.set_non_active_actions_enabled(library_map, True)
 
-    def cancel_active_download_for_close(self) -> None:
-        """Cancel pending work and scheduled polls while the splash closes."""
-        self.download_workflow.close()
-
-    def cancel_catalog_fetch_for_close(self) -> None:
-        """Cancel the pending catalog poll callback while splash closes."""
-        self.catalog_workflow.close()
-
     def finish_download_success(self, library_map, result_path: str) -> None:
         """Apply a successful standard-library download result."""
         if not self.splash_exists():
@@ -1484,19 +1465,6 @@ class MapLibraryWorkflow:
             "Check your connection and retry.",
             max_wraplength=360,
         )
-
-    def schedule_download_poll(
-        self,
-        library_map,
-        message_queue,
-        cancel_event,
-    ) -> None:
-        """Schedule the next Tk-thread poll for a download queue."""
-        self.download_workflow._schedule(library_map, message_queue, cancel_event)
-
-    def poll_download_queue(self, library_map, message_queue, cancel_event) -> None:
-        """Drain worker messages and apply the latest download state."""
-        self.download_workflow.poll(library_map, message_queue, cancel_event)
 
     def start_inline_download(self, library_map) -> None:
         """Start a standard-library download from an already resolved row."""
@@ -1591,14 +1559,6 @@ class MapLibraryWorkflow:
             "Couldn't load download info. Check your connection and retry.",
             max_wraplength=360,
         )
-
-    def schedule_catalog_poll(self) -> None:
-        """Schedule the next Tk-thread poll for catalog metadata."""
-        self.catalog_workflow._schedule_poll()
-
-    def poll_catalog_fetch(self) -> None:
-        """Apply completed catalog metadata and continue any pending download."""
-        self.catalog_workflow.poll()
 
     def _complete_catalog_fetch(self, completion) -> None:
         """Apply one catalog result delivered by the lifecycle owner."""
