@@ -1,27 +1,33 @@
-"""Test the focused platform adapter for recording encoder process startup."""
+"""Test direct platform configuration for recording encoder startup."""
 
 from __future__ import annotations
 
-from caveviewer.gui.platform.recording_process import (
-    create_recording_process_adapter,
-)
+from caveviewer.gui.platform import recording_process
 
 
-class FakePlatformAdapter:
-    def __init__(self):
-        self.calls = 0
-        self.startup_kwargs = {"creationflags": 17}
+def test_default_process_adapter_has_no_platform_launch_options():
+    adapter = recording_process.create_recording_process_adapter(
+        platform_name="linux"
+    )
 
-    def recording_subprocess_startup_kwargs(self):
-        self.calls += 1
-        return self.startup_kwargs
+    assert adapter.encoder_popen_kwargs() == {}
 
 
-def test_composed_process_adapter_delegates_encoder_popen_options():
-    platform_adapter = FakePlatformAdapter()
-    process_adapter = create_recording_process_adapter(platform_adapter)
+def test_windows_process_adapter_suppresses_console(monkeypatch):
+    class FakeStartupInfo:
+        def __init__(self):
+            self.dwFlags = 2
+            self.wShowWindow = 99
 
-    startup_kwargs = process_adapter.encoder_popen_kwargs()
+    monkeypatch.setattr(recording_process.subprocess, "STARTUPINFO", FakeStartupInfo, raising=False)
+    monkeypatch.setattr(recording_process.subprocess, "STARTF_USESHOWWINDOW", 4, raising=False)
+    monkeypatch.setattr(recording_process.subprocess, "CREATE_NO_WINDOW", 8, raising=False)
 
-    assert startup_kwargs == {"creationflags": 17}
-    assert platform_adapter.calls == 1
+    adapter = recording_process.create_recording_process_adapter(
+        platform_name="win32"
+    )
+    options = adapter.encoder_popen_kwargs()
+
+    assert options["startupinfo"].dwFlags == 6
+    assert options["startupinfo"].wShowWindow == 0
+    assert options["creationflags"] == 8

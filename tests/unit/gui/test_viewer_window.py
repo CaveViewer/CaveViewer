@@ -2157,12 +2157,14 @@ def test_recording_success_confirms_before_revealing_saved_file(monkeypatch):
     revealed = []
     monkeypatch.setattr(viewer_window.time, "perf_counter", lambda: 10.0)
 
-    class FakePlatformAdapter:
-        def reveal_file(self, path):
+    class FakeSavedArtifactRevealAdapter:
+        def reveal_saved_artifact(self, path):
             revealed.append(path)
 
     window = _recording_window()
-    window._platform_adapter = FakePlatformAdapter()
+    window._platform_runtime = SimpleNamespace(
+        saved_artifact_reveal_adapter=FakeSavedArtifactRevealAdapter()
+    )
 
     window._apply_recording_stop_result(
         recording.RecordingStopResult(
@@ -2229,12 +2231,14 @@ def test_recording_success_uses_injected_runtime_reveal_adapter(monkeypatch):
 def test_recording_success_does_not_reveal_after_background_stop():
     revealed = []
 
-    class FakePlatformAdapter:
-        def reveal_file(self, path):
+    class FakeSavedArtifactRevealAdapter:
+        def reveal_saved_artifact(self, path):
             revealed.append(path)
 
     window = _recording_window()
-    window._platform_adapter = FakePlatformAdapter()
+    window._platform_runtime = SimpleNamespace(
+        saved_artifact_reveal_adapter=FakeSavedArtifactRevealAdapter()
+    )
 
     window._apply_recording_stop_result(
         recording.RecordingStopResult(
@@ -2286,12 +2290,14 @@ def test_exit_finalization_keeps_its_video_status_and_does_not_reveal_files(
 def test_interrupted_recording_success_can_confirm_without_revealing():
     revealed = []
 
-    class FakePlatformAdapter:
-        def reveal_file(self, path):
+    class FakeSavedArtifactRevealAdapter:
+        def reveal_saved_artifact(self, path):
             revealed.append(path)
 
     window = _recording_window()
-    window._platform_adapter = FakePlatformAdapter()
+    window._platform_runtime = SimpleNamespace(
+        saved_artifact_reveal_adapter=FakeSavedArtifactRevealAdapter()
+    )
 
     window._apply_recording_stop_result(
         recording.RecordingStopResult(
@@ -2316,12 +2322,14 @@ def test_recording_reveal_failure_keeps_saved_status(monkeypatch):
     monkeypatch.setattr(viewer_window, "_LOG", logger)
     monkeypatch.setattr(viewer_window.time, "perf_counter", lambda: 10.0)
 
-    class FakePlatformAdapter:
-        def reveal_file(self, path):
+    class FakeSavedArtifactRevealAdapter:
+        def reveal_saved_artifact(self, path):
             raise RuntimeError(f"blocked: {path}")
 
     window = _recording_window()
-    window._platform_adapter = FakePlatformAdapter()
+    window._platform_runtime = SimpleNamespace(
+        saved_artifact_reveal_adapter=FakeSavedArtifactRevealAdapter()
+    )
 
     window._apply_recording_stop_result(
         recording.RecordingStopResult(

@@ -1,11 +1,14 @@
-"""Focused adapter for platform-specific recording encoder process startup."""
+"""Direct platform-owned configuration for recording encoder processes.
+
+The adapter owns only non-command ``Popen`` options. Recording workflow code
+continues to own ffmpeg commands, process lifetime, and worker threads.
+"""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import subprocess
+import sys
 from typing import Any, Protocol
-
-from .base import SplashPlatformAdapter
 
 
 class RecordingProcessAdapter(Protocol):
@@ -15,26 +18,31 @@ class RecordingProcessAdapter(Protocol):
         """Return non-command ``Popen`` options for a recording encoder."""
 
 
-@dataclass(frozen=True, slots=True)
-class PlatformRecordingProcessAdapter:
-    """Compatibility facade over established platform-specific launch options.
-
-    The broad adapter keeps its current behavior for now, including Windows
-    console suppression through ``STARTUPINFO`` and ``CREATE_NO_WINDOW``.
-    Recording workflow code depends only on this focused facade, so native
-    process startup can later move here without changing capability policy,
-    ffmpeg command construction, or session ownership.
-    """
-
-    platform_adapter: SplashPlatformAdapter
+class DefaultRecordingProcessAdapter:
+    """Launch encoders without platform-specific process flags."""
 
     def encoder_popen_kwargs(self) -> dict[str, Any]:
-        """Delegate recording-process options to existing native behavior."""
-        return self.platform_adapter.recording_subprocess_startup_kwargs()
+        return {}
+
+
+class WindowsRecordingProcessAdapter:
+    """Suppress console windows for GUI-launched recording encoders."""
+
+    def encoder_popen_kwargs(self) -> dict[str, Any]:
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        startupinfo.wShowWindow = 0
+        return {
+            "startupinfo": startupinfo,
+            "creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        }
 
 
 def create_recording_process_adapter(
-    platform_adapter: SplashPlatformAdapter,
-) -> PlatformRecordingProcessAdapter:
-    """Compose the focused encoder-process action for a platform adapter."""
-    return PlatformRecordingProcessAdapter(platform_adapter=platform_adapter)
+    *, platform_name: str | None = None
+) -> RecordingProcessAdapter:
+    """Compose direct encoder startup behavior from the platform name."""
+    normalized_platform = str(platform_name or sys.platform).strip().lower()
+    if normalized_platform.startswith("win"):
+        return WindowsRecordingProcessAdapter()
+    return DefaultRecordingProcessAdapter()

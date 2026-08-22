@@ -608,28 +608,20 @@ def _window_backend_adapter_for_runtime(
 
 def _saved_artifact_reveal_adapter_for_runtime(
     platform_runtime: PlatformRuntime | None = None,
-    *,
-    platform_adapter=None,
 ) -> SavedArtifactRevealAdapter:
-    """Use the injected artifact-reveal action with a legacy facade fallback."""
+    """Use the injected artifact-reveal action or direct platform fallback."""
     if platform_runtime is not None:
         return platform_runtime.saved_artifact_reveal_adapter
-    if platform_adapter is None:
-        platform_adapter = get_platform_adapter()
-    return create_saved_artifact_reveal_adapter(platform_adapter)
+    return create_saved_artifact_reveal_adapter()
 
 
 def _recording_process_adapter_for_runtime(
     platform_runtime: PlatformRuntime | None = None,
-    *,
-    platform_adapter=None,
 ) -> RecordingProcessAdapter:
-    """Use the injected process adapter with a legacy facade fallback."""
+    """Use the injected process adapter or direct platform fallback."""
     if platform_runtime is not None:
         return platform_runtime.recording_process_adapter
-    if platform_adapter is None:
-        platform_adapter = get_platform_adapter()
-    return create_recording_process_adapter(platform_adapter)
+    return create_recording_process_adapter()
 
 
 def _runtime_app_icon_path(presentation_profile: PresentationProfile) -> str:
@@ -1340,21 +1332,15 @@ class CaveViewerWindow(mglw.WindowConfig):
         return actions
 
     def _active_saved_artifact_reveal_adapter(self) -> SavedArtifactRevealAdapter:
-        """Return the runtime action adapter or preserve direct legacy callers."""
-        platform_runtime = getattr(self, "_platform_runtime", None)
-        if platform_runtime is not None:
-            return _saved_artifact_reveal_adapter_for_runtime(platform_runtime)
+        """Return the runtime action adapter or compose a direct fallback."""
         return _saved_artifact_reveal_adapter_for_runtime(
-            platform_adapter=self._active_platform_adapter(),
+            getattr(self, "_platform_runtime", None)
         )
 
     def _active_recording_process_adapter(self) -> RecordingProcessAdapter:
-        """Return the runtime launch adapter or preserve direct legacy callers."""
-        platform_runtime = getattr(self, "_platform_runtime", None)
-        if platform_runtime is not None:
-            return _recording_process_adapter_for_runtime(platform_runtime)
+        """Return the runtime launch adapter or compose a direct fallback."""
         return _recording_process_adapter_for_runtime(
-            platform_adapter=self._active_platform_adapter(),
+            getattr(self, "_platform_runtime", None)
         )
 
     def _acquire_import_inhibitor(self, map_name: str):

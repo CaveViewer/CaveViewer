@@ -471,14 +471,18 @@ def create_platform_runtime(
     )
     resolved_saved_artifact_reveal_adapter = (
         saved_artifact_reveal_adapter
-        or create_saved_artifact_reveal_adapter(resolved_platform_adapter)
+        or create_saved_artifact_reveal_adapter(
+            platform_name=resolved_platform_name,
+            desktop_services=resolved_desktop_services,
+        )
     )
     resolved_recording_process_adapter = (
         recording_process_adapter
-        or create_recording_process_adapter(resolved_platform_adapter)
+        or create_recording_process_adapter(platform_name=resolved_platform_name)
     )
     resolved_tls_trust_adapter = (
-        tls_trust_adapter or create_tls_trust_adapter(resolved_platform_adapter)
+        tls_trust_adapter
+        or create_tls_trust_adapter(platform_name=resolved_platform_name)
     )
     resolved_window_backend_adapter = (
         window_backend_adapter or create_window_backend_adapter()

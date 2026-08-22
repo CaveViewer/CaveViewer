@@ -24,10 +24,10 @@ platform/
 ├── update_package_storage.py # Focused verified-package storage facade
 ├── update_package_install.py # Focused signed Windows EXE handoff facade
 ├── windows_update_paths.py   # User-owned Windows update/log locations
-├── saved_artifact_reveal.py # Focused post-save user-artifact reveal facade
+├── saved_artifact_reveal.py # Direct post-save user-artifact reveal actions
 ├── saved_recording_reveal.py # Compatibility imports for former recording facade
-├── recording_process.py      # Focused recording-encoder startup facade
-├── tls_trust.py               # Focused native TLS-trust augmentation facade
+├── recording_process.py      # Direct recording-encoder startup options
+├── tls_trust.py               # Direct native TLS-trust augmentation
 ├── probes/desktop.py        # On-demand desktop action route declarations
 ├── probes/update_package_reveal.py # Static package-reveal route declaration
 ├── probes/updates.py        # Static signed-update configuration and target probe
@@ -179,23 +179,23 @@ manual reveal route.
 Saved-artifact reveal is a focused post-save `SavedArtifactRevealAdapter`. It
 runs only after a video encoder or trace writer reports success for a
 user-visible stop, so it does not require a capability probe or feature gate:
-a file-manager failure cannot undo an artifact that was already saved. Its
-compatibility facade delegates to the broad adapter's established Finder,
-Explorer, and Linux desktop-service behavior. The viewer logs a reveal failure
-while preserving the successful artifact status.
+a file-manager failure cannot undo an artifact that was already saved. Direct
+Finder, Explorer, and Linux desktop-service implementations own the reveal
+side effect. The viewer logs a reveal failure while preserving the successful
+artifact status.
 
 Recording encoder startup has its own `RecordingProcessAdapter`. It runs only
 after the existing on-demand video-recording preflight and provides the
 platform-specific non-command `Popen` kwargs used to launch ffmpeg. It neither
-selects the encoder nor decides recording availability. Its compatibility
-facade preserves Windows `STARTUPINFO`/`CREATE_NO_WINDOW` console suppression
-and the empty default, macOS, and Linux option sets. Desktop notifications and
+selects the encoder nor decides recording availability. Its direct Windows
+implementation preserves `STARTUPINFO`/`CREATE_NO_WINDOW` console suppression;
+the default, macOS, and Linux option sets remain empty. Desktop notifications and
 idle/suspend inhibition are independent optional action-time migrations.
 
 TLS trust augmentation has its own `TlsTrustAdapter`. It augments a fresh,
 normally verifying SSL context with native trust roots immediately before
-update networking. Its compatibility facade preserves Windows `CA` and `ROOT`
-certificate-store loading and the empty default, macOS, and Linux behavior.
+update networking. Its direct Windows implementation preserves `CA` and `ROOT`
+certificate-store loading; the default, macOS, and Linux behavior adds nothing.
 It does not decide whether updates are available, disable certificate
 verification, or alter the separate process-global `truststore` startup
 compatibility path.
@@ -264,9 +264,9 @@ Automatic-update policy and manifest parsing have moved to `UpdateProfile` and
 `UpdateTarget`; adapter-based update calls are likewise local compatibility
 paths. `UpdatePackageRevealAdapter`, `UpdatePackageStorageAdapter`, and the
 narrowly scoped `UpdatePackageInstallerAdapter` own direct package actions.
-`SavedArtifactRevealAdapter`, `RecordingProcessAdapter`,
-and `TlsTrustAdapter` remain narrow facades around existing artifact, recording,
-and network actions. New features should add the smallest appropriate
+`SavedArtifactRevealAdapter`, `RecordingProcessAdapter`, and `TlsTrustAdapter`
+own direct native artifact, recording, and network actions. New features should
+add the smallest appropriate
 combination of a probe, a pure policy in
 `caveviewer.gui.features`, and an injected action adapter rather than expanding
 this broad protocol. Cache, chunk streaming, navigation, and map state are
@@ -276,19 +276,12 @@ outside this runtime layer.
 
 ### `base.py` – Protocol Definition
 
-Defines `SplashPlatformAdapter`, the frozen compatibility Protocol for
-unmigrated action-time platform effects:
+Defines `SplashPlatformAdapter`, a frozen compatibility marker pending removal
+of its remaining factory and runtime property:
 
 ```python
 class SplashPlatformAdapter(Protocol):
-    def reveal_file(self, path: str) -> None:
-        ...
-
-    def load_system_certificates(self, context: object) -> None:
-        ...
-
-    def recording_subprocess_startup_kwargs(self) -> dict:
-        ...
+    pass
 ```
 
 Fonts, layouts, shortcut/input conventions, text scaling, startup focus policy,
@@ -354,30 +347,29 @@ second one. Existing callers of `get_platform_adapter()` and
 `get_desktop_services()` remain valid only as compatibility paths until their
 concerns are split out of `SplashPlatformAdapter`.
 
-### `macos.py` – macOS Implementations
+### `macos.py` – macOS Compatibility Marker
 
-`MacOSSplashPlatformAdapter` retains Finder reveal. Its fonts, layouts, input
-conventions, and scaling are selected by the macOS `PresentationProfile`;
-its About-menu registration and viewer focus are direct
-`MacOSPresentationActionsAdapter` effects.
+`MacOSSplashPlatformAdapter` no longer owns native behavior. Fonts, layouts,
+input conventions, and scaling are selected by the macOS
+`PresentationProfile`; About-menu registration and viewer focus are direct
+`MacOSPresentationActionsAdapter` effects, and saved-artifact reveal has its
+own direct adapter.
 
 ### `windows.py` & `linux.py` – Platform Overrides
 
-`WindowsSplashPlatformAdapter` retains certificate-store loading,
-recording-process startup flags, and Explorer reveal.
-`LinuxSplashPlatformAdapter` retains portal-backed file reveal. Their static
-presentation values are selected by `PresentationProfile`, not overridden on
-the broad adapter. Windows DPI setup belongs to
+`WindowsSplashPlatformAdapter` and `LinuxSplashPlatformAdapter` no longer own
+native behavior. Focused adapters own certificate stores, recording-process
+flags, Explorer selection, and portal-backed file reveal. Static presentation
+values are selected by `PresentationProfile`, and Windows DPI setup belongs to
 `WindowsPresentationActionsAdapter`.
 
 ### `default.py` – Fallback Implementations
 
-Provides conservative fallbacks for remaining compatibility actions:
+Provides an empty compatibility marker pending broad-adapter deletion:
 
 ```python
 class DefaultSplashPlatformAdapter(SplashPlatformAdapter):
-    def reveal_file(self, path: str) -> None:
-        raise RuntimeError("Revealing files is unsupported on this platform")
+    pass
 ```
 
 ## Usage Examples
@@ -507,8 +499,8 @@ after a user-visible completion.
 **How**:
 - `SavedArtifactRevealAdapter.reveal_saved_artifact()` exposes a completed
   artifact without opening or executing it.
-- `reveal_file()` remains the compatibility implementation until artifact
-  reveal behavior moves behind that focused adapter.
+- Finder, Explorer, and Linux desktop-service behavior is implemented directly
+  by the focused adapter selected during platform-runtime composition.
 - macOS reveals the file in Finder.
 - Windows selects the file in Explorer.
 - Linux uses desktop-service reveal, with portal support and fallback behavior
@@ -525,9 +517,8 @@ the viewer is about to start its encoder session.
 **How**:
 - `RecordingProcessAdapter.encoder_popen_kwargs()` supplies only native
   non-command `Popen` options.
-- `recording_subprocess_startup_kwargs()` remains the compatibility
-  implementation until process-startup behavior moves behind that focused
-  adapter.
+- The direct Windows implementation owns `STARTUPINFO` and
+  `CREATE_NO_WINDOW`; other platforms return no extra options.
 - Windows continues to suppress the GUI-launched ffmpeg console; default,
   macOS, and Linux behavior remains empty.
 
@@ -542,8 +533,8 @@ update manifest, signature, or payload request.
 **How**:
 - `TlsTrustAdapter.augment_ssl_context()` adds native trust roots while the
   default SSL verification policy remains enabled.
-- `load_system_certificates()` remains the compatibility implementation until
-  native certificate-store behavior moves behind the focused adapter.
+- The direct Windows implementation loads usable certificates from the `CA`
+  and `ROOT` stores; other platforms retain the default context roots.
 - Windows continues to load the `CA` and `ROOT` stores; default, macOS, and
   Linux behavior remains empty.
 
