@@ -61,14 +61,21 @@ storage boundary.
   considered ready. Fix an OS-only assertion or normalization failure in the
   same branch; do not treat a Linux-only pass as sufficient evidence.
 
-## Recommended order
+## Current recommended order
+
+This order was re-audited against `main` at `3ce7f5c` on 2026-08-22. Completed
+workstreams remain in the master table because their boundaries still matter,
+but they are not branches to recreate.
 
 | Order | Refactor | Primary branch | Why it comes here |
 | --- | --- | --- | --- |
-| 1 | Runtime settings source of truth | `refactor/runtime-settings-snapshot` | Gives later composition work one explicit configuration input. |
-| 2 | Broad platform adapter retirement | `refactor/platform-presentation-profile` | Removes compatibility paths before more platform work is added. |
-| 3 | Splash and Map Library workflow split | `refactor/splash-controller-lifecycle` | Uses explicit runtime and platform dependencies rather than adding more callbacks to the current composition function. |
-| 4 | Documentation and scoped-instruction consolidation | `refactor/architecture-document-authority` | Record the final boundaries after the implementation ownership is stable. |
+| 1 | Audit and retire runtime-settings fallbacks | `refactor/runtime-settings-fallback-retirement` | Confirms which remaining direct environment reads are intentional boundaries and prevents the compatibility path from spreading. |
+| 2 | Bundle Map Library dependencies | `refactor/map-library-workflow-dependencies` | Shrinks the roughly 40-argument composition surface before a controller inherits it. |
+| 3 | Extract splash lifecycle control | `refactor/splash-controller-lifecycle` | Builds on `SplashSession` and the dependency bundles without duplicating scheduler ownership. |
+| 4 | Extract Map Library catalog/download and cache-rebuild orchestration | Existing workstream branches 10 and 11 | Separates worker lifecycles before deleting the coordinating facade. |
+| 5 | Clean up splash composition | `refactor/splash-composition-cleanup` | Deletes forwarding and nested-function compatibility code only after direct composition exists. |
+| 6 | Reduce the viewer-window composition surface | `refactor/viewer-window-composition-boundary` | Applies the same ownership model to the remaining 7,924-line GUI composition/controller module. |
+| 7 | Consolidate documentation authority | `refactor/architecture-document-authority` | Records stable implementation boundaries and then splits the oversized operational reference. |
 
 The branch names below are deliberately more granular than the table. Use the
 smallest branch that produces a coherent, reviewable change; each name begins
@@ -76,29 +83,33 @@ with `refactor/` by convention.
 
 ## Master implementation status
 
-Status is recorded as of 2026-08-22 (America/New_York). “Implemented
-locally” means the change exists on a local branch and still needs review and
-merge; it is not yet part of `main`. A dash in **Commit / reference** means no
-implementation commit exists yet. **GitHub issue** links track each remaining
-workstream. This table is the authoritative branch-level handoff status.
+Status and applicability were reviewed against `main` at `3ce7f5c` on
+2026-08-22 (America/New_York). **Applies** means a new implementation branch is
+still justified. **Enforce only** means the desired architecture is present and
+should be protected, not reimplemented. **Fold** means any small remainder
+belongs in another listed branch. A dash in **Commit / reference** means no
+implementation commit exists yet.
 
-| # | Workstream | Branch | Implementation status | Commit / reference | GitHub issue | Current handoff / boundary |
-| --- | --- | --- | --- | --- | --- | --- |
-| 1 | Runtime settings source of truth | `refactor/runtime-settings-snapshot` | Implemented — merged | `64dcd91` (PR #221) | — | Merged as PR #221 at `64dcd91`. |
-| 2 | Runtime settings source of truth | `refactor/runtime-settings-consumers` | Implemented — merged | `f9716f8`, `1ddd679`; merged as `0f7b6c2` (PR #222) | — | Application and benchmark composition, typed consumer injection, preference-session replacement, and the portable import-path regression test are complete. Essential Tests and all package-smoke checks passed. |
-| 3 | Runtime settings source of truth | `refactor/runtime-settings-diagnostics` | Implemented — folded into and merged with PR #222 | `f9716f8`; merged as `0f7b6c2` (PR #222) | — | Do not create this as a separate branch; registry-derived safe diagnostics and validated source-setup table are included. |
-| 4 | Broad platform adapter retirement | `refactor/platform-presentation-profile-actions` | Implemented — merged | `e224b55`; merged as `0973c4a` (PR #234) | — | Static presentation policy lives exclusively on `PresentationProfile`. |
-| 5 | Broad platform adapter retirement | `refactor/platform-presentation-profile-actions` | Implemented — merged | `e224b55`; merged as `0973c4a` (PR #234) | — | DPI setup, macOS About registration, and viewer focus are direct `PresentationActionsAdapter` effects. |
-| 6 | Broad platform adapter retirement | `refactor/platform-native-action-adapters` | Implemented — merged | `086ac59`; merged as `2508596` ([PR #251](https://github.com/CaveViewer/CaveViewer/pull/251)) | [#224](https://github.com/CaveViewer/CaveViewer/issues/224) | Direct focused adapters own saved-artifact reveal, recording-process startup, and TLS trust; the three broad-adapter methods are removed. |
-| 7 | Broad platform adapter retirement | `refactor/remove-splash-platform-adapter` | Implemented — PR open | `8e70397` ([PR #255](https://github.com/CaveViewer/CaveViewer/pull/255)) | [#225](https://github.com/CaveViewer/CaveViewer/issues/225) | The empty broad protocol, factory, runtime property, compatibility classes, caller shims, and transitional tests are removed. A repository guard prevents their return. |
-| 8 | Splash and Map Library workflow split | `refactor/splash-controller-lifecycle` | Not implemented — tracked | — | [#226](https://github.com/CaveViewer/CaveViewer/issues/226) | Start after explicit runtime and focused platform dependencies are stable. |
-| 9 | Splash and Map Library workflow split | `refactor/map-library-workflow-dependencies` | Not implemented — tracked | — | [#227](https://github.com/CaveViewer/CaveViewer/issues/227) | Introduce typed dependency bundles before extracting worker workflows. |
-| 10 | Splash and Map Library workflow split | `refactor/map-library-catalog-download` | Not implemented — tracked | — | [#228](https://github.com/CaveViewer/CaveViewer/issues/228) | Keep catalog/download lifecycle separate from cache rebuilding. |
-| 11 | Splash and Map Library workflow split | `refactor/map-library-cache-rebuild` | Not implemented — tracked | — | [#229](https://github.com/CaveViewer/CaveViewer/issues/229) | Preserve existing cooperative process and cancellation behavior. |
-| 12 | Splash and Map Library workflow split | `refactor/splash-composition-cleanup` | Not implemented — tracked | — | [#230](https://github.com/CaveViewer/CaveViewer/issues/230) | Remove temporary facades only after focused workflows are directly composed. |
-| 13 | Documentation and scoped-instruction consolidation | `refactor/architecture-document-authority` | Not implemented — tracked | — | [#231](https://github.com/CaveViewer/CaveViewer/issues/231) | The settings-specific architecture/source-setup edits do not complete this broader authority consolidation. |
-| 14 | Documentation and scoped-instruction consolidation | `refactor/platform-documentation-authority` | Not implemented — tracked | — | [#232](https://github.com/CaveViewer/CaveViewer/issues/232) | Start after focused platform contracts replace the broad adapter. |
-| 15 | Documentation and scoped-instruction consolidation | `refactor/scoped-agent-guide-cleanup` | Not implemented — tracked | — | [#233](https://github.com/CaveViewer/CaveViewer/issues/233) | Keep separate if cleanup spans multiple directories. |
+| # | Workstream | Branch | Implementation status | Applicability on current `main` | Commit / reference | GitHub issue | Current handoff / boundary |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | Runtime settings source of truth | `refactor/runtime-settings-snapshot` | Implemented — merged | Enforce only | `64dcd91` (PR #221) | — | The immutable snapshot remains the correct composition boundary. Do not recreate this branch. |
+| 2 | Runtime settings consumer migration | `refactor/runtime-settings-consumers` | Implemented — merged | Partially applies through new workstream 16 | `f9716f8`, `1ddd679`; merged as `0f7b6c2` (PR #222) | — | Production app and benchmark composition use typed settings. Remaining optional environment fallbacks require classification and eventual retirement, not a repeat migration. |
+| 3 | Runtime settings diagnostics | `refactor/runtime-settings-diagnostics` | Implemented — folded into PR #222 | Enforce only | `f9716f8`; merged as `0f7b6c2` (PR #222) | — | Registry-derived safe diagnostics and the validated source-setup table remain current. Do not create a separate branch. |
+| 4 | Platform presentation profile | `refactor/platform-presentation-profile-actions` | Implemented — merged | Enforce only | `e224b55`; merged as `0973c4a` (PR #234) | — | Static presentation policy still belongs exclusively to `PresentationProfile`. |
+| 5 | Platform presentation actions | `refactor/platform-presentation-profile-actions` | Implemented — merged | Enforce only | `e224b55`; merged as `0973c4a` (PR #234) | — | Direct focused action adapters remain the correct boundary for DPI, About registration, and focus. |
+| 6 | Native focused action adapters | `refactor/platform-native-action-adapters` | Implemented — merged | Enforce only | `086ac59`; merged as `2508596` ([PR #251](https://github.com/CaveViewer/CaveViewer/pull/251)) | [#224](https://github.com/CaveViewer/CaveViewer/issues/224) — closed | Focused adapters own artifact reveal, recording startup, and TLS trust. |
+| 7 | Remove broad splash platform adapter | `refactor/remove-splash-platform-adapter` | Implemented — merged | Enforce only | `8e70397`; merged as `0e21f7d` ([PR #255](https://github.com/CaveViewer/CaveViewer/pull/255)) | [#225](https://github.com/CaveViewer/CaveViewer/issues/225) — closed | Production references are absent and an architecture guard prevents the retired API from returning. The previous “PR open” status was stale. |
+| 8 | Splash controller lifecycle | `refactor/splash-controller-lifecycle` | Implemented — merged | Enforce only | `197e68d` ([PR #273](https://github.com/CaveViewer/CaveViewer/pull/273)) | [#226](https://github.com/CaveViewer/CaveViewer/issues/226) — closed | A widget-free controller owns start, selection, scheduling, and idempotent close while reusing `SplashSession` as the callback-token owner. |
+| 9 | Map Library workflow dependencies | `refactor/map-library-workflow-dependencies` | Implemented — merged | Enforce only | `9fcbb97` ([PR #272](https://github.com/CaveViewer/CaveViewer/pull/272)) | [#227](https://github.com/CaveViewer/CaveViewer/issues/227) — closed | The loose constructor surface is replaced by six typed composition, storage, catalog, download, action, and cache-rebuild dependency bundles. |
+| 10 | Map Library catalog and download workflows | `refactor/map-library-catalog-download` | Implemented — merged | Enforce only | `59f5ac1` ([PR #274](https://github.com/CaveViewer/CaveViewer/pull/274)) | [#228](https://github.com/CaveViewer/CaveViewer/issues/228) — closed | Focused catalog and download lifecycle owners manage worker startup, queues, polling, cancellation, inhibition, terminal delivery, and close cleanup; Tk rendering remains in the coordinator. |
+| 11 | Map Library cache-rebuild orchestration | `refactor/map-library-cache-rebuild` | Implemented — merged | Enforce only | `3e61437` ([PR #275](https://github.com/CaveViewer/CaveViewer/pull/275)) | [#229](https://github.com/CaveViewer/CaveViewer/issues/229) — closed | A focused orchestration owner wraps `CacheRebuildJobController` and owns the Tk polling token, pause/close requests, and typed update delivery without duplicating process state. |
+| 12 | Splash composition cleanup | `refactor/splash-composition-cleanup` | Implemented — merged | Enforce only | `beae687` ([PR #276](https://github.com/CaveViewer/CaveViewer/pull/276)) | [#230](https://github.com/CaveViewer/CaveViewer/issues/230) — closed | Obsolete catalog, download, and rebuild polling/cancellation facades are removed; composition and tests call the focused lifecycle owners directly, with a regression guard preventing facade return. |
+| 13 | Architecture document authority | `refactor/architecture-document-authority` | Implemented — merged | Enforce only | `9185ad9` ([PR #278](https://github.com/CaveViewer/CaveViewer/pull/278)) | [#231](https://github.com/CaveViewer/CaveViewer/issues/231) — closed | Architecture now contains the authority map; runtime-setting mechanics have a focused canonical page while source setup retains operational commands, generated tables, and troubleshooting. |
+| 14 | Platform documentation authority | `refactor/platform-documentation-authority` | Desired outcome already present | Fold into 13 | — | [#232](https://github.com/CaveViewer/CaveViewer/issues/232) — closed | The 84-line focused platform guide already describes current adapters and no longer presents the broad adapter as the target. Only link/de-duplication work remains under #231. |
+| 15 | Scoped agent-guide cleanup | `refactor/scoped-agent-guide-cleanup` | Desired outcome already present | No standalone branch | — | [#233](https://github.com/CaveViewer/CaveViewer/issues/233) — closed | Current scoped guides are short, actionable, and link canonical development docs. Revisit only if future guides accumulate narrative duplication. |
+| 16 | Runtime-settings fallback retirement | `refactor/runtime-settings-fallback-retirement` | Implemented — merged | Enforce only | `567b2a2` ([PR #271](https://github.com/CaveViewer/CaveViewer/pull/271)) | [#268](https://github.com/CaveViewer/CaveViewer/issues/268) — closed | Remaining direct environment access is classified by ownership and an architecture test requires every module-level exception to stay explicitly allowlisted. |
+| 17 | Viewer-window composition boundary | `refactor/viewer-window-composition-boundary` | Implemented — merged | Continue incrementally through new issues | `a1ff839` ([PR #277](https://github.com/CaveViewer/CaveViewer/pull/277)) | [#269](https://github.com/CaveViewer/CaveViewer/issues/269) — closed | Pure benchmark metadata composition and fingerprinting are extracted from `viewer_window.py`; later viewer slices should use separate issues rather than extending this branch. |
+| 18 | Source-setup operational reference split | `refactor/architecture-document-authority` | Implemented — merged with 13 | Enforce only | `9185ad9` ([PR #278](https://github.com/CaveViewer/CaveViewer/pull/278)) | [#270](https://github.com/CaveViewer/CaveViewer/issues/270) — closed | The focused runtime-configuration page owns resolution mechanics; source setup explicitly remains the operational command, variable, storage, and troubleshooting reference. |
 
 ## 1. Establish one runtime-settings source of truth
 
@@ -225,9 +236,24 @@ completion; this section preserves the runtime-settings-specific rationale.
   tests), Linux/macOS unit tests, and Linux/macOS package-smoke checks passed.
   The Windows-inclusive Essential Tests run is
   [32326364728](https://github.com/CaveViewer/CaveViewer/actions/runs/32326364728).
-- End-of-day next step: start `refactor/platform-presentation-profile` fresh
-  from `main` at `0f7b6c2`. Keep platform-adapter migration separate from this
-  completed settings-consumer work.
+- The former next step, platform-adapter migration, is now complete. The
+  remaining settings action is workstream 16: inventory direct environment
+  reads and retire only compatibility fallbacks whose standalone callers no
+  longer exist.
+
+### Current applicability review — 2026-08-22
+
+- Workstreams 1 and 3 remain valid completed architecture and need enforcement,
+  not new implementation branches.
+- Workstream 2's primary consumer migration is complete. Direct environment
+  reads still exist in viewer, streaming, chunking, texture, storage, logging,
+  DPI, and platform-probe code. Some are legitimate process/platform facts or
+  deliberately supported standalone defaults, so blanket replacement would be
+  incorrect.
+- Workstream 16 must classify each remaining read. Add a boundary test with an
+  explicit allowlist for intentional reads, migrate proven legacy fallbacks,
+  and document a deletion condition for every retained compatibility read. Do
+  not make the architecture test depend on a raw count.
 
 ## 2. Finish shrinking the broad platform adapter
 
@@ -358,7 +384,8 @@ repository-wide caller inventory is empty.
   the full suite (`1729 passed`), and `git diff --check`.
 - Workstream 7 was implemented on `refactor/remove-splash-platform-adapter`,
   freshly based on clean `main` at `c187b11`, as commit `8e70397`. Review and
-  merge are tracked by [PR #255](https://github.com/CaveViewer/CaveViewer/pull/255).
+  merge completed as `0e21f7d` in
+  [PR #255](https://github.com/CaveViewer/CaveViewer/pull/255).
 - The broad protocol, factory aliases, runtime property, platform compatibility
   classes, and legacy consumer fallbacks are deleted. Focused adapters are
   composed directly, and an architecture guard requires the retired modules to
@@ -366,8 +393,11 @@ repository-wide caller inventory is empty.
 - Verification passed: 263 focused platform/viewer/update/architecture tests,
   the full suite (`1725 passed`), and `git diff --check`. Ruff was not installed
   in the development environment, so no Ruff artifact is available.
-- Next: merge PR #255, then start workstream 8 from fresh `main` after the
-  focused runtime and platform dependencies are stable.
+- The retired broad-adapter names remain only in the architecture regression
+  test that proves they stay removed. No production caller or factory remains.
+- No additional platform implementation branch applies. Keep the focused
+  adapters and removal guard intact; fold documentation link/de-duplication
+  cleanup into workstream 13.
 
 ## 3. Split the splash composition workflow
 
@@ -386,8 +416,8 @@ to return data through queues; only Tk-thread callbacks apply it to panels.
 
 ### Suggested branches
 
-1. `refactor/splash-controller-lifecycle`
-2. `refactor/map-library-workflow-dependencies`
+1. `refactor/map-library-workflow-dependencies`
+2. `refactor/splash-controller-lifecycle`
 3. `refactor/map-library-catalog-download`
 4. `refactor/map-library-cache-rebuild`
 5. `refactor/splash-composition-cleanup`
@@ -409,10 +439,13 @@ in use.
    `after`/`after_cancel`, and immutable view-state snapshots. The controller
    may call injected callbacks, but it must not import `tkinter` or hold raw
    widget references.
-3. Introduce `SplashController` alongside the existing function. Let it own a
-   `SplashSession`, all scheduled callback identifiers, explicit start/close
-   transitions, and idempotent shutdown. `show_splash_screen()` remains the
-   only place that constructs `Tk()` and adapts controller output to widgets.
+3. Introduce `SplashController` alongside the existing function. Reuse the
+   existing `SplashSession`, which already owns scheduled callback identifiers,
+   cancellation, result state, close state, and idempotent shutdown. The new
+   controller coordinates that owner; it must not duplicate its callback
+   registry or create competing close state. `show_splash_screen()` remains
+   the only place that constructs `Tk()` and adapts controller output to
+   widgets.
 4. Migrate one nested-function family at a time into controller methods. Keep
    the old public behavior and callback wiring intact between moves; do not
    combine a layout redesign, update UX change, or new map feature with this
@@ -463,6 +496,26 @@ in use.
   Dive, and GUI architecture tests; then `tests/unit/gui`, the full suite, and
   `git diff --check`.
 
+### Current applicability review — 2026-08-22
+
+- All five workstreams still apply, but dependency bundling now precedes the
+  splash controller. `MapLibraryWorkflow` is 1,967 lines and its constructor
+  receives roughly 40 individual services, callbacks, factories, queues, and
+  policy values. Moving that surface unchanged into a controller would only
+  relocate the problem.
+- `SplashSession` is a useful completed foundation, not evidence that
+  workstream 8 is finished. `splash_screen.py` is still 2,377 lines and the
+  composition function retains nested UI/workflow callbacks and direct
+  scheduling responsibilities.
+- Catalog and download may share a branch for review economy, but they must be
+  separate lifecycle owners. Cache rebuilding already has a focused process
+  controller; workstream 11 extracts orchestration around it rather than
+  replacing it.
+- Add architecture tests for ownership boundaries after extraction—for
+  example, preventing the coordinator from directly scheduling Tk polling or
+  accepting new loose callbacks. Avoid brittle line-count or method-count
+  limits.
+
 ## 4. Consolidate duplicated architecture documentation
 
 ### Outcome and boundary
@@ -482,11 +535,13 @@ instruction file or legacy branch that still contains one.
 ### Suggested branches
 
 1. `refactor/architecture-document-authority`
-2. `refactor/platform-documentation-authority`
-3. `refactor/scoped-agent-guide-cleanup`
+2. `refactor/source-setup-reference-split` if the first branch would otherwise
+   become too large
 
-The first two can be combined only if the ownership map and links stay easy to
-review. Keep scoped-agent cleanup separate when it changes many directories.
+Do not create platform-documentation or scoped-agent cleanup branches solely
+to satisfy the old table. Their intended outcomes are already present on
+current `main`; include only concrete link/de-duplication edits found while
+establishing the authority map.
 
 ### Detailed implementation steps
 
@@ -539,6 +594,50 @@ review. Keep scoped-agent cleanup separate when it changes many directories.
   policy/validation relevant to their directory.
 - Run documentation/link checks, the affected architecture-boundary tests, the
   full suite if executable checks changed, and `git diff --check`.
+
+### Current applicability review — 2026-08-22
+
+- Workstream 13 still applies, but should be an authority-and-links pass rather
+  than a broad prose rewrite. The two primary development documents are still
+  large enough—804 and 876 lines—that ownership and operational instructions
+  are difficult to locate.
+- Workstream 14 no longer warrants a standalone branch. The focused platform
+  guide is concise, names the current profiles/adapters, and does not describe
+  the retired broad adapter as the target architecture.
+- Workstream 15 no longer warrants a standalone branch. The root and scoped
+  `AGENTS.md` files are short actionable inheritance, ownership, and validation
+  guides. Preserve that shape and revisit only when concrete duplication
+  returns.
+- Workstream 18 is an optional second slice after the authority map: keep
+  source setup focused on commands, environment reference, troubleshooting,
+  and release procedures, and link to architecture for subsystem mechanics.
+
+## 5. Additional current-code suggestions
+
+### Viewer-window composition boundary
+
+`src/caveviewer/gui/viewer_window.py` is 7,924 lines. It is both a composition
+root and an owner/coordinator for map loading, asynchronous texture validation,
+benchmark route/configuration, capture and recording state, slice operations,
+and input/render behavior. Existing focused controllers show the intended
+direction, but the main class still carries extensive forwarding state and
+workflow implementation.
+
+Start only after splash ownership stabilizes, and extract one characterized
+workflow per pull request. First inventory fields, scheduled/background work,
+and delegated controller properties; then select the smallest owner with an
+explicit lifecycle. Preserve the OpenGL-thread boundary and do not convert the
+module into a generic service locator. Add dependency-direction tests for each
+extracted owner instead of enforcing a target file size.
+
+### Durable boundary guards
+
+Add or extend AST/import boundary tests when completing workstreams 8–12, 16,
+and 17. Guards should prohibit a specific architectural regression—new direct
+environment reads outside an allowlist, loose workflow callbacks, Tk scheduling
+in a worker owner, or imports across a declared layer. They should not freeze
+implementation details such as exact prose, method counts, constructor counts,
+or line totals.
 
 ## Future refactor handoff checklist
 
