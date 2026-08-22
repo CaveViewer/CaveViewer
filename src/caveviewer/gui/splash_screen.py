@@ -186,11 +186,11 @@ _BUTTON_BORDER_COLOR = DARK_THEME.primary_button_border
 # Navigation uses a location marker rather than a button treatment.  The
 # background shift stays deliberately quiet; the amber rail and stronger label
 # carry the selected-state meaning.
-_NAVIGATION_ACTIVE_BG = DARK_THEME.panel
 _NAVIGATION_HOVER_BG = DARK_THEME.entry_background
 # Keep navigation entries distinct without making the rail read as a stack of
 # separate cards. This shared spacing also scales with the active display.
 _NAVIGATION_ITEM_GAP = 8
+_PREFERENCES_TEXT_SCALE_FACTOR = 11 / 12
 _WINDOWS_SPLASH_LAYOUT = _SPLASH_LAYOUT_POLICY.windows_layout
 _LINUX_SPLASH_LAYOUT = _SPLASH_LAYOUT_POLICY.linux_layout
 _UI_FONT_FAMILY = _PRESENTATION_PROFILE.ui_font_family
@@ -1542,7 +1542,10 @@ def show_splash_screen(
             ui_font_family=_UI_FONT_FAMILY,
             desktop_services=desktop_services,
             platform_runtime=platform_runtime,
-            typography=_TYPOGRAPHY,
+            typography=create_tk_typography(
+                _UI_FONT_FAMILY,
+                text_scale=_TK_TEXT_SCALE * _PREFERENCES_TEXT_SCALE_FACTOR,
+            ),
             on_applied=_on_preferences_applied,
             on_cancel=_show_map_library_surface,
         )
@@ -1776,7 +1779,7 @@ def show_splash_screen(
             text=text,
             font=_TYPOGRAPHY.body_strong if selected else _TYPOGRAPHY.body,
             fg=_TITLE_COLOR if selected else _SUBTITLE_COLOR,
-            bg=_NAVIGATION_ACTIVE_BG if selected else _BG_COLOR,
+            bg=_BG_COLOR,
             anchor="w",
             padx=0,
             pady=px(9),
@@ -1794,10 +1797,8 @@ def show_splash_screen(
         }
 
         def refresh_visual() -> None:
-            active = state["selected"] or state["hovered"] or state["focused"]
-            background = _NAVIGATION_ACTIVE_BG if state["selected"] else (
-                _NAVIGATION_HOVER_BG if active else _BG_COLOR
-            )
+            active = state["hovered"] or state["focused"]
+            background = _NAVIGATION_HOVER_BG if active else _BG_COLOR
             item_row.config(bg=background)
             item.config(
                 bg=background,

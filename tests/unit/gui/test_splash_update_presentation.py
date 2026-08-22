@@ -750,6 +750,21 @@ def test_splash_navigation_uses_consistent_row_spacing():
     assert 'item_row.pack(fill="x", pady=(0, px(_NAVIGATION_ITEM_GAP)))' in source
 
 
+def test_splash_navigation_selection_uses_type_and_color_without_a_fill():
+    source = inspect.getsource(splash_screen.show_splash_screen)
+
+    assert "_NAVIGATION_ACTIVE_BG" not in inspect.getsource(splash_screen)
+    assert "background = _NAVIGATION_HOVER_BG if active else _BG_COLOR" in source
+    assert "_TYPOGRAPHY.body_strong" in source
+
+
+def test_preferences_uses_a_compact_panel_specific_type_scale():
+    source = inspect.getsource(splash_screen.show_splash_screen)
+
+    assert splash_screen._PREFERENCES_TEXT_SCALE_FACTOR == pytest.approx(11 / 12)
+    assert "text_scale=_TK_TEXT_SCALE * _PREFERENCES_TEXT_SCALE_FACTOR" in source
+
+
 def test_splash_navigation_uses_a_quiet_rail_and_lower_app_status():
     source = inspect.getsource(splash_screen.show_splash_screen)
     update_source = inspect.getsource(splash_screen._update_presentation)
