@@ -50,6 +50,10 @@ from caveviewer.gui.map_library_workflow import (
     _cache_rebuild_notification_id,
     _remaining_cache_error,
 )
+from caveviewer.gui.map_library_transfers import (
+    MapLibraryCatalogWorkflow,
+    MapLibraryDownloadWorkflow,
+)
 from caveviewer.gui.platform.runtime import FileSelectionPreflight
 from caveviewer.gui.standard_library_download import (
     StandardLibraryDownloadProgress,
@@ -459,6 +463,13 @@ def test_workflow_constructor_accepts_only_typed_dependency_bundles():
         "download",
         "cache_rebuild",
     )
+
+
+def test_transfer_lifecycles_have_focused_owners():
+    built = _workflow((_library_map(),))
+
+    assert isinstance(built.workflow.catalog_workflow, MapLibraryCatalogWorkflow)
+    assert isinstance(built.workflow.download_workflow, MapLibraryDownloadWorkflow)
 
 
 def _enabled_guided_dive_decision(_map_path: str | None = None) -> FeatureDecision:

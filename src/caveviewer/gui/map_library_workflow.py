@@ -40,9 +40,12 @@ from caveviewer.gui.map_library_controller import (
     StandardLibraryMapRow,
 )
 from caveviewer.gui.map_library_sources import (
-    GITHUB_RELEASE_MAP_SOURCE_ID,
     MapCatalogRefresh,
     default_map_library_catalog_service,
+)
+from caveviewer.gui.map_library_transfers import (
+    MapLibraryCatalogWorkflow,
+    MapLibraryDownloadWorkflow,
 )
 from caveviewer.gui.map_library_panel import (
     MapLibraryMenuAction,
@@ -67,9 +70,7 @@ from caveviewer.gui.platform.file_selection import (
 )
 from caveviewer.gui.platform.desktop_notifications import send_desktop_notification
 from caveviewer.gui.standard_library_download import (
-    StandardLibraryDownloadFailed,
     StandardLibraryDownloadProgress,
-    StandardLibraryDownloadSucceeded,
     close_desktop_inhibitor,
     safe_desktop_inhibit,
     start_standard_library_download_worker,
@@ -311,6 +312,30 @@ class MapLibraryWorkflow:
         self.notification_sender = cache_rebuild.notification_sender
         self.cave_metadata_catalog = actions.cave_metadata_catalog
         self.show_cave_metadata = actions.show_cave_metadata
+        self.catalog_workflow = MapLibraryCatalogWorkflow(
+            controller=self.controller,
+            scheduler=self.root,
+            splash_exists=self.splash_exists,
+            fetch_catalog=self.fetch_catalog,
+            start_worker=self.start_catalog_worker,
+            queue_factory=self.catalog_queue_factory,
+            on_complete=self._complete_catalog_fetch,
+        )
+        self.download_workflow = MapLibraryDownloadWorkflow(
+            controller=self.controller,
+            scheduler=self.root,
+            splash_exists=self.splash_exists,
+            start_worker=self.start_download_worker,
+            queue_factory=self.download_queue_factory,
+            cancel_event_factory=self.cancel_event_factory,
+            selection_factory=self.directory_selection_factory,
+            inhibit=self.inhibit_desktop,
+            close_inhibitor=self.close_inhibitor,
+            desktop_services=self.desktop_services,
+            on_progress=self.apply_download_progress,
+            on_success=self.finish_download_success,
+            on_failure=self.finish_download_failure,
+        )
         self._active_cache_rebuild: _ActiveCacheRebuild | None = None
         self._cache_rebuild_after_id = None
         self.recent_map_paths: list[str] = []
@@ -1417,25 +1442,11 @@ class MapLibraryWorkflow:
 
     def cancel_active_download_for_close(self) -> None:
         """Cancel pending work and scheduled polls while the splash closes."""
-        cleanup = self.controller.close_active_download()
-        if cleanup.cancel_event is not None:
-            cleanup.cancel_event.set()
-        if cleanup.after_id is not None:
-            try:
-                self.root.after_cancel(cleanup.after_id)
-            except tk.TclError:
-                pass
-        self.close_inhibitor(cleanup.inhibitor)
+        self.download_workflow.close()
 
     def cancel_catalog_fetch_for_close(self) -> None:
         """Cancel the pending catalog poll callback while splash closes."""
-        cleanup = self.controller.close_catalog_fetch()
-        if cleanup.after_id is None:
-            return
-        try:
-            self.root.after_cancel(cleanup.after_id)
-        except tk.TclError:
-            pass
+        self.catalog_workflow.close()
 
     def finish_download_success(self, library_map, result_path: str) -> None:
         """Apply a successful standard-library download result."""
@@ -1485,68 +1496,11 @@ class MapLibraryWorkflow:
         cancel_event,
     ) -> None:
         """Schedule the next Tk-thread poll for a download queue."""
-        if not self.controller.should_handle_download_poll(cancel_event):
-            return
-        if not self.splash_exists():
-            cancel_event.set()
-            self.clear_active_download(library_map)
-            return
-        after_id = self.root.after(
-            80,
-            lambda: self.poll_download_queue(
-                library_map,
-                message_queue,
-                cancel_event,
-            ),
-        )
-        self.controller.set_download_after_id(after_id)
+        self.download_workflow._schedule(library_map, message_queue, cancel_event)
 
     def poll_download_queue(self, library_map, message_queue, cancel_event) -> None:
         """Drain worker messages and apply the latest download state."""
-        if not self.controller.should_handle_download_poll(cancel_event):
-            return
-        self.controller.set_download_after_id(None)
-        if not self.splash_exists():
-            cancel_event.set()
-            self.clear_active_download(library_map)
-            return
-
-        latest_progress = None
-        terminal_message = None
-        while True:
-            try:
-                message = message_queue.get_nowait()
-            except queue.Empty:
-                break
-            if isinstance(message, StandardLibraryDownloadProgress):
-                latest_progress = message
-            else:
-                terminal_message = message
-                break
-
-        if latest_progress is not None:
-            try:
-                self.apply_download_progress(library_map, latest_progress)
-            except tk.TclError:
-                cancel_event.set()
-                self.clear_active_download(library_map)
-                return
-
-        if isinstance(terminal_message, StandardLibraryDownloadSucceeded):
-            self.finish_download_success(
-                library_map,
-                terminal_message.result_path,
-            )
-            return
-        if isinstance(terminal_message, StandardLibraryDownloadFailed):
-            self.finish_download_failure(library_map, terminal_message.error)
-            return
-
-        try:
-            self.schedule_download_poll(library_map, message_queue, cancel_event)
-        except tk.TclError:
-            cancel_event.set()
-            self.clear_active_download(library_map)
+        self.download_workflow.poll(library_map, message_queue, cancel_event)
 
     def start_inline_download(self, library_map) -> None:
         """Start a standard-library download from an already resolved row."""
@@ -1575,7 +1529,6 @@ class MapLibraryWorkflow:
         self.show_progress(library_map)
         self.set_row_metadata(library_map, "Downloading…")
         cancel_event = self.cancel_event_factory()
-        message_queue = self.download_queue_factory()
 
         def request_cancel() -> None:
             cancel_event.set()
@@ -1595,22 +1548,12 @@ class MapLibraryWorkflow:
             show_stop_progress=True,
         )
         self.set_non_active_actions_enabled(library_map, False)
-        self.controller.begin_download(
-            library_map,
-            cancel_event=cancel_event,
-            inhibitor=self.inhibit_desktop(
-                self.desktop_services,
-                f"Downloading {library_map.display_name}",
-                parent=self.root,
-            ),
-        )
-
         try:
-            worker = self.start_download_worker(
-                self.directory_selection_factory(self.map_library_root_dir),
+            owned_cancel_event = self.download_workflow.start(
                 library_map,
-                cancel_event,
-                message_queue,
+                self.map_library_root_dir,
+                parent=self.root,
+                cancel_event=cancel_event,
             )
         except RuntimeError as exc:
             self.reset_progress(library_map)
@@ -1628,9 +1571,10 @@ class MapLibraryWorkflow:
                 max_wraplength=360,
             )
             return
-
-        self.controller.attach_download_thread(worker)
-        self.schedule_download_poll(library_map, message_queue, cancel_event)
+        # The cancel action is created before worker startup so the row responds
+        # immediately. Both values are the same factory-created event.
+        if owned_cancel_event is not cancel_event:
+            cancel_event = owned_cancel_event
 
     def handle_download_info_unavailable(self, library_map) -> None:
         """Put a row into retry state when catalog details are unavailable."""
@@ -1654,26 +1598,14 @@ class MapLibraryWorkflow:
 
     def schedule_catalog_poll(self) -> None:
         """Schedule the next Tk-thread poll for catalog metadata."""
-        if not self.splash_exists():
-            return
-        after_id = self.root.after(120, self.poll_catalog_fetch)
-        self.controller.set_catalog_after_id(after_id)
+        self.catalog_workflow._schedule_poll()
 
     def poll_catalog_fetch(self) -> None:
         """Apply completed catalog metadata and continue any pending download."""
-        self.controller.set_catalog_after_id(None)
-        if not self.splash_exists():
-            return
-        fetch_queue = self.controller.catalog_fetch.queue
-        if fetch_queue is None:
-            return
-        try:
-            catalog_result = fetch_queue.get_nowait()
-        except queue.Empty:
-            self.schedule_catalog_poll()
-            return
+        self.catalog_workflow.poll()
 
-        completion = self.controller.complete_catalog_fetch(catalog_result)
+    def _complete_catalog_fetch(self, completion) -> None:
+        """Apply one catalog result delivered by the lifecycle owner."""
         self.reconcile_standard_catalog(completion.refreshes)
 
         pending_map = completion.pending_map
@@ -1889,37 +1821,7 @@ class MapLibraryWorkflow:
 
     def start_catalog_fetch(self, pending_map=None) -> None:
         """Start a background standard-library catalog refresh."""
-        if pending_map is not None:
-            self.controller.set_pending_catalog_map(pending_map)
-        if self.controller.catalog_fetch.loading:
-            return
-        fetch_queue = self.catalog_queue_factory()
-        if not self.controller.begin_catalog_fetch(fetch_queue):
-            return
-
-        def fetch_worker() -> None:
-            try:
-                result = self.fetch_catalog()
-                if not isinstance(result, tuple) or not all(
-                    isinstance(refresh, MapCatalogRefresh) for refresh in result
-                ):
-                    raise TypeError(
-                        "Map catalog service must return a tuple of "
-                        "MapCatalogRefresh values"
-                    )
-            except Exception as exc:
-                result = (
-                    MapCatalogRefresh(
-                        source_id=GITHUB_RELEASE_MAP_SOURCE_ID,
-                        maps=(),
-                        authoritative=False,
-                        error=f"Couldn't load the map library: {exc}",
-                    ),
-                )
-            fetch_queue.put(result)
-
-        self.start_catalog_worker(fetch_worker)
-        self.schedule_catalog_poll()
+        self.catalog_workflow.start(pending_map)
 
     def prepare_catalog_for_download(self, library_map) -> None:
         """Fetch catalog details before downloading an unresolved row."""
