@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import queue
 from dataclasses import dataclass
 from pathlib import Path
@@ -39,6 +40,12 @@ from caveviewer.gui.map_library_sources import (
 )
 from caveviewer.gui.map_library import recent_map_key
 from caveviewer.gui.map_library_workflow import (
+    MapLibraryActionDependencies,
+    MapLibraryCacheRebuildDependencies,
+    MapLibraryCatalogDependencies,
+    MapLibraryComposition,
+    MapLibraryDownloadDependencies,
+    MapLibraryStorageDependencies,
     MapLibraryWorkflow,
     _cache_rebuild_notification_id,
     _remaining_cache_error,
@@ -358,62 +365,74 @@ def _workflow(
     desktop_services = desktop_services or _FakeDesktopServices()
 
     workflow = MapLibraryWorkflow(
-        root=root,
-        controller=controller,
-        panel=panel,
-        standard_library_maps=maps,
-        map_library_root_dir="/library",
-        desktop_services=desktop_services,
-        platform_runtime=platform_runtime,
-        splash_exists=lambda: True,
-        open_map=opened.append,
-        show_feedback=lambda message, **kwargs: feedback.append(
-            (message, kwargs)
+        composition=MapLibraryComposition(
+            root=root,
+            controller=controller,
+            panel=panel,
+            standard_library_maps=maps,
+            map_library_root_dir="/library",
+            desktop_services=desktop_services,
+            platform_runtime=platform_runtime,
+            splash_exists=lambda: True,
+            show_feedback=lambda message, **kwargs: feedback.append(
+                (message, kwargs)
+            ),
+            logger=_FakeLogger(),
+            map_library_root_dir_provider=map_library_root_dir_provider,
         ),
-        logger=_FakeLogger(),
-        has_cache=has_cache or (lambda _path: False),
-        remove_cache=(
-            remove_cache
-            or (lambda _path: SimpleNamespace(error=None, removed=False))
+        actions=MapLibraryActionDependencies(
+            open_map=opened.append,
+            guided_dive_menu=guided_dive_menu or _hidden_guided_dive_decision,
+            guided_dive_preflight=(
+                guided_dive_preflight or _unexpected_guided_dive_preflight
+            ),
+            open_guided_dive=open_guided_dive,
+            cave_metadata_catalog=cave_metadata_catalog,
+            show_cave_metadata=show_cave_metadata,
         ),
-        remove_recent_path=remove_recent_path or (lambda _path: None),
-        is_downloaded=is_downloaded or (lambda _root, _map: False),
-        existing_path=existing_path or (lambda _root, _map: None),
-        remove_downloaded=lambda _root, _map: _RemovalResult(("/removed",)),
-        is_app_supplied_path=(
-            is_app_supplied_path or (lambda _path, _root: False)
+        storage=MapLibraryStorageDependencies(
+            has_cache=has_cache or (lambda _path: False),
+            remove_cache=(
+                remove_cache
+                or (lambda _path: SimpleNamespace(error=None, removed=False))
+            ),
+            remove_recent_path=remove_recent_path or (lambda _path: None),
+            is_downloaded=is_downloaded or (lambda _root, _map: False),
+            existing_path=existing_path or (lambda _root, _map: None),
+            remove_downloaded=lambda _root, _map: _RemovalResult(("/removed",)),
+            is_app_supplied_path=(
+                is_app_supplied_path or (lambda _path, _root: False)
+            ),
+            set_managed_install_former=(
+                set_managed_install_former or (lambda _map, *, former: None)
+            ),
+            managed_installs=managed_installs or (lambda: []),
         ),
-        fetch_catalog=fetch_catalog or (lambda: _catalog_refresh()),
-        set_managed_install_former=(
-            set_managed_install_former or (lambda _map, *, former: None)
+        catalog=MapLibraryCatalogDependencies(
+            fetch_catalog=fetch_catalog or (lambda: _catalog_refresh()),
+            start_worker=start_catalog_worker or (lambda target: target()),
         ),
-        managed_installs=managed_installs or (lambda: []),
-        map_library_root_dir_provider=map_library_root_dir_provider,
-        start_download_worker=(
-            start_download_worker
-            or (lambda _selection, _map, _event, _queue: object())
+        download=MapLibraryDownloadDependencies(
+            start_worker=(
+                start_download_worker
+                or (lambda _selection, _map, _event, _queue: object())
+            ),
+            directory_selection_factory=lambda path: SimpleNamespace(path=path),
+            inhibit_desktop=lambda *_args, **_kwargs: inhibitor,
+            close_inhibitor=lambda handle: closed_inhibitors.append(handle),
         ),
-        start_catalog_worker=start_catalog_worker or (lambda target: target()),
-        directory_selection_factory=lambda path: SimpleNamespace(path=path),
-        inhibit_desktop=lambda *_args, **_kwargs: inhibitor,
-        close_inhibitor=lambda handle: closed_inhibitors.append(handle),
-        guided_dive_menu=guided_dive_menu or _hidden_guided_dive_decision,
-        guided_dive_preflight=(
-            guided_dive_preflight or _unexpected_guided_dive_preflight
+        cache_rebuild=MapLibraryCacheRebuildDependencies(
+            preflight=(
+                cache_rebuild_preflight or _hidden_cache_rebuild_preflight
+            ),
+            controller=(
+                cache_rebuild_controller or _FakeCacheRebuildController()
+            ),
+            splash_is_foreground=splash_is_foreground,
+            notification_sender=(
+                notification_sender or (lambda *_args, **_kwargs: True)
+            ),
         ),
-        open_guided_dive=open_guided_dive,
-        cache_rebuild_preflight=(
-            cache_rebuild_preflight or _hidden_cache_rebuild_preflight
-        ),
-        cache_rebuild_controller=(
-            cache_rebuild_controller or _FakeCacheRebuildController()
-        ),
-        splash_is_foreground=splash_is_foreground,
-        notification_sender=(
-            notification_sender or (lambda *_args, **_kwargs: True)
-        ),
-        cave_metadata_catalog=cave_metadata_catalog,
-        show_cave_metadata=show_cave_metadata,
     )
     return SimpleNamespace(
         workflow=workflow,
@@ -426,6 +445,19 @@ def _workflow(
         closed_inhibitors=closed_inhibitors,
         desktop_services=desktop_services,
         cache_rebuild_controller=workflow.cache_rebuild_controller,
+    )
+
+
+def test_workflow_constructor_accepts_only_typed_dependency_bundles():
+    parameters = inspect.signature(MapLibraryWorkflow).parameters
+
+    assert tuple(parameters) == (
+        "composition",
+        "actions",
+        "storage",
+        "catalog",
+        "download",
+        "cache_rebuild",
     )
 
 

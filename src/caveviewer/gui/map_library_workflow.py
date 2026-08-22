@@ -128,6 +128,15 @@ def _cache_rebuild_notification_id(map_path: str) -> str:
     return f"{_CACHE_REBUILD_NOTIFICATION_PREFIX}.{digest}"
 
 
+def _start_catalog_thread(target: Callable[[], None]) -> None:
+    """Start the background worker that fetches standard-library metadata."""
+    threading.Thread(
+        target=target,
+        name="CaveViewer-map-library-catalog",
+        daemon=True,
+    ).start()
+
+
 @dataclass(slots=True)
 class _ActiveCacheRebuild:
     """Presentation context for the one splash-owned rebuild job."""
@@ -140,14 +149,95 @@ class _ActiveCacheRebuild:
     operation: str = "rebuild"
 
 
-def _start_catalog_thread(target: Callable[[], None]) -> None:
-    """Start the background worker that fetches standard-library metadata."""
-    threading.Thread(
-        target=target,
-        name="CaveViewer-map-library-catalog",
-        daemon=True,
-    ).start()
+@dataclass(frozen=True, slots=True)
+class MapLibraryComposition:
+    """Tk-thread objects and session callbacks owned by splash composition."""
 
+    root: Any
+    controller: MapLibraryController
+    panel: MapLibraryPanel
+    standard_library_maps: Sequence[Any]
+    map_library_root_dir: str
+    desktop_services: DesktopServices
+    splash_exists: Callable[[], bool]
+    show_feedback: FeedbackCallback
+    logger: Any
+    platform_runtime: PlatformRuntime | None = None
+    map_library_root_dir_provider: Callable[[], str] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class MapLibraryStorageDependencies:
+    """Filesystem and install-registry operations used by the workflow."""
+
+    has_cache: Callable[[str], bool] = has_managed_map_cache
+    remove_cache: Callable[[str], Any] = remove_managed_map_cache
+    remove_recent_path: Callable[[str], None] = remove_recent_map_path
+    is_downloaded: Callable[[str, Any], bool] = is_standard_library_map_downloaded
+    existing_path: Callable[
+        [str, Any], str | None
+    ] = existing_standard_library_map_path
+    remove_downloaded: Callable[
+        [str, Any], Any
+    ] = remove_downloaded_standard_library_map
+    is_app_supplied_path: Callable[
+        [str, str], bool
+    ] = is_app_supplied_standard_library_map_path
+    bootstrap_managed_installs: Callable[
+        [str, list[Any]], list[Any]
+    ] = bootstrap_managed_standard_library_map_installs
+    managed_installs: Callable[[], list[Any]] = managed_standard_library_map_installs
+    set_managed_install_former: Callable[..., None] = set_managed_standard_library_map_former
+
+
+@dataclass(frozen=True, slots=True)
+class MapLibraryCatalogDependencies:
+    """Catalog worker creation and result transport."""
+
+    fetch_catalog: Callable[[], tuple[MapCatalogRefresh, ...]] | None = None
+    start_worker: Callable[[Callable[[], None]], None] = _start_catalog_thread
+    queue_factory: Callable[[], Any] = lambda: queue.Queue(maxsize=1)
+
+
+@dataclass(frozen=True, slots=True)
+class MapLibraryDownloadDependencies:
+    """One-download worker, cancellation, and desktop-inhibition operations."""
+
+    start_worker: Callable[
+        [DirectorySelection, Any, threading.Event, Any], threading.Thread
+    ] = start_standard_library_download_worker
+    cancelled_type: type[BaseException] = DownloadCancelled
+    queue_factory: Callable[[], Any] = queue.Queue
+    cancel_event_factory: Callable[[], threading.Event] = threading.Event
+    directory_selection_factory: Callable[
+        [str], DirectorySelection
+    ] = DirectorySelection.from_path
+    inhibit_desktop: Callable[..., Any] = safe_desktop_inhibit
+    close_inhibitor: Callable[[Any], None] = close_desktop_inhibitor
+
+
+@dataclass(frozen=True, slots=True)
+class MapLibraryActionDependencies:
+    """User-initiated map and Guided Dive actions."""
+
+    open_map: OpenMapCallback
+    guided_dive_menu: Callable[[str], FeatureDecision] = guided_dive_menu_decision
+    guided_dive_preflight: Callable[
+        [str, str], GuidedDivePlaybackPreflight
+    ] = guided_dive_playback_preflight
+    open_guided_dive: OpenGuidedDiveCallback | None = None
+    cave_metadata_catalog: CaveMetadataCatalog | None = None
+    show_cave_metadata: ShowCaveMetadataCallback | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class MapLibraryCacheRebuildDependencies:
+    """Cache-rebuild process owner and splash presentation policy."""
+
+    preflight: Callable[[str], CacheRebuildPreflight] = probe_map_library_cache_rebuild
+    controller: CacheRebuildJobController | None = None
+    splash_is_foreground: Callable[[], bool] | None = None
+    notification_sender: Callable[..., bool] = send_desktop_notification
 
 class MapLibraryWorkflow:
     """
@@ -162,109 +252,65 @@ class MapLibraryWorkflow:
     def __init__(
         self,
         *,
-        root,
-        controller: MapLibraryController,
-        panel: MapLibraryPanel,
-        standard_library_maps: Sequence[Any],
-        map_library_root_dir: str,
-        desktop_services: DesktopServices,
-        splash_exists: Callable[[], bool],
-        open_map: OpenMapCallback,
-        show_feedback: FeedbackCallback,
-        logger,
-        platform_runtime: PlatformRuntime | None = None,
-        has_cache: Callable[[str], bool] = has_managed_map_cache,
-        remove_cache: Callable[[str], Any] = remove_managed_map_cache,
-        remove_recent_path: Callable[[str], None] = remove_recent_map_path,
-        is_downloaded: Callable[[str, Any], bool] = is_standard_library_map_downloaded,
-        existing_path: Callable[[str, Any], str | None] = existing_standard_library_map_path,
-        remove_downloaded: Callable[[str, Any], Any] = remove_downloaded_standard_library_map,
-        is_app_supplied_path: Callable[[str, str], bool] = (
-            is_app_supplied_standard_library_map_path
-        ),
-        fetch_catalog: Callable[[], tuple[MapCatalogRefresh, ...]] | None = None,
-        bootstrap_managed_installs: Callable[[str, list[Any]], list[Any]] = (
-            bootstrap_managed_standard_library_map_installs
-        ),
-        managed_installs: Callable[[], list[Any]] = managed_standard_library_map_installs,
-        set_managed_install_former: Callable[..., None] = (
-            set_managed_standard_library_map_former
-        ),
-        map_library_root_dir_provider: Callable[[], str] | None = None,
-        start_download_worker: Callable[
-            [DirectorySelection, Any, threading.Event, Any], threading.Thread
-        ] = start_standard_library_download_worker,
-        start_catalog_worker: Callable[
-            [Callable[[], None]], None
-        ] = _start_catalog_thread,
-        download_cancelled_type: type[BaseException] = DownloadCancelled,
-        download_queue_factory: Callable[[], Any] = queue.Queue,
-        catalog_queue_factory: Callable[[], Any] = lambda: queue.Queue(maxsize=1),
-        cancel_event_factory: Callable[[], threading.Event] = threading.Event,
-        directory_selection_factory: Callable[
-            [str], DirectorySelection
-        ] = DirectorySelection.from_path,
-        inhibit_desktop: Callable[..., Any] = safe_desktop_inhibit,
-        close_inhibitor: Callable[[Any], None] = close_desktop_inhibitor,
-        guided_dive_menu: Callable[[str], FeatureDecision] = guided_dive_menu_decision,
-        guided_dive_preflight: Callable[
-            [str, str], GuidedDivePlaybackPreflight
-        ] = guided_dive_playback_preflight,
-        open_guided_dive: OpenGuidedDiveCallback | None = None,
-        cache_rebuild_preflight: Callable[[str], CacheRebuildPreflight] = (
-            probe_map_library_cache_rebuild
-        ),
-        cache_rebuild_controller: CacheRebuildJobController | None = None,
-        splash_is_foreground: Callable[[], bool] | None = None,
-        notification_sender: Callable[..., bool] = send_desktop_notification,
-        cave_metadata_catalog: CaveMetadataCatalog | None = None,
-        show_cave_metadata: ShowCaveMetadataCallback | None = None,
+        composition: MapLibraryComposition,
+        actions: MapLibraryActionDependencies,
+        storage: MapLibraryStorageDependencies | None = None,
+        catalog: MapLibraryCatalogDependencies | None = None,
+        download: MapLibraryDownloadDependencies | None = None,
+        cache_rebuild: MapLibraryCacheRebuildDependencies | None = None,
     ) -> None:
-        self.root = root
-        self.controller = controller
-        self.panel = panel
-        self.standard_library_maps = tuple(standard_library_maps)
-        self.map_library_root_dir = map_library_root_dir
-        self.desktop_services = desktop_services
-        self.platform_runtime = platform_runtime
-        self.splash_exists = splash_exists
-        self.open_map = open_map
-        self.show_feedback = show_feedback
-        self.logger = logger
-        self.has_cache = has_cache
-        self.remove_cache = remove_cache
-        self.remove_recent_path = remove_recent_path
-        self.is_downloaded = is_downloaded
-        self.existing_path = existing_path
-        self.remove_downloaded = remove_downloaded
-        self.is_app_supplied_path = is_app_supplied_path
+        storage = storage or MapLibraryStorageDependencies()
+        catalog = catalog or MapLibraryCatalogDependencies()
+        download = download or MapLibraryDownloadDependencies()
+        cache_rebuild = cache_rebuild or MapLibraryCacheRebuildDependencies()
+        self.root = composition.root
+        self.controller = composition.controller
+        self.panel = composition.panel
+        self.standard_library_maps = tuple(composition.standard_library_maps)
+        self.map_library_root_dir = composition.map_library_root_dir
+        self.desktop_services = composition.desktop_services
+        self.platform_runtime = composition.platform_runtime
+        self.splash_exists = composition.splash_exists
+        self.open_map = actions.open_map
+        self.show_feedback = composition.show_feedback
+        self.logger = composition.logger
+        self.has_cache = storage.has_cache
+        self.remove_cache = storage.remove_cache
+        self.remove_recent_path = storage.remove_recent_path
+        self.is_downloaded = storage.is_downloaded
+        self.existing_path = storage.existing_path
+        self.remove_downloaded = storage.remove_downloaded
+        self.is_app_supplied_path = storage.is_app_supplied_path
         self.fetch_catalog = (
-            fetch_catalog or default_map_library_catalog_service().fetch_catalogs
+            catalog.fetch_catalog
+            or default_map_library_catalog_service().fetch_catalogs
         )
-        self.bootstrap_managed_installs = bootstrap_managed_installs
-        self.managed_installs = managed_installs
-        self.set_managed_install_former = set_managed_install_former
-        self.map_library_root_dir_provider = map_library_root_dir_provider
-        self.start_download_worker = start_download_worker
-        self.start_catalog_worker = start_catalog_worker
-        self.download_cancelled_type = download_cancelled_type
-        self.download_queue_factory = download_queue_factory
-        self.catalog_queue_factory = catalog_queue_factory
-        self.cancel_event_factory = cancel_event_factory
-        self.directory_selection_factory = directory_selection_factory
-        self.inhibit_desktop = inhibit_desktop
-        self.close_inhibitor = close_inhibitor
-        self.guided_dive_menu = guided_dive_menu
-        self.guided_dive_preflight = guided_dive_preflight
-        self.open_guided_dive = open_guided_dive
-        self.cache_rebuild_preflight = cache_rebuild_preflight
+        self.bootstrap_managed_installs = storage.bootstrap_managed_installs
+        self.managed_installs = storage.managed_installs
+        self.set_managed_install_former = storage.set_managed_install_former
+        self.map_library_root_dir_provider = composition.map_library_root_dir_provider
+        self.start_download_worker = download.start_worker
+        self.start_catalog_worker = catalog.start_worker
+        self.download_cancelled_type = download.cancelled_type
+        self.download_queue_factory = download.queue_factory
+        self.catalog_queue_factory = catalog.queue_factory
+        self.cancel_event_factory = download.cancel_event_factory
+        self.directory_selection_factory = download.directory_selection_factory
+        self.inhibit_desktop = download.inhibit_desktop
+        self.close_inhibitor = download.close_inhibitor
+        self.guided_dive_menu = actions.guided_dive_menu
+        self.guided_dive_preflight = actions.guided_dive_preflight
+        self.open_guided_dive = actions.open_guided_dive
+        self.cache_rebuild_preflight = cache_rebuild.preflight
         self.cache_rebuild_controller = (
-            cache_rebuild_controller or CacheRebuildJobController()
+            cache_rebuild.controller or CacheRebuildJobController()
         )
-        self.splash_is_foreground = splash_is_foreground or (lambda: True)
-        self.notification_sender = notification_sender
-        self.cave_metadata_catalog = cave_metadata_catalog
-        self.show_cave_metadata = show_cave_metadata
+        self.splash_is_foreground = cache_rebuild.splash_is_foreground or (
+            lambda: True
+        )
+        self.notification_sender = cache_rebuild.notification_sender
+        self.cave_metadata_catalog = actions.cave_metadata_catalog
+        self.show_cave_metadata = actions.show_cave_metadata
         self._active_cache_rebuild: _ActiveCacheRebuild | None = None
         self._cache_rebuild_after_id = None
         self.recent_map_paths: list[str] = []
