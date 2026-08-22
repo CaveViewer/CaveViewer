@@ -29,6 +29,20 @@ class SplashSession:
         callback: Callable[[], None],
     ) -> str:
         """Schedule a Tk callback and keep ownership of its cancellation token."""
+        return self._schedule_owned(
+            lambda wrapped: root.after(delay_ms, wrapped), callback
+        )
+
+    def schedule_idle(self, root: Any, callback: Callable[[], None]) -> str:
+        """Schedule and own a Tk idle callback."""
+        return self._schedule_owned(root.after_idle, callback)
+
+    def _schedule_owned(
+        self,
+        schedule: Callable[[Callable[[], None]], str],
+        callback: Callable[[], None],
+    ) -> str:
+        """Register a callback token before exposing it to lifecycle cleanup."""
         after_id_holder: dict[str, str] = {}
 
         def wrapped_callback() -> None:
@@ -39,7 +53,7 @@ class SplashSession:
                 return
             callback()
 
-        after_id = root.after(delay_ms, wrapped_callback)
+        after_id = schedule(wrapped_callback)
         after_id_holder["after_id"] = after_id
         self._after_ids.add(after_id)
         return after_id
