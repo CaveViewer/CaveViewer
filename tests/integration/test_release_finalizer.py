@@ -56,6 +56,13 @@ def _copy_release_files(destination: Path) -> None:
         target = destination / relative_path
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, target)
+    for manifest_directory in (
+        "updates/windows",
+        "updates/linux/x86_64",
+        "updates/macos/arm64",
+        "updates/macos/x86_64",
+    ):
+        (destination / manifest_directory).mkdir(parents=True, exist_ok=True)
 
 
 def _write_release_artifacts(
@@ -439,13 +446,19 @@ def test_finalizer_only_allows_same_version_resume_for_unmerged_release_metadata
 
 
 @pytest.mark.parametrize(
-    ("community_windows", "valid_remote_assets"),
-    [(False, True), (True, True), (False, False)],
+    ("community_windows", "valid_remote_assets", "preview"),
+    [
+        (False, True, False),
+        (True, True, False),
+        (False, False, False),
+        (False, True, True),
+    ],
 )
 def test_finalizer_verifies_all_assets_before_pushing_signed_metadata(
     tmp_path: Path,
     community_windows: bool,
     valid_remote_assets: bool,
+    preview: bool,
 ):
     working_repository = tmp_path / "working"
     origin_repository = tmp_path / "origin.git"
@@ -463,6 +476,7 @@ def test_finalizer_verifies_all_assets_before_pushing_signed_metadata(
         artifacts_dir,
         version,
         community_windows=community_windows,
+        release_channel="preview" if preview else "stable",
     )
     _write_release_api_response(
         release_json,
@@ -531,6 +545,8 @@ def test_finalizer_verifies_all_assets_before_pushing_signed_metadata(
     ]
     if community_windows:
         finalizer_args.append("--allow-unsigned-windows-community")
+    if preview:
+        finalizer_args.append("--preview")
     completed = subprocess.run(
         [str(arg) for arg in finalizer_args],
         cwd=working_repository,
@@ -566,7 +582,8 @@ def test_finalizer_verifies_all_assets_before_pushing_signed_metadata(
             "refs/heads/main",
             cwd=tmp_path,
         ) == source_sha
-        assert not (working_repository / "updates/windows/stable.json").exists()
+        channel = "preview" if preview else "stable"
+        assert not (working_repository / f"updates/windows/{channel}.json").exists()
         return
 
     assert completed.returncode == 0, completed.stderr
@@ -576,8 +593,9 @@ def test_finalizer_verifies_all_assets_before_pushing_signed_metadata(
     )
     assert pushed_sha == _run("git", "rev-parse", "HEAD", cwd=working_repository)
     assert _run("git", "rev-list", "--count", "HEAD", cwd=working_repository) == "2"
+    channel = "preview" if preview else "stable"
     assert _run("git", "log", "-1", "--pretty=%s", cwd=working_repository) == (
-        f"Release v{version} stable"
+        f"Release v{version} {channel}"
     )
 
     committed_paths = set(
@@ -585,10 +603,10 @@ def test_finalizer_verifies_all_assets_before_pushing_signed_metadata(
         .splitlines()
     )
     expected_manifests = {
-        "updates/windows/stable.json",
-        "updates/linux/x86_64/stable.json",
-        "updates/macos/arm64/stable.json",
-        "updates/macos/x86_64/stable.json",
+        f"updates/windows/{channel}.json",
+        f"updates/linux/x86_64/{channel}.json",
+        f"updates/macos/arm64/{channel}.json",
+        f"updates/macos/x86_64/{channel}.json",
     }
     assert "src/caveviewer/version.py" in committed_paths
     assert (
@@ -606,12 +624,12 @@ def test_finalizer_verifies_all_assets_before_pushing_signed_metadata(
 
         manifest = working_repository / manifest_path
         manifest_payload = json.loads(manifest.read_text(encoding="utf-8"))
-        assert manifest_payload["release_channel"] == "stable"
+        assert manifest_payload["release_channel"] == channel
         assert manifest_payload["release_notes"] == release_notes
         assert manifest_payload["download_url"].startswith(
             f"https://github.com/example/CaveViewer/releases/download/v{version}/"
         )
-        if manifest_path == "updates/windows/stable.json":
+        if manifest_path == f"updates/windows/{channel}.json":
             assert manifest_payload["install_channel"] == "windows_installer"
             if community_windows:
                 assert manifest_payload["authenticode_status"] == "unsigned-community"
@@ -624,14 +642,37 @@ def test_finalizer_verifies_all_assets_before_pushing_signed_metadata(
                 )
         assert b"\r\n" not in manifest.read_bytes()
         signature = base64.b64decode(
-            manifest.with_name(f"{manifest.name}.sig").read_text(encoding="ascii").strip(),
+            manifest.with_name(f"{manifest.name}.sig")
+            .read_text(encoding="ascii")
+            .strip(),
             validate=True,
         )
         private_key.public_key().verify(signature, manifest.read_bytes())
 
-    assert (working_repository / "updates/macos/stable.json").read_bytes() == (
-        working_repository / "updates/macos/arm64/stable.json"
+    legacy_alias_roots = (
+        "updates/windows",
+        "updates/linux/x86_64",
+        "updates/macos/arm64",
+        "updates/macos/x86_64",
+        "updates/macos",
+    )
+    for alias_root in legacy_alias_roots:
+        legacy_manifest = working_repository / alias_root / "prerelease.json"
+        legacy_signature = working_repository / alias_root / "prerelease.json.sig"
+        if preview:
+            preview_manifest = working_repository / alias_root / "preview.json"
+            preview_signature = working_repository / alias_root / "preview.json.sig"
+            assert legacy_manifest.read_bytes() == preview_manifest.read_bytes()
+            assert legacy_signature.read_bytes() == preview_signature.read_bytes()
+            assert str(legacy_manifest.relative_to(working_repository)) in committed_paths
+            assert str(legacy_signature.relative_to(working_repository)) in committed_paths
+        else:
+            assert not legacy_manifest.exists()
+            assert not legacy_signature.exists()
+
+    assert (working_repository / f"updates/macos/{channel}.json").read_bytes() == (
+        working_repository / f"updates/macos/arm64/{channel}.json"
     ).read_bytes()
-    assert (working_repository / "updates/macos/stable.json.sig").read_bytes() == (
-        working_repository / "updates/macos/arm64/stable.json.sig"
+    assert (working_repository / f"updates/macos/{channel}.json.sig").read_bytes() == (
+        working_repository / f"updates/macos/arm64/{channel}.json.sig"
     ).read_bytes()

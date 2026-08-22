@@ -494,6 +494,19 @@ echo "Verified ${#release_assets[@]} uploaded release asset(s) against GitHub me
 
 manifest_git_paths=()
 
+add_legacy_preview_alias() {
+  $preview || return 0
+
+  local manifest_path="$1"
+  local legacy_manifest_path="${manifest_path%/preview.json}/prerelease.json"
+  cp "$manifest_path" "$legacy_manifest_path"
+  cp "$manifest_path.sig" "$legacy_manifest_path.sig"
+  manifest_git_paths+=(
+    "${legacy_manifest_path#"$repo_root/"}"
+    "${legacy_manifest_path#"$repo_root/"}.sig"
+  )
+}
+
 sign_manifest() {
   local manifest_path="$1"
   local relative_manifest_path="${manifest_path#"$repo_root/"}"
@@ -502,9 +515,10 @@ sign_manifest() {
     'import json, sys; json.load(open(sys.argv[1], encoding="utf-8"))' \
     "$manifest_path"
   "$signing_python" "$repo_root/scripts/sign_update_manifest.py" \
-    "$manifest_path" \
+  "$manifest_path" \
     --signature "$signature_path"
   manifest_git_paths+=("$relative_manifest_path" "$relative_manifest_path.sig")
+  add_legacy_preview_alias "$manifest_path"
 }
 
 if $selected_windows; then
@@ -555,6 +569,7 @@ if $selected_macos_arm64; then
     "updates/macos/$manifest_channel.json"
     "updates/macos/$manifest_channel.json.sig"
   )
+  add_legacy_preview_alias "$repo_root/updates/macos/$manifest_channel.json"
 fi
 
 if $selected_macos_x86_64; then
