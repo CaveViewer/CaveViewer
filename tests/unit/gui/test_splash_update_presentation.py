@@ -654,11 +654,77 @@ def test_launch_layout_settlement_is_fixed_and_bounded():
 def test_launch_splash_waits_only_for_the_remaining_minimum_duration():
     remaining = splash_screen._remaining_launch_delay_ms
 
-    assert splash_screen._MIN_LAUNCH_SPLASH_MS == 2_000
-    assert remaining(visible_at=10.0, now=10.0) == 2_000
-    assert remaining(visible_at=10.0, now=11.25) == 750
-    assert remaining(visible_at=10.0, now=12.0) == 0
-    assert remaining(visible_at=10.0, now=13.0) == 0
+    assert splash_screen._MIN_LAUNCH_SPLASH_MS == 5_000
+    assert remaining(visible_at=10.0, now=10.0) == 5_000
+    assert remaining(visible_at=10.0, now=11.25) == 3_750
+    assert remaining(visible_at=10.0, now=15.0) == 0
+    assert remaining(visible_at=10.0, now=16.0) == 0
+
+
+def test_launch_splash_uses_the_loading_exploration_tagline():
+    source = inspect.getsource(splash_screen._build_launch_surface)
+
+    assert 'text="Preparing to explore what lies beneath…"' in source
+    assert 'text="Starting…"' not in source
+
+
+def test_launch_indicator_draws_an_indeterminate_amber_arc():
+    calls = []
+
+    class _Canvas:
+        def cget(self, option):
+            assert option == "width"
+            return 132
+
+        def delete(self, tag):
+            calls.append(("delete", tag))
+
+        def create_oval(self, *coordinates, **options):
+            calls.append(("oval", coordinates, options))
+
+        def create_arc(self, *coordinates, **options):
+            calls.append(("arc", coordinates, options))
+
+    splash_screen._draw_launch_indicator_frame(
+        _Canvas(),
+        phase_degrees=24,
+        px=lambda value: int(value),
+    )
+
+    assert calls[0] == ("delete", "launch_indicator")
+    assert calls[1][0] == "oval"
+    assert calls[2][0] == "arc"
+    assert calls[2][2]["start"] == 66
+    assert calls[2][2]["extent"] == -splash_screen._LAUNCH_INDICATOR_ARC_DEGREES
+    assert calls[2][2]["outline"] == splash_screen._BUTTON_BG
+
+
+def test_launch_logo_suppresses_only_amber_pixels_like_the_map_loader():
+    from PIL import Image
+
+    logo = Image.new("RGBA", (3, 1))
+    logo.putdata(
+        (
+            (229, 161, 31, 255),
+            (120, 80, 50, 20),
+            (45, 165, 210, 255),
+        )
+    )
+
+    filtered = splash_screen._suppress_amber_logo_pixels(logo)
+
+    assert list(filtered.get_flattened_data()) == [
+        (229, 161, 31, 0),
+        (120, 80, 50, 0),
+        (45, 165, 210, 255),
+    ]
+
+
+def test_launch_surface_replaces_the_logo_amber_with_one_indicator_ring():
+    source = inspect.getsource(splash_screen._build_launch_surface)
+
+    assert "suppress_amber=True" in source
+    assert "_draw_launch_indicator_frame(" in source
 
 
 def test_splash_navigation_actions_are_keyboard_accessible_without_fallthrough():
@@ -709,6 +775,16 @@ def test_splash_navigation_actions_are_keyboard_accessible_without_fallthrough()
     assert "root.after_idle(_ensure_preferences_panel)" not in source
     assert "_build_launch_surface(" in source
     assert "_settle_launch_layout(root, passes=3)" in source
+    assert "def _advance_launch_indicator() -> None:" in source
+    assert "_LAUNCH_INDICATOR_INTERVAL_MS" in source
+    indicator_start = source.index("def _advance_launch_indicator() -> None:")
+    indicator_source = source[
+        indicator_start : source.index(
+            "\n\n    _advance_launch_indicator()",
+            indicator_start,
+        )
+    ]
+    assert indicator_source.count("session.schedule_after(") == 1
     assert "def _reveal_composed_main_surface() -> None:" in source
     assert "root.after(remaining_launch_ms, _reveal_composed_main_surface)" in source
     assert "root.after_idle(_reveal_composed_main_surface)" in source
@@ -717,6 +793,7 @@ def test_splash_navigation_actions_are_keyboard_accessible_without_fallthrough()
             "remaining_launch_ms = _remaining_launch_delay_ms("
         )
     ]
+    assert "launch_indicator_active[0] = False" in reveal_source
     assert "launch_surface.destroy()" in reveal_source
     assert "after_idle(" not in reveal_source
     assert "schedule_after(" not in reveal_source
@@ -945,6 +1022,13 @@ def test_splash_map_library_uses_navigation_and_an_overflow_cue():
     assert "def _create_open_map_action" in panel_source
     assert "def _draw_open_map_action" in panel_source
     assert "self._open_map_folder = open_map_folder" in panel_source
+    panel_create_source = panel_source[
+        panel_source.index("def create(self, parent)") : panel_source.index(
+            "def sync_scroll_region"
+        )
+    ]
+    assert "highlightthickness=0" in panel_create_source
+    assert "highlightbackground=style.panel_border_color" not in panel_create_source
     assert "open_map_shell = tk.Frame(panel, bg=style.panel_color)" in panel_source
     assert "self._create_open_map_action(open_map_shell)" in panel_source
     assert "scroll_row = 1" in panel_source
@@ -1450,6 +1534,8 @@ def test_map_library_open_map_action_uses_the_existing_folder_callback(monkeypat
         panel_border_color="#1e2028",
         button_border_color="#a77a10",
         button_hover_bg="#2a2a33",
+        featured_action_bg="#202025",
+        featured_action_hover_bg="#28282e",
         menu_hover_bg="#343442",
         progress_fill_color="#f0ad22",
     )
@@ -1459,9 +1545,18 @@ def test_map_library_open_map_action_uses_the_existing_folder_callback(monkeypat
     action = canvases[0]
     assert action.options["takefocus"] is True
     assert action.options["height"] == 58
+    assert action.options["bg"] == "#202025"
     assert action.pack_calls == [{"anchor": "w", "fill": "x"}]
     assert wheel_targets == [action]
 
+    action.bindings["<Enter>"](None)
+    action.bindings["<Leave>"](None)
+    assert action.config_calls[-2:] == [
+        {"bg": "#28282e"},
+        {"bg": "#202025"},
+    ]
+
+    action.draw_calls.clear()
     action.bindings["<Configure>"](None)
     assert [entry[2]["text"] for entry in action.draw_calls if entry[0] == "text"] == [
         "Open a local map",
