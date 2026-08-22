@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import subprocess
 from pathlib import Path
 
@@ -13,6 +14,10 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 COMMON_SCRIPTS = REPOSITORY_ROOT / "scripts" / "common"
 PROMOTION_WORKFLOW = (
     REPOSITORY_ROOT / ".github" / "workflows" / "preview-release-promotion.yml"
+)
+requires_executable_shell_scripts = pytest.mark.skipif(
+    os.name == "nt",
+    reason="Preview release shell helpers are executed by Unix CI jobs",
 )
 
 
@@ -61,6 +66,7 @@ def test_preview_promotion_workflow_is_manual_serial_and_write_scoped():
     assert "group: caveviewer-preview-release-promotion" in workflow
     assert "cancel-in-progress: false" in workflow
     assert "timeout-minutes: 360" in workflow
+    assert "runs-on: ubuntu-latest" in workflow
     assert "./scripts/common/preview_release_automation.sh" in workflow
 
 
@@ -120,6 +126,7 @@ def test_explicit_pr_validation_preserves_required_checks_and_legacy_aliases():
         "preview_release_automation.sh",
     ),
 )
+@requires_executable_shell_scripts
 def test_preview_automation_shell_helpers_have_valid_syntax_and_help(script_name):
     script = COMMON_SCRIPTS / script_name
 
