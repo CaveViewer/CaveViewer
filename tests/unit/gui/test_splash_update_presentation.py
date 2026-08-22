@@ -675,6 +675,7 @@ def test_splash_navigation_actions_are_keyboard_accessible_without_fallthrough()
     assert "open_map_folder=on_open_map_folder" in source
     assert "def _focus_map_library() -> None:" in source
     assert "panel.focus_content()" in source
+    assert "panel.on_shown()" in source
     assert "map_library_surface = tk.Frame(right_frame, bg=_BG_COLOR)" in source
     assert "preferences_surface = tk.Frame(right_frame, bg=_BG_COLOR)" in source
     assert "help_surface = tk.Frame(right_frame, bg=_BG_COLOR)" in source

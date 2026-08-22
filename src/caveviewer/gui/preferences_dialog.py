@@ -1193,3 +1193,11 @@ class PreferencesPanel:
             return
         if self.apply_button is not None:
             self.apply_button.focus_set()
+
+    def on_shown(self) -> None:
+        """Recompute wrapping after the embedded surface receives its final width."""
+        self._pending_page_canvas_width = None
+        self._page_canvas_window_width = None
+        self._page_scroll_region = None
+        self._scrollbar_layout_state = None
+        self._schedule_page_layout_sync()

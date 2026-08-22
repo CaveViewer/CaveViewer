@@ -1562,6 +1562,7 @@ def show_splash_screen(
             preferences_surface.pack(fill="both", expand=True)
             active_surface[0] = "preferences"
         _set_active_navigation("Preferences")
+        panel.on_shown()
         panel.focus_content()
 
     def _on_preferences_click():

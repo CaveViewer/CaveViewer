@@ -1091,6 +1091,26 @@ def test_preferences_hint_wrapping_only_updates_the_active_page():
     assert hidden_label.configure_calls == []
 
 
+def test_preferences_invalidates_hidden_geometry_when_shown():
+    from caveviewer.gui import preferences_dialog
+
+    scheduled = []
+    panel = object.__new__(preferences_dialog.PreferencesPanel)
+    panel._pending_page_canvas_width = 1
+    panel._page_canvas_window_width = 480
+    panel._page_scroll_region = (0, 0, 480, 600)
+    panel._scrollbar_layout_state = (600, 500)
+    panel._schedule_page_layout_sync = lambda: scheduled.append(True)
+
+    panel.on_shown()
+
+    assert panel._pending_page_canvas_width is None
+    assert panel._page_canvas_window_width is None
+    assert panel._page_scroll_region is None
+    assert panel._scrollbar_layout_state is None
+    assert scheduled == [True]
+
+
 def test_preferences_feedback_wraplength_avoids_repeating_identical_geometry_work():
     from caveviewer.gui import preferences_dialog
 
