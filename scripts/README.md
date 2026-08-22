@@ -6,6 +6,13 @@ For script CLI conventions and naming rules, see `standards.md`.
 For the canonical release sequence, channel behavior, resume procedure, and
 post-release checklist, see `../docs/development/releases.md`.
 
+The one-action Preview path is `.github/workflows/preview-release-promotion.yml`.
+It promotes any pushed feature branch through `main`, synchronizes
+`release/next`, dispatches the all-platform Preview publish with the next patch
+version, and merges the generated metadata back through a second protected PR.
+The workflow calls `scripts/common/preview_release_automation.sh`; that helper
+is CI-internal and is not a replacement for `release.sh` during local builds.
+
 ## Main Entry Point
 
 Use the dispatcher script:

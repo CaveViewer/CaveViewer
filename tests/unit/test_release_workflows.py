@@ -764,7 +764,10 @@ def test_essential_workflow_reuses_validation_for_release_metadata_only_prs():
     metadata_start = workflow.index("      - name: Validate pull-request release metadata")
     metadata_end = workflow.index("\n      - name: Set up Python", metadata_start)
     metadata_step = workflow[metadata_start:metadata_end]
-    assert "if: ${{ github.event_name == 'pull_request' }}" in metadata_step
+    assert (
+        "if: ${{ github.event_name == 'pull_request' || inputs.pr_head_sha != '' }}"
+        in metadata_step
+    )
     assert "env.RUN_SOURCE_TESTS != 'true'" not in metadata_step
     assert 'git diff --check "$PR_BASE_SHA...$PR_HEAD_SHA"' in workflow
     assert "version.py changes more than APP_VERSION; run the source suites." in workflow
