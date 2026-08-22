@@ -93,6 +93,22 @@ def key_help_sections(
                     if is_help_shortcut_visible(shortcut)
                 )
         if shortcuts:
+            if section_id == "move":
+                speed_ids = {"move-speed-decrease", "move-speed-increase"}
+                if speed_ids.issubset(shortcut.id for shortcut in shortcuts):
+                    compact_shortcuts: list[KeyboardShortcut] = []
+                    for shortcut in shortcuts:
+                        if shortcut.id == "move-speed-decrease":
+                            compact_shortcuts.append(
+                                KeyboardShortcut(
+                                    id="move-speed-adjust",
+                                    shortcut="- =",
+                                    action="Decrease/increase speed",
+                                )
+                            )
+                        elif shortcut.id != "move-speed-increase":
+                            compact_shortcuts.append(shortcut)
+                    shortcuts = compact_shortcuts
             grouped_sections.append(
                 KeyboardShortcutSection(
                     id=section_id,

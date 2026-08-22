@@ -107,6 +107,7 @@ def test_keyboard_catalog_excludes_contextual_splash_navigation_shortcuts():
 def test_keycap_parts_keep_compound_shortcuts_readable():
     assert shortcut_keycap_parts("W A S D") == ("W", "A", "S", "D")
     assert shortcut_keycap_parts("E / Q") == ("E", "/", "Q")
+    assert shortcut_keycap_parts("- =") == ("-", "=")
     assert shortcut_keycap_parts("Ctrl + Shift + P") == (
         "Ctrl",
         "+",
