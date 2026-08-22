@@ -63,7 +63,6 @@ _BG_COLOR = DARK_THEME.background
 _TITLE_COLOR = DARK_THEME.title
 _SUBTITLE_COLOR = DARK_THEME.body_text
 _INSTRUCTION_COLOR = DARK_THEME.secondary_text
-_PANEL_COLOR = DARK_THEME.panel
 _BUTTON_BG = DARK_THEME.primary_button
 _BUTTON_BORDER_COLOR = DARK_THEME.primary_button_border
 
@@ -913,7 +912,7 @@ class PreferencesPanel:
         self.tab_strip = surface.tab_strip
         body = surface.content
 
-        self.button_row = tk.Frame(body, bg=_PANEL_COLOR)
+        self.button_row = tk.Frame(body, bg=_BG_COLOR)
         # Pack the action row before the page stack so a height-limited
         # Windows dialog shrinks form content first instead of clipping
         # Apply/Cancel off the bottom edge.
@@ -943,14 +942,14 @@ class PreferencesPanel:
         self.apply_button.pack(side="right")
         cancel_button.pack(side="right", padx=(0, 8))
 
-        self.feedback_frame = tk.Frame(self.button_row, bg=_PANEL_COLOR)
+        self.feedback_frame = tk.Frame(self.button_row, bg=_BG_COLOR)
         self.feedback_frame.pack(side="left", fill="x", expand=True)
         self.error_label = tk.Label(
             self.feedback_frame,
             text="",
             font=self.small_font,
             fg=DARK_THEME.error_text,
-            bg=_PANEL_COLOR,
+            bg=_BG_COLOR,
             anchor="w",
             justify="left",
             wraplength=self._layout_policy.notice_wrap_length,
