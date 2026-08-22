@@ -651,6 +651,16 @@ def test_launch_layout_settlement_is_fixed_and_bounded():
     assert calls == [True, True, True]
 
 
+def test_launch_splash_waits_only_for_the_remaining_minimum_duration():
+    remaining = splash_screen._remaining_launch_delay_ms
+
+    assert splash_screen._MIN_LAUNCH_SPLASH_MS == 2_000
+    assert remaining(visible_at=10.0, now=10.0) == 2_000
+    assert remaining(visible_at=10.0, now=11.25) == 750
+    assert remaining(visible_at=10.0, now=12.0) == 0
+    assert remaining(visible_at=10.0, now=13.0) == 0
+
+
 def test_splash_navigation_actions_are_keyboard_accessible_without_fallthrough():
     source = inspect.getsource(splash_screen.show_splash_screen)
     update_action_source = inspect.getsource(splash_screen._bind_update_label_action)
@@ -700,10 +710,11 @@ def test_splash_navigation_actions_are_keyboard_accessible_without_fallthrough()
     assert "_build_launch_surface(" in source
     assert "_settle_launch_layout(root, passes=3)" in source
     assert "def _reveal_composed_main_surface() -> None:" in source
+    assert "root.after(remaining_launch_ms, _reveal_composed_main_surface)" in source
     assert "root.after_idle(_reveal_composed_main_surface)" in source
     reveal_source = source[
         source.index("def _reveal_composed_main_surface() -> None:") : source.index(
-            "root.after_idle(_reveal_composed_main_surface)"
+            "remaining_launch_ms = _remaining_launch_delay_ms("
         )
     ]
     assert "launch_surface.destroy()" in reveal_source

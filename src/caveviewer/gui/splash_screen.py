@@ -32,6 +32,7 @@ from __future__ import annotations
 import enum
 import math
 import os
+import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable
 
@@ -197,6 +198,7 @@ _UI_FONT_FAMILY = _PRESENTATION_PROFILE.ui_font_family
 _TK_TEXT_SCALE = 1.0
 _CACHE_REBUILD_CLOSE_PAUSE_ATTEMPTS = 25
 _UPDATE_READY_ACTION_DELAY_MS = 3_000
+_MIN_LAUNCH_SPLASH_MS = 2_000
 
 _TYPOGRAPHY: TkTypography = create_tk_typography(
     _UI_FONT_FAMILY,
@@ -543,6 +545,17 @@ def _settle_launch_layout(root, *, passes: int = 3) -> None:
     """Run a fixed, bounded number of Tk geometry-only settlement passes."""
     for _pass in range(max(0, int(passes))):
         root.update_idletasks()
+
+
+def _remaining_launch_delay_ms(
+    *,
+    visible_at: float,
+    now: float,
+    minimum_ms: int = _MIN_LAUNCH_SPLASH_MS,
+) -> int:
+    """Return the one-shot delay needed to honor the minimum splash duration."""
+    elapsed_ms = max(0.0, (float(now) - float(visible_at)) * 1_000.0)
+    return max(0, int(math.ceil(max(0, int(minimum_ms)) - elapsed_ms)))
 
 
 def _build_themed_about_content(
@@ -1207,6 +1220,7 @@ def show_splash_screen(
         pady=px(16),
     )
     launch_surface.tkraise()
+    launch_visible_at = time.monotonic()
     root.deiconify()
     root.lift()
     _settle_launch_layout(root, passes=1)
@@ -2120,10 +2134,17 @@ def show_splash_screen(
         launch_surface.destroy()
         mark_startup_splash_visible()
 
-    # Give Tk one normal idle turn to paint canvas-backed Map Library rows
-    # beneath the launch cover. This callback is deliberately one-shot: it
-    # neither polls readiness nor schedules another geometry pass.
-    root.after_idle(_reveal_composed_main_surface)
+    # Honor one total minimum duration measured from the first visible launch
+    # frame. Fast builds wait only for the remaining time; slow builds reveal
+    # on the next idle paint. Neither path polls or reschedules itself.
+    remaining_launch_ms = _remaining_launch_delay_ms(
+        visible_at=launch_visible_at,
+        now=time.monotonic(),
+    )
+    if remaining_launch_ms:
+        root.after(remaining_launch_ms, _reveal_composed_main_surface)
+    else:
+        root.after_idle(_reveal_composed_main_surface)
     root.lift()
     root.focus_force()
     # Briefly force topmost so the splash appears above the GLFW viewer window
