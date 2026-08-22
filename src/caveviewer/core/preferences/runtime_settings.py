@@ -756,6 +756,17 @@ def _embedded_update_channel_default(
     return platform.release_metadata.release_channel
 
 
+def _package_log_level_default(
+    platform: RuntimePlatformFacts,
+    _resolved_values: Mapping[str, RuntimeValue],
+) -> str:
+    """Increase diagnostic detail for packages explicitly built as Preview."""
+
+    if platform.release_metadata.release_channel == "preview":
+        return "DEBUG"
+    return "INFO"
+
+
 RUNTIME_SETTING_SPECS = (
     *(_preference_setting(field) for field in PREFERENCE_FIELDS),
     _environment_setting(
@@ -791,7 +802,7 @@ RUNTIME_SETTING_SPECS = (
         "Application logging verbosity.",
         value_type=RuntimeValueType.TEXT,
         parser=_log_level,
-        default="INFO",
+        default=_package_log_level_default,
         enum_values=("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"),
         cli_name="log_level",
     ),
@@ -834,9 +845,9 @@ RUNTIME_SETTING_SPECS = (
         "CAVEVIEWER_UPDATE_CHANNEL",
         "Update manifest channel; defaults to the channel embedded in the package.",
         value_type=RuntimeValueType.TEXT,
-        parser=_enum("stable", "prerelease"),
+        parser=_enum("stable", "preview"),
         default=_embedded_update_channel_default,
-        enum_values=("stable", "prerelease"),
+        enum_values=("stable", "preview"),
     ),
     _environment_setting(
         "update_manifest_url",

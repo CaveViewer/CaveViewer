@@ -33,7 +33,7 @@ Actions:
 Release versions must contain only dot-separated decimal integers, such as
 `1.0.64`. Do not use suffixes such as `1.0.64-rc1`; the update checker cannot
 compare them and will not offer the release as a newer update. Select
-`--pre-release` to publish on the prerelease channel instead. The local
+`--preview` to publish on the preview channel instead. The local
 dispatcher accepts an optional leading `v`, but GitHub workflow inputs require
 the bare numeric version.
 
@@ -57,7 +57,7 @@ Examples:
 release.sh --target=linux-x86_64 --version=1.2.45 --notes "Release 1.2.45" --action=build
 release.sh --target=linux-x86_64 --version=1.2.45 --notes "Release 1.2.45" --action=package
 release.sh --target=linux-x86_64 --version=1.2.45 --notes "Release 1.2.45" --action=release
-release.sh --target=linux-x86_64 --version=1.2.45 --notes "Alpha." --action=release --pre-release
+release.sh --target=linux-x86_64 --version=1.2.45 --notes "Alpha." --action=release --preview
 release.sh --target=all --version=1.2.45 --notes "Release 1.2.45" --action=release
 ```
 
@@ -77,7 +77,7 @@ Options:
 
 - `--rebuild`
 - `--skip-tests`: bypass the local gate only when the same application source already passed an external test gate
-- `--pre-release`: publish GitHub prerelease assets and update `prerelease.json` instead of `stable.json`
+- `--preview`: publish GitHub prerelease assets and update `preview.json` instead of `stable.json`
 
 Examples:
 
@@ -125,8 +125,8 @@ When dispatching a workflow:
   or a suffix such as `-rc1`, because workflow artifact paths use the input
   verbatim and the update checker only compares numeric components;
 - leave `publish` disabled to build and retain a test artifact only;
-- enable both `publish` and `pre_release` to publish a GitHub prerelease and
-  update that platform/architecture's `prerelease.json` rather than
+- enable both `publish` and `preview` to publish a GitHub prerelease and
+  update that platform/architecture's `preview.json` rather than
   `stable.json`;
 - use `All Platform Release` to package all platforms concurrently and publish
   them through one finalizer;

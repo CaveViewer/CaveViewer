@@ -15,7 +15,7 @@ requires_executable_shell_scripts = pytest.mark.skipif(
 
 
 def test_arm64_manifests_match_signed_legacy_compatibility_aliases():
-    for channel in ("stable", "prerelease"):
+    for channel in ("stable", "preview"):
         legacy_manifest = MACOS_UPDATES / f"{channel}.json"
         legacy_signature = MACOS_UPDATES / f"{channel}.json.sig"
         arm_manifest = MACOS_UPDATES / "arm64" / f"{channel}.json"

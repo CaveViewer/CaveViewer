@@ -13,8 +13,8 @@ on:
         required: false
         type: string
         default: "CaveViewer release"
-      pre_release:
-        description: "Publish as a GitHub prerelease and update prerelease.json"
+      preview:
+        description: "Publish as a GitHub prerelease and update preview.json"
         required: false
         type: boolean
         default: false
@@ -55,7 +55,7 @@ jobs:
     with:
       version: ${{ inputs.version }}
       release_notes: ${{ inputs.release_notes }}
-      pre_release: ${{ inputs.pre_release }}
+      preview: ${{ inputs.preview }}
       publish: false
       # Finalize Release is the single publisher. Mark the package as unsigned
       # community only when the complete release will be published.
@@ -74,7 +74,7 @@ jobs:
     with:
       version: ${{ inputs.version }}
       release_notes: ${{ inputs.release_notes }}
-      pre_release: ${{ inputs.pre_release }}
+      preview: ${{ inputs.preview }}
       publish: false
       skip_essential_tests: true
       reuse_pr_validation: ${{ inputs.reuse_pr_validation }}
@@ -90,7 +90,7 @@ jobs:
     with:
       version: ${{ inputs.version }}
       release_notes: ${{ inputs.release_notes }}
-      pre_release: ${{ inputs.pre_release }}
+      preview: ${{ inputs.preview }}
       publish: false
       skip_essential_tests: true
       reuse_pr_validation: ${{ inputs.reuse_pr_validation }}
@@ -106,7 +106,7 @@ jobs:
     with:
       version: ${{ inputs.version }}
       release_notes: ${{ inputs.release_notes }}
-      pre_release: ${{ inputs.pre_release }}
+      preview: ${{ inputs.preview }}
       publish: false
       skip_essential_tests: true
       reuse_pr_validation: ${{ inputs.reuse_pr_validation }}
@@ -131,7 +131,7 @@ jobs:
     with:
       version: ${{ inputs.version }}
       release_notes: ${{ inputs.release_notes }}
-      pre_release: ${{ inputs.pre_release }}
+      preview: ${{ inputs.preview }}
       platforms: all
       source_sha: ${{ github.sha }}
       target_branch: ${{ github.ref_name }}

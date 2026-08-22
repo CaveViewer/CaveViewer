@@ -16,7 +16,7 @@ print_usage() {
 Usage:
   finalize_release.sh --platforms=<targets> --version=<version> --notes=<notes> \
     --artifacts-dir=<path> --target-branch=<branch> --expected-source-sha=<sha> \
-    [--pre-release] [--allow-unsigned-windows-community]
+    [--preview] [--allow-unsigned-windows-community]
   finalize_release.sh --help
 
 Targets:
@@ -32,7 +32,7 @@ release_notes=""
 artifacts_dir=""
 target_branch=""
 expected_source_sha=""
-pre_release=false
+preview=false
 allow_unsigned_windows_community=false
 
 while [ "$#" -gt 0 ]; do
@@ -79,8 +79,8 @@ while [ "$#" -gt 0 ]; do
       expected_source_sha="$1"
       shift
       ;;
-    --pre-release)
-      pre_release=true
+    --preview)
+      preview=true
       shift
       ;;
     --allow-unsigned-windows-community)
@@ -143,7 +143,7 @@ if [ -z "$normalized_version" ]; then
 fi
 tag="v$normalized_version"
 manifest_channel="stable"
-$pre_release && manifest_channel="prerelease"
+$preview && manifest_channel="preview"
 
 selected_windows=false
 selected_linux_x86_64=false
@@ -361,6 +361,53 @@ fi
 ensure_target_branch_at_expected_source
 ensure_release_metadata_is_reconciled
 
+ensure_stable_version_exceeds_preview() {
+  $preview && return
+
+  local preview_manifests=()
+  while IFS= read -r manifest; do
+    preview_manifests+=("$manifest")
+  done < <(find "$repo_root/updates" -type f -name preview.json -print | sort)
+  [ "${#preview_manifests[@]}" -eq 0 ] && return
+
+  "$signing_python" - "$normalized_version" "${preview_manifests[@]}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+
+def version_tuple(value: str) -> tuple[int, ...]:
+    parts = value.split(".")
+    if not parts or any(not part.isdecimal() for part in parts):
+        raise SystemExit(f"Error: invalid numeric release version: {value!r}")
+    return tuple(int(part) for part in parts)
+
+
+def is_greater(candidate: tuple[int, ...], baseline: tuple[int, ...]) -> bool:
+    width = max(len(candidate), len(baseline))
+    return candidate + (0,) * (width - len(candidate)) > baseline + (0,) * (
+        width - len(baseline)
+    )
+
+
+stable_version = sys.argv[1]
+stable_tuple = version_tuple(stable_version)
+for raw_path in sys.argv[2:]:
+    path = Path(raw_path)
+    preview_version = str(
+        json.loads(path.read_text(encoding="utf-8")).get("latest_version", "")
+    ).strip()
+    if not is_greater(stable_tuple, version_tuple(preview_version)):
+        raise SystemExit(
+            "Error: stable release version "
+            f"{stable_version} must be greater than Preview {preview_version} "
+            f"advertised by {path}."
+        )
+PY
+}
+
+ensure_stable_version_exceeds_preview
+
 if ! git -C "$repo_root" diff --quiet || ! git -C "$repo_root" diff --cached --quiet; then
   echo "Error: tracked files changed before release finalization."
   exit 1
@@ -383,6 +430,16 @@ echo "Channel: $manifest_channel"
 # signing-key, source-revision, and branch preflight succeeds. Update manifests
 # remain unchanged until the uploaded assets are independently verified below.
 if gh release view "$tag" --repo "$repo" >/dev/null 2>&1; then
+  existing_is_preview="$(
+    gh release view "$tag" --repo "$repo" --json isPrerelease --jq .isPrerelease
+  )"
+  requested_is_preview=false
+  $preview && requested_is_preview=true
+  if [ "$existing_is_preview" != "$requested_is_preview" ]; then
+    echo "Error: release tag $tag already belongs to the other update channel." >&2
+    echo "Use a new numeric version; Stable and Preview may not share a tag." >&2
+    exit 1
+  fi
   echo "Release $tag already exists; uploading/replacing the requested assets."
   gh release upload "$tag" "${release_assets[@]}" --repo "$repo" --clobber
 else
@@ -395,7 +452,7 @@ else
     --title "$tag"
     --notes "$release_notes"
   )
-  $pre_release && create_args+=(--prerelease)
+  $preview && create_args+=(--prerelease)
   gh release create "${create_args[@]}"
 fi
 

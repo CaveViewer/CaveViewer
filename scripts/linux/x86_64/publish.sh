@@ -10,7 +10,7 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 print_usage() {
   cat <<'EOF'
 Usage:
-  publish.sh --version=<version> [--notes=<release_notes>] [--use-existing-artifacts] [--rebuild] [--pre-release]
+  publish.sh --version=<version> [--notes=<release_notes>] [--use-existing-artifacts] [--rebuild] [--preview]
   publish.sh --help
 
 Publishes the Linux x86_64 AppImage and update manifest.

@@ -6,25 +6,25 @@ set -euo pipefail
 # release, and writes and signs an update manifest for the selected channel.
 #
 # Usage:
-#   publish.sh --version=<version> [--notes=<release_notes>] [--use-existing-artifacts] [--pre-release]
+#   publish.sh --version=<version> [--notes=<release_notes>] [--use-existing-artifacts] [--preview]
 #
 # Example:
 #   publish.sh --version=1.0.2 --notes="Bug fixes and stability improvements"
 #
 use_existing_artifacts=false
-pre_release=false
+preview=false
 
 print_usage() {
   cat <<'EOF'
 Usage:
-  publish.sh --version=<version> [--notes=<release_notes>] [--use-existing-artifacts] [--pre-release]
+  publish.sh --version=<version> [--notes=<release_notes>] [--use-existing-artifacts] [--preview]
   publish.sh --help
 
 Options:
   --version=<version>      Release version, for example 1.0.2
   --notes=<notes>          Release notes (default: "Release <version>")
   --use-existing-artifacts  Publish existing artifacts without rebuilding
-  --pre-release             Mark the GitHub release as a prerelease and write prerelease.json
+  --preview             Mark the GitHub release as a prerelease and write preview.json
 
 Example:
   publish.sh --version=1.0.2 --notes="Bug fixes and stability improvements"
@@ -65,8 +65,8 @@ while [ "$#" -gt 0 ]; do
       use_existing_artifacts=true
       shift
       ;;
-    --pre-release)
-      pre_release=true
+    --preview)
+      preview=true
       shift
       ;;
     -h|--help)
@@ -122,7 +122,7 @@ version_file="$repo_root/src/caveviewer/version.py"
 windows_packages_dir="$repo_root/dist/windows/packages"
 windows_metadata_dir="$repo_root/dist/windows/metadata"
 manifest_channel="stable"
-$pre_release && manifest_channel="prerelease"
+$preview && manifest_channel="preview"
 export CAVEVIEWER_BUILD_RELEASE_CHANNEL="$manifest_channel"
 cv_prepare_release_metadata "$repo_root" >/dev/null
 update_manifest_path="$repo_root/updates/windows/$manifest_channel.json"
@@ -146,7 +146,7 @@ fi
 echo "Using repository: $repo"
 echo "Version: $normalized_version"
 echo "Tag: $tag"
-echo "Prerelease: $pre_release"
+echo "Preview: $preview"
 
 if [ ! -f "$version_file" ]; then
   echo "Error: version file not found: $version_file"
@@ -224,7 +224,7 @@ if gh release view "$tag" --repo "$repo" >/dev/null 2>&1; then
 else
   echo "Creating release $tag and uploading Windows assets"
   create_args=("$tag" "$app_exe_path" "$app_meta_path" "$app_update_meta_path" --repo "$repo" --title "$release_title" --notes "$release_notes")
-  $pre_release && create_args+=(--prerelease)
+  $preview && create_args+=(--prerelease)
   gh release create "${create_args[@]}"
 fi
 

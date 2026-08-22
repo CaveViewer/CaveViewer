@@ -15,7 +15,7 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$ExpectedVersion,
 
-    [ValidateSet("stable", "prerelease")]
+    [ValidateSet("stable", "preview")]
     [string]$ExpectedReleaseChannel = "stable",
 
     [string]$ExpectedCertificateSubject = "",

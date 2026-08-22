@@ -6,7 +6,7 @@ set -euo pipefail
 # size, SHA-256, and release notes for the in-app update client.
 #
 # Usage:
-#   update_manifest.sh --version=<version> --download-url=<windows_package_url> --artifact-file=<windows_package_file> [--authenticode-status=<verified|unsigned-community>] [--authenticode-certificate-subject=<subject>] [--notes=<release_notes>] [--channel=<stable|prerelease>]
+#   update_manifest.sh --version=<version> --download-url=<windows_package_url> --artifact-file=<windows_package_file> [--authenticode-status=<verified|unsigned-community>] [--authenticode-certificate-subject=<subject>] [--notes=<release_notes>] [--channel=<stable|preview>]
 # Example:
 #   update_manifest.sh --version=1.0.1 \
 #     --download-url="https://github.com/<owner>/CaveViewer/releases/download/v1.0.1/CaveViewer-1.0.1-windows.exe" \
@@ -16,7 +16,7 @@ set -euo pipefail
 print_usage() {
   cat <<'EOF'
 Usage:
-  update_manifest.sh --version=<version> --download-url=<url> --artifact-file=<path> [--authenticode-status=<verified|unsigned-community>] [--authenticode-certificate-subject=<subject>] [--notes=<release_notes>] [--channel=<stable|prerelease>]
+  update_manifest.sh --version=<version> --download-url=<url> --artifact-file=<path> [--authenticode-status=<verified|unsigned-community>] [--authenticode-certificate-subject=<subject>] [--notes=<release_notes>] [--channel=<stable|preview>]
 EOF
 }
 
@@ -104,9 +104,9 @@ fi
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../.." && pwd)"
 case "$channel" in
-  stable|prerelease) ;;
+  stable|preview) ;;
   *)
-    echo "Error: invalid --channel '$channel' (expected stable or prerelease)"
+    echo "Error: invalid --channel '$channel' (expected stable or preview)"
     exit 1
     ;;
 esac

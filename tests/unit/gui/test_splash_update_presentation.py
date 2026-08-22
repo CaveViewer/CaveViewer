@@ -324,6 +324,45 @@ def test_windows_exe_update_prompts_for_install_restart_and_never_uses_reveal():
     )
 
 
+def test_preview_update_states_are_explicitly_labeled():
+    available = splash_screen._update_presentation(
+        UpdateSnapshot(
+            state=UpdateState.AVAILABLE,
+            current_version="1.0.63",
+            update_channel="preview",
+            available_version="1.0.64",
+        )
+    )
+    downloading = splash_screen._update_presentation(
+        UpdateSnapshot(
+            state=UpdateState.DOWNLOADING,
+            current_version="1.0.63",
+            update_channel="preview",
+            downloaded_bytes=50,
+            total_bytes=100,
+        )
+    )
+    verifying = splash_screen._update_presentation(
+        UpdateSnapshot(
+            state=UpdateState.VERIFYING,
+            current_version="1.0.63",
+            update_channel="preview",
+        )
+    )
+    ready = splash_screen._update_presentation(
+        UpdateSnapshot(
+            state=UpdateState.READY,
+            current_version="1.0.63",
+            update_channel="preview",
+        )
+    )
+
+    assert available.action_text == "Preview update to 1.0.64"
+    assert downloading.status_text == "Downloading Preview update… 50%"
+    assert verifying.status_text == "Verifying Preview update…"
+    assert ready.status_text == "Preview update ready"
+
+
 def test_requested_windows_installation_shows_handoff_progress_and_retry():
     preparing = splash_screen._update_presentation(
         UpdateSnapshot(
@@ -706,7 +745,7 @@ def test_splash_navigation_uses_a_quiet_rail_and_lower_app_status():
     assert "update_cluster = tk.Frame(app_status_frame, bg=_BG_COLOR)" in source
     assert "def _set_update_cluster_visible(visible: bool)" in source
     assert "def _layout_update_cluster(presentation: _UpdatePresentation)" in source
-    assert 'action_text = "Update to"' in update_source
+    assert 'update_name = "Preview update" if is_preview else "Update"' in update_source
     assert 'action_text = f"{action_text} {snapshot.available_version}"' in update_source
     assert "action_text=snapshot.reveal_action_label" in update_source
     assert "action_replaces_status_after_delay=True" in update_source

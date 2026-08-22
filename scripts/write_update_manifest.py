@@ -44,7 +44,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--download-url", required=True)
     parser.add_argument("--artifact-file", type=Path, required=True)
     parser.add_argument("--notes", default="")
-    parser.add_argument("--channel", choices=("stable", "prerelease"), required=True)
+    parser.add_argument("--channel", choices=("stable", "preview"), required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--architecture", choices=_MACOS_ARCHITECTURES)
     parser.add_argument(

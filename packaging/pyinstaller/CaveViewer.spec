@@ -45,9 +45,9 @@ def _load_release_metadata(metadata_path: Path) -> None:
         raise RuntimeError(
             f'Release metadata must be a schema_version 1 JSON object: {metadata_path}'
         )
-    if payload.get('release_channel') not in {'stable', 'prerelease'}:
+    if payload.get('release_channel') not in {'stable', 'preview'}:
         raise RuntimeError(
-            'Release metadata release_channel must be stable or prerelease: '
+            'Release metadata release_channel must be stable or preview: '
             f'{metadata_path}'
         )
 

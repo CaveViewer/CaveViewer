@@ -245,7 +245,7 @@ def test_finalizer_rejects_a_package_channel_mismatch_before_publication(
         b"Linux AppImage fixture"
     )
     (artifacts_dir / f"CaveViewer-{version}-linux-x86_64.json").write_text(
-        json.dumps({"release_channel": "prerelease"}), encoding="utf-8"
+        json.dumps({"release_channel": "preview"}), encoding="utf-8"
     )
 
     fake_bin.mkdir()
@@ -389,7 +389,7 @@ def test_finalizer_only_allows_same_version_resume_for_unmerged_release_metadata
         "git",
         "commit",
         "-m",
-        f"Release v{source_version} prerelease",
+        f"Release v{source_version} preview",
         cwd=working_repository,
     )
     _run("git", "push", "-u", "origin", "integration/next", cwd=working_repository)

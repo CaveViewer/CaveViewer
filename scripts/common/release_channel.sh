@@ -12,11 +12,11 @@ cv_release_channel() {
   local release_channel="${CAVEVIEWER_BUILD_RELEASE_CHANNEL:-stable}"
 
   case "$release_channel" in
-    stable|prerelease)
+    stable|preview)
       printf '%s\n' "$release_channel"
       ;;
     *)
-      echo "Error: CAVEVIEWER_BUILD_RELEASE_CHANNEL must be stable or prerelease." >&2
+      echo "Error: CAVEVIEWER_BUILD_RELEASE_CHANNEL must be stable or preview." >&2
       return 1
       ;;
   esac

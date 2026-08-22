@@ -189,12 +189,20 @@ jobs:
           manifest_paths = sorted(
               path
               for path in changed_paths
-              if path.startswith("updates/") and path.endswith(".json")
+              if (
+                  path.startswith("updates/")
+                  and path.endswith(".json")
+                  and Path(path).is_file()
+              )
           )
           signature_paths = {
               path
               for path in changed_paths
-              if path.startswith("updates/") and path.endswith(".json.sig")
+              if (
+                  path.startswith("updates/")
+                  and path.endswith(".json.sig")
+                  and Path(path).is_file()
+              )
           }
           if version_changed and not manifest_paths:
               raise SystemExit("A version change must include signed update manifests.")

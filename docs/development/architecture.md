@@ -731,7 +731,7 @@ an `UpdateArtifact`, whose version, HTTPS URL, package kind, positive size, and
 SHA-256 were validated before signature verification. After signature
 verification, a bounded HEAD request (with a one-byte ranged-GET fallback)
 confirms that the advertised package resolves before `UpdateAvailable` can be
-returned. A missing prerelease manifest and a signed candidate whose package is
+returned. A missing preview manifest and a signed candidate whose package is
 HTTP 404 or 410 both produce `UpdateNotAvailable`; transient probe failures
 produce the quiet `UpdateCheckFailed` path. A Windows EXE also needs
 the signed `windows_installer` channel and an explicit installer policy: the
@@ -776,7 +776,7 @@ the `windows_installer` channel and Authenticode certificate subject into the
 Ed25519-signed manifest. Linux distribution is x86_64-only
 and uses `updates/linux/x86_64/<channel>.json`. macOS uses architecture-specific
 `updates/macos/<arm64|x86_64>/<channel>.json` paths. Every published manifest
-has a companion `.sig` file; a platform's absent prerelease pair represents an
+has a companion `.sig` file; a platform's absent preview pair represents an
 empty channel. Top-level macOS manifests and signatures remain legacy ARM64
 aliases whenever that ARM64 channel exists. The update client requires a valid
 signature and a resolvable package URL before offering a newer manifest.

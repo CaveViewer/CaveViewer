@@ -900,6 +900,8 @@ def _bind_update_label_action(
 
 def _update_presentation(snapshot: UpdateSnapshot) -> _UpdatePresentation:
     """Map manager states to the exact compact labels rendered by the splash."""
+    is_preview = snapshot.update_channel == "preview"
+    update_name = "Preview update" if is_preview else "Update"
     if (
         snapshot.automatic_update is not None
         and not snapshot.automatic_update.allows_execution
@@ -908,13 +910,15 @@ def _update_presentation(snapshot: UpdateSnapshot) -> _UpdatePresentation:
     if snapshot.state == UpdateState.AVAILABLE:
         if snapshot.install_action_label:
             action_text = snapshot.install_action_label
+            if is_preview:
+                action_text = f"{action_text} (Preview)"
             if snapshot.available_version:
                 action_text = f"{action_text} {snapshot.available_version}"
             return _UpdatePresentation(
                 action_text=action_text,
                 action=_UpdateAction.INSTALL,
             )
-        action_text = "Update to"
+        action_text = f"{update_name} to"
         if snapshot.available_version:
             action_text = f"{action_text} {snapshot.available_version}"
         return _UpdatePresentation(
@@ -923,7 +927,11 @@ def _update_presentation(snapshot: UpdateSnapshot) -> _UpdatePresentation:
         )
     if snapshot.state == UpdateState.DOWNLOADING:
         return _UpdatePresentation(
-            status_text=f"Downloading… {snapshot.progress_percent}%",
+            status_text=(
+                f"Downloading Preview update… {snapshot.progress_percent}%"
+                if is_preview
+                else f"Downloading… {snapshot.progress_percent}%"
+            ),
             action_text="Cancel",
             action=_UpdateAction.CANCEL,
             progress_visible=True,
@@ -931,7 +939,9 @@ def _update_presentation(snapshot: UpdateSnapshot) -> _UpdatePresentation:
         )
     if snapshot.state == UpdateState.VERIFYING:
         return _UpdatePresentation(
-            status_text="Verifying…",
+            status_text=(
+                "Verifying Preview update…" if is_preview else "Verifying…"
+            ),
             action_text="Cancel",
             action=_UpdateAction.CANCEL,
             progress_visible=True,
@@ -941,12 +951,19 @@ def _update_presentation(snapshot: UpdateSnapshot) -> _UpdatePresentation:
         if snapshot.install_action_label:
             if snapshot.install_requested:
                 return _UpdatePresentation(status_text="Preparing update…")
-            status_text = "Update ready"
+            status_text = f"{update_name} ready"
             if snapshot.error:
-                status_text = "Installer could not start"
+                status_text = (
+                    "Preview installer could not start"
+                    if is_preview
+                    else "Installer could not start"
+                )
+            action_text = snapshot.install_action_label
+            if is_preview:
+                action_text = f"{action_text} (Preview)"
             return _UpdatePresentation(
                 status_text=status_text,
-                action_text=snapshot.install_action_label,
+                action_text=action_text,
                 action=_UpdateAction.INSTALL,
             )
         if (
@@ -957,7 +974,7 @@ def _update_presentation(snapshot: UpdateSnapshot) -> _UpdatePresentation:
                 status_text=snapshot.update_package_reveal.explanation
             )
         return _UpdatePresentation(
-            status_text="Update ready",
+            status_text=f"{update_name} ready",
             action_text=snapshot.reveal_action_label,
             action=_UpdateAction.REVEAL,
             action_replaces_status_after_delay=True,
