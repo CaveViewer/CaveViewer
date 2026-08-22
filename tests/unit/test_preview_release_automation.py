@@ -123,16 +123,16 @@ def test_explicit_pr_validation_preserves_required_checks_and_legacy_aliases():
 def test_preview_automation_shell_helpers_have_valid_syntax_and_help(script_name):
     script = COMMON_SCRIPTS / script_name
 
-    syntax = subprocess.run(
-        ["bash", "-n", str(script)],
-        capture_output=True,
-        text=True,
-    )
-    help_result = subprocess.run(
-        [str(script), "--help"],
-        capture_output=True,
-        text=True,
-    )
+    syntax_command = ["bash", "-n", str(script)]
+    help_command = ["bash", str(script), "--help"]
+
+    # Always select the shell explicitly. Executing a .sh path directly works
+    # on Unix but raises WinError 193 on Windows before its shebang is read.
+    assert syntax_command[0] == "bash"
+    assert help_command[0] == "bash"
+
+    syntax = subprocess.run(syntax_command, capture_output=True, text=True)
+    help_result = subprocess.run(help_command, capture_output=True, text=True)
 
     assert syntax.returncode == 0, syntax.stderr
     assert help_result.returncode == 0, help_result.stderr
