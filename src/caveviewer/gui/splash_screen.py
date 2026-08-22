@@ -961,8 +961,6 @@ def _bind_update_label_action(
 
 def _update_presentation(snapshot: UpdateSnapshot) -> _UpdatePresentation:
     """Map manager states to the exact compact labels rendered by the splash."""
-    is_preview = snapshot.update_channel == "preview"
-    update_name = "Preview update" if is_preview else "Update"
     if (
         snapshot.automatic_update is not None
         and not snapshot.automatic_update.allows_execution
@@ -977,7 +975,7 @@ def _update_presentation(snapshot: UpdateSnapshot) -> _UpdatePresentation:
                 action_text=action_text,
                 action=_UpdateAction.INSTALL,
             )
-        action_text = f"{update_name} to"
+        action_text = "Update to"
         if snapshot.available_version:
             action_text = f"{action_text} {snapshot.available_version}"
         return _UpdatePresentation(
@@ -994,9 +992,7 @@ def _update_presentation(snapshot: UpdateSnapshot) -> _UpdatePresentation:
         )
     if snapshot.state == UpdateState.VERIFYING:
         return _UpdatePresentation(
-            status_text=(
-                "Verifying Preview update…" if is_preview else "Verifying…"
-            ),
+            status_text="Verifying…",
             action_text="Cancel",
             action=_UpdateAction.CANCEL,
             progress_visible=True,
@@ -1006,13 +1002,9 @@ def _update_presentation(snapshot: UpdateSnapshot) -> _UpdatePresentation:
         if snapshot.install_action_label:
             if snapshot.install_requested:
                 return _UpdatePresentation(status_text="Preparing update…")
-            status_text = f"{update_name} ready"
+            status_text = "Update ready"
             if snapshot.error:
-                status_text = (
-                    "Preview installer could not start"
-                    if is_preview
-                    else "Installer could not start"
-                )
+                status_text = "Installer could not start"
             action_text = snapshot.install_action_label
             return _UpdatePresentation(
                 status_text=status_text,
@@ -1027,7 +1019,7 @@ def _update_presentation(snapshot: UpdateSnapshot) -> _UpdatePresentation:
                 status_text=snapshot.update_package_reveal.explanation
             )
         return _UpdatePresentation(
-            status_text=f"{update_name} ready",
+            status_text="Update ready",
             action_text=snapshot.reveal_action_label,
             action=_UpdateAction.REVEAL,
             action_replaces_status_after_delay=True,

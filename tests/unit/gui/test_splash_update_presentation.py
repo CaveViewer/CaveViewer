@@ -381,10 +381,10 @@ def test_preview_update_states_are_explicitly_labeled():
         )
     )
 
-    assert available.action_text == "Preview update to 1.0.64"
+    assert available.action_text == "Update to 1.0.64"
     assert downloading.status_text == "Downloading… 50%"
-    assert verifying.status_text == "Verifying Preview update…"
-    assert ready.status_text == "Preview update ready"
+    assert verifying.status_text == "Verifying…"
+    assert ready.status_text == "Update ready"
 
 
 def test_requested_windows_installation_shows_handoff_progress_and_retry():
@@ -818,7 +818,8 @@ def test_splash_navigation_uses_a_quiet_rail_and_lower_app_status():
     assert "update_cluster = tk.Frame(app_status_frame, bg=_BG_COLOR)" in source
     assert "def _set_update_cluster_visible(visible: bool)" in source
     assert "def _layout_update_cluster(presentation: _UpdatePresentation)" in source
-    assert 'update_name = "Preview update" if is_preview else "Update"' in update_source
+    assert "Preview update" not in update_source
+    assert "Preview installer" not in update_source
     assert 'action_text = f"{action_text} {snapshot.available_version}"' in update_source
     assert "action_text=snapshot.reveal_action_label" in update_source
     assert "action_replaces_status_after_delay=True" in update_source
