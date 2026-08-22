@@ -1100,6 +1100,9 @@ def test_preferences_invalidates_hidden_geometry_when_shown():
     panel._page_canvas_window_width = 480
     panel._page_scroll_region = (0, 0, 480, 600)
     panel._scrollbar_layout_state = (600, 500)
+    panel._page_layout_after_id = "hidden-layout"
+    cancelled = []
+    panel.dialog = SimpleNamespace(after_cancel=cancelled.append)
     panel._schedule_page_layout_sync = lambda: scheduled.append(True)
 
     panel.on_shown()
@@ -1108,7 +1111,23 @@ def test_preferences_invalidates_hidden_geometry_when_shown():
     assert panel._page_canvas_window_width is None
     assert panel._page_scroll_region is None
     assert panel._scrollbar_layout_state is None
+    assert panel._page_layout_after_id is None
+    assert cancelled == ["hidden-layout"]
     assert scheduled == [True]
+
+
+def test_preferences_mapped_event_refreshes_only_the_panel_container():
+    from caveviewer.gui import preferences_dialog
+
+    panel = object.__new__(preferences_dialog.PreferencesPanel)
+    panel.container = object()
+    refreshed = []
+    panel.on_shown = lambda: refreshed.append(True)
+
+    panel._on_container_mapped(SimpleNamespace(widget=object()))
+    panel._on_container_mapped(SimpleNamespace(widget=panel.container))
+
+    assert refreshed == [True]
 
 
 def test_preferences_feedback_wraplength_avoids_repeating_identical_geometry_work():

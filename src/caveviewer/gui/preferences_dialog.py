@@ -295,6 +295,7 @@ class PreferencesPanel:
         self._scrollbar_layout_state: tuple[int, int] | None = None
         self._destroyed = False
         self.container.bind("<Destroy>", self._on_container_destroy, add="+")
+        self.container.bind("<Map>", self._on_container_mapped, add="+")
 
         self.numeric_entry_validator = self.dialog.register(
             self._is_numeric_entry_candidate
@@ -746,6 +747,11 @@ class PreferencesPanel:
         except tk.TclError:
             pass
 
+    def _on_container_mapped(self, event) -> None:
+        """Refresh wrapping only after Tk maps the embedded panel onscreen."""
+        if event.widget is self.container:
+            self.on_shown()
+
     def _schedule_page_layout_sync(
         self,
         *,
@@ -1196,6 +1202,13 @@ class PreferencesPanel:
 
     def on_shown(self) -> None:
         """Recompute wrapping after the embedded surface receives its final width."""
+        after_id = self._page_layout_after_id
+        if after_id is not None:
+            self._page_layout_after_id = None
+            try:
+                self.dialog.after_cancel(after_id)
+            except tk.TclError:
+                pass
         self._pending_page_canvas_width = None
         self._page_canvas_window_width = None
         self._page_scroll_region = None
