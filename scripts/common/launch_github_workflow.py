@@ -147,6 +147,37 @@ def next_published_release_version() -> str:
         ) from error
 
 
+def release_dispatch_fields(
+    supplied_fields: Sequence[str],
+    channel: str | None,
+    *,
+    input_fn: Callable[[str], str] = input,
+) -> tuple[str, ...]:
+    """Force publication/reconciliation and select the release channel."""
+    selected_channel = channel
+    if selected_channel is None:
+        selected_channel = input_fn(
+            "Release channel [stable/preview] (stable): "
+        ).strip().lower()
+        if not selected_channel:
+            selected_channel = "stable"
+    if selected_channel not in {"stable", "preview"}:
+        raise ValueError("Release channel must be 'stable' or 'preview'.")
+
+    reserved = {"publish", "preview", "reconcile_metadata"}
+    explicit_names = {field.partition("=")[0].strip() for field in supplied_fields}
+    conflicts = reserved & explicit_names
+    if conflicts:
+        names = ", ".join(sorted(conflicts))
+        raise ValueError(f"Release mode controls workflow input(s): {names}")
+    return (
+        *supplied_fields,
+        "publish=true",
+        f"preview={'true' if selected_channel == 'preview' else 'false'}",
+        "reconcile_metadata=true",
+    )
+
+
 def select_new_workflow_run(
     previous_ids: set[int], runs: Sequence[dict[str, Any]]
 ) -> dict[str, Any] | None:
@@ -231,6 +262,16 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--workflow", required=True, help="Workflow YAML filename")
     parser.add_argument(
+        "--release",
+        action="store_true",
+        help="Publish from release/next and reconcile metadata into main.",
+    )
+    parser.add_argument(
+        "--channel",
+        choices=("stable", "preview"),
+        help="Release channel; release mode prompts when omitted.",
+    )
+    parser.add_argument(
         "--field",
         action="append",
         default=[],
@@ -250,10 +291,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _parse_args(argv)
     try:
         branch = _preflight(args.workflow)
+        if args.release and branch != "release/next":
+            raise RuntimeError(
+                "Release actions must run from the 'release/next' branch."
+            )
         workflow_path = validate_workflow_name(args.workflow)
+        supplied_fields = args.field
+        if args.release:
+            supplied_fields = list(
+                release_dispatch_fields(supplied_fields, args.channel)
+            )
+        elif args.channel is not None:
+            raise ValueError("--channel requires --release")
         fields = resolve_dispatch_fields(
             workflow_path,
-            args.field,
+            supplied_fields,
             automatic_values={"version": next_published_release_version},
         )
         previous_ids = {
