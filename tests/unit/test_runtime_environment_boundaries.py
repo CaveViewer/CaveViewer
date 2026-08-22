@@ -50,6 +50,7 @@ ALLOWED_ENVIRONMENT_MODULES = {
     "gui/recording.py": "standalone recording compatibility",
     "gui/standard_library_maps.py": "standalone Map Library compatibility",
     "gui/viewer_window.py": "standalone viewer and benchmark compatibility",
+    "gui/viewer_benchmark_composition.py": "standalone benchmark compatibility",
 }
 
 
