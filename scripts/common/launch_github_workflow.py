@@ -4,18 +4,23 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Callable
 import json
 import shutil
 import subprocess
 import sys
 import time
 from pathlib import Path
-from collections.abc import Callable
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS_ROOT = REPOSITORY_ROOT / ".github" / "workflows"
+COMMON_SCRIPTS_ROOT = Path(__file__).resolve().parent
+if str(COMMON_SCRIPTS_ROOT) not in sys.path:
+    sys.path.insert(0, str(COMMON_SCRIPTS_ROOT))
+
+from next_release_version import next_release_version  # noqa: E402
 
 
 def _run(
@@ -94,8 +99,9 @@ def resolve_dispatch_fields(
     supplied_fields: Sequence[str],
     *,
     input_fn: Callable[[str], str] = input,
+    automatic_values: Mapping[str, Callable[[], str]] | None = None,
 ) -> tuple[str, ...]:
-    """Validate explicit fields and prompt for required values still missing."""
+    """Validate fields and resolve required values not explicitly supplied."""
     values: dict[str, str] = {}
     for field in supplied_fields:
         name, separator, value = field.partition("=")
@@ -108,11 +114,37 @@ def resolve_dispatch_fields(
     for name in required_dispatch_inputs(workflow_path):
         if name in values:
             continue
-        value = input_fn(f"{name}: ").strip()
+        resolver = (automatic_values or {}).get(name)
+        value = (resolver() if resolver is not None else input_fn(f"{name}: ")).strip()
         if not value:
             raise ValueError(f"Required workflow input {name!r} was not provided")
         values[name] = value
     return tuple(f"{name}={value}" for name, value in values.items())
+
+
+def next_published_release_version() -> str:
+    """Increment the highest stable or preview GitHub release version."""
+    repository = _output(
+        ["gh", "repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"]
+    )
+    if not repository:
+        raise RuntimeError("Could not determine the GitHub repository name.")
+    tags = _output(
+        [
+            "gh",
+            "api",
+            "--paginate",
+            f"repos/{repository}/releases?per_page=100",
+            "--jq",
+            ".[] | select(.draft == false) | .tag_name",
+        ]
+    ).splitlines()
+    try:
+        return next_release_version(tags)
+    except ValueError as error:
+        raise RuntimeError(
+            "No dotted numeric stable or preview GitHub release was found."
+        ) from error
 
 
 def select_new_workflow_run(
@@ -203,7 +235,10 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         action="append",
         default=[],
         metavar="NAME=VALUE",
-        help="Workflow input; repeat as needed. Missing required inputs are prompted.",
+        help=(
+            "Workflow input; repeat as needed. The release version is selected "
+            "automatically unless explicitly supplied."
+        ),
     )
     parser.add_argument(
         "--lookup-timeout", type=int, default=60, help=argparse.SUPPRESS
@@ -216,11 +251,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         branch = _preflight(args.workflow)
         workflow_path = validate_workflow_name(args.workflow)
-        fields = resolve_dispatch_fields(workflow_path, args.field)
+        fields = resolve_dispatch_fields(
+            workflow_path,
+            args.field,
+            automatic_values={"version": next_published_release_version},
+        )
         previous_ids = {
             int(run["databaseId"]) for run in _list_runs(args.workflow, branch)
         }
         print(f"Dispatching {args.workflow} on {branch}.")
+        for field in fields:
+            if field.startswith("version="):
+                print(f"Selected release {field}.")
         command = ["gh", "workflow", "run", args.workflow, "--ref", branch]
         for field in fields:
             command.extend(("--field", field))
