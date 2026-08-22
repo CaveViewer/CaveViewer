@@ -158,6 +158,9 @@ once, then invokes every platform workflow with its duplicate internal gate
 disabled. A failed or canceled shared gate prevents every package job from
 starting. After a successful gate, all package jobs may run concurrently; the
 release finalizer runs only after every requested package succeeds.
+After a direct platform or all-platform publication, the finalizer opens or
+reuses the `release/next` metadata PR, explicitly dispatches its PR-aware gate,
+and merges into `main` only after success. Artifact-only runs skip this step.
 
 Release dispatches may set `reuse_pr_validation` only when the selected source
 has already passed PR validation and no application, packaging, dependency,

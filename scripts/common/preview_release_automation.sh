@@ -48,6 +48,7 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../.." && pwd)"
 workflow_waiter="$script_dir/dispatch_workflow_and_wait.sh"
 version_selector="$script_dir/next_release_version.py"
+metadata_reconciler="$script_dir/reconcile_release_metadata.sh"
 repo="${GITHUB_REPOSITORY:-}"
 if [ -z "$repo" ]; then
   repo="$(gh repo view --json nameWithOwner --jq .nameWithOwner)"
@@ -184,20 +185,9 @@ echo "Publishing Preview v$next_version from $release_branch at $release_source_
   --field="release_notes=$release_notes" \
   --field="preview=true" \
   --field="publish=true" \
+  --field="reconcile_metadata=false" \
   --field="reuse_pr_validation=true" >/dev/null
 
-git -C "$repo_root" fetch --no-tags origin \
-  "refs/heads/$main_branch:refs/remotes/origin/$main_branch" \
-  "refs/heads/$release_branch:refs/remotes/origin/$release_branch"
-metadata_pr="$(
-  open_or_create_pr \
-    "$release_branch" \
-    "$main_branch" \
-    "Merge Preview v$next_version release metadata" \
-    "Automated reconciliation of signed Preview v$next_version release metadata."
-)"
-echo "Validating release metadata PR #$metadata_pr."
-validate_pr "$metadata_pr"
-merge_pr "$metadata_pr"
+"$metadata_reconciler" --version="$next_version" --channel=preview
 
 echo "Preview v$next_version is published and its metadata is merged into $main_branch."

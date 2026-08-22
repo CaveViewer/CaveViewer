@@ -27,9 +27,10 @@ checks for `main`; nobody has a bypass. A branch that passed against an older
 accumulate a second release while metadata from the preceding release remains
 unmerged.
 
-Contributors using PyCharm should run the tracked **Preview Release**
-configuration from `.run/`. It is the supported local front end to the
-repository-owned release automation and GitHub CLI. Keep personal IDE state in
+Contributors using PyCharm should run the tracked **Preview Release** promotion
+or the appropriate **Release …** platform configuration from `.run/`. These are
+the supported local front ends to the repository-owned release automation and
+GitHub CLI. Keep personal IDE state in
 ignored `.idea/` files, authenticate locally with `gh auth login`, and do not
 store tokens in a run configuration. A GitHub Actions IDE plug-in is not
 required or recommended for dispatching releases; PyCharm's bundled GitHub
@@ -261,24 +262,28 @@ PR events: the promotion explicitly dispatches **Essential Tests** with the PR
 base/head pair, waits for the required check contexts on that commit, and only
 then requests the protected merge.
 
-### Stable release procedure
+### Direct stable and platform release procedure
 
-Stable publishing uses the same branch topology but is intentionally manual:
+Stable and individual-platform publishing use the same branch topology:
 
 1. Merge the release candidate into `main` through its fully gated source PR.
 2. Merge current `main` into `release/next` and push `release/next`.
-3. Dispatch **All Platform Release** on `release/next`. Enter the bare numeric
-   version and release notes, set `publish: true`, and leave `preview: false`.
+3. From checked-out `release/next`, run the tracked PyCharm **All Platform
+   Release** or desired **Release …** platform action. The launcher selects the
+   next version automatically, asks for `stable` or `preview` with Stable as the
+   default, and explicitly enables publication and reconciliation.
 4. Set `reuse_pr_validation: true` only when the exact source revision already
    passed its PR validation and no application, packaging, dependency, test, or
    workflow input changed afterward. This skips duplicate source suites, not
    package creation or package validation.
-5. After successful publication, open the `release/next` to `main` metadata PR,
-   wait for its required metadata checks, and merge it. Do not start another
-   release first.
+5. After successful publication, the shared finalizer opens or reuses the
+   `release/next` to `main` metadata PR, explicitly runs its required metadata
+   checks, and merges it after they pass. Do not start another release first.
 
-For package-only validation, leave `publish: false`; GitHub retains workflow
-artifacts without creating a GitHub Release or changing update metadata.
+For package-only validation, dispatch through GitHub and clear `publish`, or use
+the package-smoke workflow. GitHub retains workflow artifacts without creating
+a GitHub Release or changing update metadata. PyCharm actions named **Release**
+always publish; they are not build-only shortcuts.
 
 ### Release branch hygiene
 
@@ -434,13 +439,14 @@ Preview version; do not edit a Preview tag into a Stable release.
 
 ## Individual and resumed releases
 
-The four platform workflows remain manually dispatchable. A direct workflow
-runs its package job and, when `publish` is enabled, calls the same single-writer
-finalizer for that platform. Any direct run with `publish: true` must still use
-`release/next`; never use a feature branch or `main`. Use the same
+The four platform workflows remain manually dispatchable. A direct dispatch
+publishes by default, calls the same single-writer finalizer for that platform,
+then validates and merges its generated metadata into `main`. Clearing
+`publish` keeps it artifact-only and skips reconciliation. Any direct publish
+must still use `release/next`; the launcher and finalizer both reject a feature
+branch or `main`. Use the same
 `release/next` commit, version, release notes, `publish`, and `preview` values
-when resuming an intentionally partial release, then merge its generated
-metadata back through the gated `release/next` to `main` PR.
+when resuming an intentionally partial release.
 
 An all-platform build failure does not publish any platform or manifest because
 the finalizer requires all four package jobs to succeed. Inspect the retained

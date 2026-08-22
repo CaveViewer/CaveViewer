@@ -22,7 +22,12 @@ on:
         description: "Publish every platform artifact; the Windows installer is unsigned and Windows warnings are expected"
         required: false
         type: boolean
-        default: false
+        default: true
+      reconcile_metadata:
+        description: "Validate and merge published metadata into main"
+        required: false
+        type: boolean
+        default: true
       reuse_pr_validation:
         description: "Reuse successful PR validation when app/package source has not changed; skip duplicate test suites"
         required: false
@@ -30,14 +35,28 @@ on:
         default: false
 
 permissions:
+  actions: write
   contents: write
+  pull-requests: write
 
 concurrency:
   group: caveviewer-all-platform-release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
+  validate-release-branch:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Require release/next for publication
+        if: ${{ inputs.publish }}
+        env:
+          RELEASE_BRANCH: ${{ github.ref_name }}
+        run: test "$RELEASE_BRANCH" = "release/next"
+
   essential-tests:
+    needs: validate-release-branch
     if: ${{ inputs.reuse_pr_validation != true }}
     uses: ./.github/workflows/tests.yml
     permissions:
@@ -127,7 +146,9 @@ jobs:
           && needs['macos-x86_64'].result == 'success' }}
     uses: ./.github/workflows/finalize-release.yml
     permissions:
+      actions: write
       contents: write
+      pull-requests: write
     with:
       version: ${{ inputs.version }}
       release_notes: ${{ inputs.release_notes }}
@@ -136,5 +157,6 @@ jobs:
       source_sha: ${{ github.sha }}
       target_branch: ${{ github.ref_name }}
       allow_unsigned_windows_community: ${{ inputs.publish }}
+      reconcile_metadata: ${{ inputs.reconcile_metadata }}
     secrets:
       CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY: ${{ secrets.CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY }}

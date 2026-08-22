@@ -169,6 +169,38 @@ def test_shared_generic_launcher_preserves_explicit_workflow_fields():
     )
 
 
+@pytest.mark.parametrize(
+    ("channel", "answer", "expected_preview"),
+    [
+        ("stable", "unused", "preview=false"),
+        ("preview", "unused", "preview=true"),
+        (None, "", "preview=false"),
+        (None, "preview", "preview=true"),
+    ],
+)
+def test_shared_generic_launcher_release_mode_controls_publish_contract(
+    channel, answer, expected_preview
+):
+    launcher = _load_generic_launcher_module()
+
+    fields = launcher.release_dispatch_fields(
+        ["release_notes=Focused platform release"],
+        channel,
+        input_fn=lambda _prompt: answer,
+    )
+
+    assert "publish=true" in fields
+    assert expected_preview in fields
+    assert "reconcile_metadata=true" in fields
+
+
+def test_shared_generic_launcher_release_mode_rejects_flag_overrides():
+    launcher = _load_generic_launcher_module()
+
+    with pytest.raises(ValueError, match="controls workflow input"):
+        launcher.release_dispatch_fields(["publish=false"], "preview")
+
+
 def test_shared_generic_launcher_passes_resolved_fields_to_gh(monkeypatch):
     launcher = _load_generic_launcher_module()
     commands = []
@@ -239,6 +271,65 @@ def test_shared_generic_launcher_passes_automatic_version_to_gh(monkeypatch):
     ] in commands
 
 
+def test_shared_generic_launcher_release_mode_dispatches_complete_preview(monkeypatch):
+    launcher = _load_generic_launcher_module()
+    commands = []
+    monkeypatch.setattr(launcher, "_preflight", lambda _workflow: "release/next")
+    monkeypatch.setattr(launcher, "_list_runs", lambda _workflow, _branch: [])
+    monkeypatch.setattr(
+        launcher, "next_published_release_version", lambda: "1.0.94"
+    )
+    monkeypatch.setattr(
+        launcher,
+        "_wait_for_new_run",
+        lambda *_args: {"databaseId": 44, "url": "https://example.test/run/44"},
+    )
+    monkeypatch.setattr(
+        launcher,
+        "_run",
+        lambda command, **_kwargs: commands.append(list(command)),
+    )
+
+    result = launcher.main(
+        [
+            "--workflow",
+            "linux-x86_64-release.yml",
+            "--release",
+            "--channel",
+            "preview",
+        ]
+    )
+
+    assert result == 0
+    dispatch = next(
+        command
+        for command in commands
+        if command[:3] == ["gh", "workflow", "run"]
+    )
+    assert "version=1.0.94" in dispatch
+    assert "publish=true" in dispatch
+    assert "preview=true" in dispatch
+    assert "reconcile_metadata=true" in dispatch
+
+
+def test_shared_generic_launcher_release_mode_rejects_other_branches(monkeypatch):
+    launcher = _load_generic_launcher_module()
+    monkeypatch.setattr(launcher, "_preflight", lambda _workflow: "feature/example")
+
+    assert (
+        launcher.main(
+            [
+                "--workflow",
+                "linux-x86_64-release.yml",
+                "--release",
+                "--channel",
+                "preview",
+            ]
+        )
+        == 1
+    )
+
+
 @pytest.mark.parametrize("field", ("version", "=1.0.90", "version="))
 def test_shared_generic_launcher_rejects_malformed_workflow_fields(field):
     launcher = _load_generic_launcher_module()
@@ -286,9 +377,11 @@ def test_release_workflows_have_focused_shared_pycharm_actions():
         assert "TOKEN" not in text.upper()
         assert str(Path.home()) not in text
         for option in configuration.findall("option"):
-            parameters = option.attrib.get("value", "")
-            if parameters.startswith("--workflow "):
-                generic_workflows.add(parameters.removeprefix("--workflow "))
+                parameters = option.attrib.get("value", "")
+                if parameters.startswith("--workflow "):
+                    generic_workflows.add(parameters.split()[1])
+                    if parameters.split()[1] != "tests.yml":
+                        assert "--release" in parameters
 
     assert "Preview Release" in configuration_names
     assert generic_workflows == workflow_names - {"preview-release-promotion.yml"}
@@ -340,11 +433,14 @@ def test_preview_automation_has_one_fixed_gated_promotion_sequence():
     assert '--workflow=all-platform-release.yml' in source
     assert '--field="preview=true"' in source
     assert '--field="publish=true"' in source
+    assert '--field="reconcile_metadata=false"' in source
     assert '--field="reuse_pr_validation=true"' in source
     assert 'repos/$repo/releases?per_page=100' in source
     assert 'repos/$repo/tags?per_page=100' in source
-    assert source.count("validate_pr \"") == 2
-    assert source.count("merge_pr \"") == 2
+    assert source.count("validate_pr \"") == 1
+    assert source.count("merge_pr \"") == 1
+    assert 'reconcile_release_metadata.sh"' in source
+    assert '--channel=preview' in source
 
     source_sync = source.index(
         'git -C "$repo_root" switch -C "$source_branch" "origin/$source_branch"'
@@ -355,15 +451,13 @@ def test_preview_automation_has_one_fixed_gated_promotion_sequence():
         source_merge,
     )
     release_dispatch = source.index("--workflow=all-platform-release.yml")
-    metadata_pr = source.index('metadata_pr="$(')
-    metadata_merge = source.index('merge_pr "$metadata_pr"')
+    metadata_reconcile = source.index('"$metadata_reconciler"')
     assert (
         source_sync
         < source_merge
         < release_sync
         < release_dispatch
-        < metadata_pr
-        < metadata_merge
+        < metadata_reconcile
     )
 
 
