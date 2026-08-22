@@ -368,7 +368,7 @@ runtime snapshot.
 | `CAVEVIEWER_HOME` | environment | _(unset)_ | Optional absolute portable storage root. |
 | `CAVEVIEWER_MAP_CACHE_DIR` | environment | _(unset)_ | Optional absolute root for generated map caches. |
 | `CAVEVIEWER_APP_ICON` | environment | _(unset)_ | Optional custom application icon path. |
-| `CAVEVIEWER_LOG_LEVEL` | environment | `INFO` | Application logging verbosity. |
+| `CAVEVIEWER_LOG_LEVEL` | environment | derived from runtime inputs | Application logging verbosity. |
 | `CAVEVIEWER_FORCE_STARTUP_FOCUS` | environment | `False` | Whether a viewer may request foreground focus at startup. |
 | `CAVEVIEWER_FORCE_UPDATE` | environment | `False` | Whether update presentation is forced for local testing. |
 | `CAVEVIEWER_GITHUB_REPO` | environment | `CaveViewer/CaveViewer` | GitHub owner/repository used for update configuration. |
@@ -420,7 +420,7 @@ runtime snapshot.
 |---|---|---|
 | `CAVEVIEWER_GITHUB_REPO` | `CaveViewer/CaveViewer` | The GitHub `owner/repo` used to build the default update manifest URL and map-library API URL. Override when running a fork or testing a package from Terminal. |
 | `CAVEVIEWER_UPDATE_BRANCH` | `main` | Git branch used when deriving the default `raw.githubusercontent.com` update manifest URL. Also available as `--update-branch <branch>` for update testing from a non-`main` branch. Ignored when `CAVEVIEWER_UPDATE_MANIFEST_URL` is set. |
-| `CAVEVIEWER_UPDATE_CHANNEL` | embedded package channel | Deliberate developer/testing override for the update manifest channel used when deriving the default manifest URL. Accepted values: `stable`, `prerelease`. A source checkout and a historical package without metadata safely default to `stable`. Ignored when `CAVEVIEWER_UPDATE_MANIFEST_URL` is set. |
+| `CAVEVIEWER_UPDATE_CHANNEL` | embedded package channel | Deliberate developer/testing override for the update manifest channel used when deriving the default manifest URL. Accepted values: `stable`, `preview`. A source checkout and a historical package without metadata safely default to `stable`. Ignored when `CAVEVIEWER_UPDATE_MANIFEST_URL` is set. |
 | `CAVEVIEWER_UPDATE_MANIFEST_URL` | _(derived from repo)_ | Full URL to the JSON update manifest. Overrides the default `raw.githubusercontent.com` path. Useful for pointing at a staging manifest or a custom server. |
 | `CAVEVIEWER_UPDATE_MANIFEST_SIGNATURE_URL` | `<manifest-url>.sig` | Full URL to the base64 Ed25519 signature for the update manifest. |
 | `CAVEVIEWER_FORCE_UPDATE` | `0` | Set to `1` (or `true`/`yes`) to treat a valid, signed, available manifest artifact as newer regardless of its version. Also available as `--force-update`. It cannot fabricate a missing channel or make an unavailable package eligible. |
@@ -434,7 +434,7 @@ checks read the branch/channel manifest first; if it advertises a newer version,
 the app verifies the manifest signature and confirms that the package URL
 resolves before offering the download. Missing or invalid signatures and
 unavailable packages are logged and do not expose an update action. An absent
-prerelease manifest is the normal empty-channel state and likewise leaves the
+preview manifest is the normal empty-channel state and likewise leaves the
 splash unchanged. The release finalizer creates every requested companion
 `.sig` only after GitHub confirms the uploaded asset's URL, size, and SHA-256,
 then commits the manifest pairs together. See
@@ -505,21 +505,21 @@ directory by default, or an absolute `CAVEVIEWER_MAP_CACHE_DIR` override.
 
 Default update checks read committed main-branch manifests, not GitHub's
 latest-release metadata. A frozen package selects its own `stable` or
-`prerelease` channel through embedded release metadata: macOS uses
+`preview` channel through embedded release metadata: macOS uses
 `updates/macos/<arm64|x86_64>/<channel>.json` and selects the running process
 architecture, so a Rosetta-launched x86_64 build stays on the Intel channel.
 Linux distribution is x86_64-only and uses
 `updates/linux/x86_64/<channel>.json`; Linux ARM64 builds do not receive
 automatic updates. A source checkout and historical package without embedded
 metadata use `stable`. Stable publish updates and signs `stable.json`;
-prerelease publish updates the separate `prerelease.json`, leaving stable
-unchanged and marking a newly created GitHub release as prerelease. For
+Preview publishing updates the separate `preview.json`, leaving Stable
+unchanged and marking a newly created GitHub release as a GitHub prerelease. For
 debugging, explicit environment variables can point a source run or packaged
 app launched from Terminal at another branch, channel, or manifest URL.
-Until that target has a verified published prerelease, its prerelease manifest
+Until that target has a verified published preview, its preview manifest
 and signature are intentionally absent.
 
-Prerelease branch testing can use the derived prerelease manifest URL after the
+Preview branch testing can use the derived preview manifest URL after the
 selected branch contains the matching platform manifest and signature. For
 macOS, confirm the branch contains both files for the process architecture:
 
@@ -530,14 +530,14 @@ git ls-tree -r release/<version> updates/macos
 The output must include:
 
 ```text
-updates/macos/<arm64|x86_64>/prerelease.json
-updates/macos/<arm64|x86_64>/prerelease.json.sig
+updates/macos/<arm64|x86_64>/preview.json
+updates/macos/<arm64|x86_64>/preview.json.sig
 ```
 
 Then test from a source checkout with `--update-branch` and `--force-update`:
 
 ```bash
-CAVEVIEWER_UPDATE_CHANNEL=prerelease \
+CAVEVIEWER_UPDATE_CHANNEL=preview \
 ./run_caveviewer.sh --update-branch release/<version> --force-update
 ```
 
@@ -546,16 +546,16 @@ For a packaged app launched from Terminal, use environment variables instead:
 ```bash
 CAVEVIEWER_FORCE_UPDATE=1 \
 CAVEVIEWER_UPDATE_BRANCH=release/<version> \
-CAVEVIEWER_UPDATE_CHANNEL=prerelease \
+CAVEVIEWER_UPDATE_CHANNEL=preview \
 ./CaveViewer-<version>-x86_64.AppImage
 ```
 
-For a prerelease channel, a missing derived manifest logs `No prerelease update
-manifest is published` at info level and means no prerelease is currently
+For a preview channel, a missing derived manifest logs `No preview update
+manifest is published` at info level and means no preview is currently
 available for that platform. Publish a real package through the finalizer,
 switch to a branch that already advertises one, or use
 `CAVEVIEWER_UPDATE_CHANNEL=stable` if you meant to test stable updates. HTTP 404
-for a stable or explicitly configured non-prerelease manifest remains a
+for a stable or explicitly configured non-preview manifest remains a
 configuration error.
 
 If the update checker logs `Update manifest fetch failed with HTTP 429`, GitHub
@@ -569,19 +569,19 @@ Linux manifests are x86_64-only:
 
 ```text
 updates/linux/x86_64/stable.json
-updates/linux/x86_64/prerelease.json
+updates/linux/x86_64/preview.json
 ```
 
 macOS manifests are also architecture-specific:
 
 ```text
 updates/macos/arm64/stable.json
-updates/macos/arm64/prerelease.json
+updates/macos/arm64/preview.json
 updates/macos/x86_64/stable.json
-updates/macos/x86_64/prerelease.json
+updates/macos/x86_64/preview.json
 ```
 
-Each prerelease pair appears only after that platform/channel is successfully
+Each preview pair appears only after that platform/channel is successfully
 published; an absent pair is not an error. Top-level
 `updates/macos/<channel>.json[.sig]` files are legacy ARM64 aliases when that
 ARM64 channel exists. Keep each alias and signature byte-for-byte identical to

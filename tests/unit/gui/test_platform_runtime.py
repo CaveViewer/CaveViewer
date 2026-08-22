@@ -99,7 +99,7 @@ class FakeWindowBackendAdapter:
             "arm64",
             "macos_app",
             True,
-            "/updates/macos/arm64/prerelease.json",
+            "/updates/macos/arm64/preview.json",
             frozenset({"dmg", "pkg"}),
         ),
         (
@@ -107,7 +107,7 @@ class FakeWindowBackendAdapter:
             "x86_64",
             "macos_app",
             True,
-            "/updates/macos/x86_64/prerelease.json",
+            "/updates/macos/x86_64/preview.json",
             frozenset({"dmg", "pkg"}),
         ),
         (
@@ -115,7 +115,7 @@ class FakeWindowBackendAdapter:
             "AMD64",
             "windows_app",
             True,
-            "/updates/windows/prerelease.json",
+            "/updates/windows/preview.json",
             frozenset({"zip", "exe"}),
         ),
         (
@@ -123,7 +123,7 @@ class FakeWindowBackendAdapter:
             "x86_64",
             "linux_app",
             True,
-            "/updates/linux/x86_64/prerelease.json",
+            "/updates/linux/x86_64/preview.json",
             frozenset({"appimage", "deb", "rpm", "tar.gz"}),
         ),
         (
@@ -139,7 +139,7 @@ class FakeWindowBackendAdapter:
             "x86_64",
             "unsupported",
             False,
-            "/updates/macos/prerelease.json",
+            "/updates/macos/preview.json",
             None,
         ),
     ],
@@ -163,7 +163,7 @@ def test_update_profile_selects_static_release_policy(
     manifest_url = profile.default_manifest_url(
         "example/CaveViewer",
         "release-candidate",
-        "prerelease",
+        "preview",
     )
     if manifest_suffix:
         assert manifest_url.endswith(manifest_suffix)
@@ -193,7 +193,7 @@ def test_runtime_resolves_environment_only_when_it_is_composed(monkeypatch):
         window_backend_adapter=window_backend_adapter,
         environment={
             "CAVEVIEWER_UPDATE_BRANCH": "release-candidate",
-            "CAVEVIEWER_UPDATE_CHANNEL": "prerelease",
+            "CAVEVIEWER_UPDATE_CHANNEL": "preview",
         },
         platform_name="linux",
         machine="x86_64",
@@ -212,16 +212,16 @@ def test_runtime_resolves_environment_only_when_it_is_composed(monkeypatch):
     assert runtime.profile.install_channel == "linux_app"
     assert runtime.update_profile.install_channel == "linux_app"
     assert runtime.update_configuration.branch == "release-candidate"
-    assert runtime.update_configuration.manifest_channel == "prerelease"
+    assert runtime.update_configuration.manifest_channel == "preview"
     assert runtime.update_configuration.manifest_url.endswith(
-        "/release-candidate/updates/linux/x86_64/prerelease.json"
+        "/release-candidate/updates/linux/x86_64/preview.json"
     )
     assert runtime.update_configuration.source is CapabilitySource.USER_OVERRIDE
     assert runtime.automatic_update_capability.status is CapabilityStatus.AVAILABLE
     assert runtime.automatic_update_target is runtime.automatic_update_capability.value
     assert runtime.automatic_update_target is not None
     assert runtime.automatic_update_target.install_channel == "linux_app"
-    assert runtime.automatic_update_target.manifest_channel == "prerelease"
+    assert runtime.automatic_update_target.manifest_channel == "preview"
     assert runtime.automatic_update_decision.state is FeatureState.ENABLED
     assert (
         runtime.static_feature_decision(FeatureId.AUTOMATIC_UPDATE)
@@ -326,7 +326,7 @@ def test_runtime_uses_the_embedded_release_channel_without_an_override(tmp_path)
             os_name="posix",
             home=tmp_path,
             release_metadata=ReleaseMetadata(
-                "prerelease", ReleaseMetadataSource.BUNDLED
+                "preview", ReleaseMetadataSource.BUNDLED
             ),
         ),
     )
@@ -339,12 +339,12 @@ def test_runtime_uses_the_embedded_release_channel_without_an_override(tmp_path)
         machine="x86_64",
     )
 
-    assert platform_runtime.update_configuration.manifest_channel == "prerelease"
+    assert platform_runtime.update_configuration.manifest_channel == "preview"
     assert platform_runtime.update_configuration.manifest_url.endswith(
-        "/updates/linux/x86_64/prerelease.json"
+        "/updates/linux/x86_64/preview.json"
     )
     assert platform_runtime.automatic_update_target is not None
-    assert platform_runtime.automatic_update_target.manifest_channel == "prerelease"
+    assert platform_runtime.automatic_update_target.manifest_channel == "preview"
 
 
 def test_runtime_disables_unsupported_update_targets_before_network_work():

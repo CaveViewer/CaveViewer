@@ -6,7 +6,7 @@ set -euo pipefail
 # package size, SHA-256, and release notes for the in-app update client.
 #
 # Usage:
-#   update_manifest.sh [--arch=<arm64|x86_64>] --version=<version> --download-url=<macos_dmg_url> --artifact-file=<macos_dmg_file> [--notes=<release_notes>] [--channel=<stable|prerelease>]
+#   update_manifest.sh [--arch=<arm64|x86_64>] --version=<version> --download-url=<macos_dmg_url> --artifact-file=<macos_dmg_file> [--notes=<release_notes>] [--channel=<stable|preview>]
 # Example:
 #   update_manifest.sh --arch=arm64 --version=1.0.1 \
 #     --download-url="https://github.com/<owner>/CaveViewerPlus/releases/download/v1.0.1/CaveViewer-1.0.1-macos-arm64.dmg" \
@@ -16,7 +16,7 @@ set -euo pipefail
 print_usage() {
   cat <<'EOF'
 Usage:
-  update_manifest.sh [--arch=<arm64|x86_64>] --version=<version> --download-url=<url> --artifact-file=<path> [--notes=<release_notes>] [--channel=<stable|prerelease>]
+  update_manifest.sh [--arch=<arm64|x86_64>] --version=<version> --download-url=<url> --artifact-file=<path> [--notes=<release_notes>] [--channel=<stable|preview>]
 EOF
 }
 
@@ -98,9 +98,9 @@ repo_root="$(cd "$script_dir/../.." && pwd)"
 source "$script_dir/architecture.sh"
 macos_arch="$(cv_resolve_macos_arch "$macos_arch")"
 case "$channel" in
-  stable|prerelease) ;;
+  stable|preview) ;;
   *)
-    echo "Error: invalid --channel '$channel' (expected stable or prerelease)"
+    echo "Error: invalid --channel '$channel' (expected stable or preview)"
     exit 1
     ;;
 esac

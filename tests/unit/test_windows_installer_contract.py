@@ -272,7 +272,7 @@ def test_package_metadata_tracks_the_final_exe_and_blocks_unsigned_publication(
             "--update-metadata-file",
             str(update_metadata),
             "--release-channel",
-            "prerelease",
+            "preview",
         ],
         capture_output=True,
         text=True,

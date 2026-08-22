@@ -412,9 +412,9 @@ def _check_for_update_target(
         if not isinstance(data, dict):
             raise TypeError("the manifest root must be a JSON object")
     except urllib.error.HTTPError as e:
-        if e.code == 404 and resolved_channel == "prerelease":
+        if e.code == 404 and resolved_channel == "preview":
             _LOG.info(
-                "No prerelease update manifest is published for this target: "
+                "No preview update manifest is published for this target: "
                 "manifest_url=%s",
                 update_target.manifest_url,
             )

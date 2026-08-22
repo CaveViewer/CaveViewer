@@ -15,7 +15,7 @@ def main() -> int:
     parser.add_argument("--metadata-file", type=Path, required=True)
     parser.add_argument(
         "--expected-release-channel",
-        choices=("stable", "prerelease"),
+        choices=("stable", "preview"),
         required=True,
     )
     args = parser.parse_args()

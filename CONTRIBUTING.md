@@ -59,10 +59,10 @@ and all required checks are.
 Read the canonical [release guide](docs/development/releases.md) before changing
 release workflows, packaging scripts, update manifests, or version handling.
 Release versions must contain only dot-separated decimal integers, such as
-`1.0.64`. Do not encode prerelease status in a suffix such as `1.0.64-rc1`;
+`1.0.64`. Do not encode preview status in a suffix such as `1.0.64-rc1`;
 the update checker treats that form as an unparseable version and will not offer
-it as a newer update. Use the workflow's `pre_release` option and the
-`prerelease.json` channel instead. GitHub workflow inputs also require the bare
+it as a newer update. Use the workflow's `preview` option and the
+`preview.json` channel instead. GitHub workflow inputs also require the bare
 version without a leading `v`.
 
 ## Repository layout

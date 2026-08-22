@@ -229,37 +229,55 @@ def test_empty_update_url_is_an_explicit_environment_override(tmp_path):
 def test_update_channel_defaults_to_embedded_release_metadata_and_allows_override(
     tmp_path,
 ):
-    embedded_prerelease = ReleaseMetadata(
-        "prerelease", ReleaseMetadataSource.BUNDLED
+    embedded_preview = ReleaseMetadata(
+        "preview", ReleaseMetadataSource.BUNDLED
     )
 
     default_snapshot = _resolve(
         tmp_path,
-        release_metadata=embedded_prerelease,
+        release_metadata=embedded_preview,
     )
     override_snapshot = _resolve(
         tmp_path,
         environ={"CAVEVIEWER_UPDATE_CHANNEL": "stable"},
-        release_metadata=embedded_prerelease,
+        release_metadata=embedded_preview,
     )
     invalid_override_snapshot = _resolve(
         tmp_path,
-        environ={"CAVEVIEWER_UPDATE_CHANNEL": "preview"},
-        release_metadata=embedded_prerelease,
+        environ={"CAVEVIEWER_UPDATE_CHANNEL": "prerelease"},
+        release_metadata=embedded_preview,
     )
 
-    assert default_snapshot["update_channel"] == "prerelease"
+    assert default_snapshot["update_channel"] == "preview"
     assert default_snapshot.source("update_channel") is settings.SettingSource.BUILT_IN
     assert override_snapshot["update_channel"] == "stable"
     assert override_snapshot.source("update_channel") is settings.SettingSource.ENVIRONMENT
-    assert invalid_override_snapshot["update_channel"] == "prerelease"
+    assert invalid_override_snapshot["update_channel"] == "preview"
     assert invalid_override_snapshot.source("update_channel") is settings.SettingSource.BUILT_IN
     assert invalid_override_snapshot.issues[-1] == settings.RuntimeSettingIssue(
         key="update_channel",
         source=settings.SettingSource.ENVIRONMENT,
-        raw_value="preview",
-        message="expected one of: prerelease, stable",
+        raw_value="prerelease",
+        message="expected one of: preview, stable",
     )
+
+
+def test_preview_package_defaults_to_debug_and_explicit_log_level_wins(tmp_path):
+    preview_metadata = ReleaseMetadata("preview", ReleaseMetadataSource.BUNDLED)
+
+    preview = _resolve(tmp_path, release_metadata=preview_metadata)
+    preview_override = _resolve(
+        tmp_path,
+        environ={"CAVEVIEWER_LOG_LEVEL": "WARNING"},
+        release_metadata=preview_metadata,
+    )
+    stable = _resolve(tmp_path)
+
+    assert preview["log_level"] == "DEBUG"
+    assert preview.source("log_level") is settings.SettingSource.BUILT_IN
+    assert preview_override["log_level"] == "WARNING"
+    assert preview_override.source("log_level") is settings.SettingSource.ENVIRONMENT
+    assert stable["log_level"] == "INFO"
 
 
 def test_platform_facts_control_dynamic_defaults_without_reading_process_environment(

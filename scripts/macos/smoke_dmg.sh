@@ -95,7 +95,7 @@ if [ -z "$version" ]; then
 fi
 
 case "$release_channel" in
-  stable|prerelease) ;;
+  stable|preview) ;;
   *)
     echo "Error: unsupported release channel '$release_channel'." >&2
     exit 1

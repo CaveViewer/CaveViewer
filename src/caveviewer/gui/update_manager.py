@@ -105,6 +105,7 @@ class UpdateSnapshot:
 
     state: UpdateState
     current_version: str
+    update_channel: str = "stable"
     available_version: str | None = None
     downloaded_bytes: int = 0
     total_bytes: int | None = None
@@ -204,6 +205,11 @@ class UpdateManager:
             return UpdateSnapshot(
                 state=self._state,
                 current_version=self._current_version,
+                update_channel=(
+                    self._update_target.manifest_channel
+                    if self._update_target is not None
+                    else "stable"
+                ),
                 available_version=available_version,
                 downloaded_bytes=self._downloaded_bytes,
                 total_bytes=self._total_bytes,

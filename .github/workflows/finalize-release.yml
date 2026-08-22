@@ -12,8 +12,8 @@ on:
         description: "Release notes"
         required: true
         type: string
-      pre_release:
-        description: "Publish as a GitHub prerelease and update prerelease.json"
+      preview:
+        description: "Publish as a GitHub prerelease and update preview.json"
         required: false
         type: boolean
         default: false
@@ -101,7 +101,7 @@ jobs:
           RELEASE_PLATFORMS: ${{ inputs.platforms }}
           RELEASE_SOURCE_SHA: ${{ inputs.source_sha }}
           RELEASE_TARGET_BRANCH: ${{ inputs.target_branch }}
-          PRE_RELEASE: ${{ inputs.pre_release }}
+          PREVIEW: ${{ inputs.preview }}
           ALLOW_UNSIGNED_WINDOWS_COMMUNITY: ${{ inputs.allow_unsigned_windows_community }}
         run: |
           finalize_args=(
@@ -112,8 +112,8 @@ jobs:
             --target-branch="$RELEASE_TARGET_BRANCH"
             --expected-source-sha="$RELEASE_SOURCE_SHA"
           )
-          if [ "$PRE_RELEASE" = "true" ]; then
-            finalize_args+=(--pre-release)
+          if [ "$PREVIEW" = "true" ]; then
+            finalize_args+=(--preview)
           fi
           if [ "$ALLOW_UNSIGNED_WINDOWS_COMMUNITY" = "true" ]; then
             finalize_args+=(--allow-unsigned-windows-community)
