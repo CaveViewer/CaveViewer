@@ -90,7 +90,7 @@ workstream. This table is the authoritative branch-level handoff status.
 | 4 | Broad platform adapter retirement | `refactor/platform-presentation-profile-actions` | Implemented — merged | `e224b55`; merged as `0973c4a` (PR #234) | — | Static presentation policy lives exclusively on `PresentationProfile`. |
 | 5 | Broad platform adapter retirement | `refactor/platform-presentation-profile-actions` | Implemented — merged | `e224b55`; merged as `0973c4a` (PR #234) | — | DPI setup, macOS About registration, and viewer focus are direct `PresentationActionsAdapter` effects. |
 | 6 | Broad platform adapter retirement | `refactor/platform-native-action-adapters` | Implemented — merged | `086ac59`; merged as `2508596` ([PR #251](https://github.com/CaveViewer/CaveViewer/pull/251)) | [#224](https://github.com/CaveViewer/CaveViewer/issues/224) | Direct focused adapters own saved-artifact reveal, recording-process startup, and TLS trust; the three broad-adapter methods are removed. |
-| 7 | Broad platform adapter retirement | `refactor/remove-splash-platform-adapter` | Implemented locally — pending review | Working tree on `refactor/remove-splash-platform-adapter` | [#225](https://github.com/CaveViewer/CaveViewer/issues/225) | The empty broad protocol, factory, runtime property, compatibility classes, caller shims, and transitional tests are removed. A repository guard prevents their return. |
+| 7 | Broad platform adapter retirement | `refactor/remove-splash-platform-adapter` | Implemented — PR open | `8e70397` ([PR #255](https://github.com/CaveViewer/CaveViewer/pull/255)) | [#225](https://github.com/CaveViewer/CaveViewer/issues/225) | The empty broad protocol, factory, runtime property, compatibility classes, caller shims, and transitional tests are removed. A repository guard prevents their return. |
 | 8 | Splash and Map Library workflow split | `refactor/splash-controller-lifecycle` | Not implemented — tracked | — | [#226](https://github.com/CaveViewer/CaveViewer/issues/226) | Start after explicit runtime and focused platform dependencies are stable. |
 | 9 | Splash and Map Library workflow split | `refactor/map-library-workflow-dependencies` | Not implemented — tracked | — | [#227](https://github.com/CaveViewer/CaveViewer/issues/227) | Introduce typed dependency bundles before extracting worker workflows. |
 | 10 | Splash and Map Library workflow split | `refactor/map-library-catalog-download` | Not implemented — tracked | — | [#228](https://github.com/CaveViewer/CaveViewer/issues/228) | Keep catalog/download lifecycle separate from cache rebuilding. |
@@ -342,8 +342,8 @@ repository-wide caller inventory is empty.
 ### Execution handoff — 2026-08-22
 
 - Workstream 6 was implemented on `refactor/platform-native-action-adapters`,
-  freshly based on clean `main` at `379ba5c`, as commit `086ac59`. Review and
-  merge are tracked by [PR #251](https://github.com/CaveViewer/CaveViewer/pull/251).
+  freshly based on clean `main` at `379ba5c`, as commit `086ac59`, and merged
+  as `2508596` in [PR #251](https://github.com/CaveViewer/CaveViewer/pull/251).
 - `SavedArtifactRevealAdapter` now selects direct Finder, Explorer, Linux
   desktop-service, or safe unsupported behavior from stable platform facts.
 - `RecordingProcessAdapter` directly owns Windows `STARTUPINFO` and
@@ -356,10 +356,18 @@ repository-wide caller inventory is empty.
   protocol and implementations, and an AST boundary test prevents regression.
 - Verification passed: 323 focused platform/viewer/update/architecture tests,
   the full suite (`1729 passed`), and `git diff --check`.
-- Next: after this branch merges, start workstream 7
-  (`refactor/remove-splash-platform-adapter`) fresh from `main` and delete the
-  now-empty broad protocol, factory aliases, runtime property, and platform
-  compatibility classes after confirming the repository-wide caller inventory.
+- Workstream 7 was implemented on `refactor/remove-splash-platform-adapter`,
+  freshly based on clean `main` at `c187b11`, as commit `8e70397`. Review and
+  merge are tracked by [PR #255](https://github.com/CaveViewer/CaveViewer/pull/255).
+- The broad protocol, factory aliases, runtime property, platform compatibility
+  classes, and legacy consumer fallbacks are deleted. Focused adapters are
+  composed directly, and an architecture guard requires the retired modules to
+  stay absent and rejects production references to their former API.
+- Verification passed: 263 focused platform/viewer/update/architecture tests,
+  the full suite (`1725 passed`), and `git diff --check`. Ruff was not installed
+  in the development environment, so no Ruff artifact is available.
+- Next: merge PR #255, then start workstream 8 from fresh `main` after the
+  focused runtime and platform dependencies are stable.
 
 ## 3. Split the splash composition workflow
 
