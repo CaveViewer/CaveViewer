@@ -699,7 +699,16 @@ def test_splash_navigation_actions_are_keyboard_accessible_without_fallthrough()
     assert "root.after_idle(_ensure_preferences_panel)" not in source
     assert "_build_launch_surface(" in source
     assert "_settle_launch_layout(root, passes=3)" in source
-    assert "launch_surface.destroy()" in source
+    assert "def _reveal_composed_main_surface() -> None:" in source
+    assert "root.after_idle(_reveal_composed_main_surface)" in source
+    reveal_source = source[
+        source.index("def _reveal_composed_main_surface() -> None:") : source.index(
+            "root.after_idle(_reveal_composed_main_surface)"
+        )
+    ]
+    assert "launch_surface.destroy()" in reveal_source
+    assert "after_idle(" not in reveal_source
+    assert "schedule_after(" not in reveal_source
     assert "def _show_about_surface() -> None:" in source
     assert "def _ensure_help_panel() -> HelpPanel:" in source
     assert "def _show_help_surface() -> None:" in source

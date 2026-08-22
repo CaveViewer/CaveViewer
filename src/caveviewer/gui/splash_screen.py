@@ -2113,9 +2113,17 @@ def show_splash_screen(
     # geometry work; width/size guards prevent callbacks from cascading.
     _ensure_preferences_panel()
     _settle_launch_layout(root, passes=3)
-    content_frame.tkraise()
-    launch_surface.destroy()
-    mark_startup_splash_visible()
+
+    def _reveal_composed_main_surface() -> None:
+        """Reveal the fully painted main surface in one non-repeating handoff."""
+        content_frame.tkraise()
+        launch_surface.destroy()
+        mark_startup_splash_visible()
+
+    # Give Tk one normal idle turn to paint canvas-backed Map Library rows
+    # beneath the launch cover. This callback is deliberately one-shot: it
+    # neither polls readiness nor schedules another geometry pass.
+    root.after_idle(_reveal_composed_main_surface)
     root.lift()
     root.focus_force()
     # Briefly force topmost so the splash appears above the GLFW viewer window
