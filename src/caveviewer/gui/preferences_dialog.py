@@ -627,8 +627,9 @@ class PreferencesPanel:
             self.field_browse_buttons[key] = browse_button
 
         single_line_hint = compact_path
+        hint_parent = text_column if compact_path else row
         hint_label = tk.Label(
-            text_column,
+            hint_parent,
             text=field.hint,
             font=self.small_font,
             fg=_INSTRUCTION_COLOR,
@@ -639,8 +640,16 @@ class PreferencesPanel:
                 0 if single_line_hint else self._layout_policy.wrap_length
             ),
         )
-        hint_label.pack(anchor="w", fill="x", pady=(3, 0))
-        if not single_line_hint:
+        if single_line_hint:
+            hint_label.pack(anchor="w", fill="x", pady=(3, 0))
+        else:
+            hint_label.grid(
+                row=1,
+                column=0,
+                columnspan=2,
+                sticky="ew",
+                pady=(3, 0),
+            )
             self.page_hint_labels.setdefault(field.section, []).append(hint_label)
 
     def _sync_active_page_hint_wraplengths(self) -> bool:

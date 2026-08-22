@@ -880,6 +880,8 @@ def test_preferences_panel_uses_compact_tabbed_pages():
     assert "_render_guided_dive_disclaimer" not in module_source
     assert "compact_path = value_type in {" in render_field_source
     assert "entry.grid(row=0, column=0, sticky=\"ew\")" in render_field_source
+    assert "hint_parent = text_column if compact_path else row" in render_field_source
+    assert "columnspan=2" in render_field_source
     assert "grid_remove()" in show_page_source
     assert "candidate_page.tkraise()" not in show_page_source
     assert "self._ensure_page(page_key)" in show_page_source
