@@ -472,6 +472,21 @@ def test_transfer_lifecycles_have_focused_owners():
     assert isinstance(built.workflow.download_workflow, MapLibraryDownloadWorkflow)
 
 
+def test_retired_transfer_polling_facades_stay_removed():
+    retired = {
+        "schedule_download_poll",
+        "poll_download_queue",
+        "schedule_catalog_poll",
+        "poll_catalog_fetch",
+        "schedule_cache_rebuild_poll",
+        "poll_cache_rebuild",
+        "cancel_active_download_for_close",
+        "cancel_catalog_fetch_for_close",
+    }
+
+    assert retired.isdisjoint(vars(MapLibraryWorkflow))
+
+
 def _enabled_guided_dive_decision(_map_path: str | None = None) -> FeatureDecision:
     return FeatureDecision(
         feature=FeatureId.GUIDED_DIVE_PLAYBACK,
@@ -1112,7 +1127,7 @@ def test_download_success_applies_progress_and_open_action():
     result_queue.put(StandardLibraryDownloadProgress(40, 100))
     result_queue.put(StandardLibraryDownloadSucceeded("/library/Test Cave"))
 
-    state.workflow.poll_download_queue(library_map, result_queue, cancel_event)
+    state.workflow.download_workflow.poll(library_map, result_queue, cancel_event)
 
     assert ("show", _standard_key("Test Cave")) in state.panel.progress
     assert ("apply", _standard_key("Test Cave"), 40, 100) in state.panel.progress
@@ -1238,7 +1253,7 @@ def test_pending_download_waits_for_catalog_then_starts_resolved_download():
     )
 
     state.workflow.prepare_catalog_for_download(pending_map)
-    state.workflow.poll_catalog_fetch()
+    state.workflow.catalog_workflow.poll()
 
     assert download_calls == [catalog_map]
     assert state.panel.metadata[_standard_key("Test Cave")] == ("Downloading…", False)
@@ -1262,7 +1277,7 @@ def test_catalog_refresh_adds_new_remote_standard_library_rows():
     )
 
     state.workflow.populate_panel("parent", [])
-    state.workflow.poll_catalog_fetch()
+    state.workflow.catalog_workflow.poll()
 
     assert set(state.panel.standard_rows) == {
         _standard_key("initial-cave"),
@@ -1289,7 +1304,7 @@ def test_catalog_refresh_removes_stale_not_downloaded_rows():
     )
 
     state.workflow.populate_panel("parent", [])
-    state.workflow.poll_catalog_fetch()
+    state.workflow.catalog_workflow.poll()
 
     assert _standard_key("stale-cave") not in state.panel.standard_rows
     assert _standard_key("current-cave") in state.panel.standard_rows
@@ -1319,7 +1334,7 @@ def test_catalog_refresh_keeps_former_local_maps_muted_with_normal_actions():
     )
 
     state.workflow.populate_panel("parent", [])
-    state.workflow.poll_catalog_fetch()
+    state.workflow.catalog_workflow.poll()
 
     key = _standard_key("downloaded-stale-cave")
     assert key in state.panel.standard_rows
@@ -1376,7 +1391,7 @@ def test_catalog_refresh_keeps_a_former_local_map_in_its_prior_position():
     )
 
     state.workflow.populate_panel("parent", [])
-    state.workflow.poll_catalog_fetch()
+    state.workflow.catalog_workflow.poll()
 
     assert [library_map.catalog_id for library_map in state.workflow.standard_library_maps] == [
         "first-cave",
@@ -1406,7 +1421,7 @@ def test_non_authoritative_catalog_refresh_never_blocks_a_downloaded_map():
     )
 
     state.workflow.populate_panel("parent", [])
-    state.workflow.poll_catalog_fetch()
+    state.workflow.catalog_workflow.poll()
 
     key = _standard_key("cached-cave")
     assert key in state.panel.standard_rows
@@ -1432,7 +1447,7 @@ def test_persisted_former_map_remains_available_with_normal_actions_while_offlin
     )
 
     state.workflow.populate_panel("parent", [])
-    state.workflow.poll_catalog_fetch()
+    state.workflow.catalog_workflow.poll()
 
     key = _standard_key("former-cave")
     assert key in state.panel.standard_rows
@@ -1457,7 +1472,7 @@ def test_unavailable_catalog_details_show_retry_state():
     )
 
     state.workflow.prepare_catalog_for_download(pending_map)
-    state.workflow.poll_catalog_fetch()
+    state.workflow.catalog_workflow.poll()
 
     assert state.panel.metadata[_standard_key("Test Cave")] == ("", False)
     assert state.panel.standard_status == (
@@ -1542,7 +1557,7 @@ def test_paused_rebuild_is_resumable_from_a_fresh_workflow_instance():
             resume_dir="/maps/.cache.resume-checkpoint",
         )
     ]
-    original.workflow.poll_cache_rebuild()
+    original.workflow.cache_rebuild_workflow.poll()
 
     reopened = _workflow(
         [],
@@ -1658,7 +1673,7 @@ def test_rebuild_progress_success_restores_open_and_reports_completion():
         ),
     ]
 
-    state.workflow.poll_cache_rebuild()
+    state.workflow.cache_rebuild_workflow.poll()
 
     assert state.panel.row_progress == (row_widgets, 0.625)
     assert (row_widgets, "Rebuilding cache — Building chunks", False) in (
@@ -1695,7 +1710,7 @@ def test_build_progress_success_restores_open_and_reports_completion():
         ),
     ]
 
-    state.workflow.poll_cache_rebuild()
+    state.workflow.cache_rebuild_workflow.poll()
 
     assert state.panel.row_progress == (row_widgets, 0.625)
     assert (row_widgets, "Building cache — Building chunks", False) in (
@@ -1750,7 +1765,7 @@ def test_background_cache_rebuild_reports_completion_by_desktop_notification():
         )
     ]
 
-    state.workflow.poll_cache_rebuild()
+    state.workflow.cache_rebuild_workflow.poll()
 
     assert notifications == [
         (
@@ -1790,7 +1805,7 @@ def test_foreground_or_paused_cache_rebuild_does_not_notify():
             cache_dir="/maps/Recent Cave/_cache",
         )
     ]
-    foreground.workflow.poll_cache_rebuild()
+    foreground.workflow.cache_rebuild_workflow.poll()
 
     paused_controller = _FakeCacheRebuildController()
     paused = _workflow(
@@ -1811,7 +1826,7 @@ def test_foreground_or_paused_cache_rebuild_does_not_notify():
             resume_dir="/maps/Recent Cave/.resume",
         )
     ]
-    paused.workflow.poll_cache_rebuild()
+    paused.workflow.cache_rebuild_workflow.poll()
 
     assert notifications == []
 
@@ -1843,7 +1858,7 @@ def test_background_cache_rebuild_reports_failure_by_desktop_notification():
         )
     ]
 
-    state.workflow.poll_cache_rebuild()
+    state.workflow.cache_rebuild_workflow.poll()
 
     assert notifications == [
         (
@@ -1906,7 +1921,7 @@ def test_disabled_rebuild_exposes_explanation_and_failure_retains_cache():
         )
     ]
 
-    state.workflow.poll_cache_rebuild()
+    state.workflow.cache_rebuild_workflow.poll()
 
     assert state.panel.row_action[1] == "Open"
     assert state.panel.status == (row_widgets, "Cache retained", True)

@@ -15,6 +15,7 @@ from caveviewer.gui import (
     map_history,
     map_library_controller,
     map_library_panel,
+    map_library_transfers,
     map_library_workflow,
     splash_screen,
 )
@@ -993,6 +994,7 @@ def test_splash_map_library_uses_navigation_and_an_overflow_cue():
     controller_source = inspect.getsource(map_library_controller.MapLibraryController)
     panel_source = inspect.getsource(map_library_panel.MapLibraryPanel)
     workflow_source = inspect.getsource(map_library_workflow.MapLibraryWorkflow)
+    transfer_source = inspect.getsource(map_library_transfers)
     source = (
         splash_source
         + style_source
@@ -1083,8 +1085,10 @@ def test_splash_map_library_uses_navigation_and_an_overflow_cue():
     assert "show_stop_progress=True" in workflow_source
     assert '"Cancel"' not in workflow_source
     assert '"Stopping…"' in workflow_source
-    assert "poll_download_queue" in workflow_source
-    assert "cancel_active_download_for_close" in workflow_source
+    assert "def poll(" in transfer_source
+    assert "def close(" in transfer_source
+    assert "poll_download_queue" not in workflow_source
+    assert "cancel_active_download_for_close" not in workflow_source
     assert "directory_selection_factory" in workflow_source
     assert "start_catalog_fetch" in workflow_source
     assert "poll_download_queue" not in splash_source
