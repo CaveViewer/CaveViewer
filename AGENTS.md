@@ -21,6 +21,16 @@ inside a subdirectory supplements these rules for that area.
 
 ## Working agreement
 
+- Before editing repository files or changing repository-related external
+  state, create a work document from
+  `docs/development/work-definition.md` at
+  `docs/development/.agents/<work-name>.md`. Complete its A3-style master table,
+  order rows by implementation sequence, and keep it current through
+  verification and merge. Do not begin implementation until the work document
+  identifies the problem, current implementation, desired solution, task
+  details, branch, and status. This rule applies to every agent and every
+  repository task; a more specific `AGENTS.md` may add requirements but may not
+  waive the work definition.
 - Inspect `git status` before editing and preserve unrelated user changes.
 - Keep behavior changes, file moves, and formatting-only changes separate so
   each can be reviewed and reverted independently.
@@ -69,6 +79,8 @@ PYTHONPYCACHEPREFIX=/tmp/caveviewer-pycache \
 
 ## Definition of done
 
+- Update the active work document with final task status, verification evidence,
+  PR/merge references, and any remaining external action.
 - Add or update tests for observable behavior and failure cleanup.
 - Update comments in the code clearly outlining what new code does
 - Run focused tests first and the complete suite before handoff when practical.

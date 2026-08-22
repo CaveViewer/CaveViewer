@@ -1,5 +1,7 @@
 # Development documentation
 
+- [Work definition template](work-definition.md): required A3-style master
+  table for planning and tracking all repository work before implementation.
 - [Architecture](architecture.md): component boundaries, data flow, and
   concurrency rules.
 - [Repository layout](repository-layout.md): current paths, stable contracts,
@@ -29,3 +31,12 @@
 The focused documents in this directory are canonical for their subjects.
 `source-setup.md` holds operational details that remain too detailed for the
 root project README.
+
+## Starting any work
+
+Before editing repository files or changing repository-related external state,
+copy [the work definition template](work-definition.md) to
+`docs/development/.agents/<work-name>.md`. Complete and order its master table,
+then implement from that table. Keep the document's current implementation,
+desired solution, branch, and status fields synchronized through verification
+and merge. This requirement applies to human contributors and automated agents.
