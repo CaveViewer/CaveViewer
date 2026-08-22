@@ -966,6 +966,9 @@ def test_preferences_page_switch_maps_only_the_selected_page():
     }
     panel._ensure_page = lambda key: panel.pages.get(key)
     panel.active_page_key = "streaming"
+    panel._page_configured_widths = {}
+    panel.field_entries = {}
+    panel.field_page_keys = {}
     panel.tab_strip = SimpleNamespace(
         select=lambda key, notify: tab_selections.append((key, notify))
     )
@@ -1128,6 +1131,7 @@ def test_preferences_invalidates_hidden_geometry_when_shown():
     panel._page_canvas_window_width = 480
     panel._page_scroll_region = (0, 0, 480, 600)
     panel._scrollbar_layout_state = (600, 500)
+    panel._page_configured_widths = {"streaming": 480}
     panel._page_layout_after_id = "hidden-layout"
     cancelled = []
     panel.dialog = SimpleNamespace(after_cancel=cancelled.append)
@@ -1139,6 +1143,7 @@ def test_preferences_invalidates_hidden_geometry_when_shown():
     assert panel._page_canvas_window_width is None
     assert panel._page_scroll_region is None
     assert panel._scrollbar_layout_state is None
+    assert panel._page_configured_widths == {}
     assert panel._page_layout_after_id is None
     assert cancelled == ["hidden-layout"]
     assert scheduled == [True]
@@ -1161,15 +1166,40 @@ def test_preferences_mapped_event_refreshes_only_the_panel_container():
 def test_preferences_rewraps_when_the_active_page_reaches_its_final_width():
     from caveviewer.gui import preferences_dialog
 
+    class _FakeEntry:
+        def winfo_reqwidth(self) -> int:
+            return 100
+
+    class _FakeLabel:
+        def __init__(self) -> None:
+            self.wraplength = 520
+            self.configure_calls = []
+
+        def cget(self, _option: str) -> str:
+            return str(self.wraplength)
+
+        def configure(self, **options) -> None:
+            self.configure_calls.append(options)
+            self.wraplength = options["wraplength"]
+
     scheduled = []
+    label = _FakeLabel()
     panel = object.__new__(preferences_dialog.PreferencesPanel)
     panel.active_page_key = "streaming"
+    panel._page_configured_widths = {}
+    panel.page_hint_labels = {"streaming": [label]}
+    panel.field_entries = {"io_workers": _FakeEntry()}
+    panel.field_page_keys = {"io_workers": "streaming"}
+    panel._layout_policy = SimpleNamespace(row_pad_x=18)
+    panel._surface_px = int
     panel._schedule_page_layout_sync = lambda: scheduled.append(True)
 
-    panel._on_page_configured("storage")
-    panel._on_page_configured("streaming")
+    panel._on_page_configured("storage", 800)
+    panel._on_page_configured("streaming", 800)
+    panel._on_page_configured("streaming", 800)
 
     assert scheduled == [True]
+    assert label.configure_calls == [{"wraplength": 678}]
 
 
 def test_preferences_feedback_wraplength_avoids_repeating_identical_geometry_work():
