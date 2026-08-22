@@ -1,6 +1,10 @@
 # CaveViewer Development From Source
 
-This guide is for users who want to run CaveViewer from source.
+This guide is the operational reference for obtaining and running the source,
+IDE/shell setup, tests, variables, storage locations, and troubleshooting.
+Cross-layer contracts live in [Architecture](architecture.md), while setting
+ownership and precedence live in
+[Runtime configuration](runtime-configuration.md).
 
 Scope:
 
@@ -353,6 +357,10 @@ Rendering/import strategy, low-memory tuning, VM launch settings, and
 ---
 
 ## Environment Variables
+
+For ownership, precedence, and typed transport, see
+[Runtime configuration](runtime-configuration.md). The tables below remain the
+operational reference for names and accepted values.
 
 All variables are optional. Set them in your shell before launching or prefix them inline:
 

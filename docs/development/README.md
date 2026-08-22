@@ -21,6 +21,8 @@
   presentation rules.
 - [Source setup](source-setup.md): source setup, runtime configuration, and
   detailed environment variables.
+- [Runtime configuration](runtime-configuration.md): settings ownership,
+  resolution, typed transport, diagnostics, and environment boundaries.
 - [Cave metadata](cave-metadata.md): bundled catalog schema, conservative
   matching, and Map Library presentation behavior.
 
