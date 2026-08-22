@@ -95,7 +95,7 @@ from caveviewer.gui.platform.presentation_actions import (
     create_presentation_actions_adapter,
 )
 from caveviewer.gui.preference_paths import migrate_state_file, write_text_atomic
-from caveviewer.gui.splash_session import SplashSession
+from caveviewer.gui.splash_controller import SplashController, SplashScheduler
 from caveviewer.gui.tk_feedback import show_feedback
 from caveviewer.gui.tk_shortcuts import bind_primary_shortcut
 from caveviewer.gui.tk_theme import DARK_THEME
@@ -1169,7 +1169,6 @@ def show_splash_screen(
     import tkinter as tk
     record_startup_stage("tkinter_import_complete")
 
-    session = SplashSession()
     if desktop_services is None:
         desktop_services = (
             platform_runtime.desktop_services
@@ -1233,6 +1232,10 @@ def show_splash_screen(
         tk,
         presentation_profile=presentation_profile,
     )
+    splash_controller = SplashController(
+        SplashScheduler(root.after, root.after_cancel, root.after_idle)
+    )
+    splash_controller.start()
     record_startup_stage("splash_root_create_complete")
     apply_tk_scaling(
         root,
@@ -1310,7 +1313,7 @@ def show_splash_screen(
 
     def _advance_launch_indicator() -> None:
         """Advance one owned frame while the launch surface remains visible."""
-        if not launch_indicator_active[0] or session.closing:
+        if not launch_indicator_active[0] or splash_controller.closing:
             return
         try:
             if not launch_indicator.winfo_exists():
@@ -1323,8 +1326,7 @@ def show_splash_screen(
             px=px,
         )
         launch_indicator_phase[0] = (launch_indicator_phase[0] + 12.0) % 360.0
-        session.schedule_after(
-            root,
+        splash_controller.schedule(
             _LAUNCH_INDICATOR_INTERVAL_MS,
             _advance_launch_indicator,
         )
@@ -1553,14 +1555,13 @@ def show_splash_screen(
         )
         _layout_update_cluster(presentation)
         if presentation.action_replaces_status_after_delay:
-            session.schedule_after(
-                root,
+            splash_controller.schedule(
                 _UPDATE_READY_ACTION_DELAY_MS,
                 lambda: _show_delayed_update_action(presentation),
             )
 
     def _refresh_update_presentation() -> None:
-        if session.closing:
+        if splash_controller.closing:
             return
         snapshot = update_manager.snapshot()
         presentation = _update_presentation(snapshot)
@@ -1587,7 +1588,7 @@ def show_splash_screen(
         if snapshot.state == UpdateState.INSTALLING:
             _leave_splash()
             return
-        session.schedule_after(root, 100, _refresh_update_presentation)
+        splash_controller.schedule(100, _refresh_update_presentation)
 
     close_waiting_for_rebuild_pause = [False]
 
@@ -1595,8 +1596,7 @@ def show_splash_screen(
         workflow = map_library_workflow_ref[0]
         if workflow is not None:
             workflow.close()
-        session.mark_closing()
-        session.cancel_after_callbacks(root)
+        splash_controller.close()
         root.withdraw()
         root.quit()
 
@@ -1637,11 +1637,11 @@ def show_splash_screen(
                 _finalize_leave_splash()
                 return
             try:
-                root.after(100, wait_for_rebuild_pause)
+                splash_controller.schedule(100, wait_for_rebuild_pause)
             except Exception:
                 _finalize_leave_splash()
 
-        root.after(100, wait_for_rebuild_pause)
+        splash_controller.schedule(100, wait_for_rebuild_pause)
 
     # -- map selection and navigation actions --------------------------------------
     def _show_invalid_map_feedback(message: str) -> None:
@@ -1682,13 +1682,13 @@ def show_splash_screen(
                 _show_invalid_map_feedback(error_message)
                 return
 
-            session.select_folder(selection.path)
+            splash_controller.select_folder(selection.path)
             _save_last_browse_dir(selection.path)
             _leave_splash()
 
     def _open_guided_dive_from_splash(trace_path: str) -> None:
         """Leave splash only after Map Library has preflighted this trace."""
-        session.select_folder(trace_path)
+        splash_controller.select_folder(trace_path)
         _save_last_browse_dir(os.path.dirname(trace_path))
         _leave_splash()
 
@@ -2103,7 +2103,7 @@ def show_splash_screen(
             return False
 
     def _splash_exists() -> bool:
-        return not session.closing and _widget_exists(root)
+        return not splash_controller.closing and _widget_exists(root)
 
     def _splash_is_foreground() -> bool:
         """Return whether the splash is already presenting inline feedback."""
@@ -2120,7 +2120,7 @@ def show_splash_screen(
             _show_invalid_map_feedback(error_message)
             return
 
-        session.select_folder(path)
+        splash_controller.select_folder(path)
         _save_last_browse_dir(path)
         _leave_splash()
 
@@ -2288,19 +2288,21 @@ def show_splash_screen(
         now=time.monotonic(),
     )
     if remaining_launch_ms:
-        root.after(remaining_launch_ms, _reveal_composed_main_surface)
+        splash_controller.schedule(
+            remaining_launch_ms, _reveal_composed_main_surface
+        )
     else:
-        root.after_idle(_reveal_composed_main_surface)
+        splash_controller.schedule_idle(_reveal_composed_main_surface)
     root.lift()
     root.focus_force()
     # Briefly force topmost so the splash appears above the GLFW viewer window
     # that just closed -- on macOS the focus doesn't transfer automatically.
     root.attributes("-topmost", True)
-    session.schedule_after(root, 200, lambda: root.attributes("-topmost", False))
+    splash_controller.schedule(200, lambda: root.attributes("-topmost", False))
     # The app-owned manager survives this Tk window and any intervening viewer.
     # Polling immutable snapshots keeps every widget mutation on the Tk thread.
-    session.schedule_after(root, 50, _refresh_update_presentation)
-    session.schedule_after(root, 350, update_manager.check_for_updates)
+    splash_controller.schedule(50, _refresh_update_presentation)
+    splash_controller.schedule(350, update_manager.check_for_updates)
     def _handle_root_return(_event=None):
         if active_surface[0] == "preferences":
             panel = preferences_panel_ref[0]
@@ -2337,7 +2339,7 @@ def show_splash_screen(
     try:
         root.mainloop()
     finally:
-        session.cancel_after_callbacks(root)
+        splash_controller.cancel_scheduled_callbacks()
         update_manager.set_foreground_update_surface_active(False)
 
     # Some adapters keep the single Tk app object alive for process-level
@@ -2348,7 +2350,7 @@ def show_splash_screen(
         except Exception:
             pass  # already destroyed, or a background thread beat us to it
 
-    return session.selected_folder
+    return splash_controller.selected_folder
 
 
 def _load_last_browse_dir() -> str | None:

@@ -784,10 +784,10 @@ def test_splash_navigation_actions_are_keyboard_accessible_without_fallthrough()
             indicator_start,
         )
     ]
-    assert indicator_source.count("session.schedule_after(") == 1
+    assert indicator_source.count("splash_controller.schedule(") == 1
     assert "def _reveal_composed_main_surface() -> None:" in source
-    assert "root.after(remaining_launch_ms, _reveal_composed_main_surface)" in source
-    assert "root.after_idle(_reveal_composed_main_surface)" in source
+    assert "splash_controller.schedule(" in source
+    assert "splash_controller.schedule_idle(_reveal_composed_main_surface)" in source
     reveal_source = source[
         source.index("def _reveal_composed_main_surface() -> None:") : source.index(
             "remaining_launch_ms = _remaining_launch_delay_ms("
