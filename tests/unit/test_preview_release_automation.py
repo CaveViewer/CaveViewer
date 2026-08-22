@@ -105,20 +105,51 @@ def test_shared_generic_launcher_accepts_only_manual_repository_workflows():
         launcher.validate_workflow_name("finalize-release.yml")
 
 
-def test_shared_generic_launcher_prompts_for_required_workflow_inputs():
+def test_shared_generic_launcher_resolves_release_version_automatically():
     launcher = _load_generic_launcher_module()
     workflow = launcher.validate_workflow_name("linux-x86_64-release.yml")
-    prompts = []
 
     fields = launcher.resolve_dispatch_fields(
         workflow,
         [],
-        input_fn=lambda prompt: prompts.append(prompt) or "1.0.90",
+        input_fn=lambda _prompt: pytest.fail("version must not prompt"),
+        automatic_values={"version": lambda: "1.0.90"},
     )
 
     assert launcher.required_dispatch_inputs(workflow) == ("version",)
     assert fields == ("version=1.0.90",)
-    assert prompts == ["version: "]
+
+
+@pytest.mark.parametrize(
+    ("published_tags", "expected"),
+    [
+        ("1.0.88\n1.0.90", "1.0.91"),
+        ("1.0.92\n1.0.91", "1.0.93"),
+    ],
+)
+def test_shared_generic_launcher_increments_highest_published_release(
+    monkeypatch, published_tags, expected
+):
+    launcher = _load_generic_launcher_module()
+    commands = []
+
+    def fake_output(command):
+        commands.append(command)
+        if command[:3] == ["gh", "repo", "view"]:
+            return "CaveViewer/CaveViewer"
+        return published_tags
+
+    monkeypatch.setattr(launcher, "_output", fake_output)
+
+    assert launcher.next_published_release_version() == expected
+    assert commands[1] == [
+        "gh",
+        "api",
+        "--paginate",
+        "repos/CaveViewer/CaveViewer/releases?per_page=100",
+        "--jq",
+        ".[] | select(.draft == false) | .tag_name",
+    ]
 
 
 def test_shared_generic_launcher_preserves_explicit_workflow_fields():
@@ -173,6 +204,38 @@ def test_shared_generic_launcher_passes_resolved_fields_to_gh(monkeypatch):
         "release/next",
         "--field",
         "version=1.0.92",
+    ] in commands
+
+
+def test_shared_generic_launcher_passes_automatic_version_to_gh(monkeypatch):
+    launcher = _load_generic_launcher_module()
+    commands = []
+    monkeypatch.setattr(launcher, "_preflight", lambda _workflow: "release/next")
+    monkeypatch.setattr(launcher, "_list_runs", lambda _workflow, _branch: [])
+    monkeypatch.setattr(
+        launcher, "next_published_release_version", lambda: "1.0.93"
+    )
+    monkeypatch.setattr(
+        launcher,
+        "_wait_for_new_run",
+        lambda *_args: {"databaseId": 43, "url": "https://example.test/run/43"},
+    )
+    monkeypatch.setattr(
+        launcher,
+        "_run",
+        lambda command, **_kwargs: commands.append(list(command)),
+    )
+
+    assert launcher.main(["--workflow", "linux-x86_64-release.yml"]) == 0
+    assert [
+        "gh",
+        "workflow",
+        "run",
+        "linux-x86_64-release.yml",
+        "--ref",
+        "release/next",
+        "--field",
+        "version=1.0.93",
     ] in commands
 
 
