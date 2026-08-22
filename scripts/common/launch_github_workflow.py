@@ -10,6 +10,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from collections.abc import Callable
 from typing import Any, Sequence
 
 
@@ -46,6 +47,72 @@ def validate_workflow_name(workflow: str) -> Path:
     if "\n  workflow_dispatch:" not in path.read_text(encoding="utf-8"):
         raise ValueError(f"Workflow is not manually dispatchable: {workflow}")
     return path
+
+
+def required_dispatch_inputs(workflow_path: Path) -> tuple[str, ...]:
+    """Return required manual-dispatch inputs from a repository workflow."""
+    lines = workflow_path.read_text(encoding="utf-8").splitlines()
+    in_dispatch = False
+    in_inputs = False
+    dispatch_indent = -1
+    inputs_indent = -1
+    current_input: str | None = None
+    required: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        indent = len(line) - len(line.lstrip())
+        if stripped == "workflow_dispatch:":
+            in_dispatch = True
+            dispatch_indent = indent
+            continue
+        if in_dispatch and indent <= dispatch_indent:
+            break
+        if not in_dispatch:
+            continue
+        if stripped == "inputs:":
+            in_inputs = True
+            inputs_indent = indent
+            continue
+        if not in_inputs:
+            continue
+        if indent == inputs_indent + 2 and stripped.endswith(":"):
+            current_input = stripped[:-1]
+            continue
+        if (
+            current_input is not None
+            and indent > inputs_indent + 2
+            and stripped == "required: true"
+        ):
+            required.append(current_input)
+    return tuple(required)
+
+
+def resolve_dispatch_fields(
+    workflow_path: Path,
+    supplied_fields: Sequence[str],
+    *,
+    input_fn: Callable[[str], str] = input,
+) -> tuple[str, ...]:
+    """Validate explicit fields and prompt for required values still missing."""
+    values: dict[str, str] = {}
+    for field in supplied_fields:
+        name, separator, value = field.partition("=")
+        name = name.strip()
+        if not separator or not name or not value.strip():
+            raise ValueError("--field must use a non-empty name=value")
+        if name in values:
+            raise ValueError(f"Workflow input {name!r} was provided more than once")
+        values[name] = value.strip()
+    for name in required_dispatch_inputs(workflow_path):
+        if name in values:
+            continue
+        value = input_fn(f"{name}: ").strip()
+        if not value:
+            raise ValueError(f"Required workflow input {name!r} was not provided")
+        values[name] = value
+    return tuple(f"{name}={value}" for name, value in values.items())
 
 
 def select_new_workflow_run(
@@ -132,6 +199,13 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--workflow", required=True, help="Workflow YAML filename")
     parser.add_argument(
+        "--field",
+        action="append",
+        default=[],
+        metavar="NAME=VALUE",
+        help="Workflow input; repeat as needed. Missing required inputs are prompted.",
+    )
+    parser.add_argument(
         "--lookup-timeout", type=int, default=60, help=argparse.SUPPRESS
     )
     return parser.parse_args(argv)
@@ -141,13 +215,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _parse_args(argv)
     try:
         branch = _preflight(args.workflow)
+        workflow_path = validate_workflow_name(args.workflow)
+        fields = resolve_dispatch_fields(workflow_path, args.field)
         previous_ids = {
             int(run["databaseId"]) for run in _list_runs(args.workflow, branch)
         }
         print(f"Dispatching {args.workflow} on {branch}.")
-        print("GitHub CLI will prompt for any workflow inputs.")
+        command = ["gh", "workflow", "run", args.workflow, "--ref", branch]
+        for field in fields:
+            command.extend(("--field", field))
         _run(
-            ["gh", "workflow", "run", args.workflow, "--ref", branch],
+            command,
             capture_output=False,
         )
         run = _wait_for_new_run(
