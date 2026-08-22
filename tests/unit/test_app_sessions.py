@@ -420,6 +420,7 @@ def test_map_session_reports_source_viewer_failures(
     descriptor = {"format": "glb", "glb_path": str(tmp_path / "map.glb")}
     recorder = _LogRecorder()
     printed = []
+    shown = []
     monkeypatch.setattr(app, "_LOG", recorder)
     monkeypatch.setattr(app, "find_model_file", lambda _folder: descriptor)
     monkeypatch.setattr(chunker, "cache_is_valid", lambda _path: cache_is_valid)
@@ -427,6 +428,11 @@ def test_map_session_reports_source_viewer_failures(
     monkeypatch.setattr(chunker, "cache_chunk_size", lambda _path: 8.0)
     monkeypatch.setattr(chunker, "configured_chunk_size", lambda: 8.0)
     monkeypatch.setattr(traceback, "print_exc", lambda: printed.append(True))
+    monkeypatch.setattr(
+        app,
+        "_show_viewer_launch_error",
+        lambda error: shown.append(str(error)),
+    )
 
     def fail_viewer(*_args, **_kwargs):
         raise RuntimeError("viewer failed")
@@ -441,6 +447,7 @@ def test_map_session_reports_source_viewer_failures(
     assert raised.value.code == 1
     assert "viewer failed" in recorder.error_messages[-1]
     assert printed == [True]
+    assert shown == ["viewer failed"]
 
 
 def _prepare_main(monkeypatch):
