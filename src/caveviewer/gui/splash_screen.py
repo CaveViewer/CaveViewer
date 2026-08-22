@@ -910,8 +910,6 @@ def _update_presentation(snapshot: UpdateSnapshot) -> _UpdatePresentation:
     if snapshot.state == UpdateState.AVAILABLE:
         if snapshot.install_action_label:
             action_text = snapshot.install_action_label
-            if is_preview:
-                action_text = f"{action_text} (Preview)"
             if snapshot.available_version:
                 action_text = f"{action_text} {snapshot.available_version}"
             return _UpdatePresentation(
@@ -959,8 +957,6 @@ def _update_presentation(snapshot: UpdateSnapshot) -> _UpdatePresentation:
                     else "Installer could not start"
                 )
             action_text = snapshot.install_action_label
-            if is_preview:
-                action_text = f"{action_text} (Preview)"
             return _UpdatePresentation(
                 status_text=status_text,
                 action_text=action_text,

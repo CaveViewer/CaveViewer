@@ -324,6 +324,30 @@ def test_windows_exe_update_prompts_for_install_restart_and_never_uses_reveal():
     )
 
 
+def test_preview_install_actions_do_not_repeat_the_package_channel():
+    available = splash_screen._update_presentation(
+        UpdateSnapshot(
+            state=UpdateState.AVAILABLE,
+            current_version="1.0.85",
+            update_channel="preview",
+            available_version="1.0.86",
+            install_action_label="Install and restart",
+        )
+    )
+    ready = splash_screen._update_presentation(
+        UpdateSnapshot(
+            state=UpdateState.READY,
+            current_version="1.0.85",
+            update_channel="preview",
+            available_version="1.0.86",
+            install_action_label="Install and restart",
+        )
+    )
+
+    assert available.action_text == "Install and restart 1.0.86"
+    assert ready.action_text == "Install and restart"
+
+
 def test_preview_update_states_are_explicitly_labeled():
     available = splash_screen._update_presentation(
         UpdateSnapshot(
