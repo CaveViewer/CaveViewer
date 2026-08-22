@@ -36,6 +36,10 @@ from caveviewer.core.chunking import builder as chunker
 from caveviewer.core.map import slicing as map_slicing
 from caveviewer.core.hardware import gpu_memory, memory_targets, system_memory
 from caveviewer.core.diagnostics.logging import get_logger
+from caveviewer.core.diagnostics.runtime import (
+    record_runtime_exception,
+    record_runtime_stage,
+)
 from caveviewer.core.preferences.runtime_settings import (
     RuntimeSettings,
     ViewerRuntimeSettings,
@@ -770,7 +774,23 @@ class CaveViewerWindow(mglw.WindowConfig):
     _import_pause_notice_note = _import_controller_property("pause_notice_note")
 
     def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+        record_runtime_stage(
+            "viewer_config_initialization_begin",
+            requested_window_size=getattr(type(self), "window_size", None),
+        )
+        try:
+            super().__init__(**kwargs)
+        except BaseException as error:
+            record_runtime_exception(
+                "viewer_config_initialization_failed",
+                error,
+            )
+            raise
+        record_runtime_stage(
+            "viewer_config_context_ready",
+            context_version=getattr(getattr(self, "ctx", None), "version_code", None),
+            window_backend=type(getattr(self, "wnd", None)).__name__,
+        )
         self._window_setup_complete = False
         self._platform_runtime = CaveViewerWindow.cave_platform_runtime
         self._runtime_settings = (
@@ -1281,6 +1301,12 @@ class CaveViewerWindow(mglw.WindowConfig):
         # exact same "nothing to draw into yet" problem this feature
         # exists to avoid.
         self._window_setup_complete = True
+        record_runtime_stage(
+            "viewer_config_initialization_complete",
+            initial_map_mode=(
+                "cached" if have_ready_cache else "pending_import"
+            ),
+        )
 
     def _active_platform_adapter(self):
         """Return the injected adapter, falling back only for legacy test shells."""
@@ -5555,6 +5581,12 @@ class CaveViewerWindow(mglw.WindowConfig):
     def on_render(self, current_time: float, frame_time: float):
         if self._frame_phase() is ViewerFramePhase.INACTIVE:
             return
+        if not getattr(self, "_first_render_checkpoint_recorded", False):
+            self._first_render_checkpoint_recorded = True
+            record_runtime_stage(
+                "viewer_first_render_entered",
+                window_size=getattr(getattr(self, "wnd", None), "size", None),
+            )
 
         # Backends can miss iconify callbacks on Dock minimize; poll a
         # few common window flags each frame as a safety net.
@@ -7602,12 +7634,33 @@ def _run_moderngl_window_config(config_class: type, args=None) -> None:
     bypass that tail cleanup, so create the config explicitly and close/destroy
     the window ourselves before re-raising to the application boundary.
     """
-    config = mglw.create_window_config_instance(config_class, args=args)
+    config_class_name = getattr(config_class, "__name__", str(config_class))
+    record_runtime_stage(
+        "viewer_window_config_create_begin",
+        config_class=config_class_name,
+    )
+    try:
+        config = mglw.create_window_config_instance(config_class, args=args)
+    except BaseException as error:
+        record_runtime_exception(
+            "viewer_window_config_create_failed",
+            error,
+            config_class=config_class_name,
+        )
+        raise
+    record_runtime_stage(
+        "viewer_window_config_created",
+        config_class=config_class_name,
+        window_backend=type(getattr(config, "wnd", None)).__name__,
+    )
     window_destroyed_by_runner = False
     try:
+        record_runtime_stage("viewer_window_loop_begin")
         mglw.run_window_config_instance(config)
         window_destroyed_by_runner = True
-    except BaseException:
+        record_runtime_stage("viewer_window_loop_returned")
+    except BaseException as error:
+        record_runtime_exception("viewer_window_loop_exception", error)
         wnd = getattr(config, "wnd", None)
         if wnd is not None:
             try:
@@ -7617,6 +7670,10 @@ def _run_moderngl_window_config(config_class: type, args=None) -> None:
                 _LOG.exception("Error while closing viewer after interrupted window loop.")
         raise
     finally:
+        record_runtime_stage(
+            "viewer_window_cleanup_begin",
+            loop_returned=window_destroyed_by_runner,
+        )
         if not window_destroyed_by_runner:
             wnd = getattr(config, "wnd", None)
             if wnd is not None:
@@ -7624,16 +7681,26 @@ def _run_moderngl_window_config(config_class: type, args=None) -> None:
                     wnd.destroy()
                 except Exception:
                     pass
+        record_runtime_stage("viewer_window_cleanup_complete")
 
 
 def _launch_viewer_window(
     *, window_size_override: tuple[int, int] | None = None
 ) -> None:
     """Launch with dimensions expressed in the selected backend's coordinates."""
-    preflight = viewer_launch_preflight(
-        platform_runtime=CaveViewerWindow.cave_platform_runtime,
+    record_runtime_stage("viewer_launch_preflight_begin")
+    try:
+        preflight = viewer_launch_preflight(
+            platform_runtime=CaveViewerWindow.cave_platform_runtime,
+        )
+        target = authorized_viewer_launch_target(preflight)
+    except BaseException as error:
+        record_runtime_exception("viewer_launch_preflight_failed", error)
+        raise
+    record_runtime_stage(
+        "viewer_launch_target_authorized",
+        route=target.route_key,
     )
-    target = authorized_viewer_launch_target(preflight)
     if window_size_override is not None:
         CaveViewerWindow.window_size = window_size_override
         window_size_fraction = None
@@ -7650,18 +7717,29 @@ def _launch_viewer_window(
         CaveViewerWindow.window_size = _desktop_relative_window_size()
         window_size_fraction = _DESKTOP_WINDOW_SCALE
         fallback_window_size = _DEFAULT_WINDOW_SIZE
-    _window_backend_adapter_for_runtime(
-        CaveViewerWindow.cave_platform_runtime
-    ).launch_viewer(
-        target,
-        ViewerWindowLaunchRequest(
-            config_class=CaveViewerWindow,
-            runner=_run_moderngl_window_config,
-            window_size_fraction=window_size_fraction,
-            fallback_window_size=fallback_window_size,
-            force_resizable_window=True,
-        ),
+    request = ViewerWindowLaunchRequest(
+        config_class=CaveViewerWindow,
+        runner=_run_moderngl_window_config,
+        window_size_fraction=window_size_fraction,
+        fallback_window_size=fallback_window_size,
+        force_resizable_window=True,
     )
+    record_runtime_stage(
+        "viewer_native_launch_begin",
+        requested_window_size=CaveViewerWindow.window_size,
+        window_size_fraction=window_size_fraction,
+    )
+    try:
+        _window_backend_adapter_for_runtime(
+            CaveViewerWindow.cave_platform_runtime
+        ).launch_viewer(
+            target,
+            request,
+        )
+    except BaseException as error:
+        record_runtime_exception("viewer_native_launch_failed", error)
+        raise
+    record_runtime_stage("viewer_native_launch_returned")
 
 
 def _normalize_map_root(

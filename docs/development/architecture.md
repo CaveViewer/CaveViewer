@@ -159,9 +159,13 @@ path before the trace clock advances again.
 
 The process boundary also installs main-thread and worker-thread exception
 hooks. `ApplicationDiagnostics` is a generic optional sink with no output path
-until an explicit consumer binds one, so ordinary viewer sessions do not create
-cache-local diagnostic files. It can record lifecycle and bounded exception
-context without changing cache construction or manual tracing.
+until an explicit consumer binds one, so diagnostics never become cache-local
+artifacts. On Windows, the application binds it to a per-run user-profile
+JSONL file and pairs it with `RuntimeDiagnostics`: a human-readable session
+log that receives normal application logging and, when available, fatal native
+fault tracebacks. The viewer records checkpoints before native launch, context
+creation, and the first render so a crash can be located even when the
+packaged application has no console.
 
 On Windows, the module entry point also owns one short-lived
 `StartupDiagnostics` session before importing `caveviewer.app`. It writes one

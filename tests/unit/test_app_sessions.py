@@ -167,8 +167,28 @@ def test_map_session_reports_prebuilt_viewer_failure(tmp_path, monkeypatch):
     (tmp_path / chunker.MANIFEST_NAME).write_text("{}", encoding="utf-8")
     recorder = _LogRecorder()
     printed = []
+    shown = []
+    runtime_stages = []
+    runtime_errors = []
     monkeypatch.setattr(app, "_LOG", recorder)
     monkeypatch.setattr(traceback, "print_exc", lambda: printed.append(True))
+    monkeypatch.setattr(
+        app,
+        "_show_viewer_launch_error",
+        lambda error: shown.append(str(error)),
+    )
+    monkeypatch.setattr(
+        app,
+        "record_runtime_stage",
+        lambda stage, **context: runtime_stages.append((stage, context)),
+    )
+    monkeypatch.setattr(
+        app,
+        "record_runtime_exception",
+        lambda stage, error, **context: runtime_errors.append(
+            (stage, str(error), context)
+        ),
+    )
     monkeypatch.setattr(chunker, "cache_chunk_size", lambda _path: 8.0)
     monkeypatch.setattr(chunker, "configured_chunk_size", lambda: 8.0)
 
@@ -183,6 +203,18 @@ def test_map_session_reports_prebuilt_viewer_failure(tmp_path, monkeypatch):
     assert raised.value.code == 1
     assert "OpenGL unavailable" in recorder.error_messages[-1]
     assert printed == [True]
+    assert shown == ["OpenGL unavailable"]
+    assert [stage for stage, _context in runtime_stages] == [
+        "map_session_selected",
+        "viewer_session_launch_requested",
+    ]
+    assert runtime_errors == [
+        (
+            "viewer_session_exception",
+            "OpenGL unavailable",
+            {"cache_dir": str(tmp_path)},
+        )
+    ]
 
 
 def test_map_session_opens_obj_with_existing_cache(tmp_path, monkeypatch):
@@ -608,6 +640,47 @@ def test_run_returns_normally_when_main_succeeds(monkeypatch):
     app.run()
 
     assert called == [True]
+
+
+def test_run_binds_windows_runtime_diagnostics_to_application_events(
+    tmp_path,
+    monkeypatch,
+):
+    calls = []
+
+    class RuntimeDiagnosticsRecorder:
+        path = tmp_path / "viewer-session-test.log"
+        jsonl_path = tmp_path / "viewer-session-test.jsonl"
+
+        def record(self, stage, **context):
+            calls.append(("record", stage, context))
+
+        def close(self):
+            calls.append(("close",))
+
+    diagnostics = RuntimeDiagnosticsRecorder()
+    monkeypatch.setattr(
+        app,
+        "create_runtime_diagnostics",
+        lambda **_kwargs: diagnostics,
+    )
+    monkeypatch.setattr(app, "main", lambda: calls.append(("main",)))
+
+    app.run()
+
+    records = [
+        json.loads(line)
+        for line in diagnostics.jsonl_path.read_text(encoding="utf-8").splitlines()
+    ]
+    bound = next(
+        record
+        for record in records
+        if record["event"] == "application_diagnostics_bound"
+    )
+    assert bound["runtime_log_path"] == str(diagnostics.path)
+    assert calls[0][0:2] == ("record", "app_run_entered")
+    assert ("main",) in calls
+    assert calls[-1] == ("close",)
 
 
 def test_run_uses_and_closes_optional_startup_diagnostics(monkeypatch):

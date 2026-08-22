@@ -2859,6 +2859,39 @@ def test_moderngl_runner_does_not_close_window_after_normal_loop(monkeypatch):
     assert calls == ["run"]
 
 
+def test_moderngl_runner_records_native_window_checkpoints(monkeypatch):
+    checkpoints = []
+    fake_config = SimpleNamespace(wnd=SimpleNamespace())
+    fake_config_class = type("FakeConfigClass", (), {})
+    monkeypatch.setattr(
+        viewer_window.mglw,
+        "create_window_config_instance",
+        lambda _config_class, args=None: fake_config,
+    )
+    monkeypatch.setattr(
+        viewer_window.mglw,
+        "run_window_config_instance",
+        lambda _config: None,
+    )
+    monkeypatch.setattr(
+        viewer_window,
+        "record_runtime_stage",
+        lambda stage, **context: checkpoints.append((stage, context)),
+    )
+
+    viewer_window._run_moderngl_window_config(fake_config_class)
+
+    assert [stage for stage, _context in checkpoints] == [
+        "viewer_window_config_create_begin",
+        "viewer_window_config_created",
+        "viewer_window_loop_begin",
+        "viewer_window_loop_returned",
+        "viewer_window_cleanup_begin",
+        "viewer_window_cleanup_complete",
+    ]
+    assert checkpoints[0][1]["config_class"] == "FakeConfigClass"
+
+
 class _ScaledStepperProbe:
     BUTTON_SIZE = viewer_window.StepperControl.BUTTON_SIZE
     VALUE_BOX_WIDTH = viewer_window.StepperControl.VALUE_BOX_WIDTH
