@@ -47,6 +47,9 @@ from caveviewer.gui.map_library_transfers import (
     MapLibraryCatalogWorkflow,
     MapLibraryDownloadWorkflow,
 )
+from caveviewer.gui.map_library_cache_rebuild_workflow import (
+    MapLibraryCacheRebuildWorkflow,
+)
 from caveviewer.gui.map_library_panel import (
     MapLibraryMenuAction,
     MapLibraryPanel,
@@ -337,7 +340,12 @@ class MapLibraryWorkflow:
             on_failure=self.finish_download_failure,
         )
         self._active_cache_rebuild: _ActiveCacheRebuild | None = None
-        self._cache_rebuild_after_id = None
+        self.cache_rebuild_workflow = MapLibraryCacheRebuildWorkflow(
+            controller=self.cache_rebuild_controller,
+            scheduler=self.root,
+            splash_exists=self.splash_exists,
+            apply_updates=self._apply_cache_rebuild_updates,
+        )
         self.recent_map_paths: list[str] = []
 
     def populate_panel(self, parent, recent_map_paths: Sequence[str]) -> None:
@@ -854,12 +862,7 @@ class MapLibraryWorkflow:
         active = self._active_cache_rebuild
         if active is None:
             return False
-        pause_request = (
-            self.cache_rebuild_controller.request_pause_for_close
-            if for_close
-            else self.cache_rebuild_controller.request_pause
-        )
-        if not pause_request():
+        if not self.cache_rebuild_workflow.request_pause(for_close=for_close):
             return False
         self.panel.set_row_action(
             active.row_widgets,
@@ -874,23 +877,18 @@ class MapLibraryWorkflow:
 
     def schedule_cache_rebuild_poll(self) -> None:
         """Schedule a non-blocking child-event poll while a rebuild is active."""
-        if not self.cache_rebuild_controller.active or not self.splash_exists():
-            return
         try:
-            self._cache_rebuild_after_id = self.root.after(
-                100,
-                self.poll_cache_rebuild,
-            )
+            self.cache_rebuild_workflow.schedule_poll()
         except tk.TclError:
             self.request_cache_rebuild_pause()
 
     def poll_cache_rebuild(self) -> None:
         """Apply latest rebuild updates on the Tk thread and continue polling."""
-        self._cache_rebuild_after_id = None
-        if not self.splash_exists():
-            self.request_cache_rebuild_pause()
-            return
-        for update in self.cache_rebuild_controller.poll():
+        self.cache_rebuild_workflow.poll()
+
+    def _apply_cache_rebuild_updates(self, updates: tuple[Any, ...]) -> None:
+        """Render typed updates delivered by the rebuild lifecycle owner."""
+        for update in updates:
             if isinstance(update, CacheRebuildProgress):
                 self._apply_cache_rebuild_progress(update)
             elif isinstance(update, CacheRebuildSucceeded):
@@ -899,8 +897,6 @@ class MapLibraryWorkflow:
                 self._handle_cache_rebuild_paused(update)
             elif isinstance(update, CacheRebuildFailed):
                 self._handle_cache_rebuild_failure(update)
-        if self.cache_rebuild_controller.active:
-            self.schedule_cache_rebuild_poll()
 
     def _apply_cache_rebuild_progress(self, update: CacheRebuildProgress) -> None:
         active = self._active_cache_rebuild
