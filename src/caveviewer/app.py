@@ -837,8 +837,9 @@ def main():
         )
         return
 
-    # GUI mode: show the splash screen, run the viewer, then show the
-    # splash screen again so the user can open another map or exit.
+    # GUI mode: show the startup overlay before the first Map Library session,
+    # run the viewer, then return directly to a rebuilt Map Library so the user
+    # can open another map or exit.
     _update_version = "0.0.0" if _force_update else __version__
     _splash_version = (
         _update_version
@@ -863,6 +864,7 @@ def main():
         current_version=_update_version,
         platform_runtime=platform_runtime,
     )
+    first_library_session = True
     record_startup_stage("update_manager_create_complete")
     try:
         while True:
@@ -875,7 +877,9 @@ def main():
                 platform_runtime=platform_runtime,
                 runtime_settings_provider=lambda: runtime_settings_session.snapshot,
                 on_preferences_saved=runtime_settings_session.replace_preferences,
+                show_launch_overlay=first_library_session,
             )
+            first_library_session = False
 
             if not folder:
                 _LOG.info("No folder selected. Exiting.")
@@ -886,8 +890,9 @@ def main():
                 platform_runtime=platform_runtime,
                 runtime_settings=runtime_settings_session.snapshot,
             )
-            # Viewer closed -- loop back to a new splash backed by the same
-            # process-owned update state and any in-progress download.
+            # Viewer closed -- rebuild the library off-screen without replaying
+            # the startup-only launch overlay. The process-owned update state
+            # and any in-progress download survive both UI sessions.
     finally:
         # Splash and viewer closure do not own the worker. Only final process
         # shutdown cancels a partial package and waits for its temp cleanup.

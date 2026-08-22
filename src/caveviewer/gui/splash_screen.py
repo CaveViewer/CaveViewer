@@ -1156,13 +1156,15 @@ def show_splash_screen(
     platform_runtime: PlatformRuntime | None = None,
     runtime_settings_provider: Callable[[], RuntimeSettings] | None = None,
     on_preferences_saved: Callable[[object], object] | None = None,
+    show_launch_overlay: bool = True,
 ) -> str | None:
     """
-    Shows the launch splash screen and blocks until the person either
-    picks a folder (Browse -> select a folder -> OK) or closes the
-    window. Returns the selected folder path, or None if the window was closed
-    without picking one. Update work belongs to app.py and may outlive this
-    particular splash instance.
+    Builds the Map Library and blocks until the person either picks a folder
+    (Browse -> select a folder -> OK) or closes the window. The branded launch
+    overlay is optional so later library sessions can be composed off-screen
+    and revealed directly. Returns the selected folder path, or None if the
+    window was closed without picking one. Update work belongs to app.py and
+    may outlive this particular UI instance.
     """
     record_startup_stage("splash_function_entered")
     record_startup_stage("tkinter_import_begin")
@@ -1286,13 +1288,17 @@ def show_splash_screen(
 
     root.grid_rowconfigure(0, weight=1)
     root.grid_columnconfigure(0, weight=1)
-    launch_surface = tk.Frame(root, bg=_BG_COLOR)
-    launch_surface.grid(row=0, column=0, sticky="nsew")
-    launch_indicator = _build_launch_surface(
-        launch_surface,
-        program_name=program_name,
-        px=px,
-    )
+    launch_surface = None
+    launch_indicator = None
+    launch_visible_at = 0.0
+    if show_launch_overlay:
+        launch_surface = tk.Frame(root, bg=_BG_COLOR)
+        launch_surface.grid(row=0, column=0, sticky="nsew")
+        launch_indicator = _build_launch_surface(
+            launch_surface,
+            program_name=program_name,
+            px=px,
+        )
 
     content_frame = tk.Frame(root, bg=_BG_COLOR)
     content_frame.grid(
@@ -1302,18 +1308,28 @@ def show_splash_screen(
         padx=px(22),
         pady=px(16),
     )
-    launch_surface.tkraise()
-    launch_visible_at = time.monotonic()
-    root.deiconify()
-    root.lift()
-    _settle_launch_layout(root, passes=1)
+    if show_launch_overlay:
+        launch_surface.tkraise()
+        launch_visible_at = time.monotonic()
+        root.deiconify()
+        root.lift()
+        root.focus_force()
+        root.attributes("-topmost", True)
+        splash_controller.schedule(
+            200, lambda: root.attributes("-topmost", False)
+        )
+        _settle_launch_layout(root, passes=1)
 
     launch_indicator_active = [True]
     launch_indicator_phase = [0.0]
 
     def _advance_launch_indicator() -> None:
         """Advance one owned frame while the launch surface remains visible."""
-        if not launch_indicator_active[0] or splash_controller.closing:
+        if (
+            launch_indicator is None
+            or not launch_indicator_active[0]
+            or splash_controller.closing
+        ):
             return
         try:
             if not launch_indicator.winfo_exists():
@@ -1331,7 +1347,8 @@ def show_splash_screen(
             _advance_launch_indicator,
         )
 
-    _advance_launch_indicator()
+    if show_launch_overlay:
+        _advance_launch_indicator()
 
     # The splash is organized as a stable navigation rail beside an active
     # content surface. Keeping the rail a fixed width prevents map-library
@@ -2277,15 +2294,31 @@ def show_splash_screen(
         """Reveal the fully painted main surface in one non-repeating handoff."""
         launch_indicator_active[0] = False
         content_frame.tkraise()
-        launch_surface.destroy()
-        mark_startup_splash_visible()
+        if launch_surface is not None:
+            launch_surface.destroy()
+            mark_startup_splash_visible()
+        root.deiconify()
+        root.lift()
+        root.focus_force()
+        if not show_launch_overlay:
+            # Briefly force topmost so the returning library appears above the
+            # GLFW viewer that just closed. On macOS focus does not transfer
+            # automatically.
+            root.attributes("-topmost", True)
+            splash_controller.schedule(
+                200, lambda: root.attributes("-topmost", False)
+            )
 
     # Honor one total minimum duration measured from the first visible launch
     # frame. Fast builds wait only for the remaining time; slow builds reveal
     # on the next idle paint. Neither path polls or reschedules itself.
-    remaining_launch_ms = _remaining_launch_delay_ms(
-        visible_at=launch_visible_at,
-        now=time.monotonic(),
+    remaining_launch_ms = (
+        _remaining_launch_delay_ms(
+            visible_at=launch_visible_at,
+            now=time.monotonic(),
+        )
+        if show_launch_overlay
+        else 0
     )
     if remaining_launch_ms:
         splash_controller.schedule(
@@ -2293,12 +2326,6 @@ def show_splash_screen(
         )
     else:
         splash_controller.schedule_idle(_reveal_composed_main_surface)
-    root.lift()
-    root.focus_force()
-    # Briefly force topmost so the splash appears above the GLFW viewer window
-    # that just closed -- on macOS the focus doesn't transfer automatically.
-    root.attributes("-topmost", True)
-    splash_controller.schedule(200, lambda: root.attributes("-topmost", False))
     # The app-owned manager survives this Tk window and any intervening viewer.
     # Polling immutable snapshots keeps every widget mutation on the Tk thread.
     splash_controller.schedule(50, _refresh_update_presentation)
