@@ -642,11 +642,12 @@ def test_preview_display_badge_is_not_used_for_update_version_comparison(
     assert managers[0].current_version == app.__version__
 
 
-def test_main_reopens_splash_after_a_map_session(monkeypatch):
+def test_main_reopens_library_without_launch_overlay_after_map_session(monkeypatch):
     _recorder, _configured = _prepare_main(monkeypatch)
     selections = iter(("/maps/first", ""))
     versions = []
     seen_managers = []
+    launch_overlays = []
     opened = []
     managers = _install_update_manager_module(monkeypatch)
     monkeypatch.setattr(app.sys, "argv", ["caveviewer", " "])
@@ -660,6 +661,7 @@ def test_main_reopens_splash_after_a_map_session(monkeypatch):
         lambda **kwargs: (
             versions.append(kwargs["version"]),
             seen_managers.append(kwargs["update_manager"]),
+            launch_overlays.append(kwargs["show_launch_overlay"]),
             next(selections),
         )[-1],
     )
@@ -672,6 +674,7 @@ def test_main_reopens_splash_after_a_map_session(monkeypatch):
     assert versions == [app.__version__, app.__version__]
     assert managers == [seen_managers[0]]
     assert seen_managers == [managers[0], managers[0]]
+    assert launch_overlays == [True, False]
     assert managers[0].shutdown_calls == 1
 
 
