@@ -32,6 +32,7 @@ release_signing_private_key.pem
 .caveviewer/
 run_caveviewer.sh
 .idea/
-.run
+.run/*
+!.run/GitHub - *.run.xml
 .aiassistant/
 docs/development/.agents/

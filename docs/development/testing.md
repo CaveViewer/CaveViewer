@@ -138,6 +138,20 @@ notifications.
 
 ## Release gates
 
+Protected `main` accepts changes only through pull requests with strict required
+status checks. The required Essential Tests contexts cover syntax/import and
+whitespace sanity, Linux coverage/metadata, CLI smoke on Windows/macOS/Linux,
+and unit tests on Windows/macOS/Linux. Strict gating means the PR head must be
+validated against current `main`; a stale successful run is insufficient.
+
+Release source follows two gated transitions: feature branch to `main`, then
+`main` to `release/next` for the publish build. The finalizer writes release
+metadata only to `release/next`, and that metadata returns to `main` through a
+second required-check PR. No `publish: true` workflow should run on `main` or a
+feature branch. Preview Release Promotion dispatches the source and metadata
+Essential Tests explicitly because workflow-token-created PRs do not trigger a
+second privileged workflow automatically.
+
 An individually dispatched platform release workflow calls the Essential Tests
 workflow before its package job. `All Platform Release` calls Essential Tests
 once, then invokes every platform workflow with its duplicate internal gate

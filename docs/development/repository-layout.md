@@ -111,12 +111,15 @@ packaging/linux/                              desktop and AppStream metadata
 packaging/windows/CaveViewerSetup.iss          Inno Setup installer definition
 scripts/                                      development and release automation
 scripts/benchmark/                            benchmark comparison helpers and compatibility wrappers
+.run/                                         shared, secret-free JetBrains run configurations
 updates/                                      published update manifests/signatures
 ```
 
 Ignored local directories such as `.venv*`, `.cache`, `__pycache__`, `.idea`,
-`.run`, build output, and imported map caches are not repository architecture.
-They must stay untracked.
+build output, and imported map caches are not repository architecture. They
+must stay untracked. `.run/` is intentionally tracked and contains only shared,
+secret-free JetBrains run configurations; personal IDE state remains in the
+ignored `.idea/` directory.
 
 ## Package layout
 

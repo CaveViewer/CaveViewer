@@ -1,0 +1,69 @@
+name: Preview Release Promotion
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_branch:
+        description: "Feature branch to release; blank uses the selected workflow branch"
+        required: false
+        type: string
+      release_notes:
+        description: "Release notes used for every platform"
+        required: false
+        default: "CaveViewer preview release"
+        type: string
+
+permissions:
+  actions: write
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: caveviewer-preview-release-promotion
+  cancel-in-progress: false
+
+jobs:
+  promote-and-release:
+    name: Promote, publish, and reconcile Preview
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Resolve source branch
+        id: source
+        shell: bash
+        env:
+          REQUESTED_SOURCE_BRANCH: ${{ inputs.source_branch }}
+          SELECTED_WORKFLOW_BRANCH: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          source_branch="$REQUESTED_SOURCE_BRANCH"
+          if [ -z "$source_branch" ]; then
+            source_branch="$SELECTED_WORKFLOW_BRANCH"
+          fi
+          if [ -z "$source_branch" ]; then
+            echo "Error: could not resolve the source branch." >&2
+            exit 1
+          fi
+          echo "source_branch=$source_branch" >> "$GITHUB_OUTPUT"
+
+      - name: Check out automation source
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Configure Git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Promote source, publish Preview, and reconcile metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          SOURCE_BRANCH: ${{ steps.source.outputs.source_branch }}
+          RELEASE_NOTES: ${{ inputs.release_notes }}
+        run: |
+          ./scripts/common/preview_release_automation.sh \
+            --source-branch="$SOURCE_BRANCH" \
+            --release-notes="$RELEASE_NOTES"

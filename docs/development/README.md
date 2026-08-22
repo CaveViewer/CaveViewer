@@ -9,8 +9,8 @@
 - [Testing](testing.md): test placement, commands, markers, and coverage policy.
 - [Viewer benchmarking](benchmarking.md): automated FPS regression benchmark
   design, artifacts, workflow inputs, and calibration policy.
-- [Releases](releases.md): platform matrix, GitHub workflow, channels,
-  signing, resume behavior, and post-release verification.
+- [Releases](releases.md): canonical branch gates, `release/next` workflow,
+  shared PyCharm launcher, channels, signing, and post-release verification.
 - [Rendering](rendering.md): import/chunking model, runtime streaming, tuning,
   and cache compilation options.
 - [AI-assisted development](ai-assistance.md): canonical instructions,
