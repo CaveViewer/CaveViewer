@@ -79,9 +79,10 @@ an optional leading `v`, and GitHub uses the tag `v<version>`.
 - Versions must increase within each channel. Reissuing the same numeric
   preview version does not produce an update for an existing preview
   installation.
-- Packages using the retired `prerelease` CaveViewer channel are not supported.
-  Install the first `preview` package manually; later Preview updates stay
-  automatic within `preview.json`. Moving from Preview to Stable remains an
+- Packages using the retired `prerelease` CaveViewer channel follow signed
+  compatibility aliases of `preview.json`, allowing those installations to
+  discover a current Preview release. Current packages and tooling continue to
+  use only the `preview` channel name. Moving from Preview to Stable remains an
   explicit manual Stable install.
 
 Published platform/channel pairs use these paths:
@@ -96,9 +97,12 @@ updates/macos/x86_64/<stable|preview>.json
 Every published manifest has a matching `.json.sig`. macOS ARM64 publishing
 also copies the signed files to the legacy aliases at
 `updates/macos/<stable|preview>.json[.sig]`. Those aliases must remain
-byte-for-byte identical to the ARM64 files. `.gitattributes` forces every
-update JSON file to use LF line endings so Git cannot rewrite signed manifest
-bytes during a Windows checkout or commit.
+byte-for-byte identical to the ARM64 files. Preview publishing additionally
+copies every platform's signed `preview.json[.sig]` pair to
+`prerelease.json[.sig]` for old application versions. These are path aliases,
+not a supported release-channel name for current code or release tooling.
+`.gitattributes` forces every update JSON file to use LF line endings so Git
+cannot rewrite signed manifest bytes during a Windows checkout or commit.
 
 `scripts/write_update_manifest.py` is the sole manifest serializer. Before a
 manifest can be signed, it canonicalizes the numeric version, reads the built

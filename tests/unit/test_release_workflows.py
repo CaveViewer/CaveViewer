@@ -508,6 +508,9 @@ def test_release_finalizer_is_the_single_shared_state_writer():
     assert "--release-channel \"$manifest_channel\"" in finalizer
     assert "CaveViewer-${normalized_version}-linux-x86_64.json" in finalizer
     assert "scripts/common/verify_release_asset.py" in finalizer
+    assert "add_legacy_preview_alias" in finalizer
+    assert 'legacy_manifest_path="${manifest_path%/preview.json}/prerelease.json"' in finalizer
+    assert 'cp "$manifest_path.sig" "$legacy_manifest_path.sig"' in finalizer
     assert finalizer.index('gh api "repos/$repo/releases/tags/$tag"') < (
         finalizer.index("manifest_git_paths=()")
     )
