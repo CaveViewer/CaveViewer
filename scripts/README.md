@@ -107,8 +107,10 @@ contributors authenticate independently with `gh auth login`.
 Essential Tests items in PyCharm's **Release Actions** menu. Package-smoke,
 benchmark, Pages, and maintenance workflows are intentionally not exposed in
 that focused menu. The launcher dispatches the selected workflow on the
-checked-out remote branch, lets GitHub CLI prompt for workflow-specific inputs,
-resolves the exact new run, and watches it to completion.
+checked-out remote branch, prompts in the PyCharm terminal for required inputs
+such as `version`, passes them to GitHub CLI, resolves the exact new run, and
+watches it to completion. Optional inputs retain their workflow defaults. For
+scripted use, pass repeatable `--field name=value` arguments.
 
 Release workflows live under `.github/workflows/` for macOS 15, Windows, and
 Linux x86_64. Each platform workflow can be dispatched directly or called by
