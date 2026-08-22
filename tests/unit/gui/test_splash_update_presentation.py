@@ -758,11 +758,13 @@ def test_splash_navigation_selection_uses_type_and_color_without_a_fill():
     assert "_TYPOGRAPHY.body_strong" in source
 
 
-def test_preferences_uses_a_compact_panel_specific_type_scale():
+def test_preferences_and_help_share_a_compact_embedded_panel_type_scale():
     source = inspect.getsource(splash_screen.show_splash_screen)
+    help_style_source = inspect.getsource(splash_screen._help_panel_style)
 
-    assert splash_screen._PREFERENCES_TEXT_SCALE_FACTOR == pytest.approx(11 / 12)
-    assert "text_scale=_TK_TEXT_SCALE * _PREFERENCES_TEXT_SCALE_FACTOR" in source
+    assert splash_screen._EMBEDDED_PANEL_TEXT_SCALE_FACTOR == pytest.approx(11 / 12)
+    assert "typography=_embedded_panel_typography()" in source
+    assert "typography = _embedded_panel_typography()" in help_style_source
 
 
 def test_splash_navigation_uses_a_quiet_rail_and_lower_app_status():

@@ -190,7 +190,7 @@ _NAVIGATION_HOVER_BG = DARK_THEME.entry_background
 # Keep navigation entries distinct without making the rail read as a stack of
 # separate cards. This shared spacing also scales with the active display.
 _NAVIGATION_ITEM_GAP = 8
-_PREFERENCES_TEXT_SCALE_FACTOR = 11 / 12
+_EMBEDDED_PANEL_TEXT_SCALE_FACTOR = 11 / 12
 _WINDOWS_SPLASH_LAYOUT = _SPLASH_LAYOUT_POLICY.windows_layout
 _LINUX_SPLASH_LAYOUT = _SPLASH_LAYOUT_POLICY.linux_layout
 _UI_FONT_FAMILY = _PRESENTATION_PROFILE.ui_font_family
@@ -448,8 +448,17 @@ def _cave_metadata_panel_style() -> CaveMetadataPanelStyle:
     )
 
 
+def _embedded_panel_typography() -> TkTypography:
+    """Return the compact type scale shared by Preferences and Help."""
+    return create_tk_typography(
+        _UI_FONT_FAMILY,
+        text_scale=_TK_TEXT_SCALE * _EMBEDDED_PANEL_TEXT_SCALE_FACTOR,
+    )
+
+
 def _help_panel_style() -> HelpPanelStyle:
     """Return the splash-owned style tokens for the quiet Keys table."""
+    typography = _embedded_panel_typography()
     return HelpPanelStyle(
         background_color=_BG_COLOR,
         tab_active_color=_BUTTON_BG,
@@ -461,12 +470,12 @@ def _help_panel_style() -> HelpPanelStyle:
         action_color=DARK_THEME.body_text,
         detail_color=DARK_THEME.secondary_text,
         content_pad_x=_PRESENTATION_PROFILE.preferences_dialog_layout.body_pad_x,
-        tab_font=_TYPOGRAPHY.body_strong,
-        section_font=_TYPOGRAPHY.section,
-        keycap_font=_TYPOGRAPHY.body_strong,
-        action_font=_TYPOGRAPHY.body,
-        overview_font=_TYPOGRAPHY.body_strong,
-        detail_font=_TYPOGRAPHY.supporting,
+        tab_font=typography.body_strong,
+        section_font=typography.section,
+        keycap_font=typography.body_strong,
+        action_font=typography.body,
+        overview_font=typography.body_strong,
+        detail_font=typography.supporting,
     )
 
 
@@ -1542,10 +1551,7 @@ def show_splash_screen(
             ui_font_family=_UI_FONT_FAMILY,
             desktop_services=desktop_services,
             platform_runtime=platform_runtime,
-            typography=create_tk_typography(
-                _UI_FONT_FAMILY,
-                text_scale=_TK_TEXT_SCALE * _PREFERENCES_TEXT_SCALE_FACTOR,
-            ),
+            typography=_embedded_panel_typography(),
             on_applied=_on_preferences_applied,
             on_cancel=_show_map_library_surface,
         )
