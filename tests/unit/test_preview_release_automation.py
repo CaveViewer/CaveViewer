@@ -105,6 +105,86 @@ def test_shared_generic_launcher_accepts_only_manual_repository_workflows():
         launcher.validate_workflow_name("finalize-release.yml")
 
 
+def test_shared_generic_launcher_prompts_for_required_workflow_inputs():
+    launcher = _load_generic_launcher_module()
+    workflow = launcher.validate_workflow_name("linux-x86_64-release.yml")
+    prompts = []
+
+    fields = launcher.resolve_dispatch_fields(
+        workflow,
+        [],
+        input_fn=lambda prompt: prompts.append(prompt) or "1.0.90",
+    )
+
+    assert launcher.required_dispatch_inputs(workflow) == ("version",)
+    assert fields == ("version=1.0.90",)
+    assert prompts == ["version: "]
+
+
+def test_shared_generic_launcher_preserves_explicit_workflow_fields():
+    launcher = _load_generic_launcher_module()
+    workflow = launcher.validate_workflow_name("linux-x86_64-release.yml")
+
+    fields = launcher.resolve_dispatch_fields(
+        workflow,
+        ["version=1.0.91", "preview=true", "publish=false"],
+        input_fn=lambda _prompt: pytest.fail("explicit version must not prompt"),
+    )
+
+    assert fields == (
+        "version=1.0.91",
+        "preview=true",
+        "publish=false",
+    )
+
+
+def test_shared_generic_launcher_passes_resolved_fields_to_gh(monkeypatch):
+    launcher = _load_generic_launcher_module()
+    commands = []
+    monkeypatch.setattr(launcher, "_preflight", lambda _workflow: "release/next")
+    monkeypatch.setattr(launcher, "_list_runs", lambda _workflow, _branch: [])
+    monkeypatch.setattr(
+        launcher,
+        "_wait_for_new_run",
+        lambda *_args: {"databaseId": 42, "url": "https://example.test/run/42"},
+    )
+    monkeypatch.setattr(
+        launcher,
+        "_run",
+        lambda command, **_kwargs: commands.append(list(command)),
+    )
+
+    result = launcher.main(
+        [
+            "--workflow",
+            "linux-x86_64-release.yml",
+            "--field",
+            "version=1.0.92",
+        ]
+    )
+
+    assert result == 0
+    assert [
+        "gh",
+        "workflow",
+        "run",
+        "linux-x86_64-release.yml",
+        "--ref",
+        "release/next",
+        "--field",
+        "version=1.0.92",
+    ] in commands
+
+
+@pytest.mark.parametrize("field", ("version", "=1.0.90", "version="))
+def test_shared_generic_launcher_rejects_malformed_workflow_fields(field):
+    launcher = _load_generic_launcher_module()
+    workflow = launcher.validate_workflow_name("linux-x86_64-release.yml")
+
+    with pytest.raises(ValueError, match="name=value"):
+        launcher.resolve_dispatch_fields(workflow, [field])
+
+
 def test_shared_pycharm_preview_configuration_contains_no_credentials():
     configuration = (
         REPOSITORY_ROOT / ".run" / "GitHub - Preview Release.run.xml"
