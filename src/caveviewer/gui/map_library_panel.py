@@ -74,6 +74,8 @@ class MapLibraryPanelStyle:
     button_bg: str
     button_fg: str
     button_hover_bg: str
+    featured_action_bg: str
+    featured_action_hover_bg: str
     button_border_color: str
     disabled_button_bg: str
     disabled_button_fg: str
@@ -172,9 +174,7 @@ class MapLibraryPanel:
         panel = tk.Frame(
             parent,
             bg=style.panel_color,
-            highlightthickness=1,
-            highlightbackground=style.panel_border_color,
-            highlightcolor=style.panel_border_color,
+            highlightthickness=0,
         )
         # Keep a modest outer margin so the library can use more of the
         # available splash height without losing its visual separation.
@@ -626,7 +626,7 @@ class MapLibraryPanel:
         action = tk.Canvas(
             parent,
             height=self._px(58),
-            bg=style.button_hover_bg,
+            bg=style.featured_action_bg,
             borderwidth=0,
             cursor="hand2",
             takefocus=True,
@@ -643,7 +643,11 @@ class MapLibraryPanel:
         def set_hovered(hovered: bool) -> None:
             action._cv_open_map_hovered = hovered
             action.config(
-                bg=(style.menu_hover_bg if hovered else style.button_hover_bg)
+                bg=(
+                    style.featured_action_hover_bg
+                    if hovered
+                    else style.featured_action_bg
+                )
             )
             self._draw_open_map_action(action)
 
