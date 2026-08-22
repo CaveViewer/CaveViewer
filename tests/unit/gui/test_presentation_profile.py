@@ -8,7 +8,6 @@ from types import SimpleNamespace
 import pytest
 
 from caveviewer.gui.platform import presentation_actions
-from caveviewer.gui.platform.default import DefaultSplashPlatformAdapter
 from caveviewer.gui.platform.presentation import (
     font_candidates_for_profile,
     select_presentation_profile,
@@ -259,7 +258,6 @@ def test_runtime_composes_injected_presentation_values():
     profile = select_presentation_profile(platform_name="darwin")
     actions = object()
     runtime = create_platform_runtime(
-        platform_adapter=DefaultSplashPlatformAdapter(),
         desktop_services=object(),
         environment={},
         platform_name="darwin",
@@ -271,9 +269,8 @@ def test_runtime_composes_injected_presentation_values():
     assert runtime.presentation_actions_adapter is actions
 
 
-def test_runtime_composes_direct_presentation_actions_without_broad_adapter_methods():
+def test_runtime_composes_direct_presentation_actions():
     runtime = create_platform_runtime(
-        platform_adapter=object(),
         desktop_services=object(),
         environment={},
         platform_name="darwin",

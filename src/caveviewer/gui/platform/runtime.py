@@ -35,9 +35,7 @@ from caveviewer.gui.features import (
 )
 from caveviewer.gui.features.preflight import validate_route_preflight
 
-from .base import SplashPlatformAdapter
 from .desktop_services import DesktopServices, get_desktop_services
-from .factory import get_platform_adapter
 from .presentation import PresentationProfile, select_presentation_profile
 from .presentation_actions import (
     PresentationActionsAdapter,
@@ -252,7 +250,6 @@ class PlatformRuntime:
     runtime_settings: RuntimeSettings | None
     presentation_profile: PresentationProfile
     presentation_actions_adapter: PresentationActionsAdapter
-    platform_adapter: SplashPlatformAdapter
     desktop_services: DesktopServices
     update_profile: UpdateProfile
     update_configuration: UpdateConfiguration
@@ -410,7 +407,6 @@ class PlatformRuntime:
 
 def create_platform_runtime(
     *,
-    platform_adapter: SplashPlatformAdapter | None = None,
     desktop_services: DesktopServices | None = None,
     update_profile: UpdateProfile | None = None,
     presentation_profile: PresentationProfile | None = None,
@@ -440,10 +436,6 @@ def create_platform_runtime(
     )
     resolved_desktop_services = desktop_services or get_desktop_services(
         platform_name=resolved_platform_name
-    )
-    resolved_platform_adapter = platform_adapter or get_platform_adapter(
-        desktop_services=resolved_desktop_services,
-        platform_name=resolved_platform_name,
     )
     resolved_presentation_actions_adapter = (
         presentation_actions_adapter
@@ -533,7 +525,6 @@ def create_platform_runtime(
         runtime_settings=runtime_settings,
         presentation_profile=resolved_presentation_profile,
         presentation_actions_adapter=resolved_presentation_actions_adapter,
-        platform_adapter=resolved_platform_adapter,
         desktop_services=resolved_desktop_services,
         update_profile=resolved_update_profile,
         update_configuration=update_configuration,

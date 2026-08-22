@@ -77,7 +77,6 @@ from caveviewer.gui.platform import (
     DesktopServiceError,
     DesktopServices,
     get_desktop_services,
-    get_splash_platform_adapter,
     tk_root_options,
 )
 from caveviewer.gui.platform.presentation import (
@@ -279,7 +278,7 @@ def _presentation_actions_adapter_for_runtime(
     )
     if actions is not None:
         return actions
-    return create_presentation_actions_adapter(get_splash_platform_adapter())
+    return create_presentation_actions_adapter()
 
 
 def _select_tk_font_family(

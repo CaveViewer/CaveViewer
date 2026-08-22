@@ -392,8 +392,8 @@ It is selected without creating Tk widgets or probing the display. The narrow
 action adapter performs only process DPI setup, macOS About-menu registration,
 and best-effort viewer focus. It selects direct Windows, macOS, or fallback
 implementations from the composed platform fact and does not depend on
-`SplashPlatformAdapter`; Linux fontconfig lookup remains an action-time font
-fallback rather than a profile-selection side effect.
+any general-purpose platform facade; Linux fontconfig lookup remains an
+action-time font fallback rather than a profile-selection side effect.
 
 Automatic updates have a typed static boundary. `select_update_profile()` maps
 only the composed platform and process architecture to an immutable
@@ -406,9 +406,8 @@ is supported. The target carries both the existing install channel and the
 expected manifest channel; the checker accepts a declared signed
 `release_channel` only when it matches that expected channel (while accepting
 legacy manifests without the field during the migration window). `UpdateManager` requires that composed runtime: its default
-checker and downloader calls use the target and focused
-`TlsTrustAdapter`, so the update path does not consult `SplashPlatformAdapter`
-for release policy or manifest parsing.
+checker and downloader calls use the target and focused `TlsTrustAdapter`, so
+release policy and manifest parsing stay within their typed update boundary.
 
 Verified update-package reveal uses a focused adapter. At composition it
 declares `finder`, `explorer`, or Linux `desktop_service` without mounting a
@@ -440,7 +439,7 @@ convenience after a user-visible stop. A failure to launch Finder, Explorer, or
 the Linux desktop reveal route is logged but cannot downgrade the completed
 artifact's success state. Direct focused implementations own Finder selection,
 Explorer selection, and the injected Linux desktop-service route; none delegates
-to `SplashPlatformAdapter`.
+to a general-purpose platform facade.
 
 Recording encoder startup is likewise a focused action adapter, not another
 recording gate. After the existing on-demand preflight has confirmed ffmpeg and

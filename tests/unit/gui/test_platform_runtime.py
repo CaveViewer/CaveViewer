@@ -28,8 +28,6 @@ from caveviewer.core.preferences import runtime_settings
 from caveviewer.core.release_metadata import ReleaseMetadata, ReleaseMetadataSource
 from caveviewer.gui.features import FeatureDecision, FeatureId, FeatureState
 from caveviewer.gui.platform import runtime
-from caveviewer.gui.platform.factory import get_platform_adapter
-from caveviewer.gui.platform.linux import LinuxSplashPlatformAdapter
 from caveviewer.gui.platform.probes.recording import VideoRecordingTarget
 from caveviewer.gui.platform.probes.updates import (
     build_update_configuration,
@@ -39,10 +37,6 @@ from caveviewer.gui.platform.runtime import create_platform_runtime
 from caveviewer.gui.platform.update_package_reveal import (
     LinuxUpdatePackageRevealAdapter,
 )
-
-
-class FakePlatformAdapter:
-    pass
 
 
 class FakeUpdatePackageStorageAdapter:
@@ -173,7 +167,6 @@ def test_update_profile_selects_static_release_policy(
 
 def test_runtime_resolves_environment_only_when_it_is_composed(monkeypatch):
     monkeypatch.setenv("CAVEVIEWER_UPDATE_BRANCH", "ignored-process-value")
-    adapter = FakePlatformAdapter()
     desktop_services = object()
     storage_adapter = FakeUpdatePackageStorageAdapter()
     installer_adapter = FakeUpdatePackageInstallerAdapter()
@@ -183,7 +176,6 @@ def test_runtime_resolves_environment_only_when_it_is_composed(monkeypatch):
     window_backend_adapter = FakeWindowBackendAdapter()
 
     runtime = create_platform_runtime(
-        platform_adapter=adapter,
         desktop_services=desktop_services,
         update_package_storage_adapter=storage_adapter,
         update_package_installer_adapter=installer_adapter,
@@ -199,7 +191,6 @@ def test_runtime_resolves_environment_only_when_it_is_composed(monkeypatch):
         machine="x86_64",
     )
 
-    assert runtime.platform_adapter is adapter
     assert runtime.desktop_services is desktop_services
     assert runtime.update_package_storage_adapter is storage_adapter
     assert runtime.update_package_installer_adapter is installer_adapter
@@ -275,7 +266,6 @@ def test_runtime_uses_composed_snapshot_for_update_and_window_policy(
 
     monkeypatch.setattr(runtime, "probe_viewer_launch", probe)
     platform_runtime = create_platform_runtime(
-        platform_adapter=FakePlatformAdapter(),
         desktop_services=object(),
         runtime_settings=snapshot,
         environment={"CAVEVIEWER_UPDATE_BRANCH": "ignored-legacy-input"},
@@ -332,7 +322,6 @@ def test_runtime_uses_the_embedded_release_channel_without_an_override(tmp_path)
     )
 
     platform_runtime = create_platform_runtime(
-        platform_adapter=FakePlatformAdapter(),
         desktop_services=object(),
         runtime_settings=snapshot,
         platform_name="linux",
@@ -353,7 +342,6 @@ def test_runtime_disables_unsupported_update_targets_before_network_work():
         supports_automatic_update=False,
     )
     runtime = create_platform_runtime(
-        platform_adapter=FakePlatformAdapter(),
         desktop_services=object(),
         update_profile=update_profile,
         environment={},
@@ -369,7 +357,6 @@ def test_runtime_disables_unsupported_update_targets_before_network_work():
 
 def test_runtime_disables_unsupported_update_package_reveal_routes():
     runtime = create_platform_runtime(
-        platform_adapter=FakePlatformAdapter(),
         desktop_services=object(),
         environment={},
         platform_name="freebsd",
@@ -396,7 +383,6 @@ def test_runtime_composes_linux_package_reveal_with_its_desktop_service():
 
     desktop_services = FakeDesktopServices()
     runtime = create_platform_runtime(
-        platform_adapter=FakePlatformAdapter(),
         desktop_services=desktop_services,
         environment={},
         platform_name="linux",
@@ -429,7 +415,6 @@ def test_runtime_fails_closed_when_static_update_configuration_cannot_be_probed(
         fail_configuration,
     )
     runtime = create_platform_runtime(
-        platform_adapter=FakePlatformAdapter(),
         desktop_services=object(),
         environment={},
     )
@@ -455,7 +440,6 @@ def test_runtime_keeps_video_recording_probe_on_demand(monkeypatch):
     monkeypatch.setattr(runtime, "probe_video_recording", probe)
 
     platform_runtime = create_platform_runtime(
-        platform_adapter=FakePlatformAdapter(),
         desktop_services=object(),
         environment={},
     )
@@ -498,7 +482,6 @@ def test_runtime_keeps_directory_selection_probe_on_demand(monkeypatch):
 
     monkeypatch.setattr(runtime, "probe_directory_selection", probe)
     platform_runtime = create_platform_runtime(
-        platform_adapter=FakePlatformAdapter(),
         desktop_services=desktop_services,
         environment={},
     )
@@ -553,7 +536,6 @@ def test_runtime_keeps_file_selection_probe_on_demand(monkeypatch):
 
     monkeypatch.setattr(runtime, "probe_file_selection", probe)
     platform_runtime = create_platform_runtime(
-        platform_adapter=FakePlatformAdapter(),
         desktop_services=desktop_services,
         environment={},
     )
@@ -607,7 +589,6 @@ def test_runtime_keeps_desktop_notification_probe_on_demand(monkeypatch):
 
     monkeypatch.setattr(runtime, "probe_desktop_notification", probe)
     platform_runtime = create_platform_runtime(
-        platform_adapter=FakePlatformAdapter(),
         desktop_services=desktop_services,
         environment={},
     )
@@ -661,7 +642,6 @@ def test_runtime_keeps_idle_suspend_inhibition_probe_on_demand(monkeypatch):
 
     monkeypatch.setattr(runtime, "probe_idle_suspend_inhibition", probe)
     platform_runtime = create_platform_runtime(
-        platform_adapter=FakePlatformAdapter(),
         desktop_services=desktop_services,
         environment={},
     )
@@ -717,7 +697,6 @@ def test_runtime_keeps_viewer_launch_probe_on_demand(monkeypatch):
 
     monkeypatch.setattr(runtime, "probe_viewer_launch", probe)
     platform_runtime = create_platform_runtime(
-        platform_adapter=FakePlatformAdapter(),
         desktop_services=object(),
         environment={},
         platform_name="darwin",
@@ -756,15 +735,3 @@ def test_viewer_launch_preflight_rejects_route_target_disagreement():
             capability=capability,
             decision=decision,
         )
-
-
-def test_linux_factory_shares_an_injected_desktop_service_with_its_adapter():
-    desktop_services = object()
-
-    adapter = get_platform_adapter(
-        platform_name="linux",
-        desktop_services=desktop_services,
-    )
-
-    assert isinstance(adapter, LinuxSplashPlatformAdapter)
-    assert adapter._desktop_services is desktop_services

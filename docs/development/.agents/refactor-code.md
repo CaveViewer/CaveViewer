@@ -1,0 +1,558 @@
+# Code refactoring execution guide
+
+This is the working plan for the next broad codebase refactors. Treat each
+listed branch as an independent, behavior-preserving pull request from a fresh
+`main`; do not stack unrelated refactors on an unmerged branch. Update this
+guide when a discovered dependency changes the sequence or boundary below.
+
+## Shared execution rules
+
+- Start by characterizing existing behavior with focused tests. A refactor may
+  move ownership and remove compatibility code, but it must not silently
+  change precedence, UI behavior, platform routes, worker shutdown, or stored
+  data formats.
+- State the owner of every new mutable state machine, queue, timer, external
+  resource, and native side effect in its module docstring and in
+  `docs/development/architecture.md` when it creates a new cross-layer
+  boundary.
+- Use small typed values and dependency bundles at module boundaries. Do not
+  replace a long constructor with an untyped `dict` or an object that reaches
+  into globals.
+- Keep Tk and OpenGL calls on their existing owning threads. Background work
+  returns immutable data through an explicit queue/callback handoff; it never
+  mutates a widget or GL resource directly.
+- Retain a compatibility facade only while real production callers still need
+  it. Give every facade a deletion condition, migrate callers, add a search or
+  architecture test that proves the condition, then delete the facade in the
+  same branch or the immediately following one.
+- Before a pull request, run the focused tests named in its section, the
+  affected package tests, the full suite, and `git diff --check`. Keep the PR
+  description to a concise behavior/ownership summary; do not include
+  validation output in it.
+
+### Cross-platform filesystem-path and Windows-test standard
+
+These rules apply to every refactor in this guide, especially when a path
+crosses a configuration, worker, subprocess, cache, import, download, or
+storage boundary.
+
+- Treat a filesystem location as a structured path, not formatted text.
+  Construct and join runtime paths with `pathlib.Path`; convert with
+  `os.fspath()` only at an API boundary that requires a string or path-like
+  value. Do not concatenate filesystem strings, hard-code path separators, or
+  call `as_posix()` merely to make an assertion pass.
+- Use forward-slash strings only for values whose format is intentionally
+  platform-independent, such as URLs, archive member names, Git paths, and a
+  documented wire format. A local cache, map, temporary, or user-data path
+  must retain the native representation of the host that executes it.
+- In tests, create local filesystem roots with `tmp_path` or a `Path` value
+  and compare paths semantically. For example, prefer
+  `Path(cache_dir).is_relative_to(cache_root)`, `.parent == cache_root`, or
+  `.name == expected_name` over raw text checks such as
+  `cache_dir.startswith("/cache-root")`. A POSIX-looking absolute string is
+  not a portable assertion on Windows.
+- When behavior deliberately parses or emits a foreign-platform path format,
+  test that pure transformation with `PureWindowsPath` or `PurePosixPath`.
+  Do not use a foreign pure-path object for host filesystem I/O, and keep that
+  format conversion separate from normal local-path handling.
+- Any changed path handoff to a worker, child process, cache/import service,
+  or platform adapter needs a focused regression test that uses native path
+  semantics and must pass the Windows essential test job before the PR is
+  considered ready. Fix an OS-only assertion or normalization failure in the
+  same branch; do not treat a Linux-only pass as sufficient evidence.
+
+## Recommended order
+
+| Order | Refactor | Primary branch | Why it comes here |
+| --- | --- | --- | --- |
+| 1 | Runtime settings source of truth | `refactor/runtime-settings-snapshot` | Gives later composition work one explicit configuration input. |
+| 2 | Broad platform adapter retirement | `refactor/platform-presentation-profile` | Removes compatibility paths before more platform work is added. |
+| 3 | Splash and Map Library workflow split | `refactor/splash-controller-lifecycle` | Uses explicit runtime and platform dependencies rather than adding more callbacks to the current composition function. |
+| 4 | Documentation and scoped-instruction consolidation | `refactor/architecture-document-authority` | Record the final boundaries after the implementation ownership is stable. |
+
+The branch names below are deliberately more granular than the table. Use the
+smallest branch that produces a coherent, reviewable change; each name begins
+with `refactor/` by convention.
+
+## Master implementation status
+
+Status is recorded as of 2026-08-22 (America/New_York). “Implemented
+locally” means the change exists on a local branch and still needs review and
+merge; it is not yet part of `main`. A dash in **Commit / reference** means no
+implementation commit exists yet. **GitHub issue** links track each remaining
+workstream. This table is the authoritative branch-level handoff status.
+
+| # | Workstream | Branch | Implementation status | Commit / reference | GitHub issue | Current handoff / boundary |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | Runtime settings source of truth | `refactor/runtime-settings-snapshot` | Implemented — merged | `64dcd91` (PR #221) | — | Merged as PR #221 at `64dcd91`. |
+| 2 | Runtime settings source of truth | `refactor/runtime-settings-consumers` | Implemented — merged | `f9716f8`, `1ddd679`; merged as `0f7b6c2` (PR #222) | — | Application and benchmark composition, typed consumer injection, preference-session replacement, and the portable import-path regression test are complete. Essential Tests and all package-smoke checks passed. |
+| 3 | Runtime settings source of truth | `refactor/runtime-settings-diagnostics` | Implemented — folded into and merged with PR #222 | `f9716f8`; merged as `0f7b6c2` (PR #222) | — | Do not create this as a separate branch; registry-derived safe diagnostics and validated source-setup table are included. |
+| 4 | Broad platform adapter retirement | `refactor/platform-presentation-profile-actions` | Implemented — merged | `e224b55`; merged as `0973c4a` (PR #234) | — | Static presentation policy lives exclusively on `PresentationProfile`. |
+| 5 | Broad platform adapter retirement | `refactor/platform-presentation-profile-actions` | Implemented — merged | `e224b55`; merged as `0973c4a` (PR #234) | — | DPI setup, macOS About registration, and viewer focus are direct `PresentationActionsAdapter` effects. |
+| 6 | Broad platform adapter retirement | `refactor/platform-native-action-adapters` | Implemented — merged | `086ac59`; merged as `2508596` ([PR #251](https://github.com/CaveViewer/CaveViewer/pull/251)) | [#224](https://github.com/CaveViewer/CaveViewer/issues/224) | Direct focused adapters own saved-artifact reveal, recording-process startup, and TLS trust; the three broad-adapter methods are removed. |
+| 7 | Broad platform adapter retirement | `refactor/remove-splash-platform-adapter` | Implemented — PR open | `8e70397` ([PR #255](https://github.com/CaveViewer/CaveViewer/pull/255)) | [#225](https://github.com/CaveViewer/CaveViewer/issues/225) | The empty broad protocol, factory, runtime property, compatibility classes, caller shims, and transitional tests are removed. A repository guard prevents their return. |
+| 8 | Splash and Map Library workflow split | `refactor/splash-controller-lifecycle` | Not implemented — tracked | — | [#226](https://github.com/CaveViewer/CaveViewer/issues/226) | Start after explicit runtime and focused platform dependencies are stable. |
+| 9 | Splash and Map Library workflow split | `refactor/map-library-workflow-dependencies` | Not implemented — tracked | — | [#227](https://github.com/CaveViewer/CaveViewer/issues/227) | Introduce typed dependency bundles before extracting worker workflows. |
+| 10 | Splash and Map Library workflow split | `refactor/map-library-catalog-download` | Not implemented — tracked | — | [#228](https://github.com/CaveViewer/CaveViewer/issues/228) | Keep catalog/download lifecycle separate from cache rebuilding. |
+| 11 | Splash and Map Library workflow split | `refactor/map-library-cache-rebuild` | Not implemented — tracked | — | [#229](https://github.com/CaveViewer/CaveViewer/issues/229) | Preserve existing cooperative process and cancellation behavior. |
+| 12 | Splash and Map Library workflow split | `refactor/splash-composition-cleanup` | Not implemented — tracked | — | [#230](https://github.com/CaveViewer/CaveViewer/issues/230) | Remove temporary facades only after focused workflows are directly composed. |
+| 13 | Documentation and scoped-instruction consolidation | `refactor/architecture-document-authority` | Not implemented — tracked | — | [#231](https://github.com/CaveViewer/CaveViewer/issues/231) | The settings-specific architecture/source-setup edits do not complete this broader authority consolidation. |
+| 14 | Documentation and scoped-instruction consolidation | `refactor/platform-documentation-authority` | Not implemented — tracked | — | [#232](https://github.com/CaveViewer/CaveViewer/issues/232) | Start after focused platform contracts replace the broad adapter. |
+| 15 | Documentation and scoped-instruction consolidation | `refactor/scoped-agent-guide-cleanup` | Not implemented — tracked | — | [#233](https://github.com/CaveViewer/CaveViewer/issues/233) | Keep separate if cleanup spans multiple directories. |
+
+## 1. Establish one runtime-settings source of truth
+
+### Outcome and boundary
+
+`PreferenceSpec` remains the authority for persisted preference fields,
+validation, ranges, and preference-to-environment conversion. Add a separate
+typed runtime-settings registry for environment-only settings and compose one
+immutable `RuntimeSettings` snapshot after command-line overrides have been
+applied. Consumers receive the snapshot or a narrowly typed subsection instead
+of reading `os.environ` independently.
+
+Do not force every `CAVEVIEWER_*` variable into the Preferences dialog. A
+setting can be one of these categories:
+
+- persisted preference with an optional environment override;
+- environment-only runtime/developer setting;
+- command-line-only launch override; or
+- packaging/development-shell setting that must not enter application runtime
+  settings.
+
+The registry must state the category, parser, built-in default, accepted range
+or enum values, display description, documentation visibility, and whether the
+value is safe to include in startup diagnostics. This replaces the parallel
+catalogues currently spread through `PreferenceSpec`, `app.py`,
+`viewer_window.py`, and individual core services.
+
+### Suggested branches
+
+1. `refactor/runtime-settings-snapshot`
+2. `refactor/runtime-settings-consumers`
+3. `refactor/runtime-settings-diagnostics`
+
+Do not start branch 2 until branch 1 has merged. Branch 3 may follow branch 2
+or be folded into it only if the consumer migration stays small.
+
+### Detailed implementation steps
+
+1. Inventory every current read of `CAVEVIEWER_*`, every CLI override, and
+   every persisted preference. Record the current owner, parser, default,
+   precedence, and consumers in a characterization test or temporary planning
+   table before moving code. Include settings currently absent from
+   `app.py`'s startup catalog, especially recording and Map Library storage
+   settings.
+2. Add a core-only module such as
+   `src/caveviewer/core/preferences/runtime_settings.py`. It must not import
+   GUI, Tk, OpenGL, or `caveviewer.app`.
+3. Keep `PreferenceSpec` focused on persisted fields. Define a complementary
+   `RuntimeSettingSpec` for non-persisted variables, and let a runtime entry
+   reference a `PreferenceSpec` rather than copying its validation metadata.
+   Use immutable dataclasses for the resolved snapshot and for source
+   provenance, for example `SettingSource.BUILT_IN`, `PREFERENCES`,
+   `ENVIRONMENT`, and `CLI`.
+4. Make source precedence explicit and test it for every category. First
+   characterize current behavior; preserve it unless a product decision changes
+   it. Do not assume environment variables override saved preferences merely
+   because both exist. CLI overrides must be applied before the single
+   composition call, not patched into a finished snapshot later.
+5. Make composition accept injected mappings and platform facts rather than
+   reading global process state throughout the code. A shape such as
+   `resolve_runtime_settings(preferences, environ, cli_overrides, platform)`
+   keeps tests deterministic and permits workers to receive a serializable
+   subset.
+6. Replace direct environment reads in `app.py`, `viewer_window.py`, import
+   launch code, recording configuration, Map Library storage selection, and
+   relevant core services with the snapshot or a narrow typed subsection. Pass
+   settings through existing composition roots and worker launch requests. Do
+   not make a worker depend on a parent process mutating `os.environ` as an
+   implicit transport.
+7. Keep a temporary compatibility bridge only where a spawned legacy entry
+   point still requires environment variables. Isolate it at process launch,
+   document it as one-way serialization of the resolved snapshot, and delete
+   it after that entry point accepts typed settings.
+8. Replace `_KNOWN_CAVEVIEWER_ENV_VARS` and effective-default tables in
+   `app.py` with startup diagnostics derived from the registry. Preserve the
+   existing rule that unrelated environment variables are never dumped, and
+   redact any future setting marked diagnostic-unsafe.
+9. Generate or validate the environment-variable table in
+   `docs/development/source-setup.md` from the same registry. Use stable
+   begin/end markers around the generated table or a deterministic renderer in
+   a documentation test so a new setting cannot update code while leaving docs
+   and diagnostics stale.
+10. Delete duplicate parsers/default constants only after all consumers use
+    the snapshot. Keep per-feature policy constants when they are genuine
+    behavior rather than configuration.
+
+### Completion criteria and verification
+
+- One tested resolver owns runtime precedence, parsing, defaults, range
+  validation, and source provenance.
+- Adding a runtime setting requires one registry entry and tests; it does not
+  require editing parallel lists in `app.py` and the viewer.
+- Preferences persistence still stores only declared persisted fields and bad
+  saved/environment values fall back independently.
+- Startup diagnostics list the complete safe catalog and report effective
+  values from the resolved snapshot.
+- Run focused preference/schema, application composition, viewer, import, and
+  recording tests; then `tests/unit/core`, `tests/unit/gui`, the full suite,
+  and `git diff --check`.
+
+### Execution handoff — 2026-08-19
+
+The master implementation-status table above is authoritative for branch
+completion; this section preserves the runtime-settings-specific rationale.
+
+- `refactor/runtime-settings-snapshot` merged as PR #221 at `64dcd91`.
+- `refactor/runtime-settings-consumers` merged as PR #222 at `0f7b6c2`. Its
+  implementation commits are `f9716f8` (consumer migration) and `1ddd679`
+  (portable import-path regression test). The interactive application and
+  benchmark entry points now compose one `RuntimeSettings` snapshot; platform
+  policy, splash/Map Library, viewer, and import-child requests receive that
+  snapshot or a focused immutable subsection. Preferences saves replace the
+  session snapshot instead of mutating `os.environ`.
+- The diagnostics/documentation scope proposed for
+  `refactor/runtime-settings-diagnostics` was folded into this branch: startup
+  diagnostics use the registry's safe effective values, and the marked runtime
+  table in `source-setup.md` is validated against a deterministic registry
+  renderer. Do not create a duplicate diagnostics branch.
+- Optional legacy parameters on low-level core/GUI helpers still fall back to
+  process environment only for standalone callers that have not supplied a
+  snapshot. No production app or benchmark composition path uses that bridge;
+  delete the fallback once those standalone compatibility callers are retired.
+- PR #222 completed successfully: Essential Tests (including Windows unit
+  tests), Linux/macOS unit tests, and Linux/macOS package-smoke checks passed.
+  The Windows-inclusive Essential Tests run is
+  [32326364728](https://github.com/CaveViewer/CaveViewer/actions/runs/32326364728).
+- End-of-day next step: start `refactor/platform-presentation-profile` fresh
+  from `main` at `0f7b6c2`. Keep platform-adapter migration separate from this
+  completed settings-consumer work.
+
+## 2. Finish shrinking the broad platform adapter
+
+### Outcome and boundary
+
+`SplashPlatformAdapter` is a compatibility surface, not the permanent platform
+API. Its remaining methods currently mix static presentation choices, native
+presentation actions, artifact reveal, TLS trust augmentation, recording
+startup, input labels, and backend sizing. Move each remaining concern to a
+focused immutable profile, probe/policy pair, or action adapter. When no
+production callers remain, remove the broad adapter protocol, factory paths,
+and compatibility implementation classes together.
+
+Preserve the current macOS, Windows, Linux, and fallback behavior exactly. In
+particular, do not turn native work into import-time side effects, weaken update
+TLS verification, replace portal fallbacks, or change the meaning of a user
+shortcut while moving a method.
+
+### Suggested branches
+
+1. `refactor/platform-presentation-profile`
+2. `refactor/platform-presentation-actions`
+3. `refactor/platform-native-action-adapters`
+4. `refactor/remove-splash-platform-adapter`
+
+Branches 1–3 may be reviewed independently. Branch 4 is deletion-only except
+for necessary composition and test updates, and should start only after a
+repository-wide caller inventory is empty.
+
+### Detailed implementation steps
+
+1. Inventory every `SplashPlatformAdapter` method, its implementations, and
+   all production callers. Group each method by ownership: static presentation
+   convention, action-time native effect, feature probe/policy, focused file or
+   process action, or obsolete compatibility behavior.
+2. Freeze the broad protocol: no new feature may add a method to it. Add an
+   architecture-boundary test or review check that rejects new production
+   references while the migration is underway.
+3. For static values such as font candidates, layouts, shortcut labels, mouse
+   conventions, scaling, and backend sizing, extend `PresentationProfile` only
+   where it lacks a value. Select it from process-stable facts without creating
+   Tk objects, touching a display, or invoking native APIs. Migrate each caller
+   to `PlatformRuntime.presentation_profile` or an explicit pure fallback.
+4. For action-time native work such as DPI setup, About-menu registration, and
+   viewer focus, make `PresentationActionsAdapter` own direct platform
+   implementations. It may temporarily delegate to the broad adapter only
+   until the equivalent native implementation is moved; record that delegation
+   and removal condition in the module docstring.
+5. For focused file reveal, recording `Popen` kwargs, and TLS trust
+   augmentation, migrate the existing narrow facades to direct focused
+   implementations. Each should receive only the capability/target it needs,
+   retain current best-effort failure behavior, and never import a GUI caller
+   upward into `app.py`.
+6. Keep policy separate from execution. A static or action-time probe reports
+   facts, a pure policy returns a typed decision, and an injected adapter
+   performs the action. Do not replace the broad adapter with another broad
+   service locator.
+7. Update `PlatformRuntime` composition one focused adapter at a time. Inject
+   the new adapter into splash, viewer, preferences, update, and Map Library
+   callers before removing the corresponding broad-adapter method.
+8. After each migration, search for the old method and remove obsolete
+   compatibility wrappers, imports, mocks, and default implementations. Keep
+   a compatibility facade only if a real caller remains; tests alone are not a
+   reason to preserve it.
+9. Before the deletion branch, prove with `rg` and an AST architecture test
+   that no production module imports `SplashPlatformAdapter`, calls
+   `get_platform_adapter()`, or reads `PlatformRuntime.platform_adapter` for a
+   migrated concern. Then remove `base.py`, the broad factory aliases, and
+   former platform subclasses only when their methods have no focused owner
+   left.
+10. Rewrite `src/caveviewer/gui/platform/platform-adapters.md` after the code
+    is stable so it describes focused contracts rather than presenting the
+    retired broad protocol as the architecture.
+
+### Completion criteria and verification
+
+- Platform composition contains focused, typed adapters/profiles only; it has
+  no catch-all compatibility object.
+- Static profile selection is side-effect free, while native work remains
+  action-time and injected.
+- Windows console suppression, macOS About/focus behavior, Linux portal and
+  fallback routes, TLS handling, update-package reveal, and saved-artifact
+  reveal retain their existing contracts.
+- Run platform profile/runtime/adapter tests, update and recording tests,
+  `tests/unit/gui/test_gui_architecture_boundaries.py`, platform packaging
+  tests, the full suite, and `git diff --check`.
+
+### Execution handoff — 2026-08-20
+
+- User-directed exception: items 4 and 5 were completed together on
+  `refactor/platform-presentation-profile-actions`, freshly based on `main` at
+  `5bb994d`, as commit `e224b55`. The existing older dirty branch and historical
+  stash were left untouched.
+- Static font, layout, shortcut/input, scaling, startup-focus, and backend
+  sizing policy now lives exclusively in `presentation.py`. The three layout
+  value types moved there with `PresentationProfile`; no static presentation
+  method remains on the broad protocol or its compatibility implementations.
+- `PresentationActionsAdapter` now selects direct Windows, macOS, or fallback
+  implementations from the composed platform fact. It owns only DPI setup,
+  macOS About-menu registration, and viewer focus; its factory and methods do
+  not depend on `SplashPlatformAdapter`.
+- The architecture-boundary tests reject both static presentation methods and
+  native presentation actions on `SplashPlatformAdapter`, while focused
+  regression tests preserve Windows DPI fallbacks and macOS About/focus
+  behavior.
+- Verification passed: focused profile/splash/macOS/runtime/architecture tests,
+  the GUI suite (`1104 passed`), the full suite (`1653 passed`), and
+  `git diff --check`.
+- Next: workstream 6 is tracked by [#224](https://github.com/CaveViewer/CaveViewer/issues/224);
+  the remaining handoffs are linked in the master table.
+
+### Execution handoff — 2026-08-22
+
+- Workstream 6 was implemented on `refactor/platform-native-action-adapters`,
+  freshly based on clean `main` at `379ba5c`, as commit `086ac59`, and merged
+  as `2508596` in [PR #251](https://github.com/CaveViewer/CaveViewer/pull/251).
+- `SavedArtifactRevealAdapter` now selects direct Finder, Explorer, Linux
+  desktop-service, or safe unsupported behavior from stable platform facts.
+- `RecordingProcessAdapter` directly owns Windows `STARTUPINFO` and
+  `CREATE_NO_WINDOW`; other platforms retain empty encoder launch options.
+- `TlsTrustAdapter` directly augments Windows contexts from the `CA` and
+  `ROOT` stores without changing verification; other platforms retain the
+  normal default context roots.
+- `PlatformRuntime` composes all three focused adapters without passing
+  `SplashPlatformAdapter`. The migrated methods were removed from the broad
+  protocol and implementations, and an AST boundary test prevents regression.
+- Verification passed: 323 focused platform/viewer/update/architecture tests,
+  the full suite (`1729 passed`), and `git diff --check`.
+- Workstream 7 was implemented on `refactor/remove-splash-platform-adapter`,
+  freshly based on clean `main` at `c187b11`, as commit `8e70397`. Review and
+  merge are tracked by [PR #255](https://github.com/CaveViewer/CaveViewer/pull/255).
+- The broad protocol, factory aliases, runtime property, platform compatibility
+  classes, and legacy consumer fallbacks are deleted. Focused adapters are
+  composed directly, and an architecture guard requires the retired modules to
+  stay absent and rejects production references to their former API.
+- Verification passed: 263 focused platform/viewer/update/architecture tests,
+  the full suite (`1725 passed`), and `git diff --check`. Ruff was not installed
+  in the development environment, so no Ruff artifact is available.
+- Next: merge PR #255, then start workstream 8 from fresh `main` after the
+  focused runtime and platform dependencies are stable.
+
+## 3. Split the splash composition workflow
+
+### Outcome and boundary
+
+`show_splash_screen()` becomes a small Tk composition boundary: it creates the
+single root, constructs widgets, wires explicit callbacks, starts the
+controller, and enters/leaves the event loop. A testable `SplashController`
+owns splash lifecycle transitions, scheduled-callback ownership, update/map
+actions, and orderly teardown without creating or mutating widgets directly.
+
+`MapLibraryWorkflow` becomes a thin coordinator over focused catalog/download,
+cache-rebuild, and map-action workflows. Its current large injection list is
+replaced by a few typed dependency bundles and explicit ports. Workers continue
+to return data through queues; only Tk-thread callbacks apply it to panels.
+
+### Suggested branches
+
+1. `refactor/splash-controller-lifecycle`
+2. `refactor/map-library-workflow-dependencies`
+3. `refactor/map-library-catalog-download`
+4. `refactor/map-library-cache-rebuild`
+5. `refactor/splash-composition-cleanup`
+
+Keep branches 3 and 4 separate: catalog/download activity and cache rebuilding
+have different worker lifecycles, cancellation rules, and user-visible states.
+Branch 5 removes temporary facade methods only after the focused workflows are
+in use.
+
+### Detailed implementation steps
+
+1. Map the current nested functions in `show_splash_screen()` by owner before
+   moving them: root/window lifecycle, update presentation, folder selection,
+   Preferences, Map Library, scheduled polling, and close/teardown. Add
+   characterization tests for close, destroy, failed worker, cancellation,
+   retry, and an `after()` callback arriving after teardown.
+2. Define small protocol/value boundaries before moving code. Typical examples
+   are a `SplashView` for render requests, a `TkScheduler` abstraction for
+   `after`/`after_cancel`, and immutable view-state snapshots. The controller
+   may call injected callbacks, but it must not import `tkinter` or hold raw
+   widget references.
+3. Introduce `SplashController` alongside the existing function. Let it own a
+   `SplashSession`, all scheduled callback identifiers, explicit start/close
+   transitions, and idempotent shutdown. `show_splash_screen()` remains the
+   only place that constructs `Tk()` and adapts controller output to widgets.
+4. Migrate one nested-function family at a time into controller methods. Keep
+   the old public behavior and callback wiring intact between moves; do not
+   combine a layout redesign, update UX change, or new map feature with this
+   lifecycle refactor.
+5. Replace the `MapLibraryWorkflow` constructor's individual callback list
+   with purpose-specific immutable dependency bundles, for example catalog
+   service, managed-map storage, desktop actions, launch actions, scheduler,
+   and feedback port. Each bundle should expose only the methods its workflow
+   needs, preserving test injection without a 41-parameter constructor.
+6. Extract a catalog workflow that owns catalog-worker startup, result queue
+   draining, catalog reconciliation, former-map handling, and refresh state.
+   It produces row/view-model updates; `MapLibraryPanel` remains the Tk owner
+   that renders them.
+7. Extract a download workflow that owns one active download's cancel event,
+   worker/result queue, scoped desktop inhibition, completion/failure state,
+   and cleanup. It must release inhibition exactly once and ignore late worker
+   results after cancellation or splash teardown.
+8. Extract a cache-rebuild workflow that owns preflight, the rebuild job
+   controller, polling `after()` identifier, completion notification policy,
+   and close-time cancellation/cleanup. Keep rebuild process work outside the
+   Tk thread and preserve the current cooperative pause/checkpoint behavior.
+9. Keep Guided Dive, open-map, delete-map, and cave metadata actions behind a
+   small map-action coordinator or explicit callbacks. Do not embed them back
+   into catalog/download/rebuild classes merely because they originate from a
+   row click.
+10. During migration, retain `MapLibraryWorkflow` only as a forwarding facade
+    with a clear deletion condition. Once `SplashController` composes the new
+    workflows directly, remove the facade, obsolete nested functions, and
+    duplicate polling ownership.
+11. Make teardown order explicit and test it: stop accepting UI input, cancel
+    owned `after()` callbacks, request cooperative worker cancellation, release
+    scoped inhibitors, discard late queue results, then destroy the root only
+    if this splash owns it. No callback may call a destroyed widget.
+
+### Completion criteria and verification
+
+- `show_splash_screen()` is composition and view wiring rather than a second
+  controller with dozens of nested functions.
+- `SplashController` and each Map Library workflow can be unit tested with
+  fake scheduler, panel/view port, queues, workers, desktop service, and
+  clock—without creating Tk widgets.
+- Exactly one `Tk()` root remains; all Tk operations occur on its main thread;
+  every owned `after()` call has an owner and a cancellation path.
+- Catalog refresh, download, cache rebuild, Guided Dive, recent-map actions,
+  desktop inhibition, foreground feedback, and notification behavior remain
+  unchanged from the user's perspective.
+- Run splash, map-library workflow/controller/panel, cache-rebuild, Guided
+  Dive, and GUI architecture tests; then `tests/unit/gui`, the full suite, and
+  `git diff --check`.
+
+## 4. Consolidate duplicated architecture documentation
+
+### Outcome and boundary
+
+Keep `docs/development/architecture.md` concise and authoritative for
+cross-layer ownership, dependency direction, process/runtime composition, and
+state-machine summaries. Keep subsystem mechanics in the focused document that
+owns them. `source-setup.md` remains a source/development guide and references
+the authoritative update/platform contracts instead of repeating them.
+
+`AGENTS.md` files are short, enforceable local guardrails and validation
+commands—not architecture history or a duplicate of development documentation.
+The current tree no longer contains a navigation-specific `AGENTS.md` after
+navigation-certificate removal; apply the cleanup rule to any future scoped
+instruction file or legacy branch that still contains one.
+
+### Suggested branches
+
+1. `refactor/architecture-document-authority`
+2. `refactor/platform-documentation-authority`
+3. `refactor/scoped-agent-guide-cleanup`
+
+The first two can be combined only if the ownership map and links stay easy to
+review. Keep scoped-agent cleanup separate when it changes many directories.
+
+### Detailed implementation steps
+
+1. Inventory duplicated sections by concept, not merely repeated phrases:
+   platform runtime contract, capability/policy/action flow, update state,
+   package storage/reveal, recording, viewer boundary, environment settings,
+   and test/agent rules. Record the current location and intended canonical
+   location in a small mapping table before deleting prose.
+2. Define a documentation authority map. At minimum:
+
+   | Concept | Canonical location | Other documents should do |
+   | --- | --- | --- |
+   | Cross-layer architecture and ownership | `architecture.md` | Link to the relevant heading. |
+   | Platform adapter routes and implementation mechanics | `src/caveviewer/gui/platform/platform-adapters.md` | Link back to architecture for the general contract. |
+   | Update behavior and development override use | `architecture.md` plus `source-setup.md` for commands/variables | Keep one state-machine definition; elsewhere summarize and link. |
+   | Environment-variable reference | `source-setup.md`, generated/validated from the runtime-settings registry | Architecture explains ownership, not every variable. |
+   | Enforceable local instructions | nearest `AGENTS.md` | Link to docs instead of copying narrative. |
+
+3. Edit `architecture.md` first. Keep diagrams and prose at the boundary level:
+   owners, allowed dependency direction, thread/resource ownership, typed
+   composition, and concise state transitions. Replace long subsystem mechanics
+   with an anchored link to their focused document.
+4. Edit `platform-adapters.md` to contain platform-specific routes, focused
+   adapter protocols, platform behavior differences, and migration notes that
+   are still true. Remove descriptions of retired broad adapters as the target
+   architecture.
+5. Edit `source-setup.md` to retain commands, supported environment variables,
+   troubleshooting, and release/development procedures. Replace duplicated
+   update-state prose with a short explanation plus a stable link to the
+   authoritative architecture section.
+6. Shorten each scoped `AGENTS.md` to inheritance, ownership constraints,
+   thread/resource rules that are locally enforceable, and focused validation
+   commands. Move explanatory history, design rationale, and long lists of
+   platform details into development documentation.
+7. Verify all relative links and heading anchors after moves. Prefer one
+   clearly named heading over repeated near-identical headings, and avoid
+   redirect-like documents that merely restate the first paragraph of another
+   document.
+8. Add lightweight documentation checks where practical: required canonical
+   headings/links, generated settings-table agreement, and scoped `AGENTS.md`
+   shape. Do not use brittle tests that require prose wording to stay exact.
+
+### Completion criteria and verification
+
+- A contributor can identify the authoritative document for each architecture
+  concept from the mapping table and links alone.
+- The update state machine and platform contract have one detailed source of
+  truth; other pages link rather than copy it.
+- Scoped agent instructions are quick to scan and contain only actionable
+  policy/validation relevant to their directory.
+- Run documentation/link checks, the affected architecture-boundary tests, the
+  full suite if executable checks changed, and `git diff --check`.
+
+## Future refactor handoff checklist
+
+Before starting any branch in this guide, record these items in the task or PR
+notes:
+
+1. Branch name and the exact `main` commit it starts from.
+2. The owner being introduced or retired, its thread/process ownership, and
+   the compatibility code that will be deleted.
+3. The behavior characterization tests that protect current semantics.
+4. The smallest complete implementation slice and explicit non-goals.
+5. Searches/tests that prove callers have migrated and the deletion condition
+   is true.
+
+At handoff, update this document with completed branch references, newly found
+dependencies, or intentionally deferred work so the next refactor begins from
+observed repository state rather than assumptions.

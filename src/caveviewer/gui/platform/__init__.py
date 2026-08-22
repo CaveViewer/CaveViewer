@@ -9,7 +9,6 @@ from .desktop_services import (
     FileSelection,
     get_desktop_services,
 )
-from .factory import get_platform_adapter, get_splash_platform_adapter
 from .presentation import (
     DialogLayoutPolicy,
     PreferencesDialogLayoutPolicy,
@@ -41,13 +40,8 @@ from .window_backend import (
     ViewerWindowLaunchRequest,
     WindowBackendAdapter,
 )
-from .linux import LinuxSplashPlatformAdapter
-from .macos import MacOSSplashPlatformAdapter
-from .windows import WindowsSplashPlatformAdapter
 
 __all__ = [
-    "get_platform_adapter",
-    "get_splash_platform_adapter",
     "get_presentation_profile",
     "select_presentation_profile",
     "font_candidates_for_profile",
@@ -64,9 +58,6 @@ __all__ = [
     "DesktopServices",
     "DirectorySelection",
     "FileSelection",
-    "MacOSSplashPlatformAdapter",
-    "WindowsSplashPlatformAdapter",
-    "LinuxSplashPlatformAdapter",
     "DesktopNotificationPreflight",
     "DirectorySelectionPreflight",
     "FileSelectionPreflight",

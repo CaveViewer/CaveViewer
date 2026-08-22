@@ -3,8 +3,8 @@
 The application composes one immutable :class:`UpdateProfile` from its
 platform and process architecture.  That profile contains release-policy data
 only: it does not create platform adapters, contact the network, or inspect a
-manifest.  Configuration overrides then produce an ``UpdateTarget`` that the
-network client can use without depending on ``SplashPlatformAdapter``.
+manifest. Configuration overrides then produce an ``UpdateTarget`` for the
+network client without introducing a general-purpose platform dependency.
 """
 
 from __future__ import annotations

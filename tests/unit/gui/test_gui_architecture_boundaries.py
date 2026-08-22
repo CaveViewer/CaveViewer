@@ -13,20 +13,16 @@ GUI_PLATFORM_ROOT = GUI_ROOT / "platform"
 GUI_FEATURES_ROOT = GUI_ROOT / "features"
 FEATURE_POLICY_MODULE = GUI_FEATURES_ROOT / "policies.py"
 PLATFORM_RUNTIME_MODULE = GUI_PLATFORM_ROOT / "runtime.py"
-SPLASH_PLATFORM_ADAPTER_MODULE = GUI_PLATFORM_ROOT / "base.py"
-PRESENTATION_PROFILE_MODULE = GUI_PLATFORM_ROOT / "presentation.py"
-PRESENTATION_ACTIONS_MODULE = GUI_PLATFORM_ROOT / "presentation_actions.py"
-PLATFORM_ADAPTER_IMPLEMENTATION_MODULES = (
+RETIRED_SPLASH_ADAPTER_MODULES = (
+    GUI_PLATFORM_ROOT / "base.py",
     GUI_PLATFORM_ROOT / "default.py",
+    GUI_PLATFORM_ROOT / "factory.py",
     GUI_PLATFORM_ROOT / "linux.py",
     GUI_PLATFORM_ROOT / "macos.py",
     GUI_PLATFORM_ROOT / "windows.py",
 )
 UPDATE_PACKAGE_REVEAL_MODULE = GUI_PLATFORM_ROOT / "update_package_reveal.py"
 UPDATE_PACKAGE_STORAGE_MODULE = GUI_PLATFORM_ROOT / "update_package_storage.py"
-SAVED_ARTIFACT_REVEAL_MODULE = GUI_PLATFORM_ROOT / "saved_artifact_reveal.py"
-RECORDING_PROCESS_MODULE = GUI_PLATFORM_ROOT / "recording_process.py"
-TLS_TRUST_MODULE = GUI_PLATFORM_ROOT / "tls_trust.py"
 UPDATE_MANAGER_MODULE = GUI_ROOT / "update_manager.py"
 STANDARD_LIBRARY_MAPS_MODULE = GUI_ROOT / "standard_library_maps.py"
 VIEWER_SESSION_COORDINATOR_MODULES = (
@@ -53,23 +49,6 @@ _LEGACY_STATIC_PRESENTATION_ACCESSORS = {
     "option_left_mouse_look_enabled",
     "viewer_uses_glfw_native_initial_size",
 }
-_STATIC_PRESENTATION_PROFILE_METHODS = _LEGACY_STATIC_PRESENTATION_ACCESSORS | {
-    "viewer_overlay_text_scale",
-    "tk_text_scale",
-    "suppress_forced_startup_focus",
-}
-_NATIVE_PRESENTATION_ACTIONS = {
-    "configure_process_dpi_awareness",
-    "install_about_handler",
-    "focus_viewer_window",
-}
-_MIGRATED_NATIVE_ACTIONS = {
-    "reveal_file",
-    "recording_subprocess_startup_kwargs",
-    "load_system_certificates",
-}
-
-
 @dataclass(frozen=True)
 class Violation:
     path: Path
@@ -454,108 +433,35 @@ def test_standard_library_maps_do_not_import_update_compatibility_api():
     assert not violations, _format_violations(violations)
 
 
-def test_update_package_storage_does_not_depend_on_the_broad_splash_adapter():
-    """Keep verified-package promotion behind its focused storage contract."""
-    storage_module = _parse_module(UPDATE_PACKAGE_STORAGE_MODULE)
-    splash_adapter_module = _parse_module(SPLASH_PLATFORM_ADAPTER_MODULE)
-    violations: list[Violation] = []
-
-    for node in ast.walk(storage_module):
-        if isinstance(node, ast.ImportFrom) and any(
-            alias.name == "SplashPlatformAdapter" for alias in node.names
-        ):
-            violations.append(
-                Violation(
-                    UPDATE_PACKAGE_STORAGE_MODULE,
-                    node.lineno,
-                    "imports SplashPlatformAdapter",
-                )
-            )
-        elif isinstance(node, ast.Name) and node.id == "SplashPlatformAdapter":
-            violations.append(
-                Violation(
-                    UPDATE_PACKAGE_STORAGE_MODULE,
-                    node.lineno,
-                    "references SplashPlatformAdapter",
-                )
-            )
-        elif (
-            isinstance(node, ast.Attribute)
-            and node.attr == "persist_downloaded_payload"
-        ):
-            violations.append(
-                Violation(
-                    UPDATE_PACKAGE_STORAGE_MODULE,
-                    node.lineno,
-                    "delegates to persist_downloaded_payload",
-                )
-            )
-
-    if _class_method(
-        splash_adapter_module,
+def test_retired_splash_platform_adapter_stays_removed():
+    """Keep platform behavior on focused contracts after removing the broad one."""
+    retired_names = {
         "SplashPlatformAdapter",
-        "persist_downloaded_payload",
-    ) is not None:
-        violations.append(
-            Violation(
-                SPLASH_PLATFORM_ADAPTER_MODULE,
-                1,
-                "SplashPlatformAdapter still owns persist_downloaded_payload",
-            )
-        )
-
-    assert not violations, _format_violations(violations)
-
-
-def test_update_package_reveal_does_not_depend_on_the_broad_splash_adapter():
-    """Keep verified-package reveal behind its focused adapter contract."""
-    reveal_module = _parse_module(UPDATE_PACKAGE_REVEAL_MODULE)
-    legacy_methods = {
-        "download_reveal_action_label",
-        "reveal_downloaded_payload",
+        "get_platform_adapter",
+        "get_splash_platform_adapter",
     }
     violations: list[Violation] = []
 
-    for node in ast.walk(reveal_module):
-        if isinstance(node, ast.ImportFrom) and any(
-            alias.name == "SplashPlatformAdapter" for alias in node.names
-        ):
-            violations.append(
-                Violation(
-                    UPDATE_PACKAGE_REVEAL_MODULE,
-                    node.lineno,
-                    "imports SplashPlatformAdapter",
-                )
-            )
-        elif isinstance(node, ast.Name) and node.id == "SplashPlatformAdapter":
-            violations.append(
-                Violation(
-                    UPDATE_PACKAGE_REVEAL_MODULE,
-                    node.lineno,
-                    "references SplashPlatformAdapter",
-                )
-            )
-        elif isinstance(node, ast.Attribute) and node.attr in legacy_methods:
-            violations.append(
-                Violation(
-                    UPDATE_PACKAGE_REVEAL_MODULE,
-                    node.lineno,
-                    f"delegates to {node.attr}",
-                )
-            )
+    for path in RETIRED_SPLASH_ADAPTER_MODULES:
+        if path.exists():
+            violations.append(Violation(path, 1, "retired adapter module exists"))
 
-    for path in sorted(GUI_PLATFORM_ROOT.rglob("*.py")):
-        if path == UPDATE_PACKAGE_REVEAL_MODULE:
-            continue
+    for path in _gui_python_files():
         for node in ast.walk(_parse_module(path)):
-            if isinstance(node, ast.FunctionDef) and node.name in legacy_methods:
+            if isinstance(node, ast.Name) and node.id in retired_names:
                 violations.append(
-                    Violation(
-                        path,
-                        node.lineno,
-                        f"retains legacy update method {node.name}",
-                    )
+                    Violation(path, node.lineno, f"references {node.id}")
                 )
+            elif isinstance(node, ast.Attribute) and node.attr == "platform_adapter":
+                violations.append(
+                    Violation(path, node.lineno, "references broad platform_adapter")
+                )
+            elif isinstance(node, ast.ImportFrom):
+                for alias in node.names:
+                    if alias.name in retired_names:
+                        violations.append(
+                            Violation(path, node.lineno, f"imports {alias.name}")
+                        )
 
     assert not violations, _format_violations(violations)
 
@@ -629,7 +535,7 @@ def test_desktop_inhibition_acquisition_stays_inside_platform_boundary():
 def test_viewer_does_not_construct_platform_services_at_module_import():
     """Keep process-owned platform construction out of viewer module import."""
     viewer_module = _parse_module(GUI_ROOT / "viewer_window.py")
-    factory_names = {"get_platform_adapter", "get_desktop_services"}
+    factory_names = {"get_desktop_services"}
     violations: list[Violation] = []
 
     for node in viewer_module.body:
@@ -673,55 +579,6 @@ def test_viewer_session_coordinators_do_not_import_opengl():
     assert not violations, _format_violations(violations)
 
 
-def test_broad_platform_adapter_does_not_retain_static_presentation_methods():
-    """Keep static presentation policy out of the compatibility adapter."""
-    violations: list[Violation] = []
-
-    for path in (
-        SPLASH_PLATFORM_ADAPTER_MODULE,
-        *PLATFORM_ADAPTER_IMPLEMENTATION_MODULES,
-    ):
-        for node in ast.walk(_parse_module(path)):
-            if not isinstance(node, ast.ClassDef):
-                continue
-            for member in node.body:
-                if (
-                    isinstance(member, (ast.AsyncFunctionDef, ast.FunctionDef))
-                    and member.name in _STATIC_PRESENTATION_PROFILE_METHODS
-                ):
-                    violations.append(
-                        Violation(
-                            path,
-                            member.lineno,
-                            "retains static presentation method "
-                            f"{member.name}()",
-                        )
-                    )
-
-    presentation_module = _parse_module(PRESENTATION_PROFILE_MODULE)
-    for node in ast.walk(presentation_module):
-        if isinstance(node, ast.ImportFrom) and any(
-            alias.name == "SplashPlatformAdapter" for alias in node.names
-        ):
-            violations.append(
-                Violation(
-                    PRESENTATION_PROFILE_MODULE,
-                    node.lineno,
-                    "imports SplashPlatformAdapter",
-                )
-            )
-        elif isinstance(node, ast.Name) and node.id == "SplashPlatformAdapter":
-            violations.append(
-                Violation(
-                    PRESENTATION_PROFILE_MODULE,
-                    node.lineno,
-                    "references SplashPlatformAdapter",
-                )
-            )
-
-    assert not violations, _format_violations(violations)
-
-
 def test_gui_consumers_do_not_call_legacy_static_presentation_accessors():
     """Keep static UI conventions on PresentationProfile, not the broad adapter."""
     violations: list[Violation] = []
@@ -739,93 +596,6 @@ def test_gui_consumers_do_not_call_legacy_static_presentation_accessors():
                         node.lineno,
                         f"calls legacy static presentation accessor {node.func.attr}()",
                     )
-                )
-
-    assert not violations, _format_violations(violations)
-
-
-def test_presentation_actions_do_not_depend_on_the_broad_splash_adapter():
-    """Keep native presentation effects behind their focused direct adapter."""
-    actions_module = _parse_module(PRESENTATION_ACTIONS_MODULE)
-    splash_adapter_module = _parse_module(SPLASH_PLATFORM_ADAPTER_MODULE)
-    violations: list[Violation] = []
-
-    for node in ast.walk(actions_module):
-        if isinstance(node, ast.ImportFrom) and any(
-            alias.name == "SplashPlatformAdapter" for alias in node.names
-        ):
-            violations.append(
-                Violation(
-                    PRESENTATION_ACTIONS_MODULE,
-                    node.lineno,
-                    "imports SplashPlatformAdapter",
-                )
-            )
-        elif isinstance(node, ast.Name) and node.id == "SplashPlatformAdapter":
-            violations.append(
-                Violation(
-                    PRESENTATION_ACTIONS_MODULE,
-                    node.lineno,
-                    "references SplashPlatformAdapter",
-                )
-            )
-
-    for method_name in sorted(_NATIVE_PRESENTATION_ACTIONS):
-        if _class_method(
-            splash_adapter_module,
-            "SplashPlatformAdapter",
-            method_name,
-        ) is not None:
-            violations.append(
-                Violation(
-                    SPLASH_PLATFORM_ADAPTER_MODULE,
-                    1,
-                    f"SplashPlatformAdapter still owns {method_name}",
-                )
-            )
-
-    assert not violations, _format_violations(violations)
-
-
-def test_focused_native_actions_do_not_depend_on_the_broad_splash_adapter():
-    """Keep reveal, recording startup, and TLS trust on direct adapters."""
-    violations: list[Violation] = []
-
-    for path in (
-        SAVED_ARTIFACT_REVEAL_MODULE,
-        RECORDING_PROCESS_MODULE,
-        TLS_TRUST_MODULE,
-    ):
-        for node in ast.walk(_parse_module(path)):
-            if isinstance(node, ast.ImportFrom) and any(
-                alias.name == "SplashPlatformAdapter" for alias in node.names
-            ):
-                violations.append(
-                    Violation(path, node.lineno, "imports SplashPlatformAdapter")
-                )
-            elif isinstance(node, ast.Name) and node.id == "SplashPlatformAdapter":
-                violations.append(
-                    Violation(path, node.lineno, "references SplashPlatformAdapter")
-                )
-            elif (
-                isinstance(node, ast.Attribute)
-                and node.attr in _MIGRATED_NATIVE_ACTIONS
-            ):
-                violations.append(
-                    Violation(path, node.lineno, f"delegates to {node.attr}")
-                )
-
-    for path in (
-        SPLASH_PLATFORM_ADAPTER_MODULE,
-        *PLATFORM_ADAPTER_IMPLEMENTATION_MODULES,
-    ):
-        for node in ast.walk(_parse_module(path)):
-            if (
-                isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef))
-                and node.name in _MIGRATED_NATIVE_ACTIONS
-            ):
-                violations.append(
-                    Violation(path, node.lineno, f"retains {node.name}()")
                 )
 
     assert not violations, _format_violations(violations)

@@ -30,7 +30,6 @@ from caveviewer.gui.features import (
 )
 from caveviewer.gui.manual_dive_trace import ManualDivePose, ManualDiveTraceResult
 from caveviewer.gui.platform.app_identity import tk_root_options
-from caveviewer.gui.platform.default import DefaultSplashPlatformAdapter
 from caveviewer.gui.platform.presentation import select_presentation_profile
 from caveviewer.gui.platform.runtime import VideoRecordingPreflight, ViewerLaunchPreflight
 from caveviewer.gui.platform.viewer_launch import ViewerLaunchError
@@ -254,7 +253,6 @@ def _queued_import_messages(window):
 
 def _recording_window():
     window = object.__new__(viewer_window.CaveViewerWindow)
-    window._platform_adapter = DefaultSplashPlatformAdapter()
     window._platform_runtime = None
     window._recording_output_dir = "/tmp"
     window._recording_countdown_started_at = None
@@ -294,32 +292,12 @@ def _begin_exit_capture_finalization(
     return workflow
 
 
-def test_viewer_uses_the_injected_runtime_adapter_before_legacy_factory(monkeypatch):
-    adapter = object()
-    window = object.__new__(viewer_window.CaveViewerWindow)
-    window._platform_runtime = SimpleNamespace(platform_adapter=adapter)
-    window._platform_adapter = None
-    monkeypatch.setattr(
-        viewer_window,
-        "get_platform_adapter",
-        lambda: pytest.fail("injected runtime adapter must be used"),
-    )
-
-    assert window._active_platform_adapter() is adapter
-
-
 def test_viewer_uses_injected_recording_process_adapter_before_legacy_factory(
     monkeypatch,
 ):
     adapter = object()
     window = object.__new__(viewer_window.CaveViewerWindow)
     window._platform_runtime = SimpleNamespace(recording_process_adapter=adapter)
-    window._platform_adapter = None
-    monkeypatch.setattr(
-        viewer_window,
-        "get_platform_adapter",
-        lambda: pytest.fail("injected recording process adapter must be used"),
-    )
 
     assert window._active_recording_process_adapter() is adapter
 
@@ -1868,7 +1846,6 @@ def test_start_recording_encoder_uses_runtime_process_adapter(monkeypatch, tmp_p
         )
 
     window = _recording_window()
-    window._platform_adapter = None
     window._platform_runtime = SimpleNamespace(
         recording_process_adapter=FakeRecordingProcessAdapter()
     )
@@ -1880,11 +1857,6 @@ def test_start_recording_encoder_uses_runtime_process_adapter(monkeypatch, tmp_p
     window._recording_fps = 30
     window._recording_crf = 23
     monkeypatch.setattr(recording, "start_encoder_session", start_encoder_session)
-    monkeypatch.setattr(
-        viewer_window,
-        "get_platform_adapter",
-        lambda: pytest.fail("runtime process adapter must replace the legacy factory"),
-    )
 
     assert window._start_recording_encoder() is True
     assert process_adapter_calls == [True]
@@ -2200,14 +2172,8 @@ def test_recording_success_uses_injected_runtime_reveal_adapter(monkeypatch):
             revealed.append(path)
 
     window = _recording_window()
-    window._platform_adapter = None
     window._platform_runtime = SimpleNamespace(
         saved_artifact_reveal_adapter=FakeSavedArtifactRevealAdapter()
-    )
-    monkeypatch.setattr(
-        viewer_window,
-        "get_platform_adapter",
-        lambda: pytest.fail("runtime adapter must replace the legacy factory"),
     )
 
     window._apply_recording_stop_result(
@@ -2630,11 +2596,6 @@ def test_viewer_launch_uses_injected_runtime_presentation_profile(monkeypatch):
         presentation_profile=select_presentation_profile(platform_name="linux"),
         viewer_launch_preflight=lambda: preflight,
         window_backend_adapter=window_backend_adapter,
-    )
-    monkeypatch.setattr(
-        viewer_window,
-        "get_platform_adapter",
-        lambda: pytest.fail("launch must use the injected runtime profile"),
     )
     monkeypatch.setattr(
         viewer_window,

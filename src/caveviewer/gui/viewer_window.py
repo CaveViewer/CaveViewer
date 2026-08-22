@@ -97,7 +97,6 @@ from caveviewer.gui.viewer_frame_scheduler import (
     ViewerFrameScheduler,
     ViewerFrameState,
 )
-from caveviewer.gui.platform.factory import get_platform_adapter
 from caveviewer.gui.platform.presentation import (
     PresentationProfile,
     get_presentation_profile,
@@ -558,13 +557,6 @@ def _map_initial_camera_position(manifest: Mapping[str, Any]) -> np.ndarray:
 SHADER_DIR = str(resource_path("shaders"))
 
 
-def _platform_adapter_for_runtime(platform_runtime: PlatformRuntime | None = None):
-    """Use the injected process adapter, with a legacy fallback for direct callers."""
-    if platform_runtime is not None:
-        return platform_runtime.platform_adapter
-    return get_platform_adapter()
-
-
 def _presentation_profile_for_runtime(
     platform_runtime: PlatformRuntime | None = None,
 ) -> PresentationProfile:
@@ -579,10 +571,8 @@ def _presentation_profile_for_runtime(
 
 def _presentation_actions_adapter_for_runtime(
     platform_runtime: PlatformRuntime | None = None,
-    *,
-    platform_adapter=None,
 ) -> PresentationActionsAdapter:
-    """Use injected native presentation actions or a narrow legacy facade."""
+    """Use injected native presentation actions or a direct fallback."""
     actions = (
         getattr(platform_runtime, "presentation_actions_adapter", None)
         if platform_runtime is not None
@@ -590,9 +580,7 @@ def _presentation_actions_adapter_for_runtime(
     )
     if actions is not None:
         return actions
-    if platform_adapter is None:
-        platform_adapter = get_platform_adapter()
-    return create_presentation_actions_adapter(platform_adapter)
+    return create_presentation_actions_adapter()
 
 
 def _window_backend_adapter_for_runtime(
@@ -794,15 +782,11 @@ class CaveViewerWindow(mglw.WindowConfig):
             if self._runtime_settings is not None
             else None
         )
-        self._platform_adapter = _platform_adapter_for_runtime(
-            self._platform_runtime
-        )
         self._presentation_profile = _presentation_profile_for_runtime(
             self._platform_runtime
         )
         self._presentation_actions_adapter = _presentation_actions_adapter_for_runtime(
             self._platform_runtime,
-            platform_adapter=self._platform_adapter,
         )
         self._set_runtime_window_icon()
 
@@ -1300,16 +1284,6 @@ class CaveViewerWindow(mglw.WindowConfig):
             ),
         )
 
-    def _active_platform_adapter(self):
-        """Return the injected adapter, falling back only for legacy test shells."""
-        adapter = getattr(self, "_platform_adapter", None)
-        if adapter is None:
-            adapter = _platform_adapter_for_runtime(
-                getattr(self, "_platform_runtime", None)
-            )
-            self._platform_adapter = adapter
-        return adapter
-
     def _active_presentation_profile(self) -> PresentationProfile:
         """Return the immutable UI profile for this viewer instance."""
         profile = getattr(self, "_presentation_profile", None)
@@ -1326,7 +1300,6 @@ class CaveViewerWindow(mglw.WindowConfig):
         if actions is None:
             actions = _presentation_actions_adapter_for_runtime(
                 getattr(self, "_platform_runtime", None),
-                platform_adapter=self._active_platform_adapter(),
             )
             self._presentation_actions_adapter = actions
         return actions
