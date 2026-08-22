@@ -6,6 +6,13 @@ For script CLI conventions and naming rules, see `standards.md`.
 For the canonical release sequence, channel behavior, resume procedure, and
 post-release checklist, see `../docs/development/releases.md`.
 
+The one-action Preview path is `.github/workflows/preview-release-promotion.yml`.
+It promotes any pushed feature branch through `main`, synchronizes
+`release/next`, dispatches the all-platform Preview publish with the next patch
+version, and merges the generated metadata back through a second protected PR.
+The workflow calls `scripts/common/preview_release_automation.sh`; that helper
+is CI-internal and is not a replacement for `release.sh` during local builds.
+
 ## Main Entry Point
 
 Use the dispatcher script:
@@ -89,6 +96,19 @@ release.sh --target=all --version=1.2.45 --notes "Release 1.2.45" --action=packa
 ```
 
 ## GitHub Actions
+
+`scripts/common/launch_preview_release.py` is the cross-platform local launcher
+used by the shared PyCharm **Preview Release** configuration.
+It performs local branch/authentication checks, dispatches Preview promotion,
+and watches the exact new run. It never reads or stores a GitHub token itself;
+contributors authenticate independently with `gh auth login`.
+
+`scripts/common/launch_github_workflow.py` backs the other shared release and
+Essential Tests items in PyCharm's **Release Actions** menu. Package-smoke,
+benchmark, Pages, and maintenance workflows are intentionally not exposed in
+that focused menu. The launcher dispatches the selected workflow on the
+checked-out remote branch, lets GitHub CLI prompt for workflow-specific inputs,
+resolves the exact new run, and watches it to completion.
 
 Release workflows live under `.github/workflows/` for macOS 15, Windows, and
 Linux x86_64. Each platform workflow can be dispatched directly or called by

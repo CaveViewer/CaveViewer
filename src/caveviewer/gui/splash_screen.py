@@ -198,7 +198,9 @@ _UI_FONT_FAMILY = _PRESENTATION_PROFILE.ui_font_family
 _TK_TEXT_SCALE = 1.0
 _CACHE_REBUILD_CLOSE_PAUSE_ATTEMPTS = 25
 _UPDATE_READY_ACTION_DELAY_MS = 3_000
-_MIN_LAUNCH_SPLASH_MS = 2_000
+_MIN_LAUNCH_SPLASH_MS = 5_000
+_LAUNCH_INDICATOR_INTERVAL_MS = 50
+_LAUNCH_INDICATOR_ARC_DEGREES = 92
 
 _TYPOGRAPHY: TkTypography = create_tk_typography(
     _UI_FONT_FAMILY,
@@ -219,7 +221,10 @@ _ABOUT_WEBSITE_LINKS = (
     ("www.bottomlineprojects.com", _BOTTOMLINE_PROJECTS_WEBSITE_URL),
 )
 _ABOUT_CREDITS_WRAP_LENGTH = 430
-_LIBRARY_PANEL_BORDER_COLOR = "#1e2028"
+_LIBRARY_PANEL_COLOR = _BG_COLOR
+_LIBRARY_PANEL_BORDER_COLOR = _BG_COLOR
+_LIBRARY_FEATURED_ACTION_BG = "#202025"
+_LIBRARY_FEATURED_ACTION_HOVER_BG = "#28282e"
 _LIBRARY_METADATA_COLOR = "#5a5d68"
 _LIBRARY_METADATA_STATUS_COLOR = DARK_THEME.secondary_text
 _LIBRARY_METADATA_ERROR_COLOR = DARK_THEME.error_text
@@ -390,7 +395,7 @@ def _configure_runtime_tk_fonts(
 def _map_library_panel_style() -> MapLibraryPanelStyle:
     """Return the splash-owned style tokens for the Map Library panel."""
     return MapLibraryPanelStyle(
-        panel_color=_PANEL_COLOR,
+        panel_color=_LIBRARY_PANEL_COLOR,
         panel_border_color=_LIBRARY_PANEL_BORDER_COLOR,
         title_color=_TITLE_COLOR,
         former_map_title_color=_LIBRARY_FORMER_MAP_TITLE_COLOR,
@@ -399,11 +404,13 @@ def _map_library_panel_style() -> MapLibraryPanelStyle:
         body_font=_TYPOGRAPHY.body,
         supporting_font=_TYPOGRAPHY.supporting,
         section_font=_TYPOGRAPHY.section,
-        button_bg=_PANEL_COLOR,
+        button_bg=_LIBRARY_PANEL_COLOR,
         button_fg=_BUTTON_BG,
         button_hover_bg=DARK_THEME.secondary_button,
+        featured_action_bg=_LIBRARY_FEATURED_ACTION_BG,
+        featured_action_hover_bg=_LIBRARY_FEATURED_ACTION_HOVER_BG,
         button_border_color=_BUTTON_BORDER_COLOR,
-        disabled_button_bg=_PANEL_COLOR,
+        disabled_button_bg=_LIBRARY_PANEL_COLOR,
         disabled_button_fg=DARK_THEME.placeholder_text,
         disabled_button_border=DARK_THEME.entry_border,
         empty_note_color="#5f606b",
@@ -481,7 +488,36 @@ def _help_panel_style() -> HelpPanelStyle:
     )
 
 
-def _load_brand_logo(parent, *, px, max_dimension: int):
+def _suppress_amber_logo_pixels(logo_img):
+    """Return an RGBA logo copy with shader-equivalent amber pixels hidden."""
+    rgba_image = logo_img.convert("RGBA")
+    filtered_pixels = []
+    for red, green, blue, alpha in rgba_image.get_flattened_data():
+        # Use a wider warm-color envelope than the OpenGL shader so resized,
+        # antialiased edges of the logo's rings and tick marks cannot survive
+        # as small dashes around the clean launch-progress ring. The blue cave
+        # artwork remains well outside these ratios.
+        is_amber = (
+            alpha > 5
+            and red > 80
+            and green > 40
+            and red > blue * 1.25
+            and green > blue * 1.05
+        )
+        filtered_pixels.append(
+            (red, green, blue, 0) if is_amber else (red, green, blue, alpha)
+        )
+    rgba_image.putdata(filtered_pixels)
+    return rgba_image
+
+
+def _load_brand_logo(
+    parent,
+    *,
+    px,
+    max_dimension: int,
+    suppress_amber: bool = False,
+):
     """Load the About/launch brand image as a root-owned Tk photo."""
     logo_photo = None
     if _LOGO_PATH:
@@ -500,6 +536,8 @@ def _load_brand_logo(parent, *, px, max_dimension: int):
                     (int(logo_img.width * scale), int(logo_img.height * scale)),
                     Image.LANCZOS,
                 )
+            if suppress_amber:
+                logo_img = _suppress_amber_logo_pixels(logo_img)
             logo_photo = ImageTk.PhotoImage(
                 logo_img,
                 master=parent.winfo_toplevel(),
@@ -509,22 +547,61 @@ def _load_brand_logo(parent, *, px, max_dimension: int):
     return logo_photo
 
 
-def _build_launch_surface(parent, *, program_name: str, px) -> None:
-    """Build the static brand surface shown while the main UI is composed."""
+def _draw_launch_indicator_frame(canvas, *, phase_degrees: float, px) -> None:
+    """Draw one frame of the launch ring used around the brand mark."""
+    canvas.delete("launch_indicator")
+    size = max(1, int(float(canvas.cget("width"))))
+    ring_diameter = min(size, max(1, px(91)))
+    inset = (size - ring_diameter) / 2
+    stroke_width = max(1, px(2))
+    bounds = (inset, inset, size - inset, size - inset)
+    canvas.create_oval(
+        *bounds,
+        outline=DARK_THEME.entry_border,
+        width=stroke_width,
+        tags="launch_indicator",
+    )
+    canvas.create_arc(
+        *bounds,
+        start=90 - float(phase_degrees),
+        extent=-_LAUNCH_INDICATOR_ARC_DEGREES,
+        style="arc",
+        outline=_BUTTON_BG,
+        width=stroke_width,
+        tags="launch_indicator",
+    )
+
+
+def _build_launch_surface(parent, *, program_name: str, px):
+    """Build the branded launch surface and return its indicator canvas."""
     import tkinter as tk
 
     content = tk.Frame(parent, bg=_BG_COLOR)
     content.pack(expand=True)
-    logo_photo = _load_brand_logo(parent, px=px, max_dimension=120)
+    indicator_size = px(132)
+    indicator_canvas = tk.Canvas(
+        content,
+        width=indicator_size,
+        height=indicator_size,
+        bg=_BG_COLOR,
+        borderwidth=0,
+        highlightthickness=0,
+    )
+    logo_photo = _load_brand_logo(
+        parent,
+        px=px,
+        max_dimension=108,
+        suppress_amber=True,
+    )
     if logo_photo is not None:
-        logo_label = tk.Label(
-            content,
+        indicator_canvas.create_image(
+            indicator_size / 2,
+            indicator_size / 2,
             image=logo_photo,
-            bg=_BG_COLOR,
-            borderwidth=0,
         )
-        logo_label.image = logo_photo
-        logo_label.pack(pady=(0, px(14)))
+        indicator_canvas.image = logo_photo
+    _draw_launch_indicator_frame(indicator_canvas, phase_degrees=0, px=px)
+    indicator_canvas.pack(pady=(0, px(14)))
     tk.Label(
         content,
         text=program_name,
@@ -534,11 +611,12 @@ def _build_launch_surface(parent, *, program_name: str, px) -> None:
     ).pack()
     tk.Label(
         content,
-        text="Starting…",
+        text="Preparing to explore what lies beneath…",
         font=_TYPOGRAPHY.supporting,
         fg=_SUBTITLE_COLOR,
         bg=_BG_COLOR,
     ).pack(pady=(px(6), 0))
+    return indicator_canvas
 
 
 def _settle_launch_layout(root, *, passes: int = 3) -> None:
@@ -1201,7 +1279,11 @@ def show_splash_screen(
     root.grid_columnconfigure(0, weight=1)
     launch_surface = tk.Frame(root, bg=_BG_COLOR)
     launch_surface.grid(row=0, column=0, sticky="nsew")
-    _build_launch_surface(launch_surface, program_name=program_name, px=px)
+    launch_indicator = _build_launch_surface(
+        launch_surface,
+        program_name=program_name,
+        px=px,
+    )
 
     content_frame = tk.Frame(root, bg=_BG_COLOR)
     content_frame.grid(
@@ -1216,6 +1298,32 @@ def show_splash_screen(
     root.deiconify()
     root.lift()
     _settle_launch_layout(root, passes=1)
+
+    launch_indicator_active = [True]
+    launch_indicator_phase = [0.0]
+
+    def _advance_launch_indicator() -> None:
+        """Advance one owned frame while the launch surface remains visible."""
+        if not launch_indicator_active[0] or session.closing:
+            return
+        try:
+            if not launch_indicator.winfo_exists():
+                return
+        except Exception:
+            return
+        _draw_launch_indicator_frame(
+            launch_indicator,
+            phase_degrees=launch_indicator_phase[0],
+            px=px,
+        )
+        launch_indicator_phase[0] = (launch_indicator_phase[0] + 12.0) % 360.0
+        session.schedule_after(
+            root,
+            _LAUNCH_INDICATOR_INTERVAL_MS,
+            _advance_launch_indicator,
+        )
+
+    _advance_launch_indicator()
 
     # The splash is organized as a stable navigation rail beside an active
     # content surface. Keeping the rail a fixed width prevents map-library
@@ -2153,6 +2261,7 @@ def show_splash_screen(
 
     def _reveal_composed_main_surface() -> None:
         """Reveal the fully painted main surface in one non-repeating handoff."""
+        launch_indicator_active[0] = False
         content_frame.tkraise()
         launch_surface.destroy()
         mark_startup_splash_visible()

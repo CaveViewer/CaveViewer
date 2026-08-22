@@ -5,6 +5,37 @@ details remain in [`scripts/README.md`](../../scripts/README.md), while update
 configuration and local packaging variables remain in
 [`source-setup.md`](source-setup.md).
 
+## Release governance
+
+All published releases use pull-request and branch gates. Never publish from a
+developer feature branch or directly from `main`:
+
+1. Merge the intended source branch into protected `main` through a pull
+   request after every required Essential Tests status check succeeds against
+   the current base.
+2. Merge the resulting `main` into `release/next`. Every `publish: true` release
+   build must run from `release/next`; this is the only release-producing
+   branch.
+3. After the finalizer commits version, AppStream, and signed update metadata to
+   `release/next`, merge `release/next` back into protected `main` through a
+   second pull request. The metadata PR must pass its required lightweight
+   release-metadata validation before merge.
+
+The repository ruleset requires pull requests and strict required status
+checks for `main`; nobody has a bypass. A branch that passed against an older
+`main` must be brought up to date and validated again. `release/next` must not
+accumulate a second release while metadata from the preceding release remains
+unmerged.
+
+Contributors using PyCharm should run the tracked **Preview Release**
+configuration from `.run/`. It is the supported local front end to the
+repository-owned release automation and GitHub CLI. Keep personal IDE state in
+ignored `.idea/` files, authenticate locally with `gh auth login`, and do not
+store tokens in a run configuration. A GitHub Actions IDE plug-in is not
+required or recommended for dispatching releases; PyCharm's bundled GitHub
+support may still be used for editing workflow YAML and ordinary pull-request
+work.
+
 ## Release matrix
 
 CaveViewer publishes four user-installable artifacts from four GitHub workflows:
@@ -158,28 +189,96 @@ smoke-test only this desktop integration path without starting the GUI. Set
 metadata, and hicolor icons without removing maps, settings, caches, or
 downloaded update packages.
 
-## Recommended GitHub release
+## Release workflows
 
-Use [`.github/workflows/all-platform-release.yml`](../../.github/workflows/all-platform-release.yml)
-for a complete release.
+[`all-platform-release.yml`](../../.github/workflows/all-platform-release.yml)
+is the only complete four-platform build/publish workflow. For every published
+release it is dispatched on `release/next`, never on `main` or a feature branch.
+Package-only (`publish: false`) validation may run on another branch because it
+does not create a release or commit release metadata.
 
-1. Open **Actions → All Platform Release → Run workflow**.
-2. Select the source branch explicitly. For a production release this is
-   normally `main`.
-3. Enter the bare version (for example, `1.0.64`, not `v1.0.64`) and release
-   notes that apply to every platform.
-4. Leave `publish` off for package-only validation. Actions retains each build
-   as a workflow artifact, but no GitHub release or update manifest is changed.
-5. Turn `publish` on to upload assets and commit update metadata.
-6. Turn `preview` on when this is a preview package: it embeds the
-   preview subscription, updates `preview.json` when publishing, and
-   marks a newly created GitHub release as a preview.
-7. Turn `reuse_pr_validation` on only when the selected source has already
+### One-action Preview promotion
+
+Use **Preview Release Promotion** when a validated feature branch is ready to
+become the next Preview. The selected source may be any pushed feature branch;
+all package publication still occurs exclusively from `release/next`.
+
+From a local checkout of the branch to release, one command starts the entire
+promotion:
+
+```bash
+gh workflow run preview-release-promotion.yml \
+  --ref main \
+  -f source_branch="$(git branch --show-current)" \
+  -f release_notes="Describe this Preview"
+```
+
+The preferred entry point is PyCharm's shared **Preview Release** run
+configuration. It validates that the current feature branch is
+clean and fully pushed, prompts for optional notes and an explicit confirmation,
+dispatches the same workflow, resolves the exact new run, and watches it to
+completion. The configuration is stored in the tracked `.run/` directory; it
+contains no token, account name, personal path, or release secret.
+
+The `gh workflow run` command above is the supported terminal fallback. The
+GitHub Actions web interface exposes the same `source_branch` and
+`release_notes` inputs, but contributors should normally use the shared
+PyCharm configuration so its clean-tree, pushed-branch, confirmation, and exact
+run-tracking checks are not skipped. When dispatching manually, run the
+promotion workflow definition from `main` and explicitly name the feature
+source branch.
+
+The promotion is Preview-only and performs one strictly ordered sequence:
+
+1. Confirm `release/next` has no release metadata still missing from `main`.
+2. Merge current `main` into the source branch, open or reuse its pull request
+   into `main`, explicitly run the required PR-aware checks, and merge it only
+   after success.
+3. Merge the resulting `main` into `release/next` and push that exact source.
+4. Choose one greater patch version from the current application version and
+   all existing numeric GitHub release tags (including tags without a release).
+5. Dispatch **All Platform Release** on `release/next` with `preview`, `publish`,
+   and `reuse_pr_validation` enabled, then wait for the complete run.
+6. Open or reuse the `release/next` metadata pull request into `main`, run the
+   lightweight PR-aware metadata validation, and merge it only after success.
+
+Every mutation follows a successful preflight or workflow. A failed source PR
+check leaves both protected branches unchanged. A failed package workflow
+leaves its failure visible in **All Platform Release** and does not create the
+metadata PR. A failed metadata check leaves that PR open for inspection. Rerun
+the promotion only after correcting the reported failure. The repository-wide
+promotion concurrency group prevents two Preview promotions from overlapping.
+
+The workflow intentionally rejects `main` and `release/next` as source-branch
+inputs. It also refuses to begin while `release/next` differs from `main`; merge
+the preceding release-metadata PR first. This prevents two release versions
+from accumulating on the long-lived release branch.
+
+The workflow token needs `actions: write`, `contents: write`, and
+`pull-requests: write`; these permissions are declared narrowly in the workflow.
+No personal access token is required. Bot-created PRs do not rely on recursive
+PR events: the promotion explicitly dispatches **Essential Tests** with the PR
+base/head pair, waits for the required check contexts on that commit, and only
+then requests the protected merge.
+
+### Stable release procedure
+
+Stable publishing uses the same branch topology but is intentionally manual:
+
+1. Merge the release candidate into `main` through its fully gated source PR.
+2. Merge current `main` into `release/next` and push `release/next`.
+3. Dispatch **All Platform Release** on `release/next`. Enter the bare numeric
+   version and release notes, set `publish: true`, and leave `preview: false`.
+4. Set `reuse_pr_validation: true` only when the exact source revision already
    passed its PR validation and no application, packaging, dependency, test, or
-   workflow change has been made since. This skips the duplicate source test
-   suites, not package creation or package validation. Documentation, release
-   notes, and other release metadata changes alone do not require the source
-   suites to run again.
+   workflow input changed afterward. This skips duplicate source suites, not
+   package creation or package validation.
+5. After successful publication, open the `release/next` to `main` metadata PR,
+   wait for its required metadata checks, and merge it. Do not start another
+   release first.
+
+For package-only validation, leave `publish: false`; GitHub retains workflow
+artifacts without creating a GitHub Release or changing update metadata.
 
 ### Release branch hygiene
 
@@ -188,12 +287,12 @@ it creates or updates the GitHub Release and writes the version, AppStream, and
 signed update-manifest metadata. Use "publish: false" until the candidate is
 ready to publish.
 
-Do not publish successive versions from a long-lived integration branch. After
-publishing from a non-main branch, merge its release-metadata pull request into
-main, then rebase that branch from main (or start a new release branch) before
-publishing again. The finalizer rejects a non-main target whose version,
-AppStream, or update metadata differs from origin/main; this prevents multiple
-unmerged AppStream release entries from accumulating in one pull request.
+Do not publish successive versions before reconciling `release/next`. After
+publishing, merge its release-metadata pull request into `main`, then synchronize
+`release/next` from that updated `main` before publishing again. The finalizer
+rejects a release target whose version, AppStream, or update metadata differs
+from `origin/main`; this prevents multiple unmerged AppStream release entries
+from accumulating in one pull request.
 
 An intentionally partial platform publish may be resumed with the same version:
 the finalizer permits that only when the branch has exactly one new AppStream
@@ -337,9 +436,11 @@ Preview version; do not edit a Preview tag into a Stable release.
 
 The four platform workflows remain manually dispatchable. A direct workflow
 runs its package job and, when `publish` is enabled, calls the same single-writer
-finalizer for that platform. Use the same source branch, version, release notes,
-`publish`, and `preview` values when resuming an intentionally partial
-release.
+finalizer for that platform. Any direct run with `publish: true` must still use
+`release/next`; never use a feature branch or `main`. Use the same
+`release/next` commit, version, release notes, `publish`, and `preview` values
+when resuming an intentionally partial release, then merge its generated
+metadata back through the gated `release/next` to `main` PR.
 
 An all-platform build failure does not publish any platform or manifest because
 the finalizer requires all four package jobs to succeed. Inspect the retained
@@ -351,8 +452,8 @@ do not manually point a manifest at them.
 
 ## Local dispatcher
 
-Use [`scripts/release.sh`](../../scripts/release.sh) for local build, package,
-and publish operations:
+Use [`scripts/release.sh`](../../scripts/release.sh) for local build and package
+operations:
 
 ```bash
 ./scripts/release.sh \
@@ -380,10 +481,15 @@ already passed. `--preview` is valid with `build`, `package`, and
 package, while `release` also marks the GitHub release as a preview.
 Publishing also requires an authenticated GitHub CLI and
 `CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY`.
+Local publishing is an exceptional recovery path, not the normal contributor
+workflow. If it is required, check out synchronized `release/next`, publish
+there, push its metadata commit, and merge that metadata into `main` through the
+same required-check PR. Never publish locally from `main` or a feature branch.
 
 ## Post-release checklist
 
-- Confirm the workflow used the intended branch, version, notes, and channel.
+- Confirm the published workflow used `release/next` and the intended version,
+  notes, and channel.
 - Confirm all four user artifacts are present on the same GitHub tag.
 - Confirm `src/caveviewer/version.py` contains the released version.
 - Confirm every platform/channel manifest contains the expected version, URL,

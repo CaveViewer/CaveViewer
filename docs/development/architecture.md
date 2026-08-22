@@ -796,6 +796,9 @@ run independently. `All Platform Release` runs one shared test gate, packages
 all four targets in parallel from one immutable source revision, and hands the
 artifacts to a single finalizer. In GitHub Actions, only that finalizer creates
 the release, verifies its uploaded assets, signs manifests, and pushes release
-metadata, preserving one owner
-for shared mutable state. The operational contract and verification checklist
-live in [releases.md](releases.md).
+metadata, preserving one owner for shared mutable state. Published workflows
+run from `release/next`; the finalizer commits only to that branch. Source first
+enters protected `main` through a required-check PR, and finalized metadata
+returns from `release/next` to `main` through another required-check PR. The
+operational contract and verification checklist live in
+[releases.md](releases.md).
