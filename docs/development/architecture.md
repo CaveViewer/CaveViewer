@@ -438,26 +438,26 @@ encoder or trace writer has already reported success when `CaveViewerWindow`
 calls `SavedArtifactRevealAdapter`, and the action is only a post-save
 convenience after a user-visible stop. A failure to launch Finder, Explorer, or
 the Linux desktop reveal route is logged but cannot downgrade the completed
-artifact's success state. The compatibility facade delegates to the existing
-`reveal_file()` behavior until native implementations move behind the narrow
-contract.
+artifact's success state. Direct focused implementations own Finder selection,
+Explorer selection, and the injected Linux desktop-service route; none delegates
+to `SplashPlatformAdapter`.
 
 Recording encoder startup is likewise a focused action adapter, not another
 recording gate. After the existing on-demand preflight has confirmed ffmpeg and
 the output directory, `RecordingProcessAdapter` supplies only the native
 non-command `Popen` options immediately before the encoder session starts. It
 does not select an ffmpeg binary, build the command, or alter recording policy.
-The current compatibility facade preserves Windows console suppression through
-`STARTUPINFO` and `CREATE_NO_WINDOW`, while default, macOS, and Linux behavior
-remains unchanged.
+The direct Windows adapter preserves console suppression through `STARTUPINFO`
+and `CREATE_NO_WINDOW`, while the default, macOS, and Linux adapter returns no
+extra launch options.
 
 TLS trust augmentation is also a focused action adapter, not a capability gate.
 Each update-network request creates Python's normal verifying SSL context, then
 asks `TlsTrustAdapter` to add any native trust roots before it contacts a
 manifest, signature, package-availability probe, or verified payload URL. The
-compatibility facade
-preserves Windows `CA`/`ROOT` certificate-store augmentation and the empty
-default, macOS, and Linux behavior without disabling certificate verification.
+direct Windows adapter preserves `CA`/`ROOT` certificate-store augmentation;
+the default, macOS, and Linux adapter adds nothing. Neither path disables
+certificate verification.
 The process-global `truststore` startup compatibility path remains separate;
 this adapter does not change process initialization or network policy.
 The neutral file-download transport receives that explicit context from its

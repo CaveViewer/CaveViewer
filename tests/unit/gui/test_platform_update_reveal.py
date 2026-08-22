@@ -7,8 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from caveviewer.gui.platform import default, linux, macos, windows
-from caveviewer.gui.platform import update_package_reveal
+from caveviewer.gui.platform import saved_artifact_reveal, update_package_reveal
 
 
 def test_windows_reveals_package_with_explorer_selection(tmp_path, monkeypatch):
@@ -36,12 +35,14 @@ def test_windows_reveals_saved_file_with_explorer_selection(
     payload.write_bytes(b"video")
     launched = []
     monkeypatch.setattr(
-        windows.subprocess,
+        saved_artifact_reveal.subprocess,
         "Popen",
         lambda command: launched.append(command),
     )
 
-    windows.WindowsSplashPlatformAdapter().reveal_file(str(payload))
+    saved_artifact_reveal.WindowsSavedArtifactRevealAdapter().reveal_saved_artifact(
+        str(payload)
+    )
 
     assert launched == [["explorer", "/select,", str(payload)]]
 
@@ -55,15 +56,17 @@ def test_windows_reveal_keeps_explorer_selector_outside_a_whitespace_path(
     payload.write_text("trace", encoding="utf-8")
     launched = []
     monkeypatch.setattr(
-        windows.subprocess,
+        saved_artifact_reveal.subprocess,
         "Popen",
         lambda command: launched.append(command),
     )
 
-    windows.WindowsSplashPlatformAdapter().reveal_file(str(payload))
+    saved_artifact_reveal.WindowsSavedArtifactRevealAdapter().reveal_saved_artifact(
+        str(payload)
+    )
 
     assert launched == [["explorer", "/select,", str(payload)]]
-    assert windows.subprocess.list2cmdline(launched[0]) == (
+    assert saved_artifact_reveal.subprocess.list2cmdline(launched[0]) == (
         f'explorer /select, "{payload}"'
     )
 
@@ -95,10 +98,10 @@ def test_linux_reveals_saved_file_with_desktop_services(tmp_path):
         def reveal_path(self, path, *, parent=None):
             revealed.append((path, parent))
 
-    adapter = linux.LinuxSplashPlatformAdapter(
+    adapter = saved_artifact_reveal.LinuxSavedArtifactRevealAdapter(
         desktop_services=FakeDesktopServices()
     )
-    adapter.reveal_file(str(payload))
+    adapter.reveal_saved_artifact(str(payload))
 
     assert revealed == [(str(payload), None)]
 
@@ -177,12 +180,14 @@ def test_macos_reveals_saved_file_without_mounting(tmp_path, monkeypatch):
     payload.write_bytes(b"video")
     finder_calls = []
     monkeypatch.setattr(
-        macos.subprocess,
+        saved_artifact_reveal.subprocess,
         "Popen",
         lambda command: finder_calls.append(command),
     )
 
-    macos.MacOSSplashPlatformAdapter().reveal_file(str(payload))
+    saved_artifact_reveal.MacOSSavedArtifactRevealAdapter().reveal_saved_artifact(
+        str(payload)
+    )
 
     assert finder_calls == [["open", "-R", str(payload)]]
 
@@ -199,4 +204,6 @@ def test_unsupported_package_reveal_fails_safely_without_affecting_saved_files(
         adapter.reveal_verified_package(str(payload))
 
     with pytest.raises(RuntimeError, match="unsupported"):
-        default.DefaultSplashPlatformAdapter().reveal_file(str(payload))
+        saved_artifact_reveal.UnsupportedSavedArtifactRevealAdapter().reveal_saved_artifact(
+            str(payload)
+        )

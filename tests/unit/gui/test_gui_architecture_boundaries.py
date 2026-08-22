@@ -24,6 +24,9 @@ PLATFORM_ADAPTER_IMPLEMENTATION_MODULES = (
 )
 UPDATE_PACKAGE_REVEAL_MODULE = GUI_PLATFORM_ROOT / "update_package_reveal.py"
 UPDATE_PACKAGE_STORAGE_MODULE = GUI_PLATFORM_ROOT / "update_package_storage.py"
+SAVED_ARTIFACT_REVEAL_MODULE = GUI_PLATFORM_ROOT / "saved_artifact_reveal.py"
+RECORDING_PROCESS_MODULE = GUI_PLATFORM_ROOT / "recording_process.py"
+TLS_TRUST_MODULE = GUI_PLATFORM_ROOT / "tls_trust.py"
 UPDATE_MANAGER_MODULE = GUI_ROOT / "update_manager.py"
 STANDARD_LIBRARY_MAPS_MODULE = GUI_ROOT / "standard_library_maps.py"
 VIEWER_SESSION_COORDINATOR_MODULES = (
@@ -59,6 +62,11 @@ _NATIVE_PRESENTATION_ACTIONS = {
     "configure_process_dpi_awareness",
     "install_about_handler",
     "focus_viewer_window",
+}
+_MIGRATED_NATIVE_ACTIONS = {
+    "reveal_file",
+    "recording_subprocess_startup_kwargs",
+    "load_system_certificates",
 }
 
 
@@ -775,6 +783,50 @@ def test_presentation_actions_do_not_depend_on_the_broad_splash_adapter():
                     f"SplashPlatformAdapter still owns {method_name}",
                 )
             )
+
+    assert not violations, _format_violations(violations)
+
+
+def test_focused_native_actions_do_not_depend_on_the_broad_splash_adapter():
+    """Keep reveal, recording startup, and TLS trust on direct adapters."""
+    violations: list[Violation] = []
+
+    for path in (
+        SAVED_ARTIFACT_REVEAL_MODULE,
+        RECORDING_PROCESS_MODULE,
+        TLS_TRUST_MODULE,
+    ):
+        for node in ast.walk(_parse_module(path)):
+            if isinstance(node, ast.ImportFrom) and any(
+                alias.name == "SplashPlatformAdapter" for alias in node.names
+            ):
+                violations.append(
+                    Violation(path, node.lineno, "imports SplashPlatformAdapter")
+                )
+            elif isinstance(node, ast.Name) and node.id == "SplashPlatformAdapter":
+                violations.append(
+                    Violation(path, node.lineno, "references SplashPlatformAdapter")
+                )
+            elif (
+                isinstance(node, ast.Attribute)
+                and node.attr in _MIGRATED_NATIVE_ACTIONS
+            ):
+                violations.append(
+                    Violation(path, node.lineno, f"delegates to {node.attr}")
+                )
+
+    for path in (
+        SPLASH_PLATFORM_ADAPTER_MODULE,
+        *PLATFORM_ADAPTER_IMPLEMENTATION_MODULES,
+    ):
+        for node in ast.walk(_parse_module(path)):
+            if (
+                isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef))
+                and node.name in _MIGRATED_NATIVE_ACTIONS
+            ):
+                violations.append(
+                    Violation(path, node.lineno, f"retains {node.name}()")
+                )
 
     assert not violations, _format_violations(violations)
 

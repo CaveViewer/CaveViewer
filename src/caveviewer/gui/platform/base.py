@@ -8,17 +8,8 @@ move into focused adapters.
 
 from __future__ import annotations
 
-from typing import Any, Protocol
+from typing import Protocol
 
 
 class SplashPlatformAdapter(Protocol):
-    """Legacy action hooks not yet moved to focused adapter contracts."""
-
-    def reveal_file(self, path: str) -> None:
-        ...
-
-    def load_system_certificates(self, context: Any) -> None:
-        ...
-
-    def recording_subprocess_startup_kwargs(self) -> dict[str, Any]:
-        ...
+    """Frozen compatibility marker pending deletion of the broad factory."""
