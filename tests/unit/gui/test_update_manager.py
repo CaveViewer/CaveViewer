@@ -60,10 +60,6 @@ class FakePlatformAdapter:
         self.update_package_reveal_adapter = FakeUpdatePackageRevealAdapter()
 
 
-class FakeRuntimePlatformAdapter(FakePlatformAdapter):
-    pass
-
-
 class FakeUpdatePackageStorageAdapter:
     def __init__(self, destination: Path, *, error: Exception | None = None):
         self.destination = destination
@@ -200,7 +196,6 @@ def _available_exe_outcome(payload: bytes):
 
 def _runtime(adapter, desktop_services, *, installer_adapter=None):
     return create_platform_runtime(
-        platform_adapter=adapter,
         desktop_services=desktop_services,
         update_package_reveal_adapter=adapter.update_package_reveal_adapter,
         update_package_storage_adapter=DefaultUpdatePackageStorageAdapter(
@@ -1023,12 +1018,10 @@ def test_non_actionable_states_reject_download_and_reveal(tmp_path):
 def test_runtime_package_reveal_adapter_controls_label_and_action(tmp_path):
     payload_path = tmp_path / "CaveViewer.zip"
     payload_path.write_bytes(b"verified package")
-    platform_adapter = FakeRuntimePlatformAdapter(tmp_path / "Downloads")
     reveal_adapter = FakeUpdatePackageRevealAdapter(
         label="Show Verified Test Package"
     )
     runtime = create_platform_runtime(
-        platform_adapter=platform_adapter,
         desktop_services=FakeDesktopServices(),
         update_package_reveal_adapter=reveal_adapter,
         environment={},
@@ -1054,12 +1047,10 @@ def test_runtime_package_reveal_adapter_controls_label_and_action(tmp_path):
 
 
 def test_runtime_storage_adapter_owns_verified_package_persistence(tmp_path):
-    platform_adapter = FakeRuntimePlatformAdapter(tmp_path / "Downloads")
     storage_adapter = FakeUpdatePackageStorageAdapter(
         tmp_path / "Stored Packages" / "CaveViewer-1.0.64.zip"
     )
     runtime = create_platform_runtime(
-        platform_adapter=platform_adapter,
         desktop_services=FakeDesktopServices(),
         update_package_storage_adapter=storage_adapter,
         environment={},
@@ -1096,13 +1087,11 @@ def test_runtime_storage_adapter_owns_verified_package_persistence(tmp_path):
 
 
 def test_storage_adapter_failure_is_an_ordinary_update_workflow_failure(tmp_path):
-    platform_adapter = FakeRuntimePlatformAdapter(tmp_path / "Downloads")
     storage_adapter = FakeUpdatePackageStorageAdapter(
         tmp_path / "Stored Packages" / "CaveViewer-1.0.64.zip",
         error=OSError("downloads directory is unavailable"),
     )
     runtime = create_platform_runtime(
-        platform_adapter=platform_adapter,
         desktop_services=FakeDesktopServices(),
         update_package_storage_adapter=storage_adapter,
         environment={},
@@ -1136,9 +1125,7 @@ def test_storage_adapter_failure_is_an_ordinary_update_workflow_failure(tmp_path
 def test_disabled_runtime_package_reveal_gate_blocks_native_action(tmp_path):
     payload_path = tmp_path / "CaveViewer.bin"
     payload_path.write_bytes(b"verified package")
-    platform_adapter = FakeRuntimePlatformAdapter(tmp_path / "Downloads")
     runtime = create_platform_runtime(
-        platform_adapter=platform_adapter,
         desktop_services=FakeDesktopServices(),
         environment={},
         platform_name="freebsd",
@@ -1166,13 +1153,11 @@ def test_disabled_runtime_package_reveal_gate_blocks_native_action(tmp_path):
 
 
 def test_disabled_runtime_gate_starts_no_update_workers_or_downloads(tmp_path):
-    adapter = FakeRuntimePlatformAdapter(tmp_path / "Downloads")
     update_profile = replace(
         select_update_profile(platform_name="linux", machine="x86_64"),
         supports_automatic_update=False,
     )
     runtime = create_platform_runtime(
-        platform_adapter=adapter,
         desktop_services=FakeDesktopServices(),
         update_profile=update_profile,
         environment={},
@@ -1207,9 +1192,7 @@ def test_disabled_runtime_gate_starts_no_update_workers_or_downloads(tmp_path):
 def test_runtime_target_is_passed_to_the_default_update_client(
     monkeypatch, tmp_path
 ):
-    adapter = FakeRuntimePlatformAdapter(tmp_path / "Downloads")
     runtime = create_platform_runtime(
-        platform_adapter=adapter,
         desktop_services=FakeDesktopServices(),
         environment={"CAVEVIEWER_UPDATE_BRANCH": "release-candidate"},
     )
@@ -1252,7 +1235,6 @@ def test_runtime_target_is_passed_to_the_default_update_client(
 def test_runtime_tls_adapter_is_passed_to_default_update_download(
     monkeypatch, tmp_path
 ):
-    adapter = FakeRuntimePlatformAdapter(tmp_path / "Downloads")
 
     class FakeTlsTrustAdapter:
         def augment_ssl_context(self, _context):
@@ -1260,7 +1242,6 @@ def test_runtime_tls_adapter_is_passed_to_default_update_download(
 
     tls_trust_adapter = FakeTlsTrustAdapter()
     runtime = create_platform_runtime(
-        platform_adapter=adapter,
         desktop_services=FakeDesktopServices(),
         tls_trust_adapter=tls_trust_adapter,
         environment={},
