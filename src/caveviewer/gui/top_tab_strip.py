@@ -1,4 +1,4 @@
-"""Shared underline-tab navigation for splash-window content surfaces."""
+"""Shared text-tab navigation for splash-window content surfaces."""
 
 from __future__ import annotations
 
@@ -20,10 +20,9 @@ class TopTab:
 
 @dataclass(frozen=True)
 class TopTabStripStyle:
-    """Scale-independent visual tokens for one underline-tab strip."""
+    """Scale-independent visual tokens for one text-tab strip."""
 
     background_color: str
-    baseline_color: str
     active_color: str
     inactive_color: str
     focus_color: str
@@ -33,13 +32,12 @@ class TopTabStripStyle:
     tab_pad_x: int = 8
     tab_pad_y: int = 7
     tab_gap: int = 10
-    underline_height: int = 3
     focus_highlight_thickness: int = 1
 
 
 @dataclass(frozen=True)
 class TopTabbedContentSurfaceStyle:
-    """Shared layout tokens for content shown beneath an underline tab strip."""
+    """Shared layout tokens for content shown beneath a text tab strip."""
 
     background_color: str
     content_pad_x: int
@@ -59,7 +57,7 @@ def next_tab_key(tabs: tuple[TopTab, ...], current_key: str, offset: int) -> str
 
 
 class TopTabStrip:
-    """Own a compact, keyboard-accessible underline-tab strip on Tk's UI thread."""
+    """Own a compact, keyboard-accessible text-tab strip on Tk's UI thread."""
 
     def __init__(
         self,
@@ -78,7 +76,6 @@ class TopTabStrip:
         self._px = px
         self._style = style
         self._tab_labels: dict[str, tk.Label] = {}
-        self._indicators: dict[str, tk.Frame] = {}
 
         self.widget = tk.Frame(parent, bg=style.background_color)
         tab_row = tk.Frame(self.widget, bg=style.background_color)
@@ -111,21 +108,9 @@ class TopTabStrip:
                 highlightcolor=style.focus_color,
             )
             label.pack(anchor="w")
-            indicator = tk.Frame(
-                tab_shell,
-                bg=style.background_color,
-                height=max(1, self._px(style.underline_height)),
-            )
-            indicator.pack(fill="x")
             self._tab_labels[tab.key] = label
-            self._indicators[tab.key] = indicator
             self._bind_tab_events(label, tab.key)
 
-        tk.Frame(
-            self.widget,
-            bg=style.baseline_color,
-            height=max(1, self._px(1)),
-        ).pack(fill="x")
         self.select(active_key, notify=False)
 
     @property
@@ -149,13 +134,6 @@ class TopTabStrip:
                     self._style.active_color
                     if active
                     else self._style.inactive_color
-                ),
-            )
-            self._indicators[tab.key].configure(
-                bg=(
-                    self._style.active_color
-                    if active
-                    else self._style.background_color
                 ),
             )
         if notify and self._on_selected is not None:
@@ -204,7 +182,7 @@ class TopTabStrip:
 
 
 class TopTabbedContentSurface:
-    """Provide a standard tab baseline and content gap for splash panels.
+    """Provide standard text tabs and a content gap for splash panels.
 
     Every consumer gets the same inset, zero extra tab-top space, and the
     standard gap before the first content group.  Callers own only the

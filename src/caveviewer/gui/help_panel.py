@@ -93,6 +93,22 @@ def key_help_sections(
                     if is_help_shortcut_visible(shortcut)
                 )
         if shortcuts:
+            if section_id == "move":
+                speed_ids = {"move-speed-decrease", "move-speed-increase"}
+                if speed_ids.issubset(shortcut.id for shortcut in shortcuts):
+                    compact_shortcuts: list[KeyboardShortcut] = []
+                    for shortcut in shortcuts:
+                        if shortcut.id == "move-speed-decrease":
+                            compact_shortcuts.append(
+                                KeyboardShortcut(
+                                    id="move-speed-adjust",
+                                    shortcut="- =",
+                                    action="Decrease/increase speed",
+                                )
+                            )
+                        elif shortcut.id != "move-speed-increase":
+                            compact_shortcuts.append(shortcut)
+                    shortcuts = compact_shortcuts
             grouped_sections.append(
                 KeyboardShortcutSection(
                     id=section_id,
@@ -151,7 +167,6 @@ class HelpPanelStyle:
     keycap_text_color: str
     action_color: str
     detail_color: str
-    tab_baseline_color: str
     content_pad_x: int
     tab_font: tuple
     section_font: tuple
@@ -213,7 +228,6 @@ class HelpPanel:
             px=self._px,
             tab_style=TopTabStripStyle(
                 background_color=style.background_color,
-                baseline_color=style.tab_baseline_color,
                 active_color=style.tab_active_color,
                 inactive_color=style.section_color,
                 focus_color=style.tab_focus_color,

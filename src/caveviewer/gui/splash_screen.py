@@ -183,16 +183,14 @@ _SUBTITLE_COLOR = DARK_THEME.body_text
 _INSTRUCTION_COLOR = DARK_THEME.secondary_text
 _BUTTON_BG = DARK_THEME.primary_button
 _BUTTON_BORDER_COLOR = DARK_THEME.primary_button_border
-_BORDER_COLOR = DARK_THEME.border
 # Navigation uses a location marker rather than a button treatment.  The
 # background shift stays deliberately quiet; the amber rail and stronger label
 # carry the selected-state meaning.
-_NAVIGATION_ACTIVE_BG = DARK_THEME.panel
 _NAVIGATION_HOVER_BG = DARK_THEME.entry_background
-_NAVIGATION_ACTIVE_INDICATOR = DARK_THEME.primary_button
 # Keep navigation entries distinct without making the rail read as a stack of
 # separate cards. This shared spacing also scales with the active display.
 _NAVIGATION_ITEM_GAP = 8
+_EMBEDDED_PANEL_TEXT_SCALE_FACTOR = 11 / 12
 _WINDOWS_SPLASH_LAYOUT = _SPLASH_LAYOUT_POLICY.windows_layout
 _LINUX_SPLASH_LAYOUT = _SPLASH_LAYOUT_POLICY.linux_layout
 _UI_FONT_FAMILY = _PRESENTATION_PROFILE.ui_font_family
@@ -450,8 +448,17 @@ def _cave_metadata_panel_style() -> CaveMetadataPanelStyle:
     )
 
 
+def _embedded_panel_typography() -> TkTypography:
+    """Return the compact type scale shared by Preferences and Help."""
+    return create_tk_typography(
+        _UI_FONT_FAMILY,
+        text_scale=_TK_TEXT_SCALE * _EMBEDDED_PANEL_TEXT_SCALE_FACTOR,
+    )
+
+
 def _help_panel_style() -> HelpPanelStyle:
     """Return the splash-owned style tokens for the quiet Keys table."""
+    typography = _embedded_panel_typography()
     return HelpPanelStyle(
         background_color=_BG_COLOR,
         tab_active_color=_BUTTON_BG,
@@ -462,15 +469,80 @@ def _help_panel_style() -> HelpPanelStyle:
         keycap_text_color=DARK_THEME.body_text,
         action_color=DARK_THEME.body_text,
         detail_color=DARK_THEME.secondary_text,
-        tab_baseline_color=_LIBRARY_PANEL_BORDER_COLOR,
         content_pad_x=_PRESENTATION_PROFILE.preferences_dialog_layout.body_pad_x,
-        tab_font=_TYPOGRAPHY.body_strong,
-        section_font=_TYPOGRAPHY.section,
-        keycap_font=_TYPOGRAPHY.body_strong,
-        action_font=_TYPOGRAPHY.body,
-        overview_font=_TYPOGRAPHY.body_strong,
-        detail_font=_TYPOGRAPHY.supporting,
+        tab_font=typography.body_strong,
+        section_font=typography.section,
+        keycap_font=typography.body_strong,
+        action_font=typography.body,
+        overview_font=typography.body_strong,
+        detail_font=typography.supporting,
     )
+
+
+def _load_brand_logo(parent, *, px, max_dimension: int):
+    """Load the About/launch brand image as a root-owned Tk photo."""
+    logo_photo = None
+    if _LOGO_PATH:
+        try:
+            from PIL import Image, ImageTk
+
+            logo_img = Image.open(_LOGO_PATH)
+            max_logo_dim = px(max_dimension)
+            scale = min(
+                max_logo_dim / logo_img.width,
+                max_logo_dim / logo_img.height,
+                1.0,
+            )
+            if scale < 1.0:
+                logo_img = logo_img.resize(
+                    (int(logo_img.width * scale), int(logo_img.height * scale)),
+                    Image.LANCZOS,
+                )
+            logo_photo = ImageTk.PhotoImage(
+                logo_img,
+                master=parent.winfo_toplevel(),
+            )
+        except Exception as exc:
+            _LOG.warning("Could not load brand presentation logo: %s", exc)
+    return logo_photo
+
+
+def _build_launch_surface(parent, *, program_name: str, px) -> None:
+    """Build the static brand surface shown while the main UI is composed."""
+    import tkinter as tk
+
+    content = tk.Frame(parent, bg=_BG_COLOR)
+    content.pack(expand=True)
+    logo_photo = _load_brand_logo(parent, px=px, max_dimension=120)
+    if logo_photo is not None:
+        logo_label = tk.Label(
+            content,
+            image=logo_photo,
+            bg=_BG_COLOR,
+            borderwidth=0,
+        )
+        logo_label.image = logo_photo
+        logo_label.pack(pady=(0, px(14)))
+    tk.Label(
+        content,
+        text=program_name,
+        font=_TYPOGRAPHY.heading,
+        fg=_TITLE_COLOR,
+        bg=_BG_COLOR,
+    ).pack()
+    tk.Label(
+        content,
+        text="Starting…",
+        font=_TYPOGRAPHY.supporting,
+        fg=_SUBTITLE_COLOR,
+        bg=_BG_COLOR,
+    ).pack(pady=(px(6), 0))
+
+
+def _settle_launch_layout(root, *, passes: int = 3) -> None:
+    """Run a fixed, bounded number of Tk geometry-only settlement passes."""
+    for _pass in range(max(0, int(passes))):
+        root.update_idletasks()
 
 
 def _build_themed_about_content(
@@ -493,30 +565,7 @@ def _build_themed_about_content(
     else:
         content.pack(fill="both", expand=True, padx=px(32), pady=px(28))
 
-    logo_photo = None
-    if _LOGO_PATH:
-        try:
-            from PIL import Image, ImageTk
-
-            logo_img = Image.open(_LOGO_PATH)
-            max_logo_dim = px(92)
-            scale = min(
-                max_logo_dim / logo_img.width,
-                max_logo_dim / logo_img.height,
-                1.0,
-            )
-            if scale < 1.0:
-                logo_img = logo_img.resize(
-                    (int(logo_img.width * scale), int(logo_img.height * scale)),
-                    Image.LANCZOS,
-                )
-            logo_photo = ImageTk.PhotoImage(
-                logo_img,
-                master=parent.winfo_toplevel(),
-            )
-        except Exception as exc:
-            _LOG.warning("Could not load About presentation logo: %s", exc)
-
+    logo_photo = _load_brand_logo(parent, px=px, max_dimension=92)
     if logo_photo is not None:
         logo_label = tk.Label(
             content,
@@ -1143,8 +1192,24 @@ def show_splash_screen(
     pos_y = (screen_h - window_h) // 3  # slightly above true vertical center, reads better
     root.geometry(f"{window_w}x{window_h}+{pos_x}+{pos_y}")
 
+    root.grid_rowconfigure(0, weight=1)
+    root.grid_columnconfigure(0, weight=1)
+    launch_surface = tk.Frame(root, bg=_BG_COLOR)
+    launch_surface.grid(row=0, column=0, sticky="nsew")
+    _build_launch_surface(launch_surface, program_name=program_name, px=px)
+
     content_frame = tk.Frame(root, bg=_BG_COLOR)
-    content_frame.pack(fill="both", expand=True, padx=px(22), pady=px(16))
+    content_frame.grid(
+        row=0,
+        column=0,
+        sticky="nsew",
+        padx=px(22),
+        pady=px(16),
+    )
+    launch_surface.tkraise()
+    root.deiconify()
+    root.lift()
+    _settle_launch_layout(root, passes=1)
 
     # The splash is organized as a stable navigation rail beside an active
     # content surface. Keeping the rail a fixed width prevents map-library
@@ -1153,16 +1218,29 @@ def show_splash_screen(
     left_frame.pack(side="left", fill="y")
     left_frame.pack_propagate(False)
 
-    divider = tk.Frame(content_frame, bg=_BORDER_COLOR, width=1)
-    divider.pack(side="left", fill="y", padx=(px(14), px(18)), pady=px(10))
-
     right_frame = tk.Frame(content_frame, bg=_BG_COLOR)
-    right_frame.pack(side="left", fill="both", expand=True)
+    right_frame.pack(
+        side="left",
+        fill="both",
+        expand=True,
+        padx=(px(32), 0),
+    )
+    right_frame.grid_rowconfigure(0, weight=1)
+    right_frame.grid_columnconfigure(0, weight=1)
     map_library_surface = tk.Frame(right_frame, bg=_BG_COLOR)
     preferences_surface = tk.Frame(right_frame, bg=_BG_COLOR)
     help_surface = tk.Frame(right_frame, bg=_BG_COLOR)
     about_surface = tk.Frame(right_frame, bg=_BG_COLOR)
     cave_metadata_surface = tk.Frame(right_frame, bg=_BG_COLOR)
+    for surface in (
+        map_library_surface,
+        preferences_surface,
+        help_surface,
+        about_surface,
+        cave_metadata_surface,
+    ):
+        surface.grid(row=0, column=0, sticky="nsew")
+    map_library_surface.tkraise()
 
     navigation_frame = tk.Frame(left_frame, bg=_BG_COLOR)
     navigation_frame.pack(fill="x", pady=(px(22), 0))
@@ -1494,11 +1572,7 @@ def show_splash_screen(
     def _show_map_library_surface() -> None:
         """Reveal the existing Map Library without rebuilding its catalog."""
         if active_surface[0] != "map_library":
-            preferences_surface.pack_forget()
-            help_surface.pack_forget()
-            about_surface.pack_forget()
-            cave_metadata_surface.pack_forget()
-            map_library_surface.pack(fill="both", expand=True)
+            map_library_surface.tkraise()
             active_surface[0] = "map_library"
         _set_active_navigation("Map Library")
         panel = map_library_panel_ref[0]
@@ -1543,7 +1617,7 @@ def show_splash_screen(
             ui_font_family=_UI_FONT_FAMILY,
             desktop_services=desktop_services,
             platform_runtime=platform_runtime,
-            typography=_TYPOGRAPHY,
+            typography=_embedded_panel_typography(),
             on_applied=_on_preferences_applied,
             on_cancel=_show_map_library_surface,
         )
@@ -1553,11 +1627,7 @@ def show_splash_screen(
     def _show_preferences_surface() -> None:
         panel = _ensure_preferences_panel()
         if active_surface[0] != "preferences":
-            map_library_surface.pack_forget()
-            help_surface.pack_forget()
-            about_surface.pack_forget()
-            cave_metadata_surface.pack_forget()
-            preferences_surface.pack(fill="both", expand=True)
+            preferences_surface.tkraise()
             active_surface[0] = "preferences"
         _set_active_navigation("Preferences")
         panel.focus_content()
@@ -1582,11 +1652,7 @@ def show_splash_screen(
     def _show_help_surface() -> None:
         panel = _ensure_help_panel()
         if active_surface[0] != "help":
-            map_library_surface.pack_forget()
-            preferences_surface.pack_forget()
-            about_surface.pack_forget()
-            cave_metadata_surface.pack_forget()
-            help_surface.pack(fill="both", expand=True)
+            help_surface.tkraise()
             active_surface[0] = "help"
         _set_active_navigation("Help")
         panel.focus_content()
@@ -1626,11 +1692,7 @@ def show_splash_screen(
     def _show_about_surface() -> None:
         _ensure_about_surface()
         if active_surface[0] != "about":
-            map_library_surface.pack_forget()
-            preferences_surface.pack_forget()
-            help_surface.pack_forget()
-            cave_metadata_surface.pack_forget()
-            about_surface.pack(fill="both", expand=True)
+            about_surface.tkraise()
             active_surface[0] = "about"
         _set_active_navigation("About")
 
@@ -1770,20 +1832,14 @@ def show_splash_screen(
     ):
         """Create one keyboard-accessible action in the persistent nav rail."""
         item_row = tk.Frame(navigation_frame, bg=_BG_COLOR)
-        indicator = tk.Frame(
-            item_row,
-            bg=_NAVIGATION_ACTIVE_INDICATOR if selected else _BG_COLOR,
-            width=px(3),
-        )
-        indicator.pack(side="left", fill="y")
         icon = _create_navigation_icon(item_row, icon_name)
-        icon.pack(side="left", padx=(px(10), px(7)))
+        icon.pack(side="left", padx=(px(13), px(7)))
         item = tk.Label(
             item_row,
             text=text,
             font=_TYPOGRAPHY.body_strong if selected else _TYPOGRAPHY.body,
             fg=_TITLE_COLOR if selected else _SUBTITLE_COLOR,
-            bg=_NAVIGATION_ACTIVE_BG if selected else _BG_COLOR,
+            bg=_BG_COLOR,
             anchor="w",
             padx=0,
             pady=px(9),
@@ -1801,18 +1857,9 @@ def show_splash_screen(
         }
 
         def refresh_visual() -> None:
-            active = state["selected"] or state["hovered"] or state["focused"]
-            background = _NAVIGATION_ACTIVE_BG if state["selected"] else (
-                _NAVIGATION_HOVER_BG if active else _BG_COLOR
-            )
+            active = state["hovered"] or state["focused"]
+            background = _NAVIGATION_HOVER_BG if active else _BG_COLOR
             item_row.config(bg=background)
-            indicator.config(
-                bg=(
-                    _NAVIGATION_ACTIVE_INDICATOR
-                    if state["selected"]
-                    else background
-                )
-            )
             item.config(
                 bg=background,
                 fg=(
@@ -1956,11 +2003,7 @@ def show_splash_screen(
         )
         panel.create()
         if active_surface[0] != "cave_metadata":
-            map_library_surface.pack_forget()
-            preferences_surface.pack_forget()
-            help_surface.pack_forget()
-            about_surface.pack_forget()
-            cave_metadata_surface.pack(fill="both", expand=True)
+            cave_metadata_surface.tkraise()
             active_surface[0] = "cave_metadata"
         _set_active_navigation("Map Library")
         panel.focus_content()
@@ -2047,7 +2090,7 @@ def show_splash_screen(
         map_library_workflow.populate_panel(parent, recent_map_paths)
 
     _create_map_library_panel(map_library_surface)
-    map_library_surface.pack(fill="both", expand=True)
+    map_library_surface.tkraise()
 
     # Keep deferred navigation surfaces out of the initial Tk geometry pass.
     # Preferences creates only its active tab on first use and coalesces the
@@ -2065,8 +2108,22 @@ def show_splash_screen(
     pos_y = (screen_h - final_height) // 3
     root.geometry(f"{window_w}x{final_height}+{pos_x}+{pos_y}")
 
-    root.deiconify()
-    mark_startup_splash_visible()
+    # Compose Preferences behind the launch surface while every stacked panel
+    # already owns its final mapped width. Fixed settlement passes drain only
+    # geometry work; width/size guards prevent callbacks from cascading.
+    _ensure_preferences_panel()
+    _settle_launch_layout(root, passes=3)
+
+    def _reveal_composed_main_surface() -> None:
+        """Reveal the fully painted main surface in one non-repeating handoff."""
+        content_frame.tkraise()
+        launch_surface.destroy()
+        mark_startup_splash_visible()
+
+    # Give Tk one normal idle turn to paint canvas-backed Map Library rows
+    # beneath the launch cover. This callback is deliberately one-shot: it
+    # neither polls readiness nor schedules another geometry pass.
+    root.after_idle(_reveal_composed_main_surface)
     root.lift()
     root.focus_force()
     # Briefly force topmost so the splash appears above the GLFW viewer window

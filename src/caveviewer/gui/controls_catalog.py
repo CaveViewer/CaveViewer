@@ -32,7 +32,7 @@ class KeyboardShortcutSection:
 # This chord remains available in the viewer, but is intentionally omitted
 # from both Help presentations while its long-term interaction is decided.
 _HELP_HIDDEN_SHORTCUT_IDS = frozenset({"bookmark-delete-control-shift"})
-_SPACED_KEY_GROUPS = frozenset({"W A S D", "J L I K", "Z X"})
+_SPACED_KEY_GROUPS = frozenset({"W A S D", "J L I K", "Z X", "- ="})
 
 
 def is_help_shortcut_visible(shortcut: KeyboardShortcut) -> bool:

@@ -63,11 +63,11 @@ _BG_COLOR = DARK_THEME.background
 _TITLE_COLOR = DARK_THEME.title
 _SUBTITLE_COLOR = DARK_THEME.body_text
 _INSTRUCTION_COLOR = DARK_THEME.secondary_text
-_PANEL_COLOR = DARK_THEME.panel
 _BUTTON_BG = DARK_THEME.primary_button
 _BUTTON_BORDER_COLOR = DARK_THEME.primary_button_border
 
-_NUMERIC_ENTRY_WIDTH = 8
+_NUMERIC_ENTRY_WIDTH = 6
+_SCROLLBAR_GUTTER_X = 18
 _PLACEHOLDER_COLOR = DARK_THEME.placeholder_text
 _INLINE_FEEDBACK_PAD_X = 10
 _CONTROL_GAP_X = 10
@@ -293,8 +293,10 @@ class PreferencesPanel:
         self._page_canvas_window_width: int | None = None
         self._page_scroll_region: tuple[int, int, int, int] | None = None
         self._scrollbar_layout_state: tuple[int, int] | None = None
+        self._page_configured_sizes: dict[str, tuple[int, int]] = {}
         self._destroyed = False
         self.container.bind("<Destroy>", self._on_container_destroy, add="+")
+        self.container.bind("<Map>", self._on_container_mapped, add="+")
 
         self.numeric_entry_validator = self.dialog.register(
             self._is_numeric_entry_candidate
@@ -643,24 +645,64 @@ class PreferencesPanel:
         if not single_line_hint:
             self.page_hint_labels.setdefault(field.section, []).append(hint_label)
 
+    @staticmethod
+    def _sync_hint_wraplength(label, available_width: int) -> bool:
+        """Match one description to its actual rendered text-column width."""
+        if int(available_width) <= 1:
+            return False
+        wraplength = max(
+            _MIN_HINT_WRAP_LENGTH,
+            int(available_width) - _HINT_WRAP_INSET,
+        )
+        try:
+            if int(label.cget("wraplength")) == wraplength:
+                return False
+            label.configure(wraplength=wraplength)
+        except tk.TclError:
+            return False
+        return True
+
     def _sync_active_page_hint_wraplengths(self) -> bool:
         """Resize visible hints once per coalesced viewport layout pass."""
         changed = False
-        for label in self.page_hint_labels.get(self.active_page_key or "", ()):
+        page_key = self.active_page_key or ""
+        uniform_width = self._hint_width_for_page(page_key)
+        for label in self.page_hint_labels.get(page_key, ()):
             try:
-                available_width = int(label.master.winfo_width())
+                available_width = (
+                    uniform_width
+                    if uniform_width is not None
+                    else int(label.master.winfo_width())
+                )
                 if available_width <= 1:
                     continue
-                wraplength = max(
-                    _MIN_HINT_WRAP_LENGTH,
-                    available_width - _HINT_WRAP_INSET,
-                )
-                if int(label.cget("wraplength")) != wraplength:
-                    label.configure(wraplength=wraplength)
-                    changed = True
+                changed = self._sync_hint_wraplength(label, available_width) or changed
             except tk.TclError:
                 continue
         return changed
+
+    def _hint_width_for_page(self, page_key: str) -> int | None:
+        """Return one stable description width from the final page width."""
+        page_size = getattr(self, "_page_configured_sizes", {}).get(page_key)
+        if page_size is None or page_size[0] <= 1:
+            return None
+        page_width = page_size[0]
+        control_widths: list[int] = []
+        for key, entry in self.field_entries.items():
+            if self.field_page_keys.get(key) != page_key:
+                continue
+            try:
+                control_widths.append(int(entry.winfo_reqwidth()))
+            except tk.TclError:
+                continue
+        if not control_widths:
+            return None
+        return max(
+            _MIN_HINT_WRAP_LENGTH,
+            page_width
+            - max(control_widths)
+            - self._surface_px(self._layout_policy.row_pad_x),
+        )
 
     def _sync_feedback_wraplength(self, available_width: int) -> None:
         """Resize feedback text only when its usable width actually changes."""
@@ -745,6 +787,11 @@ class PreferencesPanel:
             self.dialog.after_cancel(after_id)
         except tk.TclError:
             pass
+
+    def _on_container_mapped(self, event) -> None:
+        """Refresh wrapping only after Tk maps the embedded panel onscreen."""
+        if event.widget is self.container:
+            self.on_shown()
 
     def _schedule_page_layout_sync(
         self,
@@ -852,11 +899,33 @@ class PreferencesPanel:
             return None
 
         page = tk.Frame(self.page_stack, bg=_BG_COLOR)
+        page.bind(
+            "<Configure>",
+            lambda event, key=page_key: self._on_page_configured(
+                key,
+                event.width,
+                event.height,
+            ),
+            add="+",
+        )
         self.pages[page_key] = page
         self._render_section(page, page_key)
         if self.page_scrollbar is not None:
             self.page_scrollbar.bind_mousewheel(page)
         return page
+
+    def _on_page_configured(self, page_key: str, width: int, height: int) -> None:
+        """Rewrap on width changes and resync overflow on height changes."""
+        size = (int(width), int(height))
+        previous_size = self._page_configured_sizes.get(page_key)
+        if size[0] <= 1 or size[1] <= 1 or previous_size == size:
+            return
+        self._page_configured_sizes[page_key] = size
+        if page_key != self.active_page_key:
+            return
+        if previous_size is None or previous_size[0] != size[0]:
+            self._sync_active_page_hint_wraplengths()
+        self._schedule_page_layout_sync()
 
     def _show_page(self, page_key: str) -> None:
         page = self._ensure_page(page_key)
@@ -896,7 +965,6 @@ class PreferencesPanel:
             px=self._surface_px,
             tab_style=TopTabStripStyle(
                 background_color=_BG_COLOR,
-                baseline_color=DARK_THEME.entry_border,
                 active_color=_BUTTON_BG,
                 inactive_color=_INSTRUCTION_COLOR,
                 focus_color=DARK_THEME.entry_focus_border,
@@ -912,7 +980,7 @@ class PreferencesPanel:
         self.tab_strip = surface.tab_strip
         body = surface.content
 
-        self.button_row = tk.Frame(body, bg=_PANEL_COLOR)
+        self.button_row = tk.Frame(body, bg=_BG_COLOR)
         # Pack the action row before the page stack so a height-limited
         # Windows dialog shrinks form content first instead of clipping
         # Apply/Cancel off the bottom edge.
@@ -942,14 +1010,14 @@ class PreferencesPanel:
         self.apply_button.pack(side="right")
         cancel_button.pack(side="right", padx=(0, 8))
 
-        self.feedback_frame = tk.Frame(self.button_row, bg=_PANEL_COLOR)
+        self.feedback_frame = tk.Frame(self.button_row, bg=_BG_COLOR)
         self.feedback_frame.pack(side="left", fill="x", expand=True)
         self.error_label = tk.Label(
             self.feedback_frame,
             text="",
             font=self.small_font,
             fg=DARK_THEME.error_text,
-            bg=_PANEL_COLOR,
+            bg=_BG_COLOR,
             anchor="w",
             justify="left",
             wraplength=self._layout_policy.notice_wrap_length,
@@ -978,7 +1046,12 @@ class PreferencesPanel:
             px=self._surface_px,
             style=CanvasScrollbarStyle(background_color=_BG_COLOR),
         )
-        self.page_scrollbar.mount_grid(row=0, column=1, sticky="ns")
+        self.page_scrollbar.mount_grid(
+            row=0,
+            column=1,
+            sticky="ns",
+            padx=(self._surface_px(_SCROLLBAR_GUTTER_X), 0),
+        )
 
         self.page_stack = tk.Frame(self.page_canvas, bg=_BG_COLOR)
         self.page_canvas_window = self.page_canvas.create_window(
@@ -1189,3 +1262,19 @@ class PreferencesPanel:
             return
         if self.apply_button is not None:
             self.apply_button.focus_set()
+
+    def on_shown(self) -> None:
+        """Recompute wrapping after the embedded surface receives its final width."""
+        after_id = self._page_layout_after_id
+        if after_id is not None:
+            self._page_layout_after_id = None
+            try:
+                self.dialog.after_cancel(after_id)
+            except tk.TclError:
+                pass
+        self._pending_page_canvas_width = None
+        self._page_canvas_window_width = None
+        self._page_scroll_region = None
+        self._scrollbar_layout_state = None
+        self._page_configured_sizes.clear()
+        self._schedule_page_layout_sync()

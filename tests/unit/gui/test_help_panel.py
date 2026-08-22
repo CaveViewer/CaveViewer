@@ -61,9 +61,10 @@ def test_keys_help_groups_shortcuts_as_move_look_and_navigate():
         "move-strafe",
         "move-vertical",
         "move-speed-boost",
-        "move-speed-decrease",
-        "move-speed-increase",
+        "move-speed-adjust",
     ]
+    assert key_sections[0].shortcuts[-1].shortcut == "- ="
+    assert key_sections[0].shortcuts[-1].action == "Decrease/increase speed"
     assert [shortcut.id for shortcut in key_sections[1].shortcuts] == [
         "look-arrows",
         "look-jlik",
@@ -121,7 +122,7 @@ def test_help_panel_uses_a_quiet_table_without_card_borders():
     assert 'text="Help"' not in create_source
     assert "TopTabbedContentSurface(" in create_source
     assert "highlightbackground" not in create_source
-    assert "tab_baseline_color" in create_source
+    assert "baseline_color" not in create_source
     assert "canvas.create_line(" not in row_source
 
 

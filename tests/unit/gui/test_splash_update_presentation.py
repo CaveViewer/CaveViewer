@@ -642,12 +642,21 @@ def test_splash_linux_fonts_do_not_multiply_the_tk_default_font(monkeypatch):
             setattr(splash_screen, name, value)
 
 
+def test_launch_layout_settlement_is_fixed_and_bounded():
+    calls = []
+    root = SimpleNamespace(update_idletasks=lambda: calls.append(True))
+
+    splash_screen._settle_launch_layout(root, passes=3)
+
+    assert calls == [True, True, True]
+
+
 def test_splash_navigation_actions_are_keyboard_accessible_without_fallthrough():
     source = inspect.getsource(splash_screen.show_splash_screen)
     update_action_source = inspect.getsource(splash_screen._bind_update_label_action)
-    initial_layout_source = source[
+    background_layout_source = source[
         source.index("_create_map_library_panel(map_library_surface)") : source.index(
-            "root.deiconify()"
+            "content_frame.tkraise()"
         )
     ]
 
@@ -655,10 +664,8 @@ def test_splash_navigation_actions_are_keyboard_accessible_without_fallthrough()
     assert "def _create_navigation_icon(" in source
     assert "def _create_navigation_item(" in source
     assert "item_row = tk.Frame(navigation_frame, bg=_BG_COLOR)" in source
-    assert "indicator = tk.Frame(" in source
     assert "icon = _create_navigation_icon(item_row, icon_name)" in source
     assert "_bind_activation(icon, callback)" in source
-    assert "_NAVIGATION_ACTIVE_INDICATOR" in source
     assert "font=_TYPOGRAPHY.body_strong if selected else _TYPOGRAPHY.body" in source
     assert "takefocus=True" in source
     assert 'label.bind("<Return>", invoke)' in update_action_source
@@ -684,9 +691,24 @@ def test_splash_navigation_actions_are_keyboard_accessible_without_fallthrough()
     assert "def _show_preferences_surface() -> None:" in source
     assert "preferences_surface_required_height" not in source
     assert "panel = _ensure_preferences_panel()" in source
-    assert "_ensure_preferences_panel()" not in initial_layout_source
-    assert "map_library_surface.pack_forget()" in source
-    assert "preferences_surface.pack_forget()" in source
+    assert "_ensure_preferences_panel()" in background_layout_source
+    assert "map_library_surface.pack_forget()" not in source
+    assert "preferences_surface.pack_forget()" not in source
+    assert 'surface.grid(row=0, column=0, sticky="nsew")' in source
+    assert "preferences_surface.tkraise()" in source
+    assert "root.after_idle(_ensure_preferences_panel)" not in source
+    assert "_build_launch_surface(" in source
+    assert "_settle_launch_layout(root, passes=3)" in source
+    assert "def _reveal_composed_main_surface() -> None:" in source
+    assert "root.after_idle(_reveal_composed_main_surface)" in source
+    reveal_source = source[
+        source.index("def _reveal_composed_main_surface() -> None:") : source.index(
+            "root.after_idle(_reveal_composed_main_surface)"
+        )
+    ]
+    assert "launch_surface.destroy()" in reveal_source
+    assert "after_idle(" not in reveal_source
+    assert "schedule_after(" not in reveal_source
     assert "def _show_about_surface() -> None:" in source
     assert "def _ensure_help_panel() -> HelpPanel:" in source
     assert "def _show_help_surface() -> None:" in source
@@ -752,6 +774,23 @@ def test_splash_navigation_uses_consistent_row_spacing():
     assert 'item_row.pack(fill="x", pady=(0, px(_NAVIGATION_ITEM_GAP)))' in source
 
 
+def test_splash_navigation_selection_uses_type_and_color_without_a_fill():
+    source = inspect.getsource(splash_screen.show_splash_screen)
+
+    assert "_NAVIGATION_ACTIVE_BG" not in inspect.getsource(splash_screen)
+    assert "background = _NAVIGATION_HOVER_BG if active else _BG_COLOR" in source
+    assert "_TYPOGRAPHY.body_strong" in source
+
+
+def test_preferences_and_help_share_a_compact_embedded_panel_type_scale():
+    source = inspect.getsource(splash_screen.show_splash_screen)
+    help_style_source = inspect.getsource(splash_screen._help_panel_style)
+
+    assert splash_screen._EMBEDDED_PANEL_TEXT_SCALE_FACTOR == pytest.approx(11 / 12)
+    assert "typography=_embedded_panel_typography()" in source
+    assert "typography = _embedded_panel_typography()" in help_style_source
+
+
 def test_splash_navigation_uses_a_quiet_rail_and_lower_app_status():
     source = inspect.getsource(splash_screen.show_splash_screen)
     update_source = inspect.getsource(splash_screen._update_presentation)
@@ -791,13 +830,17 @@ def test_splash_navigation_uses_a_quiet_rail_and_lower_app_status():
 
 def test_themed_about_content_reuses_the_splash_identity_in_both_hosts():
     content_source = inspect.getsource(splash_screen._build_themed_about_content)
+    logo_source = inspect.getsource(splash_screen._load_brand_logo)
+    launch_source = inspect.getsource(splash_screen._build_launch_surface)
     dialog_source = inspect.getsource(splash_screen._show_themed_about_dialog)
     splash_source = inspect.getsource(splash_screen.show_splash_screen)
 
     assert "tk.Toplevel(root)" in dialog_source
     assert "_build_themed_about_content(" in dialog_source
     assert "dialog.grab_set()" in dialog_source
-    assert "_LOGO_PATH" in content_source
+    assert "_LOGO_PATH" in logo_source
+    assert "_load_brand_logo(" in content_source
+    assert "_load_brand_logo(" in launch_source
     assert "_CREDITS_TEXT.strip()" in content_source
     assert "_ABOUT_WEBSITE_LINKS" in content_source
     assert "www.caveviewer.com" in inspect.getsource(splash_screen)
@@ -912,7 +955,7 @@ def test_splash_map_library_uses_navigation_and_an_overflow_cue():
     assert "highlightthickness=0" in source
     assert "panel_border_color=_LIBRARY_PANEL_BORDER_COLOR" in style_source
     assert 'left_frame = tk.Frame(content_frame, bg=_BG_COLOR, width=px(220))' in source
-    assert 'divider.pack(side="left", fill="y", padx=(px(14), px(18)), pady=px(10))' in source
+    assert 'padx=(px(32), 0)' in source
     assert 'panel.pack(fill="both", expand=True, pady=self._px(14))' in panel_source
     assert "title_font=_TYPOGRAPHY.body_strong" in style_source
     assert "body_font=_TYPOGRAPHY.body" in style_source

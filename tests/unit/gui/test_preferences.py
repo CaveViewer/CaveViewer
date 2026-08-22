@@ -602,7 +602,8 @@ def test_obj_import_batch_preference_maps_thousands_to_faces_env(
 def test_preferences_panel_uses_extracted_settings_logic():
     from caveviewer.gui import preferences_dialog, preferences_form, splash_screen
 
-    assert preferences_dialog._NUMERIC_ENTRY_WIDTH == 8
+    assert preferences_dialog._NUMERIC_ENTRY_WIDTH == 6
+    assert preferences_dialog._SCROLLBAR_GUTTER_X == 18
     assert preferences_dialog._CONTROL_GAP_X == 10
     assert preferences_dialog.PREFERENCE_FIELDS is settings.PREFERENCE_FIELDS
     assert (
@@ -915,7 +916,11 @@ def test_preferences_pages_are_constructed_once_on_first_selection(monkeypatch):
         def __init__(self, parent, **options) -> None:
             self.parent = parent
             self.options = options
+            self.bindings = []
             created.append(self)
+
+        def bind(self, event, callback, *, add=None) -> None:
+            self.bindings.append((event, callback, add))
 
     panel = object.__new__(preferences_dialog.PreferencesPanel)
     panel.pages = {}
@@ -961,6 +966,9 @@ def test_preferences_page_switch_maps_only_the_selected_page():
     }
     panel._ensure_page = lambda key: panel.pages.get(key)
     panel.active_page_key = "streaming"
+    panel._page_configured_sizes = {}
+    panel.field_entries = {}
+    panel.field_page_keys = {}
     panel.tab_strip = SimpleNamespace(
         select=lambda key, notify: tab_selections.append((key, notify))
     )
@@ -1088,6 +1096,111 @@ def test_preferences_hint_wrapping_only_updates_the_active_page():
 
     assert active_label.configure_calls == [{"wraplength": 356}]
     assert hidden_label.configure_calls == []
+
+
+def test_preferences_hint_wrap_tracks_the_rendered_text_column_width():
+    from caveviewer.gui import preferences_dialog
+
+    class _FakeLabel:
+        def __init__(self) -> None:
+            self.wraplength = 520
+            self.configure_calls = []
+
+        def cget(self, option: str) -> str:
+            assert option == "wraplength"
+            return str(self.wraplength)
+
+        def configure(self, **options) -> None:
+            self.configure_calls.append(options)
+            self.wraplength = options["wraplength"]
+
+    label = _FakeLabel()
+
+    assert preferences_dialog.PreferencesPanel._sync_hint_wraplength(label, 1) is False
+    assert preferences_dialog.PreferencesPanel._sync_hint_wraplength(label, 804) is True
+    assert preferences_dialog.PreferencesPanel._sync_hint_wraplength(label, 804) is False
+    assert label.configure_calls == [{"wraplength": 800}]
+
+
+def test_preferences_invalidates_hidden_geometry_when_shown():
+    from caveviewer.gui import preferences_dialog
+
+    scheduled = []
+    panel = object.__new__(preferences_dialog.PreferencesPanel)
+    panel._pending_page_canvas_width = 1
+    panel._page_canvas_window_width = 480
+    panel._page_scroll_region = (0, 0, 480, 600)
+    panel._scrollbar_layout_state = (600, 500)
+    panel._page_configured_sizes = {"streaming": (480, 600)}
+    panel._page_layout_after_id = "hidden-layout"
+    cancelled = []
+    panel.dialog = SimpleNamespace(after_cancel=cancelled.append)
+    panel._schedule_page_layout_sync = lambda: scheduled.append(True)
+
+    panel.on_shown()
+
+    assert panel._pending_page_canvas_width is None
+    assert panel._page_canvas_window_width is None
+    assert panel._page_scroll_region is None
+    assert panel._scrollbar_layout_state is None
+    assert panel._page_configured_sizes == {}
+    assert panel._page_layout_after_id is None
+    assert cancelled == ["hidden-layout"]
+    assert scheduled == [True]
+
+
+def test_preferences_mapped_event_refreshes_only_the_panel_container():
+    from caveviewer.gui import preferences_dialog
+
+    panel = object.__new__(preferences_dialog.PreferencesPanel)
+    panel.container = object()
+    refreshed = []
+    panel.on_shown = lambda: refreshed.append(True)
+
+    panel._on_container_mapped(SimpleNamespace(widget=object()))
+    panel._on_container_mapped(SimpleNamespace(widget=panel.container))
+
+    assert refreshed == [True]
+
+
+def test_preferences_rewraps_when_the_active_page_reaches_its_final_width():
+    from caveviewer.gui import preferences_dialog
+
+    class _FakeEntry:
+        def winfo_reqwidth(self) -> int:
+            return 100
+
+    class _FakeLabel:
+        def __init__(self) -> None:
+            self.wraplength = 520
+            self.configure_calls = []
+
+        def cget(self, _option: str) -> str:
+            return str(self.wraplength)
+
+        def configure(self, **options) -> None:
+            self.configure_calls.append(options)
+            self.wraplength = options["wraplength"]
+
+    scheduled = []
+    label = _FakeLabel()
+    panel = object.__new__(preferences_dialog.PreferencesPanel)
+    panel.active_page_key = "streaming"
+    panel._page_configured_sizes = {}
+    panel.page_hint_labels = {"streaming": [label]}
+    panel.field_entries = {"io_workers": _FakeEntry()}
+    panel.field_page_keys = {"io_workers": "streaming"}
+    panel._layout_policy = SimpleNamespace(row_pad_x=18)
+    panel._surface_px = int
+    panel._schedule_page_layout_sync = lambda: scheduled.append(True)
+
+    panel._on_page_configured("storage", 800, 500)
+    panel._on_page_configured("streaming", 800, 600)
+    panel._on_page_configured("streaming", 800, 600)
+    panel._on_page_configured("streaming", 800, 580)
+
+    assert scheduled == [True, True]
+    assert label.configure_calls == [{"wraplength": 678}]
 
 
 def test_preferences_feedback_wraplength_avoids_repeating_identical_geometry_work():
@@ -1229,7 +1342,7 @@ def test_preferences_page_uses_the_shared_canvas_scrollbar():
     assert "vertical_scroll_units" not in source
 
 
-def test_preferences_tabs_use_the_shared_underline_navigation_pattern():
+def test_preferences_tabs_use_the_shared_text_navigation_pattern():
     from caveviewer.gui import preferences_dialog
 
     source = inspect.getsource(preferences_dialog.PreferencesPanel)
