@@ -642,12 +642,21 @@ def test_splash_linux_fonts_do_not_multiply_the_tk_default_font(monkeypatch):
             setattr(splash_screen, name, value)
 
 
+def test_launch_layout_settlement_is_fixed_and_bounded():
+    calls = []
+    root = SimpleNamespace(update_idletasks=lambda: calls.append(True))
+
+    splash_screen._settle_launch_layout(root, passes=3)
+
+    assert calls == [True, True, True]
+
+
 def test_splash_navigation_actions_are_keyboard_accessible_without_fallthrough():
     source = inspect.getsource(splash_screen.show_splash_screen)
     update_action_source = inspect.getsource(splash_screen._bind_update_label_action)
-    initial_layout_source = source[
+    background_layout_source = source[
         source.index("_create_map_library_panel(map_library_surface)") : source.index(
-            "root.deiconify()"
+            "content_frame.tkraise()"
         )
     ]
 
@@ -682,12 +691,15 @@ def test_splash_navigation_actions_are_keyboard_accessible_without_fallthrough()
     assert "def _show_preferences_surface() -> None:" in source
     assert "preferences_surface_required_height" not in source
     assert "panel = _ensure_preferences_panel()" in source
-    assert "_ensure_preferences_panel()" not in initial_layout_source
+    assert "_ensure_preferences_panel()" in background_layout_source
     assert "map_library_surface.pack_forget()" not in source
     assert "preferences_surface.pack_forget()" not in source
     assert 'surface.grid(row=0, column=0, sticky="nsew")' in source
     assert "preferences_surface.tkraise()" in source
-    assert "root.after_idle(_ensure_preferences_panel)" in source
+    assert "root.after_idle(_ensure_preferences_panel)" not in source
+    assert "_build_launch_surface(" in source
+    assert "_settle_launch_layout(root, passes=3)" in source
+    assert "launch_surface.destroy()" in source
     assert "def _show_about_surface() -> None:" in source
     assert "def _ensure_help_panel() -> HelpPanel:" in source
     assert "def _show_help_surface() -> None:" in source
@@ -809,13 +821,17 @@ def test_splash_navigation_uses_a_quiet_rail_and_lower_app_status():
 
 def test_themed_about_content_reuses_the_splash_identity_in_both_hosts():
     content_source = inspect.getsource(splash_screen._build_themed_about_content)
+    logo_source = inspect.getsource(splash_screen._load_brand_logo)
+    launch_source = inspect.getsource(splash_screen._build_launch_surface)
     dialog_source = inspect.getsource(splash_screen._show_themed_about_dialog)
     splash_source = inspect.getsource(splash_screen.show_splash_screen)
 
     assert "tk.Toplevel(root)" in dialog_source
     assert "_build_themed_about_content(" in dialog_source
     assert "dialog.grab_set()" in dialog_source
-    assert "_LOGO_PATH" in content_source
+    assert "_LOGO_PATH" in logo_source
+    assert "_load_brand_logo(" in content_source
+    assert "_load_brand_logo(" in launch_source
     assert "_CREDITS_TEXT.strip()" in content_source
     assert "_ABOUT_WEBSITE_LINKS" in content_source
     assert "www.caveviewer.com" in inspect.getsource(splash_screen)

@@ -479,6 +479,72 @@ def _help_panel_style() -> HelpPanelStyle:
     )
 
 
+def _load_brand_logo(parent, *, px, max_dimension: int):
+    """Load the About/launch brand image as a root-owned Tk photo."""
+    logo_photo = None
+    if _LOGO_PATH:
+        try:
+            from PIL import Image, ImageTk
+
+            logo_img = Image.open(_LOGO_PATH)
+            max_logo_dim = px(max_dimension)
+            scale = min(
+                max_logo_dim / logo_img.width,
+                max_logo_dim / logo_img.height,
+                1.0,
+            )
+            if scale < 1.0:
+                logo_img = logo_img.resize(
+                    (int(logo_img.width * scale), int(logo_img.height * scale)),
+                    Image.LANCZOS,
+                )
+            logo_photo = ImageTk.PhotoImage(
+                logo_img,
+                master=parent.winfo_toplevel(),
+            )
+        except Exception as exc:
+            _LOG.warning("Could not load brand presentation logo: %s", exc)
+    return logo_photo
+
+
+def _build_launch_surface(parent, *, program_name: str, px) -> None:
+    """Build the static brand surface shown while the main UI is composed."""
+    import tkinter as tk
+
+    content = tk.Frame(parent, bg=_BG_COLOR)
+    content.pack(expand=True)
+    logo_photo = _load_brand_logo(parent, px=px, max_dimension=120)
+    if logo_photo is not None:
+        logo_label = tk.Label(
+            content,
+            image=logo_photo,
+            bg=_BG_COLOR,
+            borderwidth=0,
+        )
+        logo_label.image = logo_photo
+        logo_label.pack(pady=(0, px(14)))
+    tk.Label(
+        content,
+        text=program_name,
+        font=_TYPOGRAPHY.heading,
+        fg=_TITLE_COLOR,
+        bg=_BG_COLOR,
+    ).pack()
+    tk.Label(
+        content,
+        text="Starting…",
+        font=_TYPOGRAPHY.supporting,
+        fg=_SUBTITLE_COLOR,
+        bg=_BG_COLOR,
+    ).pack(pady=(px(6), 0))
+
+
+def _settle_launch_layout(root, *, passes: int = 3) -> None:
+    """Run a fixed, bounded number of Tk geometry-only settlement passes."""
+    for _pass in range(max(0, int(passes))):
+        root.update_idletasks()
+
+
 def _build_themed_about_content(
     parent,
     *,
@@ -499,30 +565,7 @@ def _build_themed_about_content(
     else:
         content.pack(fill="both", expand=True, padx=px(32), pady=px(28))
 
-    logo_photo = None
-    if _LOGO_PATH:
-        try:
-            from PIL import Image, ImageTk
-
-            logo_img = Image.open(_LOGO_PATH)
-            max_logo_dim = px(92)
-            scale = min(
-                max_logo_dim / logo_img.width,
-                max_logo_dim / logo_img.height,
-                1.0,
-            )
-            if scale < 1.0:
-                logo_img = logo_img.resize(
-                    (int(logo_img.width * scale), int(logo_img.height * scale)),
-                    Image.LANCZOS,
-                )
-            logo_photo = ImageTk.PhotoImage(
-                logo_img,
-                master=parent.winfo_toplevel(),
-            )
-        except Exception as exc:
-            _LOG.warning("Could not load About presentation logo: %s", exc)
-
+    logo_photo = _load_brand_logo(parent, px=px, max_dimension=92)
     if logo_photo is not None:
         logo_label = tk.Label(
             content,
@@ -1149,8 +1192,24 @@ def show_splash_screen(
     pos_y = (screen_h - window_h) // 3  # slightly above true vertical center, reads better
     root.geometry(f"{window_w}x{window_h}+{pos_x}+{pos_y}")
 
+    root.grid_rowconfigure(0, weight=1)
+    root.grid_columnconfigure(0, weight=1)
+    launch_surface = tk.Frame(root, bg=_BG_COLOR)
+    launch_surface.grid(row=0, column=0, sticky="nsew")
+    _build_launch_surface(launch_surface, program_name=program_name, px=px)
+
     content_frame = tk.Frame(root, bg=_BG_COLOR)
-    content_frame.pack(fill="both", expand=True, padx=px(22), pady=px(16))
+    content_frame.grid(
+        row=0,
+        column=0,
+        sticky="nsew",
+        padx=px(22),
+        pady=px(16),
+    )
+    launch_surface.tkraise()
+    root.deiconify()
+    root.lift()
+    _settle_launch_layout(root, passes=1)
 
     # The splash is organized as a stable navigation rail beside an active
     # content surface. Keeping the rail a fixed width prevents map-library
@@ -2049,11 +2108,13 @@ def show_splash_screen(
     pos_y = (screen_h - final_height) // 3
     root.geometry(f"{window_w}x{final_height}+{pos_x}+{pos_y}")
 
-    root.deiconify()
-    # Build Preferences behind the visible Map Library after the first paint.
-    # Its mapped surface already has final geometry, so the first user-visible
-    # switch needs only one z-order change and no pack/forget reflow.
-    root.after_idle(_ensure_preferences_panel)
+    # Compose Preferences behind the launch surface while every stacked panel
+    # already owns its final mapped width. Fixed settlement passes drain only
+    # geometry work; width/size guards prevent callbacks from cascading.
+    _ensure_preferences_panel()
+    _settle_launch_layout(root, passes=3)
+    content_frame.tkraise()
+    launch_surface.destroy()
     mark_startup_splash_visible()
     root.lift()
     root.focus_force()
