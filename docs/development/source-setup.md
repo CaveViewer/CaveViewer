@@ -63,6 +63,29 @@ latest=$(git tag -l "v*" --sort=-version:refname | head -n 1)
 git checkout "$latest"
 ```
 
+## Shared PyCharm workflows
+
+PyCharm contributors should use the versioned **Release Actions** run
+configurations under `.run/` for release workflows and their Essential Tests
+gate. Package-smoke, benchmark, Pages, and other maintenance workflows are
+intentionally omitted from the PyCharm menu. In particular, **Preview Release**
+is the supported release launcher: it checks the current branch and remote
+state, asks for confirmation, dispatches the repository-owned promotion
+workflow, and watches the exact GitHub Actions run.
+
+The tracked configurations contain no credentials or machine-specific paths.
+Keep personal settings, interpreter choices, window layout, and local
+environment variables under the ignored `.idea/` directory. Authenticate the
+GitHub CLI once on each workstation with `gh auth login`; never add `GH_TOKEN`,
+`GITHUB_TOKEN`, signing keys, or passwords to `.run/` or `.idea` run
+configurations.
+
+No third-party GitHub Actions PyCharm plug-in is needed for release execution.
+The shared configuration and `gh` CLI are preferred because their behavior is
+reviewed and tested with the repository. PyCharm's bundled GitHub support may
+still provide workflow-YAML completion and normal pull-request integration.
+See [releases.md](releases.md) for branch gating and the full release sequence.
+
 ## Optional: Make This Local Clone Read-Only (No Push)
 
 If you only want to pull and run from source, you can disable push behavior in this clone.
