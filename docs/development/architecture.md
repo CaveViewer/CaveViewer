@@ -3,6 +3,20 @@
 This document describes the current architectural boundaries. The filesystem
 contract is documented in [repository-layout.md](repository-layout.md).
 
+## Documentation authority
+
+| Concern | Canonical document | Other documents should do |
+| --- | --- | --- |
+| Cross-layer ownership and dependency direction | This document | Link to the relevant heading. |
+| Runtime configuration resolution and transport | [Runtime configuration](runtime-configuration.md) | Keep commands and generated tables in source setup. |
+| Platform adapter routes and native behavior | [`platform-adapters.md`](../../src/caveviewer/gui/platform/platform-adapters.md) | Link back here for the general boundary. |
+| Commands, environment reference, and troubleshooting | [Source setup](source-setup.md) | Avoid restating architecture mechanics. |
+| Releases, channels, and workflow sequencing | [Releases](releases.md) | Link to the update boundary here when needed. |
+| Directory-local instructions | Nearest `AGENTS.md` | Link to development docs instead of copying narrative. |
+
+Focused documents own subsystem mechanics; this page owns allowed dependency,
+thread, process, and state-machine boundaries.
+
 ## Dependency direction
 
 ```text
