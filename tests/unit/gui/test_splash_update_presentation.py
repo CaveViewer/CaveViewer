@@ -381,10 +381,10 @@ def test_preview_update_states_are_explicitly_labeled():
         )
     )
 
-    assert available.action_text == "Preview update to 1.0.64"
+    assert available.action_text == "Update to 1.0.64"
     assert downloading.status_text == "Downloading… 50%"
-    assert verifying.status_text == "Verifying Preview update…"
-    assert ready.status_text == "Preview update ready"
+    assert verifying.status_text == "Verifying…"
+    assert ready.status_text == "Update ready"
 
 
 def test_requested_windows_installation_shows_handoff_progress_and_retry():
@@ -651,6 +651,16 @@ def test_launch_layout_settlement_is_fixed_and_bounded():
     assert calls == [True, True, True]
 
 
+def test_launch_splash_waits_only_for_the_remaining_minimum_duration():
+    remaining = splash_screen._remaining_launch_delay_ms
+
+    assert splash_screen._MIN_LAUNCH_SPLASH_MS == 2_000
+    assert remaining(visible_at=10.0, now=10.0) == 2_000
+    assert remaining(visible_at=10.0, now=11.25) == 750
+    assert remaining(visible_at=10.0, now=12.0) == 0
+    assert remaining(visible_at=10.0, now=13.0) == 0
+
+
 def test_splash_navigation_actions_are_keyboard_accessible_without_fallthrough():
     source = inspect.getsource(splash_screen.show_splash_screen)
     update_action_source = inspect.getsource(splash_screen._bind_update_label_action)
@@ -700,10 +710,11 @@ def test_splash_navigation_actions_are_keyboard_accessible_without_fallthrough()
     assert "_build_launch_surface(" in source
     assert "_settle_launch_layout(root, passes=3)" in source
     assert "def _reveal_composed_main_surface() -> None:" in source
+    assert "root.after(remaining_launch_ms, _reveal_composed_main_surface)" in source
     assert "root.after_idle(_reveal_composed_main_surface)" in source
     reveal_source = source[
         source.index("def _reveal_composed_main_surface() -> None:") : source.index(
-            "root.after_idle(_reveal_composed_main_surface)"
+            "remaining_launch_ms = _remaining_launch_delay_ms("
         )
     ]
     assert "launch_surface.destroy()" in reveal_source
@@ -802,13 +813,13 @@ def test_splash_navigation_uses_a_quiet_rail_and_lower_app_status():
     assert "masthead_icon_label" not in source
     assert 'navigation_frame.pack(fill="x", pady=(px(22), 0))' in source
     assert "app_status_frame = tk.Frame(left_frame, bg=_BG_COLOR)" in source
-    assert "update_progress_width = px(192)" in source
     assert 'text=f"Version {version}"' in source
     assert 'version_label.pack(anchor="w")' in source
     assert "update_cluster = tk.Frame(app_status_frame, bg=_BG_COLOR)" in source
     assert "def _set_update_cluster_visible(visible: bool)" in source
     assert "def _layout_update_cluster(presentation: _UpdatePresentation)" in source
-    assert 'update_name = "Preview update" if is_preview else "Update"' in update_source
+    assert "Preview update" not in update_source
+    assert "Preview installer" not in update_source
     assert 'action_text = f"{action_text} {snapshot.available_version}"' in update_source
     assert "action_text=snapshot.reveal_action_label" in update_source
     assert "action_replaces_status_after_delay=True" in update_source
@@ -818,10 +829,15 @@ def test_splash_navigation_uses_a_quiet_rail_and_lower_app_status():
     assert "def _show_delayed_update_action(" in source
     assert "show_delayed_action=True" in source
     assert "update_cluster.pack_forget()" in source
-    assert "update_progress_canvas.pack_forget()" in source
+    assert "update_cancel_button.pack_forget()" in source
+    assert 'update_label.pack(side="left", anchor="w", fill="x", expand=True)' in source
+    assert 'update_cancel_button.pack(side="right", padx=(px(6), 0))' in source
+    assert "def _draw_update_cancel_button(progress_fraction: float)" in source
+    assert "extent=-360 * clamped" in source
+    assert "update_progress_canvas" not in source
     footer_action_source = source[
         source.index("update_action_label = tk.Label(") : source.index(
-            "update_progress_canvas = tk.Canvas("
+            "update_cancel_button = tk.Canvas("
         )
     ]
     assert "font=_TYPOGRAPHY.supporting" in footer_action_source

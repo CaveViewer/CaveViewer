@@ -32,6 +32,7 @@ from __future__ import annotations
 import enum
 import math
 import os
+import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable
 
@@ -197,6 +198,7 @@ _UI_FONT_FAMILY = _PRESENTATION_PROFILE.ui_font_family
 _TK_TEXT_SCALE = 1.0
 _CACHE_REBUILD_CLOSE_PAUSE_ATTEMPTS = 25
 _UPDATE_READY_ACTION_DELAY_MS = 3_000
+_MIN_LAUNCH_SPLASH_MS = 2_000
 
 _TYPOGRAPHY: TkTypography = create_tk_typography(
     _UI_FONT_FAMILY,
@@ -543,6 +545,17 @@ def _settle_launch_layout(root, *, passes: int = 3) -> None:
     """Run a fixed, bounded number of Tk geometry-only settlement passes."""
     for _pass in range(max(0, int(passes))):
         root.update_idletasks()
+
+
+def _remaining_launch_delay_ms(
+    *,
+    visible_at: float,
+    now: float,
+    minimum_ms: int = _MIN_LAUNCH_SPLASH_MS,
+) -> int:
+    """Return the one-shot delay needed to honor the minimum splash duration."""
+    elapsed_ms = max(0.0, (float(now) - float(visible_at)) * 1_000.0)
+    return max(0, int(math.ceil(max(0, int(minimum_ms)) - elapsed_ms)))
 
 
 def _build_themed_about_content(
@@ -948,8 +961,6 @@ def _bind_update_label_action(
 
 def _update_presentation(snapshot: UpdateSnapshot) -> _UpdatePresentation:
     """Map manager states to the exact compact labels rendered by the splash."""
-    is_preview = snapshot.update_channel == "preview"
-    update_name = "Preview update" if is_preview else "Update"
     if (
         snapshot.automatic_update is not None
         and not snapshot.automatic_update.allows_execution
@@ -964,7 +975,7 @@ def _update_presentation(snapshot: UpdateSnapshot) -> _UpdatePresentation:
                 action_text=action_text,
                 action=_UpdateAction.INSTALL,
             )
-        action_text = f"{update_name} to"
+        action_text = "Update to"
         if snapshot.available_version:
             action_text = f"{action_text} {snapshot.available_version}"
         return _UpdatePresentation(
@@ -981,9 +992,7 @@ def _update_presentation(snapshot: UpdateSnapshot) -> _UpdatePresentation:
         )
     if snapshot.state == UpdateState.VERIFYING:
         return _UpdatePresentation(
-            status_text=(
-                "Verifying Preview update…" if is_preview else "Verifying…"
-            ),
+            status_text="Verifying…",
             action_text="Cancel",
             action=_UpdateAction.CANCEL,
             progress_visible=True,
@@ -993,13 +1002,9 @@ def _update_presentation(snapshot: UpdateSnapshot) -> _UpdatePresentation:
         if snapshot.install_action_label:
             if snapshot.install_requested:
                 return _UpdatePresentation(status_text="Preparing update…")
-            status_text = f"{update_name} ready"
+            status_text = "Update ready"
             if snapshot.error:
-                status_text = (
-                    "Preview installer could not start"
-                    if is_preview
-                    else "Installer could not start"
-                )
+                status_text = "Installer could not start"
             action_text = snapshot.install_action_label
             return _UpdatePresentation(
                 status_text=status_text,
@@ -1014,7 +1019,7 @@ def _update_presentation(snapshot: UpdateSnapshot) -> _UpdatePresentation:
                 status_text=snapshot.update_package_reveal.explanation
             )
         return _UpdatePresentation(
-            status_text=f"{update_name} ready",
+            status_text="Update ready",
             action_text=snapshot.reveal_action_label,
             action=_UpdateAction.REVEAL,
             action_replaces_status_after_delay=True,
@@ -1207,6 +1212,7 @@ def show_splash_screen(
         pady=px(16),
     )
     launch_surface.tkraise()
+    launch_visible_at = time.monotonic()
     root.deiconify()
     root.lift()
     _settle_launch_layout(root, passes=1)
@@ -1252,8 +1258,6 @@ def show_splash_screen(
         padx=px(14),
         pady=(0, px(14)),
     )
-    update_progress_width = px(192)
-
     last_update_presentation: list[_UpdatePresentation | None] = [None]
     map_library_workflow_ref: list[MapLibraryWorkflow | None] = [None]
     map_library_panel_ref: list[MapLibraryPanel | None] = [None]
@@ -1313,16 +1317,63 @@ def show_splash_screen(
         anchor="w",
     )
 
-    update_progress_canvas = tk.Canvas(
+    update_cancel_button_size = px(24)
+    update_cancel_button = tk.Canvas(
         update_cluster,
-        width=update_progress_width,
-        height=4,
+        width=update_cancel_button_size,
+        height=update_cancel_button_size,
         bg=_BG_COLOR,
-        highlightthickness=0,
+        borderwidth=0,
+        highlightthickness=1,
+        highlightbackground=_BG_COLOR,
+        highlightcolor=_BUTTON_BG,
+        cursor="hand2",
+        takefocus=True,
     )
-    _update_progress_bar = update_progress_canvas.create_rectangle(
-        0, 0, 0, 4, fill=_BUTTON_BG, width=0
-    )
+
+    def _invoke_update_cancel(_event=None):
+        _invoke_update_action(update_manager, _UpdateAction.CANCEL)
+        return "break"
+
+    for sequence in ("<Button-1>", "<Return>", "<space>"):
+        update_cancel_button.bind(sequence, _invoke_update_cancel)
+
+    def _draw_update_cancel_button(progress_fraction: float) -> None:
+        """Draw the map-download stop/progress pattern in the update row."""
+        update_cancel_button.delete("all")
+        size = update_cancel_button_size
+        inset = px(3)
+        track_color = DARK_THEME.entry_background
+        update_cancel_button.create_oval(
+            inset,
+            inset,
+            size - inset,
+            size - inset,
+            outline=track_color,
+            width=max(1, px(2)),
+        )
+        clamped = max(0.0, min(1.0, float(progress_fraction)))
+        update_cancel_button.create_arc(
+            inset,
+            inset,
+            size - inset,
+            size - inset,
+            start=90,
+            extent=-360 * clamped,
+            style="arc",
+            outline=_BUTTON_BG,
+            width=max(1, px(2)),
+        )
+        stop_half_size = max(2, px(3))
+        center = size / 2
+        update_cancel_button.create_rectangle(
+            center - stop_half_size,
+            center - stop_half_size,
+            center + stop_half_size,
+            center + stop_half_size,
+            fill=_BUTTON_BG,
+            outline="",
+        )
 
     def _set_update_cluster_visible(visible: bool) -> None:
         if visible:
@@ -1335,24 +1386,21 @@ def show_splash_screen(
         """Pack only the update controls relevant to the current state."""
         update_label.pack_forget()
         update_action_label.pack_forget()
-        update_progress_canvas.pack_forget()
+        update_cancel_button.pack_forget()
 
         if presentation.status_text:
-            update_label.pack(anchor="w", fill="x")
+            update_label.pack(side="left", anchor="w", fill="x", expand=True)
         if (
             presentation.action_text
             and not presentation.action_replaces_status_after_delay
         ):
-            update_action_label.pack(
-                anchor="w",
-                pady=(px(2) if presentation.status_text else 0, 0),
-            )
+            if presentation.action == _UpdateAction.CANCEL:
+                _draw_update_cancel_button(presentation.progress_fraction)
+                update_cancel_button.pack(side="right", padx=(px(6), 0))
+            else:
+                update_action_label.pack(side="left", anchor="w")
         if presentation.progress_visible:
-            update_progress_canvas.config(bg=DARK_THEME.entry_background)
-            update_progress_canvas.pack(anchor="w", pady=(px(5), 0))
-        else:
-            update_progress_canvas.config(bg=_BG_COLOR)
-            update_progress_canvas.coords(_update_progress_bar, 0, 0, 0, 4)
+            _draw_update_cancel_button(presentation.progress_fraction)
 
         _set_update_cluster_visible(
             bool(
@@ -1363,16 +1411,6 @@ def show_splash_screen(
                 )
                 or presentation.progress_visible
             )
-        )
-
-    def _set_progress(frac: float):
-        clamped = max(0.0, min(1.0, float(frac)))
-        update_progress_canvas.coords(
-            _update_progress_bar,
-            0,
-            0,
-            int(update_progress_width * clamped),
-            4,
         )
 
     def _show_delayed_update_action(presentation: _UpdatePresentation) -> None:
@@ -1400,7 +1438,6 @@ def show_splash_screen(
             presentation.action,
         )
         _layout_update_cluster(presentation)
-        _set_progress(presentation.progress_fraction)
         if presentation.action_replaces_status_after_delay:
             session.schedule_after(
                 root,
@@ -2120,10 +2157,17 @@ def show_splash_screen(
         launch_surface.destroy()
         mark_startup_splash_visible()
 
-    # Give Tk one normal idle turn to paint canvas-backed Map Library rows
-    # beneath the launch cover. This callback is deliberately one-shot: it
-    # neither polls readiness nor schedules another geometry pass.
-    root.after_idle(_reveal_composed_main_surface)
+    # Honor one total minimum duration measured from the first visible launch
+    # frame. Fast builds wait only for the remaining time; slow builds reveal
+    # on the next idle paint. Neither path polls or reschedules itself.
+    remaining_launch_ms = _remaining_launch_delay_ms(
+        visible_at=launch_visible_at,
+        now=time.monotonic(),
+    )
+    if remaining_launch_ms:
+        root.after(remaining_launch_ms, _reveal_composed_main_surface)
+    else:
+        root.after_idle(_reveal_composed_main_surface)
     root.lift()
     root.focus_force()
     # Briefly force topmost so the splash appears above the GLFW viewer window
