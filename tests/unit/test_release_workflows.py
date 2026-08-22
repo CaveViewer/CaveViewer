@@ -99,9 +99,12 @@ def test_platform_release_workflows_package_immutable_source_before_finalizing()
         assert "reuse_pr_validation" in dispatch_contract, workflow_name
         assert "ref: ${{ inputs.source_sha || github.sha }}" in workflow, workflow_name
         workflow_header = workflow.split("\njobs:\n", 1)[0]
-        assert "permissions:\n  contents: write" in workflow_header, workflow_name
-        assert workflow.count("permissions:\n      contents: read") == 2, workflow_name
-        assert "permissions:\n      contents: write" in workflow, workflow_name
+        assert "actions: write" in workflow_header, workflow_name
+        assert "contents: write" in workflow_header, workflow_name
+        assert "pull-requests: write" in workflow_header, workflow_name
+        assert workflow.count("permissions:\n      contents: read") == 3, workflow_name
+        assert "actions: write" in workflow, workflow_name
+        assert "pull-requests: write" in workflow, workflow_name
         assert f"group: caveviewer-build-{target}-" in workflow, workflow_name
         assert "--action=package" in workflow, workflow_name
         assert "--action=release" not in workflow, workflow_name
@@ -110,6 +113,10 @@ def test_platform_release_workflows_package_immutable_source_before_finalizing()
         assert "uses: ./.github/workflows/finalize-release.yml" in workflow
         assert f"platforms: {target}" in workflow
         assert "inputs.publish" in workflow
+        assert "reconcile_metadata: ${{ inputs.reconcile_metadata }}" in workflow
+        assert "default: true" in dispatch_contract
+        assert "Require release/next for publication" in workflow
+        assert 'run: test "$RELEASE_BRANCH" = "release/next"' in workflow
 
 
 def test_release_channel_is_forwarded_to_all_platform_package_builds():
@@ -141,6 +148,39 @@ def test_release_channel_is_forwarded_to_all_platform_package_builds():
     for workflow_name in ("macos-arm64-release.yml", "macos-x86_64-release.yml"):
         workflow = (WORKFLOWS_DIR / workflow_name).read_text(encoding="utf-8")
         assert "--release-channel=\"$RELEASE_CHANNEL\"" in workflow
+
+
+def test_direct_release_dispatches_publish_and_reconcile_by_default():
+    workflow_names = (
+        "all-platform-release.yml",
+        "windows-release.yml",
+        "linux-x86_64-release.yml",
+        "macos-arm64-release.yml",
+        "macos-x86_64-release.yml",
+    )
+
+    for workflow_name in workflow_names:
+        workflow = (WORKFLOWS_DIR / workflow_name).read_text(encoding="utf-8")
+        dispatch = workflow.split("  workflow_call:", 1)[0]
+        publish = dispatch.split("      publish:\n", 1)[1].split(
+            "      reconcile_metadata:\n", 1
+        )[0]
+        reconcile = dispatch.split("      reconcile_metadata:\n", 1)[1].split(
+            "      reuse_pr_validation:\n", 1
+        )[0]
+        assert "default: true" in publish, workflow_name
+        assert "default: true" in reconcile, workflow_name
+
+        if "  workflow_call:" in workflow:
+            called = workflow.split("  workflow_call:", 1)[1]
+            called_publish = called.split("      publish:\n", 1)[1].split(
+                "      reconcile_metadata:\n", 1
+            )[0]
+            called_reconcile = called.split(
+                "      reconcile_metadata:\n", 1
+            )[1][:250]
+            assert "default: false" in called_publish, workflow_name
+            assert "default: false" in called_reconcile, workflow_name
 
 
 def test_linux_release_workflows_build_before_packaging_on_fresh_runners():
@@ -491,6 +531,10 @@ def test_release_finalizer_is_the_single_shared_state_writer():
     assert "CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY" in workflow
     assert "CAVEVIEWER_GITHUB_REPO: ${{ github.repository }}" in workflow
     assert "./scripts/common/finalize_release.sh" in workflow
+    assert "./scripts/common/reconcile_release_metadata.sh" in workflow
+    assert "reconcile_metadata:" in workflow
+    assert "actions: write" in workflow
+    assert "pull-requests: write" in workflow
     assert "--allow-unsigned-windows-community" in workflow
 
     assert finalizer.count("gh release create") == 1
@@ -546,6 +590,33 @@ def test_release_finalizer_help_and_shell_syntax():
     assert help_result.returncode == 0
     assert "--expected-source-sha=<sha>" in help_result.stdout
     assert "Single-writer" not in help_result.stdout
+
+
+@requires_executable_shell_scripts
+def test_release_metadata_reconciler_is_gated_and_executable():
+    reconciler = (
+        REPOSITORY_ROOT / "scripts" / "common" / "reconcile_release_metadata.sh"
+    )
+    assert reconciler.is_file()
+    assert os.access(reconciler, os.X_OK)
+
+    source = reconciler.read_text(encoding="utf-8")
+    assert 'release_branch="release/next"' in source
+    assert 'main_branch="main"' in source
+    assert "--workflow=tests.yml" in source
+    assert 'gh pr create' in source
+    assert 'gh pr merge "$pr_number"' in source
+    assert "--delete-branch=false" in source
+
+    syntax = subprocess.run(
+        ["bash", "-n", str(reconciler)], capture_output=True, text=True
+    )
+    assert syntax.returncode == 0, syntax.stderr
+    help_result = subprocess.run(
+        [str(reconciler), "--help"], capture_output=True, text=True
+    )
+    assert help_result.returncode == 0
+    assert "--channel=<stable|preview>" in help_result.stdout
 
 
 @requires_executable_shell_scripts

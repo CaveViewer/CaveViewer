@@ -20,7 +20,12 @@ on:
         description: "Publish the unsigned Windows installer EXE to the GitHub release; Windows warnings are expected"
         required: false
         type: boolean
-        default: false
+        default: true
+      reconcile_metadata:
+        description: "Validate and merge published metadata into main"
+        required: false
+        type: boolean
+        default: true
       reuse_pr_validation:
         description: "Reuse successful PR validation when app/package source has not changed; skip duplicate test suites"
         required: false
@@ -44,6 +49,11 @@ on:
         default: false
       publish:
         description: "Publish the unsigned Windows installer EXE to the GitHub release; Windows warnings are expected"
+        required: false
+        type: boolean
+        default: false
+      reconcile_metadata:
+        description: "Validate and merge published metadata into main"
         required: false
         type: boolean
         default: false
@@ -75,14 +85,28 @@ on:
 # Nested reusable workflows cannot elevate permissions granted by their caller.
 # Keep write available for publish-windows; executable jobs downgrade to read.
 permissions:
+  actions: write
   contents: write
+  pull-requests: write
 
 concurrency:
   group: caveviewer-build-windows-${{ github.ref }}-${{ inputs.version }}
   cancel-in-progress: false
 
 jobs:
+  validate-release-branch:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Require release/next for publication
+        if: ${{ inputs.publish }}
+        env:
+          RELEASE_BRANCH: ${{ github.ref_name }}
+        run: test "$RELEASE_BRANCH" = "release/next"
+
   essential-tests:
+    needs: validate-release-branch
     if: ${{ inputs.skip_essential_tests != true && inputs.reuse_pr_validation != true }}
     uses: ./.github/workflows/tests.yml
     permissions:
@@ -172,7 +196,9 @@ jobs:
     if: ${{ !cancelled() && inputs.publish && needs.build-windows.result == 'success' }}
     uses: ./.github/workflows/finalize-release.yml
     permissions:
+      actions: write
       contents: write
+      pull-requests: write
     with:
       version: ${{ inputs.version }}
       release_notes: ${{ inputs.release_notes }}
@@ -180,6 +206,7 @@ jobs:
       platforms: windows
       source_sha: ${{ inputs.source_sha || github.sha }}
       target_branch: ${{ github.ref_name }}
+      reconcile_metadata: ${{ inputs.reconcile_metadata }}
       allow_unsigned_windows_community: ${{ inputs.publish || inputs.allow_unsigned_windows_community }}
     secrets:
       CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY: ${{ secrets.CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY }}

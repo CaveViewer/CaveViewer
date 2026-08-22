@@ -108,7 +108,10 @@ Essential Tests items in PyCharm's **Release Actions** menu. Package-smoke,
 benchmark, Pages, and maintenance workflows are intentionally not exposed in
 that focused menu. The launcher dispatches the selected workflow on the
 checked-out remote branch, resolves the exact new run, and watches it to
-completion. For release workflows, it finds the greatest dotted version among
+completion. The shared **Release …** configurations require checked-out
+`release/next`, prompt for Stable or Preview with Stable as the default, and
+explicitly enable publication plus gated metadata reconciliation. For release
+workflows, the launcher finds the greatest dotted version among
 all published stable and preview GitHub releases, increments the final number,
 and supplies that version automatically. This makes every new preview newer
 than the latest stable or preview and every stable newer than the latest
@@ -140,17 +143,20 @@ the artifacts, uploads them to one GitHub release, and verifies each remote
 asset URL, byte size, and SHA-256 through the GitHub Release API. Only then does
 it write and sign update manifests, update the application version, and push
 one commit. A failed remote verification leaves the previously committed
-manifests unchanged. The package jobs are read-only and do not receive the
-release signing key. Individually dispatched platform workflows use the same
-finalizer for their one target.
+manifests unchanged. It then opens or reuses the `release/next` metadata PR,
+dispatches its PR-aware Essential Tests, and merges it into `main` only after
+success. The package jobs are read-only and do not receive the release signing
+key. Individually dispatched platform workflows use the same finalizer and
+reconciliation path for their one target.
 
-When dispatching a workflow:
+When dispatching manually through GitHub:
 
 - choose the source branch explicitly;
 - enter a bare, dotted-numeric version such as `1.0.64`, without a leading `v`
   or a suffix such as `-rc1`, because workflow artifact paths use the input
   verbatim and the update checker only compares numeric components;
-- leave `publish` disabled to build and retain a test artifact only;
+- direct release dispatches enable `publish` and metadata reconciliation by
+  default; clear `publish` to build and retain a test artifact only;
 - enable both `publish` and `preview` to publish a GitHub prerelease and
   update that platform/architecture's `preview.json` rather than
   `stable.json`;
@@ -159,6 +165,11 @@ When dispatching a workflow:
 - avoid source pushes to the selected branch while packages are building. The
   finalizer rejects a moved branch rather than publishing metadata for a source
   revision different from the packaged artifacts.
+
+The tracked PyCharm **Release …** actions do not expose artifact-only behavior:
+they force `publish=true`, select the channel explicitly, and reconcile the
+result. Use GitHub's manual form or a package-smoke workflow for build-only
+validation.
 
 ## Directory Layout
 

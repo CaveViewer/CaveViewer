@@ -20,7 +20,12 @@ on:
         description: "Publish the macOS x86_64 DMG to the GitHub release"
         required: false
         type: boolean
-        default: false
+        default: true
+      reconcile_metadata:
+        description: "Validate and merge published metadata into main"
+        required: false
+        type: boolean
+        default: true
       reuse_pr_validation:
         description: "Reuse successful PR validation when app/package source has not changed; skip duplicate test suites"
         required: false
@@ -47,6 +52,11 @@ on:
         required: false
         type: boolean
         default: false
+      reconcile_metadata:
+        description: "Validate and merge published metadata into main"
+        required: false
+        type: boolean
+        default: false
       skip_essential_tests:
         description: "Skip this workflow's test gate when the caller already ran it"
         required: false
@@ -70,14 +80,28 @@ on:
 # Nested reusable workflows cannot elevate permissions granted by their caller.
 # Keep write available for publish-macos-x86_64; executable jobs downgrade to read.
 permissions:
+  actions: write
   contents: write
+  pull-requests: write
 
 concurrency:
   group: caveviewer-build-macos-x86_64-${{ github.ref }}-${{ inputs.version }}
   cancel-in-progress: false
 
 jobs:
+  validate-release-branch:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Require release/next for publication
+        if: ${{ inputs.publish }}
+        env:
+          RELEASE_BRANCH: ${{ github.ref_name }}
+        run: test "$RELEASE_BRANCH" = "release/next"
+
   essential-tests:
+    needs: validate-release-branch
     if: ${{ inputs.skip_essential_tests != true && inputs.reuse_pr_validation != true }}
     uses: ./.github/workflows/tests.yml
     permissions:
@@ -179,7 +203,9 @@ jobs:
     if: ${{ inputs.publish && needs.build-macos-x86_64.result == 'success' }}
     uses: ./.github/workflows/finalize-release.yml
     permissions:
+      actions: write
       contents: write
+      pull-requests: write
     with:
       version: ${{ inputs.version }}
       release_notes: ${{ inputs.release_notes }}
@@ -187,5 +213,6 @@ jobs:
       platforms: macos-x86_64
       source_sha: ${{ inputs.source_sha || github.sha }}
       target_branch: ${{ github.ref_name }}
+      reconcile_metadata: ${{ inputs.reconcile_metadata }}
     secrets:
       CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY: ${{ secrets.CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY }}
