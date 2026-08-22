@@ -644,6 +644,23 @@ class PreferencesPanel:
         if not single_line_hint:
             self.page_hint_labels.setdefault(field.section, []).append(hint_label)
 
+    @staticmethod
+    def _sync_hint_wraplength(label, available_width: int) -> bool:
+        """Match one description to its actual rendered text-column width."""
+        if int(available_width) <= 1:
+            return False
+        wraplength = max(
+            _MIN_HINT_WRAP_LENGTH,
+            int(available_width) - _HINT_WRAP_INSET,
+        )
+        try:
+            if int(label.cget("wraplength")) == wraplength:
+                return False
+            label.configure(wraplength=wraplength)
+        except tk.TclError:
+            return False
+        return True
+
     def _sync_active_page_hint_wraplengths(self) -> bool:
         """Resize visible hints once per coalesced viewport layout pass."""
         changed = False
@@ -652,13 +669,7 @@ class PreferencesPanel:
                 available_width = int(label.master.winfo_width())
                 if available_width <= 1:
                     continue
-                wraplength = max(
-                    _MIN_HINT_WRAP_LENGTH,
-                    available_width - _HINT_WRAP_INSET,
-                )
-                if int(label.cget("wraplength")) != wraplength:
-                    label.configure(wraplength=wraplength)
-                    changed = True
+                changed = self._sync_hint_wraplength(label, available_width) or changed
             except tk.TclError:
                 continue
         return changed
@@ -858,11 +869,21 @@ class PreferencesPanel:
             return None
 
         page = tk.Frame(self.page_stack, bg=_BG_COLOR)
+        page.bind(
+            "<Configure>",
+            lambda _event, key=page_key: self._on_page_configured(key),
+            add="+",
+        )
         self.pages[page_key] = page
         self._render_section(page, page_key)
         if self.page_scrollbar is not None:
             self.page_scrollbar.bind_mousewheel(page)
         return page
+
+    def _on_page_configured(self, page_key: str) -> None:
+        """Rewrap after the active page expands from requested to viewport width."""
+        if page_key == self.active_page_key:
+            self._schedule_page_layout_sync()
 
     def _show_page(self, page_key: str) -> None:
         page = self._ensure_page(page_key)

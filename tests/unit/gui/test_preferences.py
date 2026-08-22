@@ -916,7 +916,11 @@ def test_preferences_pages_are_constructed_once_on_first_selection(monkeypatch):
         def __init__(self, parent, **options) -> None:
             self.parent = parent
             self.options = options
+            self.bindings = []
             created.append(self)
+
+        def bind(self, event, callback, *, add=None) -> None:
+            self.bindings.append((event, callback, add))
 
     panel = object.__new__(preferences_dialog.PreferencesPanel)
     panel.pages = {}
@@ -1091,6 +1095,30 @@ def test_preferences_hint_wrapping_only_updates_the_active_page():
     assert hidden_label.configure_calls == []
 
 
+def test_preferences_hint_wrap_tracks_the_rendered_text_column_width():
+    from caveviewer.gui import preferences_dialog
+
+    class _FakeLabel:
+        def __init__(self) -> None:
+            self.wraplength = 520
+            self.configure_calls = []
+
+        def cget(self, option: str) -> str:
+            assert option == "wraplength"
+            return str(self.wraplength)
+
+        def configure(self, **options) -> None:
+            self.configure_calls.append(options)
+            self.wraplength = options["wraplength"]
+
+    label = _FakeLabel()
+
+    assert preferences_dialog.PreferencesPanel._sync_hint_wraplength(label, 1) is False
+    assert preferences_dialog.PreferencesPanel._sync_hint_wraplength(label, 804) is True
+    assert preferences_dialog.PreferencesPanel._sync_hint_wraplength(label, 804) is False
+    assert label.configure_calls == [{"wraplength": 800}]
+
+
 def test_preferences_invalidates_hidden_geometry_when_shown():
     from caveviewer.gui import preferences_dialog
 
@@ -1128,6 +1156,20 @@ def test_preferences_mapped_event_refreshes_only_the_panel_container():
     panel._on_container_mapped(SimpleNamespace(widget=panel.container))
 
     assert refreshed == [True]
+
+
+def test_preferences_rewraps_when_the_active_page_reaches_its_final_width():
+    from caveviewer.gui import preferences_dialog
+
+    scheduled = []
+    panel = object.__new__(preferences_dialog.PreferencesPanel)
+    panel.active_page_key = "streaming"
+    panel._schedule_page_layout_sync = lambda: scheduled.append(True)
+
+    panel._on_page_configured("storage")
+    panel._on_page_configured("streaming")
+
+    assert scheduled == [True]
 
 
 def test_preferences_feedback_wraplength_avoids_repeating_identical_geometry_work():
