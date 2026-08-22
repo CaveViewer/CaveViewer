@@ -127,7 +127,7 @@ def test_manifest_parser_returns_a_complete_artifact_for_a_newer_update(
 def test_manifest_release_channel_must_match_the_target_channel(update_target):
     manifest = {
         "latest_version": "2.0.0",
-        "release_channel": "prerelease",
+        "release_channel": "preview",
         "windows_app_url": "https://updates.example/CaveViewer.zip",
         "windows_app_size": 123,
         "windows_app_sha256": "A" * 64,
@@ -523,20 +523,20 @@ def test_update_check_handles_manifest_http_errors(
     assert str(code) in failure.error
 
 
-def test_missing_prerelease_manifest_means_no_prerelease_is_available(
+def test_missing_preview_manifest_means_no_preview_is_available(
     monkeypatch,
     caplog,
     update_target,
     tls_trust_adapter,
 ):
-    prerelease_target = replace(
+    preview_target = replace(
         update_target,
-        manifest_channel="prerelease",
-        manifest_url="https://updates.example/prerelease.json",
-        manifest_signature_url="https://updates.example/prerelease.json.sig",
+        manifest_channel="preview",
+        manifest_url="https://updates.example/preview.json",
+        manifest_signature_url="https://updates.example/preview.json.sig",
     )
     error = urllib.error.HTTPError(
-        prerelease_target.manifest_url,
+        preview_target.manifest_url,
         404,
         "not found",
         {},
@@ -551,7 +551,7 @@ def test_missing_prerelease_manifest_means_no_prerelease_is_available(
     with caplog.at_level(logging.INFO, logger="caveviewer"):
         result = update_checker.check_for_update_target(
             "1.0.0",
-            update_target=prerelease_target,
+            update_target=preview_target,
             tls_trust_adapter=tls_trust_adapter,
         )
 
@@ -559,7 +559,7 @@ def test_missing_prerelease_manifest_means_no_prerelease_is_available(
     assert result.current_version == "1.0.0"
     assert result.latest_version is None
     assert any(
-        "No prerelease update manifest is published" in record.getMessage()
+        "No preview update manifest is published" in record.getMessage()
         for record in caplog.records
     )
 

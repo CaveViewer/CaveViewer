@@ -22,13 +22,15 @@ Workflow:
 import logging
 import os
 import sys
-from caveviewer.version import APP_NAME, APP_VERSION
-from caveviewer.core.map import source_model
+
 from caveviewer.core.diagnostics.application import (
     ApplicationDiagnostics,
     get_active_application_diagnostics,
     set_active_application_diagnostics,
 )
+from caveviewer.core.map import source_model
+from caveviewer.core.release_metadata import display_version
+from caveviewer.version import APP_NAME, APP_VERSION
 from caveviewer.core.diagnostics.runtime import (
     RuntimeDiagnostics,
     create_runtime_diagnostics,
@@ -837,7 +839,10 @@ def main():
 
     # GUI mode: show the splash screen, run the viewer, then show the
     # splash screen again so the user can open another map or exit.
-    _splash_version = "0.0.0" if _force_update else __version__
+    _splash_version = "0.0.0" if _force_update else display_version(
+        __version__,
+        release_metadata.release_channel,
+    )
     record_startup_stage("splash_module_import_begin")
     from caveviewer.gui.splash_screen import show_splash_screen
     record_startup_stage("splash_module_import_complete")

@@ -25,7 +25,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--app-name", required=True)
     parser.add_argument("--version", required=True)
     parser.add_argument(
-        "--release-channel", choices=("stable", "prerelease"), required=True
+        "--release-channel", choices=("stable", "preview"), required=True
     )
     parser.add_argument("--created-at-utc", required=True)
     parser.add_argument("--download-url", default="")

@@ -6,7 +6,7 @@ set -euo pipefail
 # package size, SHA-256, and release notes for the in-app update client.
 #
 # Usage:
-#   update_manifest.sh --version=<version> --download-url=<appimage_url> --artifact-file=<appimage_file> [--notes=<release_notes>] [--channel=<stable|prerelease>]
+#   update_manifest.sh --version=<version> --download-url=<appimage_url> --artifact-file=<appimage_file> [--notes=<release_notes>] [--channel=<stable|preview>]
 # Example:
 #   update_manifest.sh --version=1.0.1 \
 #     --download-url="https://github.com/<owner>/CaveViewerPlus/releases/download/v1.0.1/CaveViewer-1.0.1-x86_64.AppImage" \
@@ -16,7 +16,7 @@ set -euo pipefail
 print_usage() {
   cat <<'EOF'
 Usage:
-  update_manifest.sh --version=<version> --download-url=<url> --artifact-file=<path> [--notes=<release_notes>] [--channel=<stable|prerelease>]
+  update_manifest.sh --version=<version> --download-url=<url> --artifact-file=<path> [--notes=<release_notes>] [--channel=<stable|preview>]
 EOF
 }
 
@@ -107,9 +107,9 @@ case "$linux_update_arch" in
 esac
 
 case "$channel" in
-  stable|prerelease) ;;
+  stable|preview) ;;
   *)
-    echo "Error: invalid --channel '$channel' (expected stable or prerelease)"
+    echo "Error: invalid --channel '$channel' (expected stable or preview)"
     exit 1
     ;;
 esac

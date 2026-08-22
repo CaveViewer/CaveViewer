@@ -10,22 +10,22 @@ set -euo pipefail
 # Shared Linux publisher.
 # Builds or reuses Linux AppImage artifacts, publishes/uploads a GitHub release,
 # and writes a signed architecture-specific update manifest for the selected
-# channel: updates/linux/<arch>/<stable|prerelease>.json.
+# channel: updates/linux/<arch>/<stable|preview>.json.
 #
 # Usage:
-#   publish.sh --version=<version> [--notes=<release_notes>] [--use-existing-artifacts] [--rebuild] [--pre-release]
+#   publish.sh --version=<version> [--notes=<release_notes>] [--use-existing-artifacts] [--rebuild] [--preview]
 #
 # Example:
 #   publish.sh --version=1.0.2 --notes="Bug fixes and stability improvements"
 #
 use_existing_artifacts=false
 rebuild=false
-pre_release=false
+preview=false
 
 print_usage() {
   cat <<'EOF'
 Usage:
-  publish.sh --version=<version> [--notes=<release_notes>] [--use-existing-artifacts] [--rebuild] [--pre-release]
+  publish.sh --version=<version> [--notes=<release_notes>] [--use-existing-artifacts] [--rebuild] [--preview]
   publish.sh --help
 
 Options:
@@ -33,7 +33,7 @@ Options:
   --notes=<notes>           Release notes (default: "Release <version>")
   --use-existing-artifacts  Publish existing artifacts without rebuilding
   --rebuild                 Rebuild the Linux Docker image before building artifacts
-  --pre-release             Mark the GitHub release as a prerelease and write prerelease.json
+  --preview             Mark the GitHub release as a prerelease and write preview.json
 
 Internal shared publisher. Prefer:
   x86_64/publish.sh --version=<version> --notes="Release notes"
@@ -78,8 +78,8 @@ while [ "$#" -gt 0 ]; do
       rebuild=true
       shift
       ;;
-    --pre-release)
-      pre_release=true
+    --preview)
+      preview=true
       shift
       ;;
     -h|--help)
@@ -132,7 +132,7 @@ source "$repo_root/scripts/common/github.sh"
 source "$repo_root/scripts/common/release_channel.sh"
 version_file="$repo_root/src/caveviewer/version.py"
 manifest_channel="stable"
-$pre_release && manifest_channel="prerelease"
+$preview && manifest_channel="preview"
 export CAVEVIEWER_BUILD_RELEASE_CHANNEL="$manifest_channel"
 cv_prepare_release_metadata "$repo_root" >/dev/null
 
@@ -164,7 +164,7 @@ fi
 echo "Using repository: $repo"
 echo "Version: $normalized_version"
 echo "Tag: $tag"
-echo "Prerelease: $pre_release"
+echo "Preview: $preview"
 
 if [ ! -f "$version_file" ]; then
   echo "Error: version file not found: $version_file"
@@ -255,7 +255,7 @@ if gh release view "$tag" --repo "$repo" >/dev/null 2>&1; then
 else
   echo "Creating release $tag and uploading Linux AppImages"
   create_args=("$tag" "${upload_appimage_paths[@]}" --repo "$repo" --title "$release_title" --notes "$release_notes")
-  $pre_release && create_args+=(--prerelease)
+  $preview && create_args+=(--prerelease)
   gh release create "${create_args[@]}"
 fi
 

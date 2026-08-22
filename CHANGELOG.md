@@ -8,7 +8,7 @@ All notable changes to this project are documented in this file.
   download a verified update, choose **Install and restart**, and safely launch
   the new version; older ZIP installations keep the manual migration path.
 - Updates are more dependable across platforms, with clearer status messages,
-  cancellation, atomic package handling, and correct stable/prerelease channel
+  cancellation, atomic package handling, and correct stable/preview channel
   behavior.
 - Startup and Preferences are smoother on Windows: the splash screen stays
   responsive while Preferences initializes, and its layout no longer stalls.

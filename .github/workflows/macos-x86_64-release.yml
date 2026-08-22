@@ -11,8 +11,8 @@ on:
         description: "Release notes"
         required: false
         default: "macOS x86_64 release"
-      pre_release:
-        description: "Publish as a GitHub prerelease and update prerelease.json"
+      preview:
+        description: "Publish as a GitHub prerelease and update preview.json"
         required: false
         type: boolean
         default: false
@@ -37,8 +37,8 @@ on:
         required: false
         type: string
         default: "macOS x86_64 release"
-      pre_release:
-        description: "Publish as a GitHub prerelease and update prerelease.json"
+      preview:
+        description: "Publish as a GitHub prerelease and update preview.json"
         required: false
         type: boolean
         default: false
@@ -145,7 +145,7 @@ jobs:
         env:
           RELEASE_VERSION: ${{ inputs.version }}
           RELEASE_NOTES: ${{ inputs.release_notes }}
-          RELEASE_PRE_RELEASE: ${{ inputs.pre_release }}
+          RELEASE_PREVIEW: ${{ inputs.preview }}
         run: |
           release_args=(
             --target=macos-x86_64 \
@@ -154,15 +154,15 @@ jobs:
             --action=package \
             --skip-tests
           )
-          if [ "$RELEASE_PRE_RELEASE" = "true" ]; then
-            release_args+=(--pre-release)
+          if [ "$RELEASE_PREVIEW" = "true" ]; then
+            release_args+=(--preview)
           fi
           ./scripts/release.sh "${release_args[@]}"
 
       - name: Smoke-test macOS x86_64 DMG
         env:
           RELEASE_VERSION: ${{ inputs.version }}
-          RELEASE_CHANNEL: ${{ inputs.pre_release && 'prerelease' || 'stable' }}
+          RELEASE_CHANNEL: ${{ inputs.preview && 'preview' || 'stable' }}
         run: ./scripts/macos/smoke_dmg.sh --arch=x86_64 --version="$RELEASE_VERSION" --release-channel="$RELEASE_CHANNEL"
 
       - name: Upload macOS x86_64 DMG for testing
@@ -183,7 +183,7 @@ jobs:
     with:
       version: ${{ inputs.version }}
       release_notes: ${{ inputs.release_notes }}
-      pre_release: ${{ inputs.pre_release }}
+      preview: ${{ inputs.preview }}
       platforms: macos-x86_64
       source_sha: ${{ inputs.source_sha || github.sha }}
       target_branch: ${{ github.ref_name }}

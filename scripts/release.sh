@@ -37,14 +37,14 @@ Actions:
 Options:
   --rebuild            Rebuild Linux Docker image when building/packaging Linux targets
   --skip-tests         Skip the local test gate (only after an external gate passed)
-  --pre-release        Build packages for the prerelease update channel; release
+  --preview            Build packages for the Preview update channel; release
                        actions also mark the GitHub release as a prerelease
 
 Examples:
   release.sh --target=linux-x86_64 --version=1.0.60 --notes "Alpha." --action=build
   release.sh --target=linux-x86_64 --version=1.0.60 --notes "Alpha." --action=package
   release.sh --target=linux-x86_64 --version=1.0.60 --notes "Alpha." --action=release
-  release.sh --target=linux-x86_64 --version=1.0.60 --notes "Alpha." --action=release --pre-release
+  release.sh --target=linux-x86_64 --version=1.0.60 --notes "Alpha." --action=release --preview
   release.sh --target=macos-arm64,linux-x86_64 --version=1.0.60 --notes "Alpha." --action=package
   release.sh --target=all --version=1.0.60 --notes "Alpha." --action=release
 EOF
@@ -55,20 +55,20 @@ print_target_help() {
     all)
       cat <<'EOF'
 Usage:
-  release.sh --target=all --version=<version> --notes=<notes> --action=<build|package|release> [--rebuild] [--skip-tests] [--pre-release]
+  release.sh --target=all --version=<version> --notes=<notes> --action=<build|package|release> [--rebuild] [--skip-tests] [--preview]
 
 If all appears in a comma-separated target list, it takes precedence.
 The all target selects the host's native macOS architecture.
 EOF
       ;;
     macos-arm64|macos-x86_64)
-      echo "Usage: release.sh --target=$1 --version=<version> --notes=<notes> --action=<build|package|release> [--skip-tests] [--pre-release]"
+      echo "Usage: release.sh --target=$1 --version=<version> --notes=<notes> --action=<build|package|release> [--skip-tests] [--preview]"
       ;;
     windows)
-      echo "Usage: release.sh --target=windows --version=<version> --notes=<notes> --action=<build|package|release> [--skip-tests] [--pre-release]"
+      echo "Usage: release.sh --target=windows --version=<version> --notes=<notes> --action=<build|package|release> [--skip-tests] [--preview]"
       ;;
     linux-x86_64)
-      echo "Usage: release.sh --target=linux-x86_64 --version=<version> --notes=<notes> --action=<build|package|release> [--rebuild] [--skip-tests] [--pre-release]"
+      echo "Usage: release.sh --target=linux-x86_64 --version=<version> --notes=<notes> --action=<build|package|release> [--rebuild] [--skip-tests] [--preview]"
       ;;
     *)
       echo "Error: unknown target '$1'"
@@ -469,7 +469,7 @@ run_selected_releases() {
   run_selected_packages
 
   publish_args+=(--use-existing-artifacts)
-  $pre_release && publish_args+=(--pre-release)
+  $preview && publish_args+=(--preview)
 
   echo ""
   echo "====================================================="
@@ -508,7 +508,7 @@ action=""
 version=""
 notes=""
 show_help=false
-pre_release=false
+preview=false
 skip_tests=false
 rebuild=false
 reuse_existing_artifacts=false
@@ -593,8 +593,8 @@ while [ "$#" -gt 0 ]; do
       passthrough_args+=("$arg")
       shift
       ;;
-    --pre-release)
-      pre_release=true
+    --preview)
+      preview=true
       shift
       ;;
     --skip-tests)
@@ -656,9 +656,9 @@ if $rebuild && ! has_linux_target; then
   exit 1
 fi
 
-pre_release_args=()
-if $pre_release; then
-  pre_release_args+=(--pre-release)
+preview_args=()
+if $preview; then
+  preview_args+=(--preview)
 fi
 
 normalized_version="${version#v}"
@@ -710,8 +710,8 @@ if [ "$current_version" != "$normalized_version" ]; then
 fi
 
 build_release_channel="stable"
-if $pre_release; then
-  build_release_channel="prerelease"
+if $preview; then
+  build_release_channel="preview"
 fi
 export CAVEVIEWER_BUILD_RELEASE_CHANNEL="$build_release_channel"
 release_metadata_path="$repo_root/build/$CV_RELEASE_METADATA_RESOURCE_NAME"
@@ -743,7 +743,7 @@ case "$dispatch_target:$action" in
     ;;
   macos-arm64:release|macos-x86_64:release)
     require_macos_host
-    exec "$script_dir/macos/publish.sh" --arch "$(selected_macos_arch)" --version "$normalized_version" --notes "$notes" ${pre_release_args[@]+"${pre_release_args[@]}"} ${passthrough_args[@]+"${passthrough_args[@]}"}
+    exec "$script_dir/macos/publish.sh" --arch "$(selected_macos_arch)" --version "$normalized_version" --notes "$notes" ${preview_args[@]+"${preview_args[@]}"} ${passthrough_args[@]+"${passthrough_args[@]}"}
     ;;
   windows:build)
     exec "$script_dir/windows/build.sh" ${passthrough_args[@]+"${passthrough_args[@]}"}
@@ -752,7 +752,7 @@ case "$dispatch_target:$action" in
     exec "$script_dir/windows/package.sh" ${passthrough_args[@]+"${passthrough_args[@]}"}
     ;;
   windows:release)
-    exec "$script_dir/windows/publish.sh" --version "$normalized_version" --notes "$notes" ${pre_release_args[@]+"${pre_release_args[@]}"} ${passthrough_args[@]+"${passthrough_args[@]}"}
+    exec "$script_dir/windows/publish.sh" --version "$normalized_version" --notes "$notes" ${preview_args[@]+"${preview_args[@]}"} ${passthrough_args[@]+"${passthrough_args[@]}"}
     ;;
   linux-x86_64:build)
     exec "$script_dir/linux/x86_64/build.sh" ${passthrough_args[@]+"${passthrough_args[@]}"}
@@ -761,7 +761,7 @@ case "$dispatch_target:$action" in
     exec "$script_dir/linux/x86_64/package.sh" ${passthrough_args[@]+"${passthrough_args[@]}"}
     ;;
   linux-x86_64:release)
-    exec "$script_dir/linux/x86_64/publish.sh" --version "$normalized_version" --notes "$notes" ${pre_release_args[@]+"${pre_release_args[@]}"} ${passthrough_args[@]+"${passthrough_args[@]}"}
+    exec "$script_dir/linux/x86_64/publish.sh" --version "$normalized_version" --notes "$notes" ${preview_args[@]+"${preview_args[@]}"} ${passthrough_args[@]+"${passthrough_args[@]}"}
     ;;
   multi:build)
     run_selected_builds

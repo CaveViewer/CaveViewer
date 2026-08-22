@@ -25,7 +25,7 @@ def main() -> int:
     parser.add_argument("--metadata-file", type=Path, required=True)
     parser.add_argument("--update-metadata-file", type=Path, required=True)
     parser.add_argument(
-        "--release-channel", choices=("stable", "prerelease"), required=True
+        "--release-channel", choices=("stable", "preview"), required=True
     )
     parser.add_argument(
         "--allow-unsigned-community",

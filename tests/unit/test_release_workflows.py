@@ -81,7 +81,7 @@ def test_platform_release_workflows_package_immutable_source_before_finalizing()
         workflow = (WORKFLOWS_DIR / workflow_name).read_text(encoding="utf-8")
         assert "workflow_call:" in workflow, workflow_name
         assert "publish:" in workflow, workflow_name
-        assert "pre_release:" in workflow, workflow_name
+        assert "preview:" in workflow, workflow_name
         assert "CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY:" in workflow, workflow_name
         assert "uses: ./.github/workflows/tests.yml" in workflow, workflow_name
         assert "needs: essential-tests" in workflow, workflow_name
@@ -122,8 +122,8 @@ def test_release_channel_is_forwarded_to_all_platform_package_builds():
 
     for workflow_name in workflow_names:
         workflow = (WORKFLOWS_DIR / workflow_name).read_text(encoding="utf-8")
-        assert "RELEASE_PRE_RELEASE: ${{ inputs.pre_release }}" in workflow
-        assert 'release_args+=(--pre-release)' in workflow
+        assert "RELEASE_PREVIEW: ${{ inputs.preview }}" in workflow
+        assert 'release_args+=(--preview)' in workflow
         assert './scripts/release.sh "${release_args[@]}"' in workflow
 
     windows_workflow = (WORKFLOWS_DIR / "windows-release.yml").read_text(
@@ -460,7 +460,7 @@ def test_all_platform_release_workflow_builds_platforms_in_parallel_then_finaliz
             assert "require_signed_installer:" not in job_block
 
     assert job_positions == sorted(job_positions)
-    for input_name in ("version", "release_notes", "pre_release"):
+    for input_name in ("version", "release_notes", "preview"):
         forwarded_input = f"{input_name}: ${{{{ inputs.{input_name} }}}}"
         assert workflow.count(forwarded_input) == len(job_contracts) + 1
 
@@ -498,6 +498,10 @@ def test_release_finalizer_is_the_single_shared_state_writer():
     assert finalizer.count('git -C "$repo_root" push') == 1
     assert "origin/$target_branch moved" in finalizer
     assert "release metadata not reconciled with origin/main" in finalizer
+    assert "Stable and Preview may not share a tag" in finalizer
+    assert "stable release version" in finalizer
+    assert "must be greater than Preview" in finalizer
+    assert "--json isPrerelease" in finalizer
     assert "refs/heads/main:refs/remotes/origin/main" in finalizer
     assert "--allow-unsigned-windows-community" in finalizer
     assert "verify_package_release_channel" in finalizer

@@ -19,7 +19,7 @@ from caveviewer.resources import resource_path
 
 RELEASE_METADATA_RESOURCE_NAME = "release_metadata.v1.json"
 RELEASE_METADATA_SCHEMA_VERSION = 1
-VALID_RELEASE_CHANNELS = frozenset({"stable", "prerelease"})
+VALID_RELEASE_CHANNELS = frozenset({"stable", "preview"})
 
 
 class ReleaseMetadataSource(str, Enum):
@@ -58,6 +58,29 @@ def default_release_metadata() -> ReleaseMetadata:
     return ReleaseMetadata(
         release_channel="stable",
         source=ReleaseMetadataSource.SOURCE_DEFAULT,
+    )
+
+
+def release_channel_display_name(release_channel: str) -> str | None:
+    """Return the user-facing badge for a supported package channel."""
+
+    normalized = str(release_channel).strip().lower()
+    if normalized == "stable":
+        return None
+    if normalized == "preview":
+        return "Preview"
+    raise ValueError(f"unsupported release channel: {release_channel!r}")
+
+
+def display_version(version: str, release_channel: str) -> str:
+    """Decorate a package version only when its channel needs disclosure."""
+
+    normalized_version = str(version).strip()
+    channel_name = release_channel_display_name(release_channel)
+    return (
+        normalized_version
+        if channel_name is None
+        else f"{normalized_version} {channel_name}"
     )
 
 

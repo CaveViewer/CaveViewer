@@ -50,7 +50,7 @@ export PYTHONPATH="$CAVEVIEWER_PROJECT_ROOT/src"
 # Or set a repo/branch and let the app derive the platform-specific manifest URL:
 export CAVEVIEWER_GITHUB_REPO="CaveViewer/CaveViewer"
 # export CAVEVIEWER_UPDATE_BRANCH="release/<version>"
-# export CAVEVIEWER_UPDATE_CHANNEL="prerelease"
+# export CAVEVIEWER_UPDATE_CHANNEL="preview"
 
 # You can add additional environment configurations here as necessary
 

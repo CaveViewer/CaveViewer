@@ -39,14 +39,14 @@ Build, package, and publish the Linux target:
 
 ```bash
 ./scripts/release.sh --target=linux-x86_64 --version=1.2.45 --notes "Release 1.2.45" --action=release
-./scripts/release.sh --target=linux-x86_64 --version=1.2.45 --notes "Alpha." --action=release --pre-release
+./scripts/release.sh --target=linux-x86_64 --version=1.2.45 --notes "Alpha." --action=release --preview
 ```
 
 `--action=package` packages an existing Linux app bundle. Run
 `--action=build` first if `dist/linux/<arch>/app/CaveViewer` does not exist.
 `--action=release` publishes artifacts and writes signed update manifests.
-Stable releases write `stable.json`; `--pre-release` marks the GitHub release
-as a prerelease and writes `prerelease.json` instead. Both require
+Stable releases write `stable.json`; `--preview` marks the GitHub release
+as a preview and writes `preview.json` instead. Both require
 `CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY`.
 
 ## Direct Docker Driver
@@ -92,8 +92,8 @@ Update manifests are architecture-specific:
 ```text
 updates/linux/x86_64/stable.json
 updates/linux/x86_64/stable.json.sig
-updates/linux/x86_64/prerelease.json
-updates/linux/x86_64/prerelease.json.sig
+updates/linux/x86_64/preview.json
+updates/linux/x86_64/preview.json.sig
 ```
 
 ## Notes
@@ -105,5 +105,5 @@ updates/linux/x86_64/prerelease.json.sig
   template used by Docker. The default is `.venv-linux-build-{arch}`.
 - `--rebuild` rebuilds the Docker image and clears the matching cached Linux
   build venv.
-- `--pre-release` publishes prerelease assets and advances
-  `updates/linux/x86_64/prerelease.json`, leaving `stable.json` untouched.
+- `--preview` publishes preview assets and advances
+  `updates/linux/x86_64/preview.json`, leaving `stable.json` untouched.
