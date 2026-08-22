@@ -54,6 +54,29 @@ def _assert_common_contract(manifest: Path, payload: dict[str, object]) -> None:
     verify_update_manifest_signature(manifest.read_bytes(), signature.read_bytes())
 
 
+def _expected_release_channel(relative_path: Path) -> str:
+    """Map legacy manifest aliases to the current embedded channel name."""
+    if relative_path.stem == "prerelease":
+        return "preview"
+    return relative_path.stem
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "expected"),
+    (
+        (Path("windows/stable.json"), "stable"),
+        (Path("windows/preview.json"), "preview"),
+        (Path("windows/prerelease.json"), "preview"),
+        (Path("macos/x86_64/prerelease.json"), "preview"),
+    ),
+)
+def test_manifest_path_maps_legacy_prerelease_alias_to_preview(
+    relative_path: Path,
+    expected: str,
+):
+    assert _expected_release_channel(relative_path) == expected
+
+
 @pytest.mark.parametrize("manifest", MANIFEST_PATHS, ids=lambda path: str(path.relative_to(REPOSITORY_ROOT)))
 def test_signed_update_manifests_follow_the_release_contract(manifest: Path):
     payload = json.loads(manifest.read_text(encoding="utf-8"))
@@ -64,7 +87,7 @@ def test_signed_update_manifests_follow_the_release_contract(manifest: Path):
     # Existing signed manifests remain valid during the staged rollout. New
     # writers always add this field and its path is the expected channel.
     if "release_channel" in payload:
-        assert payload["release_channel"] == relative_path.stem
+        assert payload["release_channel"] == _expected_release_channel(relative_path)
     download_url = payload["download_url"]
     download_size_bytes = payload["download_size_bytes"]
     sha256 = payload["sha256"]
