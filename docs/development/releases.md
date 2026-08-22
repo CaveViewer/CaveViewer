@@ -270,8 +270,8 @@ Stable and individual-platform publishing use the same branch topology:
 2. Merge current `main` into `release/next` and push `release/next`.
 3. From checked-out `release/next`, run the tracked PyCharm **All Platform
    Release** or desired **Release …** platform action. The launcher selects the
-   next version automatically, asks for `stable` or `preview` with Stable as the
-   default, and explicitly enables publication and reconciliation.
+   next version automatically, asks for `preview` or `stable` with Preview as
+   the default, and explicitly enables publication and reconciliation.
 4. Set `reuse_pr_validation: true` only when the exact source revision already
    passed its PR validation and no application, packaging, dependency, test, or
    workflow input changed afterward. This skips duplicate source suites, not

@@ -162,23 +162,31 @@ def test_direct_release_dispatches_publish_and_reconcile_by_default():
     for workflow_name in workflow_names:
         workflow = (WORKFLOWS_DIR / workflow_name).read_text(encoding="utf-8")
         dispatch = workflow.split("  workflow_call:", 1)[0]
+        preview = dispatch.split("      preview:\n", 1)[1].split(
+            "      publish:\n", 1
+        )[0]
         publish = dispatch.split("      publish:\n", 1)[1].split(
             "      reconcile_metadata:\n", 1
         )[0]
         reconcile = dispatch.split("      reconcile_metadata:\n", 1)[1].split(
             "      reuse_pr_validation:\n", 1
         )[0]
+        assert "default: true" in preview, workflow_name
         assert "default: true" in publish, workflow_name
         assert "default: true" in reconcile, workflow_name
 
         if "  workflow_call:" in workflow:
             called = workflow.split("  workflow_call:", 1)[1]
+            called_preview = called.split("      preview:\n", 1)[1].split(
+                "      publish:\n", 1
+            )[0]
             called_publish = called.split("      publish:\n", 1)[1].split(
                 "      reconcile_metadata:\n", 1
             )[0]
             called_reconcile = called.split(
                 "      reconcile_metadata:\n", 1
             )[1][:250]
+            assert "default: false" in called_preview, workflow_name
             assert "default: false" in called_publish, workflow_name
             assert "default: false" in called_reconcile, workflow_name
 

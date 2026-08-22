@@ -174,7 +174,7 @@ def test_shared_generic_launcher_preserves_explicit_workflow_fields():
     [
         ("stable", "unused", "preview=false"),
         ("preview", "unused", "preview=true"),
-        (None, "", "preview=false"),
+        (None, "", "preview=true"),
         (None, "preview", "preview=true"),
     ],
 )

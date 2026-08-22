@@ -17,7 +17,7 @@ on:
         description: "Publish as a GitHub prerelease and update preview.json"
         required: false
         type: boolean
-        default: false
+        default: true
       publish:
         description: "Publish every platform artifact; the Windows installer is unsigned and Windows warnings are expected"
         required: false

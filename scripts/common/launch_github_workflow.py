@@ -157,10 +157,10 @@ def release_dispatch_fields(
     selected_channel = channel
     if selected_channel is None:
         selected_channel = input_fn(
-            "Release channel [stable/preview] (stable): "
+            "Release channel [preview/stable] (preview): "
         ).strip().lower()
         if not selected_channel:
-            selected_channel = "stable"
+            selected_channel = "preview"
     if selected_channel not in {"stable", "preview"}:
         raise ValueError("Release channel must be 'stable' or 'preview'.")
 

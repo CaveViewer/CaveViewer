@@ -109,7 +109,7 @@ benchmark, Pages, and maintenance workflows are intentionally not exposed in
 that focused menu. The launcher dispatches the selected workflow on the
 checked-out remote branch, resolves the exact new run, and watches it to
 completion. The shared **Release …** configurations require checked-out
-`release/next`, prompt for Stable or Preview with Stable as the default, and
+`release/next`, prompt for Preview or Stable with Preview as the default, and
 explicitly enable publication plus gated metadata reconciliation. For release
 workflows, the launcher finds the greatest dotted version among
 all published stable and preview GitHub releases, increments the final number,
