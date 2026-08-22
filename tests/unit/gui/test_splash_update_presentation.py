@@ -382,7 +382,7 @@ def test_preview_update_states_are_explicitly_labeled():
     )
 
     assert available.action_text == "Preview update to 1.0.64"
-    assert downloading.status_text == "Downloading Preview update… 50%"
+    assert downloading.status_text == "Downloading… 50%"
     assert verifying.status_text == "Verifying Preview update…"
     assert ready.status_text == "Preview update ready"
 
