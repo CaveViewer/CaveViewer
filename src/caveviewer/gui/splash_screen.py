@@ -66,7 +66,13 @@ from caveviewer.gui.map_library_panel import (
     MapLibraryPanel,
     MapLibraryPanelStyle,
 )
-from caveviewer.gui.map_library_workflow import MapLibraryWorkflow
+from caveviewer.gui.map_library_workflow import (
+    MapLibraryActionDependencies,
+    MapLibraryCacheRebuildDependencies,
+    MapLibraryCatalogDependencies,
+    MapLibraryComposition,
+    MapLibraryWorkflow,
+)
 from caveviewer.gui.map_selection import (
     validate_selected_map_folder as _validate_selected_map_folder,
 )
@@ -2204,28 +2210,36 @@ def show_splash_screen(
         )
 
     map_library_workflow = MapLibraryWorkflow(
-        root=root,
-        controller=map_library_controller,
-        panel=map_library_panel,
-        standard_library_maps=standard_library_maps,
-        map_library_root_dir=map_library_root_dir,
-        desktop_services=desktop_services,
-        platform_runtime=platform_runtime,
-        splash_exists=_splash_exists,
-        splash_is_foreground=_splash_is_foreground,
-        open_map=_open_library_map_from_splash,
-        show_feedback=_show_map_library_feedback,
-        logger=_LOG,
-        map_library_root_dir_provider=lambda: default_map_library_install_dir(
-            current_map_library_configuration()
+        composition=MapLibraryComposition(
+            root=root,
+            controller=map_library_controller,
+            panel=map_library_panel,
+            standard_library_maps=standard_library_maps,
+            map_library_root_dir=map_library_root_dir,
+            desktop_services=desktop_services,
+            platform_runtime=platform_runtime,
+            splash_exists=_splash_exists,
+            show_feedback=_show_map_library_feedback,
+            logger=_LOG,
+            map_library_root_dir_provider=lambda: default_map_library_install_dir(
+                current_map_library_configuration()
+            ),
         ),
-        fetch_catalog=MapLibraryCatalogService(
-            (GitHubReleaseMapLibrarySource(map_library_configuration),)
-        ).fetch_catalogs,
-        open_guided_dive=_open_guided_dive_from_splash,
-        cache_rebuild_controller=cache_rebuild_controller,
-        cave_metadata_catalog=cave_metadata_catalog,
-        show_cave_metadata=_show_cave_metadata,
+        actions=MapLibraryActionDependencies(
+            open_map=_open_library_map_from_splash,
+            open_guided_dive=_open_guided_dive_from_splash,
+            cave_metadata_catalog=cave_metadata_catalog,
+            show_cave_metadata=_show_cave_metadata,
+        ),
+        catalog=MapLibraryCatalogDependencies(
+            fetch_catalog=MapLibraryCatalogService(
+                (GitHubReleaseMapLibrarySource(map_library_configuration),)
+            ).fetch_catalogs,
+        ),
+        cache_rebuild=MapLibraryCacheRebuildDependencies(
+            controller=cache_rebuild_controller,
+            splash_is_foreground=_splash_is_foreground,
+        ),
     )
     map_library_workflow_ref[0] = map_library_workflow
 
