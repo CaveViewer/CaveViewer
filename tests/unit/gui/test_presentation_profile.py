@@ -57,6 +57,7 @@ def test_presentation_profile_selects_static_platform_conventions(
         2.0 * overlay_scale
     )
     assert profile.viewer_uses_glfw_native_initial_size is uses_glfw_size
+    assert profile.splash_layout.min_height == 740
     assert profile.font_candidates
 
 
