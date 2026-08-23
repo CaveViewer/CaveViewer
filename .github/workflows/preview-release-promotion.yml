@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       source_branch:
-        description: "Feature branch to release; blank uses the selected workflow branch"
+        description: "Feature branch already merged into main; blank uses the selected workflow branch"
         required: false
         type: string
       release_notes:
@@ -16,7 +16,6 @@ on:
 permissions:
   actions: write
   contents: write
-  pull-requests: write
 
 concurrency:
   group: caveviewer-preview-release-promotion
@@ -24,7 +23,7 @@ concurrency:
 
 jobs:
   promote-and-release:
-    name: Promote, publish, and reconcile Preview
+    name: Prepare and publish Preview
     runs-on: ubuntu-latest
     timeout-minutes: 360
 
@@ -57,7 +56,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      - name: Promote source, publish Preview, and reconcile metadata
+      - name: Verify source and publish Preview
         env:
           GH_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}

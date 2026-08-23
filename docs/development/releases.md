@@ -201,8 +201,8 @@ does not create a release or commit release metadata.
 ### One-action Preview promotion
 
 Use **Preview Release Promotion** when a validated feature branch is ready to
-become the next Preview. The selected source may be any pushed feature branch;
-all package publication still occurs exclusively from `release/next`.
+become the next Preview. The selected source branch must already be present in
+protected `main`; all publication still occurs exclusively from `release/next`.
 
 From a local checkout of the branch to release, one command starts the entire
 promotion:
@@ -232,35 +232,30 @@ source branch.
 The promotion is Preview-only and performs one strictly ordered sequence:
 
 1. Confirm `release/next` has no release metadata still missing from `main`.
-2. Merge current `main` into the source branch, open or reuse its pull request
-   into `main`, explicitly run the required PR-aware checks, and merge it only
-   after success.
-3. Merge the resulting `main` into `release/next` and push that exact source.
+2. Confirm the selected source branch tip is already reachable from `main`.
+3. Merge current `main` into `release/next` and push that exact source.
 4. Choose one greater patch version from the current application version and
    all existing numeric GitHub release tags (including tags without a release).
 5. Dispatch **All Platform Release** on `release/next` with `preview`, `publish`,
    and `reuse_pr_validation` enabled, then wait for the complete run.
-6. Open or reuse the `release/next` metadata pull request into `main`, run the
-   lightweight PR-aware metadata validation, and merge it only after success.
+6. Report the release, source SHA, metadata commit, and compare URL. A
+   maintainer opens, reviews, and merges `release/next` into `main` manually.
 
-Every mutation follows a successful preflight or workflow. A failed source PR
-check leaves both protected branches unchanged. A failed package workflow
-leaves its failure visible in **All Platform Release** and does not create the
-metadata PR. A failed metadata check leaves that PR open for inspection. Rerun
-the promotion only after correcting the reported failure. The repository-wide
-promotion concurrency group prevents two Preview promotions from overlapping.
+Every mutation follows a successful preflight or workflow. A source branch not
+already present in `main` leaves both long-lived branches unchanged. A failed
+package workflow remains visible in **All Platform Release**. Rerun only after
+correcting the reported failure. The repository-wide promotion concurrency
+group prevents two Preview promotions from overlapping.
 
 The workflow intentionally rejects `main` and `release/next` as source-branch
 inputs. It also refuses to begin while `release/next` differs from `main`; merge
 the preceding release-metadata PR first. This prevents two release versions
 from accumulating on the long-lived release branch.
 
-The workflow token needs `actions: write`, `contents: write`, and
-`pull-requests: write`; these permissions are declared narrowly in the workflow.
-No personal access token is required. Bot-created PRs do not rely on recursive
-PR events: the promotion explicitly dispatches **Essential Tests** with the PR
-base/head pair, waits for the required check contexts on that commit, and only
-then requests the protected merge.
+The orchestrator needs `actions: write` to dispatch the immutable release run
+and `contents: write` to synchronize `release/next`; it has no pull-request
+permission. No personal access token is required, and no workflow creates or
+merges a pull request.
 
 ### Direct stable and platform release procedure
 
@@ -271,14 +266,14 @@ Stable and individual-platform publishing use the same branch topology:
 3. From checked-out `release/next`, run the tracked PyCharm **All Platform
    Release** or desired **Release …** platform action. The launcher selects the
    next version automatically, asks for `preview` or `stable` with Preview as
-   the default, and explicitly enables publication and reconciliation.
+   the default, and explicitly enables publication.
 4. Set `reuse_pr_validation: true` only when the exact source revision already
    passed its PR validation and no application, packaging, dependency, test, or
    workflow input changed afterward. This skips duplicate source suites, not
    package creation or package validation.
-5. After successful publication, the shared finalizer opens or reuses the
-   `release/next` to `main` metadata PR, explicitly runs its required metadata
-   checks, and merges it after they pass. Do not start another release first.
+5. After successful publication, manually open, review, and merge the
+   `release/next` to `main` metadata PR after its required checks pass. Do not
+   start another release first.
 
 For package-only validation, dispatch through GitHub and clear `publish`, or use
 the package-smoke workflow. GitHub retains workflow artifacts without creating
@@ -440,9 +435,9 @@ Preview version; do not edit a Preview tag into a Stable release.
 ## Individual and resumed releases
 
 The four platform workflows remain manually dispatchable. A direct dispatch
-publishes by default, calls the same single-writer finalizer for that platform,
-then validates and merges its generated metadata into `main`. Clearing
-`publish` keeps it artifact-only and skips reconciliation. Any direct publish
+publishes by default and calls the same single-writer finalizer for that
+platform. It leaves generated metadata on `release/next` for a manual PR into
+`main`. Clearing `publish` keeps it artifact-only. Any direct publish
 must still use `release/next`; the launcher and finalizer both reject a feature
 branch or `main`. Use the same
 `release/next` commit, version, release notes, `publish`, and `preview` values

@@ -21,11 +21,6 @@ on:
         required: false
         type: boolean
         default: true
-      reconcile_metadata:
-        description: "Validate and merge published metadata into main"
-        required: false
-        type: boolean
-        default: true
       reuse_pr_validation:
         description: "Reuse successful PR validation when app/package source has not changed; skip duplicate test suites"
         required: false
@@ -49,11 +44,6 @@ on:
         default: false
       publish:
         description: "Publish the unsigned Windows installer EXE to the GitHub release; Windows warnings are expected"
-        required: false
-        type: boolean
-        default: false
-      reconcile_metadata:
-        description: "Validate and merge published metadata into main"
         required: false
         type: boolean
         default: false
@@ -85,9 +75,7 @@ on:
 # Nested reusable workflows cannot elevate permissions granted by their caller.
 # Keep write available for publish-windows; executable jobs downgrade to read.
 permissions:
-  actions: write
-  contents: write
-  pull-requests: write
+  contents: read
 
 concurrency:
   group: caveviewer-build-windows-${{ github.ref }}-${{ inputs.version }}
@@ -196,9 +184,7 @@ jobs:
     if: ${{ !cancelled() && inputs.publish && needs.build-windows.result == 'success' }}
     uses: ./.github/workflows/finalize-release.yml
     permissions:
-      actions: write
       contents: write
-      pull-requests: write
     with:
       version: ${{ inputs.version }}
       release_notes: ${{ inputs.release_notes }}
@@ -206,7 +192,6 @@ jobs:
       platforms: windows
       source_sha: ${{ inputs.source_sha || github.sha }}
       target_branch: ${{ github.ref_name }}
-      reconcile_metadata: ${{ inputs.reconcile_metadata }}
       allow_unsigned_windows_community: ${{ inputs.publish || inputs.allow_unsigned_windows_community }}
     secrets:
       CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY: ${{ secrets.CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY }}

@@ -191,7 +191,7 @@ def test_shared_generic_launcher_release_mode_controls_publish_contract(
 
     assert "publish=true" in fields
     assert expected_preview in fields
-    assert "reconcile_metadata=true" in fields
+    assert not any(field.startswith("reconcile_metadata=") for field in fields)
 
 
 def test_shared_generic_launcher_release_mode_rejects_flag_overrides():
@@ -309,7 +309,7 @@ def test_shared_generic_launcher_release_mode_dispatches_complete_preview(monkey
     assert "version=1.0.94" in dispatch
     assert "publish=true" in dispatch
     assert "preview=true" in dispatch
-    assert "reconcile_metadata=true" in dispatch
+    assert "reconcile_metadata=true" not in dispatch
 
 
 def test_shared_generic_launcher_release_mode_rejects_other_branches(monkeypatch):
@@ -414,7 +414,7 @@ def test_preview_promotion_workflow_is_manual_serial_and_write_scoped():
     assert "release_notes:" in workflow
     assert "actions: write" in workflow
     assert "contents: write" in workflow
-    assert "pull-requests: write" in workflow
+    assert "pull-requests: write" not in workflow
     assert "group: caveviewer-preview-release-promotion" in workflow
     assert "cancel-in-progress: false" in workflow
     assert "timeout-minutes: 360" in workflow
@@ -433,32 +433,24 @@ def test_preview_automation_has_one_fixed_gated_promotion_sequence():
     assert '--workflow=all-platform-release.yml' in source
     assert '--field="preview=true"' in source
     assert '--field="publish=true"' in source
-    assert '--field="reconcile_metadata=false"' in source
     assert '--field="reuse_pr_validation=true"' in source
     assert 'repos/$repo/releases?per_page=100' in source
     assert 'repos/$repo/tags?per_page=100' in source
-    assert source.count("validate_pr \"") == 1
-    assert source.count("merge_pr \"") == 1
-    assert 'reconcile_release_metadata.sh"' in source
-    assert '--channel=preview' in source
+    assert "gh pr create" not in source
+    assert "gh pr merge" not in source
+    assert "reconcile_release_metadata" not in source
+    assert "merge-base --is-ancestor" in source
+    assert "is not present in origin/$main_branch" in source
+    assert "Main remains unchanged" in source
+    assert "compare/$main_branch...$release_branch?expand=1" in source
 
-    source_sync = source.index(
-        'git -C "$repo_root" switch -C "$source_branch" "origin/$source_branch"'
-    )
-    source_merge = source.index('merge_pr "$source_pr"')
+    source_gate = source.index("merge-base --is-ancestor")
     release_sync = source.index(
-        'git -C "$repo_root" merge --no-edit "origin/$main_branch"',
-        source_merge,
+        'git -C "$repo_root" merge --no-edit "origin/$main_branch"'
     )
     release_dispatch = source.index("--workflow=all-platform-release.yml")
-    metadata_reconcile = source.index('"$metadata_reconciler"')
-    assert (
-        source_sync
-        < source_merge
-        < release_sync
-        < release_dispatch
-        < metadata_reconcile
-    )
+    manual_handoff = source.index("Main remains unchanged")
+    assert source_gate < release_sync < release_dispatch < manual_handoff
 
 
 def test_explicit_pr_validation_preserves_required_checks_and_legacy_aliases():

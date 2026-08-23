@@ -7,9 +7,10 @@ For the canonical release sequence, channel behavior, resume procedure, and
 post-release checklist, see `../docs/development/releases.md`.
 
 The one-action Preview path is `.github/workflows/preview-release-promotion.yml`.
-It promotes any pushed feature branch through `main`, synchronizes
-`release/next`, dispatches the all-platform Preview publish with the next patch
-version, and merges the generated metadata back through a second protected PR.
+It verifies that the selected feature branch is already present in `main`,
+synchronizes `release/next`, and dispatches the all-platform Preview publish
+with the next patch version. Generated metadata remains on `release/next` for a
+maintainer-managed pull request.
 The workflow calls `scripts/common/preview_release_automation.sh`; that helper
 is CI-internal and is not a replacement for `release.sh` during local builds.
 
@@ -143,11 +144,10 @@ the artifacts, uploads them to one GitHub release, and verifies each remote
 asset URL, byte size, and SHA-256 through the GitHub Release API. Only then does
 it write and sign update manifests, update the application version, and push
 one commit. A failed remote verification leaves the previously committed
-manifests unchanged. It then opens or reuses the `release/next` metadata PR,
-dispatches its PR-aware Essential Tests, and merges it into `main` only after
-success. The package jobs are read-only and do not receive the release signing
-key. Individually dispatched platform workflows use the same finalizer and
-reconciliation path for their one target.
+manifests unchanged. It does not create or merge a pull request. The package
+jobs are read-only and do not receive the release signing key. Individually
+dispatched platform workflows use the same finalizer for their one target; a
+maintainer reconciles the resulting metadata manually.
 
 When dispatching manually through GitHub:
 
@@ -155,8 +155,8 @@ When dispatching manually through GitHub:
 - enter a bare, dotted-numeric version such as `1.0.64`, without a leading `v`
   or a suffix such as `-rc1`, because workflow artifact paths use the input
   verbatim and the update checker only compares numeric components;
-- direct release dispatches enable `publish` and metadata reconciliation by
-  default; clear `publish` to build and retain a test artifact only;
+- direct release dispatches enable `publish` by default; clear `publish` to
+  build and retain a test artifact only;
 - enable both `publish` and `preview` to publish a GitHub prerelease and
   update that platform/architecture's `preview.json` rather than
   `stable.json`;
@@ -167,9 +167,9 @@ When dispatching manually through GitHub:
   revision different from the packaged artifacts.
 
 The tracked PyCharm **Release …** actions do not expose artifact-only behavior:
-they force `publish=true`, select the channel explicitly, and reconcile the
-result. Use GitHub's manual form or a package-smoke workflow for build-only
-validation.
+they force `publish=true` and select the channel explicitly. The metadata
+handoff into `main` remains manual. Use GitHub's manual form or a package-smoke
+workflow for build-only validation.
 
 ## Directory Layout
 

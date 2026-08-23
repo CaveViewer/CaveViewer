@@ -7,9 +7,10 @@ Usage:
   preview_release_automation.sh --source-branch=<branch> \
     --release-notes=<notes>
 
-Promote one source branch through main, publish the next all-platform Preview
-from release/next, then merge the generated release metadata back into main.
-This helper is intended for the Preview Release Promotion GitHub workflow.
+Verify that one source branch has already reached main, publish the next
+all-platform Preview from release/next, and leave the generated release
+metadata there for a maintainer-managed pull request into main. This helper is
+intended for the Preview Release Promotion GitHub workflow.
 EOF
 }
 
@@ -48,7 +49,6 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../.." && pwd)"
 workflow_waiter="$script_dir/dispatch_workflow_and_wait.sh"
 version_selector="$script_dir/next_release_version.py"
-metadata_reconciler="$script_dir/reconcile_release_metadata.sh"
 repo="${GITHUB_REPOSITORY:-}"
 if [ -z "$repo" ]; then
   repo="$(gh repo view --json nameWithOwner --jq .nameWithOwner)"
@@ -60,92 +60,25 @@ git -C "$repo_root" fetch --no-tags origin \
   "refs/heads/$source_branch:refs/remotes/origin/$source_branch"
 
 # Do not stack another release on metadata that has not reached main. This
-# check happens before the source PR is merged so a failed run is side-effect
-# free and can be resumed after reconciling the previous release.
+# check happens before release/next changes so a failed run is side-effect free
+# and can be resumed after a maintainer reconciles the previous release.
 if ! git -C "$repo_root" diff --quiet "origin/$main_branch" "origin/$release_branch"; then
   echo "Error: $release_branch contains changes not reconciled with $main_branch." >&2
   echo "Merge the existing release metadata PR before starting another Preview." >&2
   exit 1
 fi
 
-# Bring the selected source branch up to the current protected base before its
-# PR validation. Besides satisfying strict checks, this makes the automation
-# usable for branches created before the promotion workflow itself existed.
-git -C "$repo_root" switch -C "$source_branch" "origin/$source_branch"
-git -C "$repo_root" merge --no-edit "origin/$main_branch"
-git -C "$repo_root" push origin "HEAD:refs/heads/$source_branch"
-
-open_or_create_pr() {
-  local head_branch="$1"
-  local base_branch="$2"
-  local title="$3"
-  local body="$4"
-  local pr_number
-  pr_number="$(
-    gh pr list \
-      --repo "$repo" \
-      --head "$head_branch" \
-      --base "$base_branch" \
-      --state open \
-      --json number \
-      --jq '.[0].number // empty'
-  )"
-  if [ -z "$pr_number" ]; then
-    gh pr create \
-      --repo "$repo" \
-      --head "$head_branch" \
-      --base "$base_branch" \
-      --title "$title" \
-      --body "$body" >/dev/null
-    pr_number="$(
-      gh pr list \
-        --repo "$repo" \
-        --head "$head_branch" \
-        --base "$base_branch" \
-        --state open \
-        --json number \
-        --jq '.[0].number // empty'
-    )"
-  fi
-  if [ -z "$pr_number" ]; then
-    echo "Error: could not resolve the pull request for $head_branch." >&2
-    exit 1
-  fi
-  printf '%s\n' "$pr_number"
-}
-
-validate_pr() {
-  local pr_number="$1"
-  local pr_base_sha
-  local pr_head_sha
-  pr_base_sha="$(gh pr view "$pr_number" --repo "$repo" --json baseRefOid --jq .baseRefOid)"
-  pr_head_sha="$(gh pr view "$pr_number" --repo "$repo" --json headRefOid --jq .headRefOid)"
-  "$workflow_waiter" \
-    --workflow=tests.yml \
-    --ref="$(gh pr view "$pr_number" --repo "$repo" --json headRefName --jq .headRefName)" \
-    --head-sha="$pr_head_sha" \
-    --field="pr_base_sha=$pr_base_sha" \
-    --field="pr_head_sha=$pr_head_sha" >/dev/null
-}
-
-merge_pr() {
-  local pr_number="$1"
-  gh pr merge "$pr_number" \
-    --repo "$repo" \
-    --merge \
-    --delete-branch=false
-}
-
-source_pr="$(
-  open_or_create_pr \
-    "$source_branch" \
-    "$main_branch" \
-    "Promote $source_branch for Preview release" \
-    "Automated source promotion for the next all-platform Preview release."
-)"
-echo "Validating source PR #$source_pr."
-validate_pr "$source_pr"
-merge_pr "$source_pr"
+# Source promotion is intentionally outside release automation. Accept a
+# feature branch only when its current remote tip is already reachable from
+# protected main, proving that a maintainer-managed PR supplied the source.
+source_sha="$(git -C "$repo_root" rev-parse "origin/$source_branch^{commit}")"
+if ! git -C "$repo_root" merge-base --is-ancestor \
+  "$source_sha" "origin/$main_branch"; then
+  echo "Error: origin/$source_branch at $source_sha is not present in origin/$main_branch." >&2
+  echo "Merge the source through a maintainer-managed PR before starting a Preview release." >&2
+  exit 1
+fi
+echo "Verified source $source_branch at $source_sha is present in $main_branch."
 
 git -C "$repo_root" fetch --no-tags origin \
   "refs/heads/$main_branch:refs/remotes/origin/$main_branch" \
@@ -185,9 +118,34 @@ echo "Publishing Preview v$next_version from $release_branch at $release_source_
   --field="release_notes=$release_notes" \
   --field="preview=true" \
   --field="publish=true" \
-  --field="reconcile_metadata=false" \
   --field="reuse_pr_validation=true" >/dev/null
 
-"$metadata_reconciler" --version="$next_version" --channel=preview
+git -C "$repo_root" fetch --no-tags origin \
+  "refs/heads/$release_branch:refs/remotes/origin/$release_branch"
+metadata_sha="$(git -C "$repo_root" rev-parse "origin/$release_branch")"
+release_url="https://github.com/$repo/releases/tag/v$next_version"
+compare_url="https://github.com/$repo/compare/$main_branch...$release_branch?expand=1"
 
-echo "Preview v$next_version is published and its metadata is merged into $main_branch."
+summary="$(cat <<EOF
+Preview v$next_version is published.
+Release: $release_url
+Source SHA: $release_source_sha
+Metadata commit: $metadata_sha
+Main remains unchanged. Review and manually merge release/next into main:
+$compare_url
+EOF
+)"
+printf '%s\n' "$summary"
+if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+  {
+    echo "## Preview v$next_version published"
+    echo
+    echo "- Release: [$release_url]($release_url)"
+    echo "- Source SHA: \`$release_source_sha\`"
+    echo "- Metadata commit: \`$metadata_sha\`"
+    echo
+    echo "Main was not changed. [Open the manual release metadata PR]($compare_url)."
+  } >> "$GITHUB_STEP_SUMMARY"
+fi
+
+echo "Release automation completed without creating or merging a pull request."
