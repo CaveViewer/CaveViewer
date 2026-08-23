@@ -521,7 +521,7 @@ def test_all_platform_release_workflow_builds_platforms_in_parallel_then_finaliz
     assert "needs.essential-tests.result == 'success'" in workflow
     assert workflow.count("skip_essential_tests: true") == len(job_contracts)
     assert workflow.count("publish: false") == len(job_contracts)
-    assert "secrets: inherit" not in workflow
+    assert workflow.count("secrets: inherit") == 1
 
     job_positions = []
     for index, (job_name, called_workflow) in enumerate(job_contracts):
@@ -537,6 +537,7 @@ def test_all_platform_release_workflow_builds_platforms_in_parallel_then_finaliz
         assert "needs: essential-tests" in job_block
         assert "needs.essential-tests.result == 'success'" in job_block
         assert "permissions:\n      contents: read" in job_block
+        assert "secrets: inherit" not in job_block
         assert "publish: false" in job_block
         assert "source_sha: ${{ github.sha }}" in job_block
         if job_name == "windows":
@@ -559,6 +560,7 @@ def test_all_platform_release_workflow_builds_platforms_in_parallel_then_finaliz
     assert "target_branch: ${{ github.ref_name }}" in finalizer
     assert "allow_unsigned_windows_community: ${{ inputs.publish }}" in finalizer
     assert "permissions:\n      contents: read" in finalizer
+    assert "secrets: inherit" in finalizer
     assert "inputs.publish && !cancelled()" in finalizer
     dispatch_contract = workflow.split("\njobs:\n", 1)[0]
     assert "allow_unsigned_windows_community" not in dispatch_contract
@@ -665,6 +667,8 @@ def test_every_release_publisher_uses_the_protected_finalizer_environment():
     for workflow_name in publisher_workflows:
         workflow = (WORKFLOWS_DIR / workflow_name).read_text(encoding="utf-8")
         assert "uses: ./.github/workflows/finalize-release.yml" in workflow
+        finalizer_call = workflow[workflow.index("uses: ./.github/workflows/finalize-release.yml") :]
+        assert "secrets: inherit" in finalizer_call.split("    with:\n", 1)[0]
         assert "gh release create" not in workflow
         assert "CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY" not in workflow
         assert "CAVEVIEWER_RELEASE_APP_ID" not in workflow

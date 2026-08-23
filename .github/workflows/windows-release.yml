@@ -168,6 +168,7 @@ jobs:
     needs: build-windows
     if: ${{ !cancelled() && inputs.publish && needs.build-windows.result == 'success' }}
     uses: ./.github/workflows/finalize-release.yml
+    secrets: inherit
     permissions:
       contents: read
     with:

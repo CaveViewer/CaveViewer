@@ -93,7 +93,8 @@ jobs:
 
       - name: Configure release signing key
         # This resolves only after the production-release environment is
-        # approved; callers cannot forward a repository-level signing key.
+        # approved and only through a finalizer call that explicitly inherits
+        # secrets across the reusable-workflow boundary.
         env:
           SIGNING_PRIVATE_KEY_PEM: ${{ secrets.CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY }}
         run: |
