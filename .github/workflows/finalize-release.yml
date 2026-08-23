@@ -51,6 +51,10 @@ concurrency:
 jobs:
   finalize:
     runs-on: ubuntu-latest
+    # Approval is intentionally requested only after every caller's build and
+    # package gates have succeeded and this finalizer is ready to receive the
+    # signing key and repository write token.
+    environment: production-release
 
     steps:
       - name: Check out the immutable release source
