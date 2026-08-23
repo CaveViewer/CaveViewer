@@ -117,8 +117,7 @@ echo "Publishing Preview v$next_version from $release_branch at $release_source_
   --field="version=$next_version" \
   --field="release_notes=$release_notes" \
   --field="preview=true" \
-  --field="publish=true" \
-  --field="reuse_pr_validation=true" >/dev/null
+  --field="publish=true" >/dev/null
 
 git -C "$repo_root" fetch --no-tags origin \
   "refs/heads/$release_branch:refs/remotes/origin/$release_branch"

@@ -236,8 +236,8 @@ The promotion is Preview-only and performs one strictly ordered sequence:
 3. Merge current `main` into `release/next` and push that exact source.
 4. Choose one greater patch version from the current application version and
    all existing numeric GitHub release tags (including tags without a release).
-5. Dispatch **All Platform Release** on `release/next` with `preview`, `publish`,
-   and `reuse_pr_validation` enabled, then wait for the complete run.
+5. Dispatch **All Platform Release** on `release/next` with `preview` and
+   `publish` enabled, then wait for its complete Essential Tests and package run.
 6. Report the release, source SHA, metadata commit, and compare URL. A
    maintainer opens, reviews, and merges `release/next` into `main` manually.
 
@@ -267,10 +267,8 @@ Stable and individual-platform publishing use the same branch topology:
    Release** or desired **Release …** platform action. The launcher selects the
    next version automatically, asks for `preview` or `stable` with Preview as
    the default, and explicitly enables publication.
-4. Set `reuse_pr_validation: true` only when the exact source revision already
-   passed its PR validation and no application, packaging, dependency, test, or
-   workflow input changed afterward. This skips duplicate source suites, not
-   package creation or package validation.
+4. Wait for the workflow's Essential Tests and every package validation to
+   succeed for the immutable release source.
 5. After successful publication, manually open, review, and merge the
    `release/next` to `main` metadata PR after its required checks pass. Do not
    start another release first.
@@ -313,12 +311,11 @@ Essential Tests ────├─ Linux x86_64 ───┼─ Finalize Release
                     └─ macOS x86_64 ───┘
 ```
 
-Each called platform workflow skips its duplicate internal gate. A platform
-workflow dispatched on its own still runs Essential Tests before packaging.
-When `reuse_pr_validation` is selected, the shared gate and the duplicate
-native Intel source suite are skipped; the four platform packages and their
-release-time package checks still run. Use that option only for the already
-validated source described above.
+Each called platform workflow skips its duplicate internal gate because the
+all-platform caller just ran the same Essential Tests for the immutable source.
+A platform workflow dispatched on its own always runs Essential Tests before
+packaging. The native Intel release job also retains its platform-specific
+source suite and CLI checks.
 
 Normal code, dependency, packaging, test, and workflow pushes to `main` or
 `release/**` also trigger `.github/workflows/tests.yml`; those branch-CI runs
@@ -391,8 +388,7 @@ read-only, verifies bundle identity and version, checks every bundled Mach-O
 file for the requested architecture and runner-local library references, and
 exercises a controlled packaged CLI error path. The Intel smoke workflow also
 runs the complete pytest suite and source CLI checks on `macos-15-intel` before
-building. The Intel release workflow does the same by default, and skips only
-those duplicate source checks when the release uses `reuse_pr_validation`.
+building. The Intel release workflow always runs the same native source checks.
 
 Dispatch Intel package validation from the Actions tab or with GitHub CLI:
 
