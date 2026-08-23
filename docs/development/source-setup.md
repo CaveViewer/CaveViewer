@@ -77,6 +77,13 @@ is the supported release launcher: it checks the current branch and remote
 state, asks for confirmation, dispatches the repository-owned promotion
 workflow, and watches the exact GitHub Actions run.
 
+For a direct Stable or individual-platform release, run the shared
+**Prepare Release Next** action from checked-out `main`, then fetch and check out
+`release/next` before running **All Platform Release** or the selected
+**… Release** action. Release actions publish metadata only to `release/next`;
+opening, reviewing, and merging the final metadata PR into `main` is always a
+separate maintainer action.
+
 The tracked configurations contain no credentials or machine-specific paths.
 Keep personal settings, interpreter choices, window layout, and local
 environment variables under the ignored `.idea/` directory. Authenticate the
