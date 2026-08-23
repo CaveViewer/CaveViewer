@@ -405,9 +405,25 @@ def test_release_documentation_preserves_branch_and_pycharm_policy():
     assert "Every `publish: true` release" in releases
     assert "must run from `release/next`" in releases
     assert "merge `release/next` back into protected `main`" in releases
+    assert "No workflow creates, approves, or merges" in releases
+    assert "do not select or publish a newer version" in releases
+    assert "Prepare Release Next" in source_setup
+    assert "final metadata PR into `main` is always" in source_setup
     assert "No third-party GitHub Actions PyCharm plug-in" in source_setup
     assert "Preview Release" in source_setup
     assert "never add `GH_TOKEN`" in source_setup
+
+
+def test_release_launcher_describes_manual_metadata_reconciliation(capsys):
+    module = _load_generic_launcher_module()
+
+    with pytest.raises(SystemExit) as exc_info:
+        module._parse_args(["--help"])
+
+    assert exc_info.value.code == 0
+    help_output = capsys.readouterr().out
+    assert "metadata reconciliation" in help_output
+    assert "into main remains manual" in help_output
 
 
 def test_preview_promotion_workflow_is_manual_serial_and_write_scoped():

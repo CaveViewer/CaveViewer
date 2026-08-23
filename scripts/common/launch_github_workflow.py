@@ -263,7 +263,7 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--release",
         action="store_true",
-        help="Publish from release/next and reconcile metadata into main.",
+        help="Publish from release/next; metadata reconciliation into main remains manual.",
     )
     parser.add_argument(
         "--channel",

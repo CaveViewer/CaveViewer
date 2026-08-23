@@ -13,9 +13,11 @@ developer feature branch or directly from `main`:
 1. Merge the intended source branch into protected `main` through a pull
    request after every required Essential Tests status check succeeds against
    the current base.
-2. Merge the resulting `main` into `release/next`. Every `publish: true` release
-   build must run from `release/next`; this is the only release-producing
-   branch.
+2. Run the protected **Prepare Release Next** workflow from `main`. Its approved
+   release App fast-forwards `release/next` to that exact protected `main` tip.
+   Every `publish: true` release build must run from `release/next`; this is the
+   only release-producing branch. Contributors do not push this synchronization
+   directly.
 3. After the finalizer commits version, AppStream, and signed update metadata to
    `release/next`, merge `release/next` back into protected `main` through a
    second pull request. The metadata PR must pass its required lightweight
@@ -262,8 +264,11 @@ merges a pull request.
 Stable and individual-platform publishing use the same branch topology:
 
 1. Merge the release candidate into `main` through its fully gated source PR.
-2. Merge current `main` into `release/next` and push `release/next`.
-3. From checked-out `release/next`, run the tracked PyCharm **All Platform
+2. From checked-out `main`, run the tracked PyCharm **Prepare Release Next**
+   action. Wait for it to fast-forward protected `release/next` successfully;
+   do not push `release/next` with a contributor credential.
+3. Fetch and check out the prepared `release/next`, then run the tracked
+   PyCharm **All Platform
    Release** or desired **Release …** platform action. The launcher selects the
    next version automatically, asks for `preview` or `stable` with Preview as
    the default, and explicitly enables publication.
@@ -272,6 +277,32 @@ Stable and individual-platform publishing use the same branch topology:
 5. After successful publication, manually open, review, and merge the
    `release/next` to `main` metadata PR after its required checks pass. Do not
    start another release first.
+
+### Manual metadata reconciliation
+
+No workflow creates, approves, or merges the final metadata pull request. After
+publication succeeds, a maintainer performs this gate explicitly:
+
+```bash
+git fetch origin main release/next
+gh pr create \
+  --base main \
+  --head release/next \
+  --title "Reconcile release metadata" \
+  --body "Merge the published release metadata from release/next."
+gh pr checks --watch "$(gh pr view release/next --json number --jq .number)"
+```
+
+Review the diff and confirm it contains only the expected version, AppStream,
+changelog, and signed update-manifest metadata. Merge the PR through the normal
+protected-branch control only after every required check succeeds. The next
+release starts with **Prepare Release Next**, which fast-forwards
+`release/next` to the newly reconciled `main` tip. PyCharm's bundled pull-request
+support or the GitHub website may be used for this human review; no workflow
+plug-in or stored IDE token is required.
+
+If a pull request for `release/next` is already open, review and use that PR
+instead of opening a duplicate.
 
 For package-only validation, dispatch through GitHub and clear `publish`, or use
 the package-smoke workflow. GitHub retains workflow artifacts without creating
@@ -291,6 +322,25 @@ publishing, merge its release-metadata pull request into `main`, then synchroniz
 rejects a release target whose version, AppStream, or update metadata differs
 from `origin/main`; this prevents multiple unmerged AppStream release entries
 from accumulating in one pull request.
+
+If publication succeeds but reconciliation is interrupted, stop the release
+queue: do not select or publish a newer version. Fetch both branches and inspect
+the published workflow summary, GitHub Release, and `origin/release/next`:
+
+- If the finalizer's metadata commit is on `release/next`, open or resume the
+  manual metadata PR above and merge it after required checks pass.
+- If assets exist but no metadata commit reached `release/next`, the release is
+  not advertised to updaters. Preserve the immutable source and inspect the
+  failed finalizer. After correcting the failure, manually dispatch the same
+  release workflow with the same numeric version, channel, platform set, and
+  `publish: true`; do not let the automatic next-version launcher skip to a new
+  version. The finalizer must verify the existing remote assets and create the
+  one metadata commit before reconciliation.
+- If metadata has reached `main` but `release/next` is behind it, run **Prepare
+  Release Next**. Do not repair either protected branch with a force push.
+
+Resume normal version selection only when the metadata PR is merged and
+**Prepare Release Next** reports that `release/next` matches protected `main`.
 
 An intentionally partial platform publish may be resumed with the same version:
 the finalizer permits that only when the branch has exactly one new AppStream
