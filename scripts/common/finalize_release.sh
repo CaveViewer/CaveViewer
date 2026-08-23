@@ -112,6 +112,19 @@ if [ -z "$platforms" ] || [ -z "$version" ] || [ -z "$release_notes" ] \
   exit 1
 fi
 
+if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "Error: version must contain exactly three numeric components (for example, 1.2.3)."
+  exit 1
+fi
+if [[ ! "$expected_source_sha" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "Error: expected source SHA must be a full lowercase 40-character commit SHA."
+  exit 1
+fi
+if [ "$target_branch" != "release/next" ]; then
+  echo "Error: releases may publish metadata only to release/next."
+  exit 1
+fi
+
 if [ -z "${CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY:-}" ]; then
   echo "Error: CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY must be set when finalizing a release."
   exit 1
@@ -170,9 +183,26 @@ select_platform() {
 }
 
 IFS=',' read -r -a requested_platforms <<< "$platforms"
+seen_platforms=""
 for requested_platform in "${requested_platforms[@]}"; do
-  select_platform "${requested_platform// /}"
+  requested_platform="${requested_platform// /}"
+  if [ -z "$requested_platform" ]; then
+    echo "Error: platform list contains an empty target."
+    exit 1
+  fi
+  case ",$seen_platforms," in
+    *",$requested_platform,"*)
+      echo "Error: duplicate platform '$requested_platform'."
+      exit 1
+      ;;
+  esac
+  seen_platforms="${seen_platforms:+$seen_platforms,}$requested_platform"
+  select_platform "$requested_platform"
 done
+if [[ ",$seen_platforms," == *,all,* ]] && [ "${#requested_platforms[@]}" -ne 1 ]; then
+  echo "Error: platform 'all' cannot be combined with another target."
+  exit 1
+fi
 
 if $allow_unsigned_windows_community && ! $selected_windows; then
   echo "Error: --allow-unsigned-windows-community requires the windows platform."
@@ -194,6 +224,7 @@ find_artifact() {
 }
 
 release_assets=()
+expected_artifact_names=()
 windows_exe_path=""
 linux_x86_64_path=""
 linux_x86_64_meta_path=""
@@ -205,26 +236,65 @@ macos_x86_64_meta_path=""
 # Resolve every requested artifact before creating or modifying a release. A
 # missing platform package therefore cannot leave a partially published set.
 if $selected_windows; then
+  expected_artifact_names+=(
+    "CaveViewer-${normalized_version}-windows.exe"
+    "CaveViewer-${normalized_version}.json"
+    "CaveViewer-${normalized_version}.update.json"
+  )
   windows_exe_path="$(find_artifact "CaveViewer-${normalized_version}-windows.exe")"
   windows_meta_path="$(find_artifact "CaveViewer-${normalized_version}.json")"
   windows_update_meta_path="$(find_artifact "CaveViewer-${normalized_version}.update.json")"
   release_assets+=("$windows_exe_path" "$windows_meta_path" "$windows_update_meta_path")
 fi
 if $selected_linux_x86_64; then
+  expected_artifact_names+=(
+    "CaveViewer-${normalized_version}-x86_64.AppImage"
+    "CaveViewer-${normalized_version}-linux-x86_64.json"
+  )
   linux_x86_64_path="$(find_artifact "CaveViewer-${normalized_version}-x86_64.AppImage")"
   linux_x86_64_meta_path="$(find_artifact "CaveViewer-${normalized_version}-linux-x86_64.json")"
   release_assets+=("$linux_x86_64_path")
 fi
 if $selected_macos_arm64; then
+  expected_artifact_names+=(
+    "CaveViewer-${normalized_version}-macos-arm64.dmg"
+    "CaveViewer-${normalized_version}-macos-arm64.json"
+  )
   macos_arm64_path="$(find_artifact "CaveViewer-${normalized_version}-macos-arm64.dmg")"
   macos_arm64_meta_path="$(find_artifact "CaveViewer-${normalized_version}-macos-arm64.json")"
   release_assets+=("$macos_arm64_path" "$macos_arm64_meta_path")
 fi
 if $selected_macos_x86_64; then
+  expected_artifact_names+=(
+    "CaveViewer-${normalized_version}-macos-x86_64.dmg"
+    "CaveViewer-${normalized_version}-macos-x86_64.json"
+  )
   macos_x86_64_path="$(find_artifact "CaveViewer-${normalized_version}-macos-x86_64.dmg")"
   macos_x86_64_meta_path="$(find_artifact "CaveViewer-${normalized_version}-macos-x86_64.json")"
   release_assets+=("$macos_x86_64_path" "$macos_x86_64_meta_path")
 fi
+
+# download-artifact is intentionally left on its current-run default. Reject
+# every file that is not part of the selected producer contract, even if a
+# foreign artifact matched the broad download glob.
+if find "$artifacts_dir" -type l -print -quit | grep -q .; then
+  echo "Error: release artifacts must not contain symbolic links."
+  exit 1
+fi
+while IFS= read -r -d '' downloaded_artifact; do
+  downloaded_name="$(basename "$downloaded_artifact")"
+  artifact_expected=false
+  for expected_artifact_name in "${expected_artifact_names[@]}"; do
+    if [ "$downloaded_name" = "$expected_artifact_name" ]; then
+      artifact_expected=true
+      break
+    fi
+  done
+  if ! $artifact_expected; then
+    echo "Error: unexpected or foreign release artifact: $downloaded_name"
+    exit 1
+  fi
+done < <(find "$artifacts_dir" -type f -print0)
 
 if [ "${#release_assets[@]}" -eq 0 ]; then
   echo "Error: no release platforms were selected."

@@ -421,8 +421,13 @@ def test_preview_promotion_workflow_is_manual_serial_and_write_scoped():
     assert "contents: write" not in workflow
     assert "pull-requests: write" not in workflow
     assert "environment: production-release" in workflow
-    assert "actions/create-github-app-token@v3.2.0" in workflow
+    assert (
+        "actions/create-github-app-token@"
+        "bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0"
+    ) in workflow
     assert "token: ${{ steps.release-app-token.outputs.token }}" in workflow
+    assert "persist-credentials: false" in workflow
+    assert "RELEASE_PUSH_TOKEN: ${{ steps.release-app-token.outputs.token }}" in workflow
     assert "group: caveviewer-preview-release-promotion" in workflow
     assert "cancel-in-progress: false" in workflow
     assert "timeout-minutes: 360" in workflow

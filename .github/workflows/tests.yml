@@ -47,7 +47,7 @@ jobs:
     steps:
       - name: Check out pull request comparison commits
         if: ${{ github.event_name == 'pull_request' || inputs.pr_head_sha != '' }}
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
 
@@ -122,7 +122,7 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
 
@@ -290,7 +290,7 @@ jobs:
 
       - name: Set up Python
         if: ${{ env.RUN_SOURCE_TESTS == 'true' }}
-        uses: actions/setup-python@v7.0.0
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
 
@@ -340,11 +340,11 @@ jobs:
 
       - name: Check out repository
         if: ${{ env.RUN_SOURCE_TESTS == 'true' && needs.sanity.result == 'success' }}
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Python
         if: ${{ env.RUN_SOURCE_TESTS == 'true' && needs.sanity.result == 'success' }}
-        uses: actions/setup-python@v7.0.0
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
           cache: pip
@@ -380,11 +380,11 @@ jobs:
 
       - name: Check out repository
         if: ${{ env.RUN_SOURCE_TESTS == 'true' && needs.sanity.result == 'success' }}
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Python
         if: ${{ env.RUN_SOURCE_TESTS == 'true' && needs.sanity.result == 'success' }}
-        uses: actions/setup-python@v7.0.0
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
           cache: pip
@@ -474,7 +474,7 @@ jobs:
 
       - name: Upload coverage report
         if: ${{ always() && env.RUN_SOURCE_TESTS == 'true' && needs.sanity.result == 'success' }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: essential-test-coverage-linux
           path: coverage.xml
@@ -510,11 +510,11 @@ jobs:
 
       - name: Check out repository
         if: ${{ env.RUN_SOURCE_TESTS == 'true' && needs.sanity.result == 'success' }}
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Python
         if: ${{ env.RUN_SOURCE_TESTS == 'true' && needs.sanity.result == 'success' }}
-        uses: actions/setup-python@v7.0.0
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
           cache: pip

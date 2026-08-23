@@ -49,7 +49,7 @@ jobs:
 
       - name: Create release publisher token
         id: release-app-token
-        uses: actions/create-github-app-token@v3.2.0
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: ${{ secrets.CAVEVIEWER_RELEASE_APP_ID }}
           private-key: ${{ secrets.CAVEVIEWER_RELEASE_APP_PRIVATE_KEY }}
@@ -57,10 +57,11 @@ jobs:
           repositories: ${{ github.event.repository.name }}
 
       - name: Check out automation source
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
           token: ${{ steps.release-app-token.outputs.token }}
+          persist-credentials: false
 
       - name: Configure Git identity
         run: |
@@ -70,10 +71,15 @@ jobs:
       - name: Verify source and publish Preview
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_PUSH_TOKEN: ${{ steps.release-app-token.outputs.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           SOURCE_BRANCH: ${{ steps.source.outputs.source_branch }}
           RELEASE_NOTES: ${{ inputs.release_notes }}
         run: |
+          git_auth="$(printf 'x-access-token:%s' "$RELEASE_PUSH_TOKEN" | base64 -w0)"
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0=http.https://github.com/.extraheader
+          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $git_auth"
           ./scripts/common/preview_release_automation.sh \
             --source-branch="$SOURCE_BRANCH" \
             --release-notes="$RELEASE_NOTES"

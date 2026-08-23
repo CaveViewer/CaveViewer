@@ -54,7 +54,7 @@ jobs:
     steps:
       - name: Create release publisher token
         id: release-app-token
-        uses: actions/create-github-app-token@v3.2.0
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: ${{ secrets.CAVEVIEWER_RELEASE_APP_ID }}
           private-key: ${{ secrets.CAVEVIEWER_RELEASE_APP_PRIVATE_KEY }}
@@ -62,22 +62,25 @@ jobs:
           repositories: ${{ github.event.repository.name }}
 
       - name: Check out the immutable release source
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
           ref: ${{ inputs.source_sha }}
           token: ${{ steps.release-app-token.outputs.token }}
+          persist-credentials: false
 
       - name: Set up signing Python
-        uses: actions/setup-python@v7.0.0
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
 
       - name: Install manifest signing dependency
-        run: python -m pip install --disable-pip-version-check "cryptography>=43.0.0"
+        run: >-
+          python -m pip install --disable-pip-version-check --only-binary=:all:
+          --require-hashes -r requirements/release-finalizer-linux.txt
 
       - name: Download platform packages
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           pattern: CaveViewer-${{ inputs.version }}-*
           path: release-artifacts
@@ -115,6 +118,10 @@ jobs:
           PREVIEW: ${{ inputs.preview }}
           ALLOW_UNSIGNED_WINDOWS_COMMUNITY: ${{ inputs.allow_unsigned_windows_community }}
         run: |
+          git_auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0=http.https://github.com/.extraheader
+          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $git_auth"
           finalize_args=(
             --platforms="$RELEASE_PLATFORMS"
             --version="$RELEASE_VERSION"
