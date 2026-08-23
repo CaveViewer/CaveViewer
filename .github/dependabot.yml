@@ -17,3 +17,20 @@ updates:
       - "github-actions"
     commit-message:
       prefix: "ci(deps)"
+
+  # Update only the isolated, hash-locked privileged finalizer dependencies.
+  - package-ecosystem: "pip"
+    directory: "/requirements"
+    schedule:
+      interval: "weekly"
+      day: "tuesday"
+      time: "09:00"
+      timezone: "Europe/Zagreb"
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 1
+    labels:
+      - "dependencies"
+      - "release-security"
+    commit-message:
+      prefix: "build(deps)"

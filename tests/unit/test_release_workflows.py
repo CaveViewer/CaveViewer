@@ -1,6 +1,7 @@
 """Repository contracts for release workflows and their coverage gates."""
 
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -297,7 +298,7 @@ def test_package_smoke_workflows_are_read_only_and_non_publishing():
         assert "--skip-tests" in workflow
         assert "--action=release" not in workflow
         assert "finalize-release.yml" not in workflow
-        assert "actions/upload-artifact@v7" in workflow
+        assert "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7" in workflow
         assert smoke_marker in workflow
         assert artifact_label in workflow
 
@@ -398,7 +399,7 @@ def test_viewer_benchmark_workflow_compares_refs_and_uploads_artifacts():
     assert "scripts/benchmark/compare_benchmark_results.py" in workflow
     assert "--thresholds \"$GITHUB_WORKSPACE/candidate/${{ inputs.threshold_config_path }}\"" in workflow
     assert "compare_args+=(--max-median-fps-drop-pct" in workflow
-    assert "actions/upload-artifact@v7" in workflow
+    assert "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7" in workflow
     assert "benchmark-artifacts/" in workflow
 
 
@@ -412,17 +413,17 @@ def test_pages_workflow_deploys_docs_independently_from_releases():
     assert '      - "docs/**"' in workflow
     assert '      - ".github/workflows/pages.yml"' in workflow
     assert "release:" not in workflow
-    assert "actions/configure-pages@v6" in workflow
-    assert "actions/upload-pages-artifact@v5" in workflow
+    assert "actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6" in workflow
+    assert "actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5" in workflow
     assert "path: docs" in workflow
-    assert "actions/deploy-pages@v5" in workflow
+    assert "actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5" in workflow
     assert "name: github-pages" in workflow
     assert "pages: write" in workflow
     assert "id-token: write" in workflow
     assert "github.ref == 'refs/heads/main'" in workflow
 
 
-def test_dependabot_updates_only_github_actions_with_bounded_pr_noise():
+def test_dependabot_updates_actions_and_isolated_finalizer_lock():
     config_path = REPOSITORY_ROOT / ".github" / "dependabot.yml"
 
     assert config_path.is_file()
@@ -439,7 +440,65 @@ def test_dependabot_updates_only_github_actions_with_bounded_pr_noise():
     assert '- "dependencies"' in config
     assert '- "github-actions"' in config
     assert 'prefix: "ci(deps)"' in config
-    assert 'package-ecosystem: "pip"' not in config
+    assert 'package-ecosystem: "pip"' in config
+    assert 'directory: "/requirements"' in config
+    assert 'prefix: "build(deps)"' in config
+
+
+def test_external_actions_are_pinned_to_reviewed_commits():
+    expected_actions = {
+        "actions/checkout": ("3d3c42e5aac5ba805825da76410c181273ba90b1", "v7"),
+        "actions/configure-pages": ("45bfe0192ca1faeb007ade9deae92b16b8254a0d", "v6"),
+        "actions/create-github-app-token": (
+            "bcd2ba49218906704ab6c1aa796996da409d3eb1",
+            "v3.2.0",
+        ),
+        "actions/deploy-pages": ("cd2ce8fcbc39b97be8ca5fce6e763baed58fa128", "v5"),
+        "actions/download-artifact": (
+            "3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+            "v8",
+        ),
+        "actions/setup-python": (
+            "5fda3b95a4ea91299a34e894583c3862153e4b97",
+            "v7.0.0",
+        ),
+        "actions/upload-artifact": (
+            "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+            "v7",
+        ),
+        "actions/upload-pages-artifact": (
+            "fc324d3547104276b827a68afc52ff2a11cc49c9",
+            "v5",
+        ),
+    }
+    observed_actions = set()
+    action_pattern = re.compile(
+        r"^\s*uses:\s+([\w.-]+/[\w.-]+)@([0-9a-f]{40})\s+#\s+(\S+)\s*$"
+    )
+    for workflow_path in WORKFLOWS_DIR.glob("*.yml"):
+        for line in workflow_path.read_text(encoding="utf-8").splitlines():
+            if "uses:" not in line or "uses: ./" in line:
+                continue
+            match = action_pattern.match(line)
+            assert match is not None, f"Unpinned Action in {workflow_path}: {line}"
+            action, revision, version = match.groups()
+            assert expected_actions.get(action) == (revision, version)
+            observed_actions.add(action)
+    assert observed_actions == set(expected_actions)
+
+
+def test_release_finalizer_dependency_lock_is_exact_and_hash_checked():
+    lock_path = REPOSITORY_ROOT / "requirements" / "release-finalizer-linux.txt"
+    lock = lock_path.read_text(encoding="utf-8")
+    workflow = (WORKFLOWS_DIR / "finalize-release.yml").read_text(encoding="utf-8")
+
+    assert "cryptography==49.0.0" in lock
+    assert "cffi==2.1.1" in lock
+    assert "pycparser==3.0" in lock
+    assert lock.count("--hash=sha256:") == 3
+    assert ">=" not in lock
+    assert "--require-hashes -r requirements/release-finalizer-linux.txt" in workflow
+    assert "--only-binary=:all:" in workflow
 
 
 def test_all_platform_release_workflow_builds_platforms_in_parallel_then_finalizes():
@@ -526,14 +585,17 @@ def test_release_finalizer_is_the_single_shared_state_writer():
         "CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY", environment_position
     )
     assert "group: caveviewer-publish-${{ github.ref }}" in workflow
-    assert "actions/download-artifact@v8" in workflow
+    assert "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8" in workflow
     assert "merge-multiple: true" in workflow
     assert "CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY" in workflow
-    assert "actions/create-github-app-token@v3.2.0" in workflow
+    assert "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0" in workflow
     assert "app-id: ${{ secrets.CAVEVIEWER_RELEASE_APP_ID }}" in workflow
     assert "private-key: ${{ secrets.CAVEVIEWER_RELEASE_APP_PRIVATE_KEY }}" in workflow
     assert workflow.count("steps.release-app-token.outputs.token") == 2
     assert "GH_TOKEN: ${{ github.token }}" not in workflow
+    assert workflow.count("GH_TOKEN:") == 1
+    assert "persist-credentials: false" in workflow
+    assert "GIT_CONFIG_VALUE_0=\"AUTHORIZATION: basic $git_auth\"" in workflow
     assert "CAVEVIEWER_GITHUB_REPO: ${{ github.repository }}" in workflow
     assert "./scripts/common/finalize_release.sh" in workflow
     assert "reconcile_release_metadata" not in workflow
@@ -547,6 +609,12 @@ def test_release_finalizer_is_the_single_shared_state_writer():
     assert finalizer.count('git -C "$repo_root" push') == 1
     assert "origin/$target_branch moved" in finalizer
     assert "release metadata not reconciled with origin/main" in finalizer
+    assert "version must contain exactly three numeric components" in finalizer
+    assert "full lowercase 40-character commit SHA" in finalizer
+    assert "only to release/next" in finalizer
+    assert "duplicate platform" in finalizer
+    assert "unexpected or foreign release artifact" in finalizer
+    assert "must not contain symbolic links" in finalizer
     assert "Stable and Preview may not share a tag" in finalizer
     assert "stable release version" in finalizer
     assert "must be greater than Preview" in finalizer
@@ -632,8 +700,10 @@ def test_release_next_preparation_uses_only_the_approved_app_identity():
     assert "actions: write" not in workflow
     assert "pull-requests: write" not in workflow
     assert "environment: production-release" in workflow
-    assert "actions/create-github-app-token@v3.2.0" in workflow
+    assert "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0" in workflow
     assert "token: ${{ steps.release-app-token.outputs.token }}" in workflow
+    assert "persist-credentials: false" in workflow
+    assert "RELEASE_PUSH_TOKEN: ${{ steps.release-app-token.outputs.token }}" in workflow
     assert 'run: test "$SELECTED_BRANCH" = "main"' in workflow
     assert "git merge-base --is-ancestor origin/release/next origin/main" in workflow
     assert "refs/remotes/origin/main:refs/heads/release/next" in workflow

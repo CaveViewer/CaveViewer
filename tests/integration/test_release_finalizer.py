@@ -185,6 +185,105 @@ def _write_release_api_response(
     )
 
 
+@pytest.mark.parametrize(
+    ("argument", "expected_error"),
+    [
+        ("--version=1.2", "exactly three numeric components"),
+        ("--version=v1.2.3", "exactly three numeric components"),
+        ("--target-branch=main", "only to release/next"),
+        ("--expected-source-sha=deadbeef", "full lowercase 40-character"),
+        (f"--expected-source-sha={'A' * 40}", "full lowercase 40-character"),
+    ],
+)
+def test_finalizer_rejects_malformed_boundary_inputs_before_authentication(
+    tmp_path: Path,
+    argument: str,
+    expected_error: str,
+):
+    artifacts_dir = tmp_path / "artifacts"
+    artifacts_dir.mkdir()
+    arguments = {
+        "version": "--version=1.2.3",
+        "target-branch": "--target-branch=release/next",
+        "expected-source-sha": f"--expected-source-sha={'d' * 40}",
+    }
+    argument_name = argument[2:].split("=", 1)[0]
+    arguments[argument_name] = argument
+
+    completed = subprocess.run(
+        [
+            str(REPOSITORY_ROOT / "scripts/common/finalize_release.sh"),
+            "--platforms=windows",
+            arguments["version"],
+            "--notes=Boundary validation",
+            f"--artifacts-dir={artifacts_dir}",
+            arguments["target-branch"],
+            arguments["expected-source-sha"],
+        ],
+        cwd=REPOSITORY_ROOT,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    assert expected_error in completed.stdout
+
+
+@pytest.mark.parametrize("foreign_kind", ("file", "symlink"))
+def test_finalizer_rejects_foreign_or_linked_artifacts(
+    tmp_path: Path,
+    foreign_kind: str,
+):
+    artifacts_dir = tmp_path / "artifacts"
+    fake_bin = tmp_path / "bin"
+    gh_log = tmp_path / "gh.log"
+    _write_release_artifacts(artifacts_dir, "9.9.9")
+    foreign_path = artifacts_dir / "CaveViewer-9.9.9-foreign.bin"
+    if foreign_kind == "file":
+        foreign_path.write_bytes(b"foreign")
+        expected_error = "unexpected or foreign release artifact"
+    else:
+        foreign_path.symlink_to(artifacts_dir / "CaveViewer-9.9.9-windows.exe")
+        expected_error = "must not contain symbolic links"
+
+    fake_bin.mkdir()
+    fake_gh = fake_bin / "gh"
+    fake_gh.write_text(
+        "#!/usr/bin/env bash\n"
+        "printf '%s\\n' \"$*\" >> \"$GH_LOG\"\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{fake_bin}{os.pathsep}{env['PATH']}",
+            "GH_LOG": str(gh_log),
+            "CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY": str(tmp_path / "unused.pem"),
+        }
+    )
+
+    completed = subprocess.run(
+        [
+            str(REPOSITORY_ROOT / "scripts/common/finalize_release.sh"),
+            "--platforms=all",
+            "--version=9.9.9",
+            "--notes=Foreign artifact",
+            f"--artifacts-dir={artifacts_dir}",
+            "--target-branch=release/next",
+            f"--expected-source-sha={'d' * 40}",
+        ],
+        cwd=REPOSITORY_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    assert expected_error in completed.stdout
+
+
 def test_finalizer_rejects_incomplete_artifacts_before_creating_a_release(
     tmp_path: Path,
 ):
@@ -221,8 +320,8 @@ def test_finalizer_rejects_incomplete_artifacts_before_creating_a_release(
             "--version=9.9.9",
             "--notes=Incomplete release",
             f"--artifacts-dir={artifacts_dir}",
-            "--target-branch=main",
-            "--expected-source-sha=deadbeef",
+            "--target-branch=release/next",
+            f"--expected-source-sha={'d' * 40}",
         ],
         cwd=REPOSITORY_ROOT,
         env=env,
@@ -289,8 +388,8 @@ def test_finalizer_rejects_a_package_channel_mismatch_before_publication(
             f"--version={version}",
             "--notes=Channel mismatch",
             f"--artifacts-dir={artifacts_dir}",
-            "--target-branch=main",
-            "--expected-source-sha=deadbeef",
+            "--target-branch=release/next",
+            f"--expected-source-sha={'d' * 40}",
         ],
         cwd=working_repository,
         env=env,
@@ -358,7 +457,7 @@ def test_finalizer_only_allows_same_version_resume_for_unmerged_release_metadata
     _run("git", "remote", "add", "origin", origin_repository, cwd=working_repository)
     _run("git", "push", "-u", "origin", "main", cwd=working_repository)
 
-    _run("git", "checkout", "-b", "integration/next", cwd=working_repository)
+    _run("git", "checkout", "-b", "release/next", cwd=working_repository)
     metainfo_path = (
         working_repository
         / "packaging/linux/io.github.caveviewer.caveviewer.metainfo.xml"
@@ -399,7 +498,7 @@ def test_finalizer_only_allows_same_version_resume_for_unmerged_release_metadata
         f"Release v{source_version} preview",
         cwd=working_repository,
     )
-    _run("git", "push", "-u", "origin", "integration/next", cwd=working_repository)
+    _run("git", "push", "-u", "origin", "release/next", cwd=working_repository)
     source_sha = _run("git", "rev-parse", "HEAD", cwd=working_repository)
     _run("git", "checkout", "--detach", source_sha, cwd=working_repository)
 
@@ -419,7 +518,7 @@ def test_finalizer_only_allows_same_version_resume_for_unmerged_release_metadata
             f"--version={requested_version}",
             "--notes=Blocked release",
             f"--artifacts-dir={artifacts_dir}",
-            "--target-branch=integration/next",
+            "--target-branch=release/next",
             f"--expected-source-sha={source_sha}",
         ],
         cwd=working_repository,
@@ -440,7 +539,7 @@ def test_finalizer_only_allows_same_version_resume_for_unmerged_release_metadata
         "--git-dir",
         origin_repository,
         "rev-parse",
-        "refs/heads/integration/next",
+        "refs/heads/release/next",
         cwd=tmp_path,
     ) == source_sha
 
@@ -516,6 +615,13 @@ def test_finalizer_verifies_all_assets_before_pushing_signed_metadata(
     _run("git", "commit", "-m", "Source revision", cwd=working_repository)
     _run("git", "remote", "add", "origin", origin_repository, cwd=working_repository)
     _run("git", "push", "-u", "origin", "main", cwd=working_repository)
+    _run(
+        "git",
+        "push",
+        "origin",
+        "refs/heads/main:refs/heads/release/next",
+        cwd=working_repository,
+    )
     source_sha = _run("git", "rev-parse", "HEAD", cwd=working_repository)
     _run("git", "checkout", "--detach", source_sha, cwd=working_repository)
 
@@ -540,7 +646,7 @@ def test_finalizer_verifies_all_assets_before_pushing_signed_metadata(
         "--notes",
         release_notes,
         f"--artifacts-dir={artifacts_dir}",
-        "--target-branch=main",
+        "--target-branch=release/next",
         f"--expected-source-sha={source_sha}",
     ]
     if community_windows:
@@ -589,9 +695,22 @@ def test_finalizer_verifies_all_assets_before_pushing_signed_metadata(
     assert completed.returncode == 0, completed.stderr
 
     pushed_sha = _run(
-        "git", "--git-dir", origin_repository, "rev-parse", "refs/heads/main", cwd=tmp_path
+        "git",
+        "--git-dir",
+        origin_repository,
+        "rev-parse",
+        "refs/heads/release/next",
+        cwd=tmp_path,
     )
     assert pushed_sha == _run("git", "rev-parse", "HEAD", cwd=working_repository)
+    assert _run(
+        "git",
+        "--git-dir",
+        origin_repository,
+        "rev-parse",
+        "refs/heads/main",
+        cwd=tmp_path,
+    ) == source_sha
     assert _run("git", "rev-list", "--count", "HEAD", cwd=working_repository) == "2"
     channel = "preview" if preview else "stable"
     assert _run("git", "log", "-1", "--pretty=%s", cwd=working_repository) == (
