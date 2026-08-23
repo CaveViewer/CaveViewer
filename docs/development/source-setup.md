@@ -465,11 +465,11 @@ runtime snapshot.
 | `CAVEVIEWER_MACOS_ARCH` | _(auto)_ | Low-level macOS packaging override. The top-level release dispatcher uses `--target=macos-arm64` or `--target=macos-x86_64`; normal app update checks detect the running process architecture automatically. |
 | `CAVEVIEWER_LINUX_UPDATE_ARCH` | `x86_64` | Linux publish helper only. Linux distribution is x86_64-only; set to `x86_64` when invoking lower-level publish helpers directly. |
 
-The update checker requires manifests to be signed with the release Ed25519
-private key. The bundled public key lives at
-`src/caveviewer/resources/release_signing_public_key.pem`. Startup update
+The update checker requires manifests to be signed by a trusted release
+Ed25519 identity. The bundled primary, offline-recovery, and retained legacy
+public keys live under `src/caveviewer/resources/`. Startup update
 checks read the branch/channel manifest first; if it advertises a newer version,
-the app verifies the manifest signature and confirms that the package URL
+the app checks those keys in primary, recovery, legacy order and confirms that the package URL
 resolves before offering the download. Missing or invalid signatures and
 unavailable packages are logged and do not expose an update action. An absent
 preview manifest is the normal empty-channel state and likewise leaves the
@@ -644,8 +644,10 @@ python3 scripts/sign_update_manifest.py \
 This writes `updates/macos/arm64/stable.json.sig`. An ARM64 publish copies the
 signed manifest and signature to the top-level legacy aliases. Release publish
 scripts do not use a default private-key path; set
-`CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY` before publishing either channel. When
-signing manually, either set that variable or pass `--private-key`.
+`CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY` to the deliberately selected private
+key before publishing either channel. When signing manually, either set that
+variable or pass `--private-key`; verify it matches the intended bundled public
+identity first.
 
 ### UI & Rendering
 

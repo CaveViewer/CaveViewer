@@ -138,10 +138,13 @@ if ! find "$payload_dir" -type d -path '*caveviewer/resources/shaders' -print -q
   echo "Error: frozen payload is missing CaveViewer shader resources." >&2
   exit 1
 fi
-if ! find "$payload_dir" -type f -name 'release_signing_public_key.pem' -print -quit | grep -q .; then
-  echo "Error: frozen payload is missing the update-signing public key." >&2
-  exit 1
-fi
+for signing_identity in primary recovery legacy; do
+  signing_key_name="release_signing_${signing_identity}_public_key.pem"
+  if ! find "$payload_dir" -type f -name "$signing_key_name" -print -quit | grep -q .; then
+    echo "Error: frozen payload is missing the $signing_identity update-signing public key." >&2
+    exit 1
+  fi
+done
 bundled_release_metadata="$(find "$payload_dir" -type f -path '*caveviewer/resources/release_metadata.v1.json' -print -quit)"
 if [ -z "$bundled_release_metadata" ]; then
   echo "Error: frozen payload is missing embedded release metadata." >&2

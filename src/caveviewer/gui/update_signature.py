@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 
 from caveviewer.core.diagnostics.logging import get_logger
-from caveviewer.resources import release_public_key_path
+from caveviewer.resources import RELEASE_PUBLIC_KEY_FILENAMES, release_public_key_path
 
 
 _LOG = get_logger("UpdateSignature")
@@ -27,21 +27,62 @@ def default_manifest_signature_url(manifest_url: str) -> str:
     return f"{manifest_url}.sig"
 
 
-def verify_update_manifest_signature(manifest_bytes: bytes, signature_bytes: bytes) -> None:
+TRUSTED_KEY_IDENTITIES = ("primary", "recovery", "legacy")
+
+
+def verify_update_manifest_signature(manifest_bytes: bytes, signature_bytes: bytes) -> str:
+    """Verify exact manifest bytes and return the trusted signing identity.
+
+    A broken or unavailable individual trust root never disables the remaining
+    roots. The ordered fallback is intentionally invisible to the UI; details
+    are retained in diagnostics for release recovery investigations.
+    """
     _LOG.info(
         "Verifying update manifest signature: manifest_bytes=%d, signature_bytes=%d",
         len(manifest_bytes),
         len(signature_bytes),
     )
     invalid_signature_type, public_key_type, serialization_module = _load_cryptography_backend()
-    public_key = _load_release_public_key(public_key_type, serialization_module)
     signature = _decode_signature(signature_bytes)
-    try:
-        public_key.verify(signature, manifest_bytes)
-    except invalid_signature_type as exc:
-        _LOG.warning("Update manifest signature verification failed: invalid signature.")
-        raise SignatureVerificationError("Update manifest signature is invalid.") from exc
-    _LOG.info("Update manifest signature verification passed.")
+    failed_identities: list[str] = []
+    for identity in TRUSTED_KEY_IDENTITIES:
+        try:
+            public_key = _load_release_public_key(
+                identity,
+                public_key_type,
+                serialization_module,
+            )
+        except SignatureVerificationError as exc:
+            failed_identities.append(identity)
+            _LOG.warning(
+                "Update manifest trust root is unavailable: identity=%s, detail=%s",
+                identity,
+                exc,
+            )
+            continue
+        try:
+            public_key.verify(signature, manifest_bytes)
+        except invalid_signature_type:
+            failed_identities.append(identity)
+            _LOG.warning(
+                "Update manifest signature did not match trusted key: identity=%s",
+                identity,
+            )
+            continue
+        _LOG.info(
+            "Update manifest signature verification passed: identity=%s, prior_failures=%s",
+            identity,
+            failed_identities,
+        )
+        return identity
+
+    _LOG.warning(
+        "Update manifest signature verification failed for every trusted key: identities=%s",
+        TRUSTED_KEY_IDENTITIES,
+    )
+    raise SignatureVerificationError(
+        "Update manifest signature is not valid for any trusted release key."
+    )
 
 
 def _decode_signature(signature_bytes: bytes) -> bytes:
@@ -80,22 +121,36 @@ def _load_cryptography_backend():
     return InvalidSignature, Ed25519PublicKey, serialization
 
 
-def _load_release_public_key(public_key_type=None, serialization_module=None):
+def _load_release_public_key(
+    identity: str = "primary",
+    public_key_type=None,
+    serialization_module=None,
+):
     if public_key_type is None or serialization_module is None:
         _invalid_signature_type, public_key_type, serialization_module = (
             _load_cryptography_backend()
         )
 
-    key_path = _resolve_release_public_key_path()
+    key_path = _resolve_release_public_key_path(identity)
     if key_path is None:
-        searched = ", ".join(str(path) for path in _candidate_public_key_paths())
-        _LOG.warning("Release signing public key not found. Searched: %s", searched)
+        searched = ", ".join(
+            str(path) for path in _candidate_public_key_paths(identity)
+        )
+        _LOG.warning(
+            "Release signing public key not found: identity=%s. Searched: %s",
+            identity,
+            searched,
+        )
         raise SignatureVerificationError(
-            f"Release signing public key not found. Searched: {searched}"
+            f"Release signing public key {identity!r} not found. Searched: {searched}"
         )
 
     try:
-        _LOG.info("Loading release signing public key: %s", key_path)
+        _LOG.info(
+            "Loading release signing public key: identity=%s, path=%s",
+            identity,
+            key_path,
+        )
         key_bytes = key_path.read_bytes()
         public_key = serialization_module.load_pem_public_key(key_bytes)
     except Exception as exc:
@@ -109,20 +164,30 @@ def _load_release_public_key(public_key_type=None, serialization_module=None):
         raise SignatureVerificationError(
             f"Release signing public key at {key_path} is not an Ed25519 public key."
         )
-    _LOG.info("Loaded Ed25519 release signing public key: %s", key_path)
+    _LOG.info(
+        "Loaded Ed25519 release signing public key: identity=%s, path=%s",
+        identity,
+        key_path,
+    )
     return public_key
 
 
-def _resolve_release_public_key_path() -> Path | None:
-    for path in _candidate_public_key_paths():
+def _resolve_release_public_key_path(identity: str = "primary") -> Path | None:
+    for path in _candidate_public_key_paths(identity):
         if path.is_file():
             return path
     return None
 
 
-def _candidate_public_key_paths() -> list[Path]:
-    bundled_rel_path = Path("caveviewer", "resources", "release_signing_public_key.pem")
-    candidates: list[Path] = [release_public_key_path()]
+def _candidate_public_key_paths(identity: str = "primary") -> list[Path]:
+    try:
+        filename = RELEASE_PUBLIC_KEY_FILENAMES[identity]
+    except KeyError as exc:
+        raise SignatureVerificationError(
+            f"Unknown release public-key identity: {identity}"
+        ) from exc
+    bundled_rel_path = Path("caveviewer", "resources", filename)
+    candidates: list[Path] = [release_public_key_path(identity)]
 
     if hasattr(sys, "frozen") and hasattr(sys, "_MEIPASS"):
         candidates.append(Path(sys._MEIPASS) / bundled_rel_path)  # type: ignore[attr-defined]

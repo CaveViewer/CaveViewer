@@ -34,6 +34,11 @@ on:
         required: false
         type: boolean
         default: false
+      signing_identity:
+        description: "Trusted manifest-signing identity: primary, recovery, or legacy"
+        required: false
+        type: string
+        default: primary
 permissions:
   contents: read
 
@@ -52,6 +57,18 @@ jobs:
     environment: production-release
 
     steps:
+      - name: Validate signing identity
+        env:
+          SIGNING_IDENTITY: ${{ inputs.signing_identity }}
+        run: |
+          case "$SIGNING_IDENTITY" in
+            primary|recovery|legacy) ;;
+            *)
+              echo "Error: signing_identity must be primary, recovery, or legacy."
+              exit 1
+              ;;
+          esac
+
       - name: Create release publisher token
         id: release-app-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
@@ -84,27 +101,64 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Configure release signing key
+      - name: Configure primary release signing key
+        if: ${{ inputs.signing_identity == 'primary' }}
         # This resolves only after the production-release environment is
         # approved and only through a finalizer call that explicitly inherits
         # secrets across the reusable-workflow boundary.
         env:
-          SIGNING_PRIVATE_KEY_PEM: ${{ secrets.CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY }}
+          SIGNING_PRIVATE_KEY_PEM: ${{ secrets.CAVEVIEWER_RELEASE_PRIMARY_PRIVATE_KEY }}
         run: |
           if [ -z "$SIGNING_PRIVATE_KEY_PEM" ]; then
-            echo "Error: CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY secret is required."
+            echo "Error: CAVEVIEWER_RELEASE_PRIMARY_PRIVATE_KEY secret is required."
             exit 1
           fi
           key_path="$RUNNER_TEMP/release_signing_private_key.pem"
           printf '%s' "$SIGNING_PRIVATE_KEY_PEM" > "$key_path"
           chmod 600 "$key_path"
           echo "CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY=$key_path" >> "$GITHUB_ENV"
+          echo "CAVEVIEWER_RELEASE_SIGNING_PUBLIC_KEY=src/caveviewer/resources/release_signing_primary_public_key.pem" >> "$GITHUB_ENV"
+
+      - name: Configure recovery release signing key
+        if: ${{ inputs.signing_identity == 'recovery' }}
+        env:
+          SIGNING_PRIVATE_KEY_PEM: ${{ secrets.CAVEVIEWER_RELEASE_RECOVERY_PRIVATE_KEY }}
+        run: |
+          if [ -z "$SIGNING_PRIVATE_KEY_PEM" ]; then
+            echo "Error: CAVEVIEWER_RELEASE_RECOVERY_PRIVATE_KEY secret is required."
+            exit 1
+          fi
+          key_path="$RUNNER_TEMP/release_signing_private_key.pem"
+          printf '%s' "$SIGNING_PRIVATE_KEY_PEM" > "$key_path"
+          chmod 600 "$key_path"
+          echo "CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY=$key_path" >> "$GITHUB_ENV"
+          echo "CAVEVIEWER_RELEASE_SIGNING_PUBLIC_KEY=src/caveviewer/resources/release_signing_recovery_public_key.pem" >> "$GITHUB_ENV"
+
+      - name: Configure legacy release signing key
+        if: ${{ inputs.signing_identity == 'legacy' }}
+        env:
+          SIGNING_PRIVATE_KEY_PEM: ${{ secrets.CAVEVIEWER_RELEASE_LEGACY_PRIVATE_KEY }}
+        run: |
+          if [ -z "$SIGNING_PRIVATE_KEY_PEM" ]; then
+            echo "Error: CAVEVIEWER_RELEASE_LEGACY_PRIVATE_KEY secret is required."
+            exit 1
+          fi
+          key_path="$RUNNER_TEMP/release_signing_private_key.pem"
+          printf '%s' "$SIGNING_PRIVATE_KEY_PEM" > "$key_path"
+          chmod 600 "$key_path"
+          echo "CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY=$key_path" >> "$GITHUB_ENV"
+          echo "CAVEVIEWER_RELEASE_SIGNING_PUBLIC_KEY=src/caveviewer/resources/release_signing_legacy_public_key.pem" >> "$GITHUB_ENV"
 
       - name: Verify release signing key pair
         run: >-
           python scripts/verify_release_signing_key.py
           "$CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY"
-          src/caveviewer/resources/release_signing_public_key.pem
+          "$CAVEVIEWER_RELEASE_SIGNING_PUBLIC_KEY"
+
+      - name: Record signing identity
+        env:
+          SIGNING_IDENTITY: ${{ inputs.signing_identity }}
+        run: echo "Manifest signing identity - $SIGNING_IDENTITY" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Download platform packages
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
