@@ -433,7 +433,7 @@ def test_preview_automation_has_one_fixed_gated_promotion_sequence():
     assert '--workflow=all-platform-release.yml' in source
     assert '--field="preview=true"' in source
     assert '--field="publish=true"' in source
-    assert '--field="reuse_pr_validation=true"' in source
+    assert "reuse_pr_validation" not in source
     assert 'repos/$repo/releases?per_page=100' in source
     assert 'repos/$repo/tags?per_page=100' in source
     assert "gh pr create" not in source

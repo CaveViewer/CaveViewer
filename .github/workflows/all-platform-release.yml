@@ -23,11 +23,6 @@ on:
         required: false
         type: boolean
         default: true
-      reuse_pr_validation:
-        description: "Reuse successful PR validation when app/package source has not changed; skip duplicate test suites"
-        required: false
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -50,7 +45,6 @@ jobs:
 
   essential-tests:
     needs: validate-release-branch
-    if: ${{ inputs.reuse_pr_validation != true }}
     uses: ./.github/workflows/tests.yml
     permissions:
       contents: read
@@ -58,7 +52,7 @@ jobs:
   windows:
     name: Windows
     needs: essential-tests
-    if: ${{ !cancelled() && (inputs.reuse_pr_validation == true || needs.essential-tests.result == 'success') }}
+    if: ${{ !cancelled() && needs.essential-tests.result == 'success' }}
     uses: ./.github/workflows/windows-release.yml
     # Preserve write through the reusable-workflow call chain. The called
     # workflow downgrades its test and package jobs to read-only.
@@ -73,13 +67,12 @@ jobs:
       # community only when the complete release will be published.
       allow_unsigned_windows_community: ${{ inputs.publish }}
       skip_essential_tests: true
-      reuse_pr_validation: ${{ inputs.reuse_pr_validation }}
       source_sha: ${{ github.sha }}
 
   linux-x86_64:
     name: Linux x86_64
     needs: essential-tests
-    if: ${{ !cancelled() && (inputs.reuse_pr_validation == true || needs.essential-tests.result == 'success') }}
+    if: ${{ !cancelled() && needs.essential-tests.result == 'success' }}
     uses: ./.github/workflows/linux-x86_64-release.yml
     permissions:
       contents: read
@@ -89,13 +82,12 @@ jobs:
       preview: ${{ inputs.preview }}
       publish: false
       skip_essential_tests: true
-      reuse_pr_validation: ${{ inputs.reuse_pr_validation }}
       source_sha: ${{ github.sha }}
 
   macos-arm64:
     name: macOS ARM64
     needs: essential-tests
-    if: ${{ !cancelled() && (inputs.reuse_pr_validation == true || needs.essential-tests.result == 'success') }}
+    if: ${{ !cancelled() && needs.essential-tests.result == 'success' }}
     uses: ./.github/workflows/macos-arm64-release.yml
     permissions:
       contents: read
@@ -105,13 +97,12 @@ jobs:
       preview: ${{ inputs.preview }}
       publish: false
       skip_essential_tests: true
-      reuse_pr_validation: ${{ inputs.reuse_pr_validation }}
       source_sha: ${{ github.sha }}
 
   macos-x86_64:
     name: macOS x86_64
     needs: essential-tests
-    if: ${{ !cancelled() && (inputs.reuse_pr_validation == true || needs.essential-tests.result == 'success') }}
+    if: ${{ !cancelled() && needs.essential-tests.result == 'success' }}
     uses: ./.github/workflows/macos-x86_64-release.yml
     permissions:
       contents: read
@@ -121,7 +112,6 @@ jobs:
       preview: ${{ inputs.preview }}
       publish: false
       skip_essential_tests: true
-      reuse_pr_validation: ${{ inputs.reuse_pr_validation }}
       source_sha: ${{ github.sha }}
 
   finalize-release:

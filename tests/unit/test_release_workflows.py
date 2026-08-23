@@ -56,11 +56,8 @@ def test_macos_release_workflows_use_architecture_specific_contracts():
     assert "Run complete Intel test suite" in intel_workflow
     assert "python -m pytest -p no:cacheprovider -q" in intel_workflow
     assert "Run Intel CLI smoke checks" in intel_workflow
-    assert intel_workflow.count("if: ${{ inputs.reuse_pr_validation != true }}") == 3
-    assert (
-        "inputs.skip_essential_tests != true && inputs.reuse_pr_validation != true"
-        in intel_workflow
-    )
+    assert "reuse_pr_validation" not in intel_workflow
+    assert "if: ${{ inputs.skip_essential_tests != true }}" in intel_workflow
     assert "./scripts/macos/smoke_dmg.sh" in intel_workflow
     assert intel_workflow.index("./scripts/macos/smoke_dmg.sh") < intel_workflow.index(
         "Upload macOS x86_64 DMG for testing"
@@ -86,17 +83,14 @@ def test_platform_release_workflows_package_immutable_source_before_finalizing()
         assert "uses: ./.github/workflows/tests.yml" in workflow, workflow_name
         assert "needs: essential-tests" in workflow, workflow_name
         assert "skip_essential_tests:" in workflow, workflow_name
-        assert "reuse_pr_validation:" in workflow, workflow_name
         assert "inputs.skip_essential_tests != true" in workflow, workflow_name
-        assert "inputs.reuse_pr_validation != true" in workflow, workflow_name
         assert "inputs.skip_essential_tests == true" in workflow, workflow_name
-        assert "inputs.reuse_pr_validation == true" in workflow, workflow_name
         assert "needs.essential-tests.result == 'success'" in workflow, workflow_name
         assert "!cancelled()" in workflow, workflow_name
         dispatch_contract = workflow.split("  workflow_call:", 1)[0]
         assert "skip_essential_tests" not in dispatch_contract, workflow_name
         assert "source_sha" not in dispatch_contract, workflow_name
-        assert "reuse_pr_validation" in dispatch_contract, workflow_name
+        assert "reuse_pr_validation" not in workflow, workflow_name
         assert "ref: ${{ inputs.source_sha || github.sha }}" in workflow, workflow_name
         workflow_header = workflow.split("\njobs:\n", 1)[0]
         assert "contents: read" in workflow_header, workflow_name
@@ -164,9 +158,7 @@ def test_direct_release_dispatches_publish_without_reconciliation_input():
         preview = dispatch.split("      preview:\n", 1)[1].split(
             "      publish:\n", 1
         )[0]
-        publish = dispatch.split("      publish:\n", 1)[1].split(
-            "      reuse_pr_validation:\n", 1
-        )[0]
+        publish = dispatch.split("      publish:\n", 1)[1]
         assert "default: true" in preview, workflow_name
         assert "default: true" in publish, workflow_name
         assert "reconcile_metadata" not in dispatch, workflow_name
@@ -466,13 +458,9 @@ def test_all_platform_release_workflow_builds_platforms_in_parallel_then_finaliz
     assert "permissions:\n  contents: read" in workflow
     assert "group: caveviewer-all-platform-release-${{ github.ref }}" in workflow
     assert workflow.count("uses: ./.github/workflows/tests.yml") == 1
-    assert "reuse_pr_validation:" in workflow
-    assert "if: ${{ inputs.reuse_pr_validation != true }}" in workflow
+    assert "reuse_pr_validation" not in workflow
+    assert "needs.essential-tests.result == 'success'" in workflow
     assert workflow.count("skip_essential_tests: true") == len(job_contracts)
-    assert (
-        workflow.count("reuse_pr_validation: ${{ inputs.reuse_pr_validation }}")
-        == len(job_contracts)
-    )
     assert workflow.count("publish: false") == len(job_contracts)
     assert "secrets: inherit" not in workflow
 
@@ -488,7 +476,7 @@ def test_all_platform_release_workflow_builds_platforms_in_parallel_then_finaliz
         job_positions.append(block_start)
         assert f"uses: ./.github/workflows/{called_workflow}" in job_block
         assert "needs: essential-tests" in job_block
-        assert "inputs.reuse_pr_validation == true" in job_block
+        assert "needs.essential-tests.result == 'success'" in job_block
         assert "permissions:\n      contents: read" in job_block
         assert "publish: false" in job_block
         assert "source_sha: ${{ github.sha }}" in job_block

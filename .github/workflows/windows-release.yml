@@ -21,11 +21,6 @@ on:
         required: false
         type: boolean
         default: true
-      reuse_pr_validation:
-        description: "Reuse successful PR validation when app/package source has not changed; skip duplicate test suites"
-        required: false
-        type: boolean
-        default: false
   workflow_call:
     inputs:
       version:
@@ -54,11 +49,6 @@ on:
         default: false
       skip_essential_tests:
         description: "Skip this workflow's test gate when the caller already ran it"
-        required: false
-        type: boolean
-        default: false
-      reuse_pr_validation:
-        description: "Reuse successful PR validation when app/package source has not changed; skip duplicate test suites"
         required: false
         type: boolean
         default: false
@@ -95,14 +85,14 @@ jobs:
 
   essential-tests:
     needs: validate-release-branch
-    if: ${{ inputs.skip_essential_tests != true && inputs.reuse_pr_validation != true }}
+    if: ${{ inputs.skip_essential_tests != true }}
     uses: ./.github/workflows/tests.yml
     permissions:
       contents: read
 
   build-windows:
     needs: essential-tests
-    if: ${{ !cancelled() && (inputs.skip_essential_tests == true || inputs.reuse_pr_validation == true || needs.essential-tests.result == 'success') }}
+    if: ${{ !cancelled() && (inputs.skip_essential_tests == true || needs.essential-tests.result == 'success') }}
     # Hosted releases currently use the explicit unsigned-community policy.
     # Keep the build on GitHub-hosted Windows until Authenticode support returns.
     runs-on: windows-latest

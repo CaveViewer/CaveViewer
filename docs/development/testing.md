@@ -148,9 +148,8 @@ Release source follows two gated transitions: feature branch to `main`, then
 `main` to `release/next` for the publish build. The finalizer writes release
 metadata only to `release/next`, and that metadata returns to `main` through a
 second required-check PR. No `publish: true` workflow should run on `main` or a
-feature branch. Preview Release Promotion dispatches the source and metadata
-Essential Tests explicitly because workflow-token-created PRs do not trigger a
-second privileged workflow automatically.
+feature branch. Preview Release Promotion never creates or merges a PR; the
+final metadata pull request and its normal required checks remain manual.
 
 An individually dispatched platform release workflow calls the Essential Tests
 workflow before its package job. `All Platform Release` calls Essential Tests
@@ -158,16 +157,11 @@ once, then invokes every platform workflow with its duplicate internal gate
 disabled. A failed or canceled shared gate prevents every package job from
 starting. After a successful gate, all package jobs may run concurrently; the
 release finalizer runs only after every requested package succeeds.
-After a direct platform or all-platform publication, the finalizer opens or
-reuses the `release/next` metadata PR, explicitly dispatches its PR-aware gate,
-and merges into `main` only after success. Artifact-only runs skip this step.
-
-Release dispatches may set `reuse_pr_validation` only when the selected source
-has already passed PR validation and no application, packaging, dependency,
-test, or workflow change has occurred since. It omits duplicate source suites
-while retaining every platform build and release-time package check. A changelog
-or other release-only metadata edit does not make the source suite material
-again.
+After a direct platform or all-platform publication, a maintainer opens and
+merges the `release/next` metadata PR after its normal required checks pass.
+Every manually dispatched release runs Essential Tests; there is no
+caller-controlled validation-reuse bypass. Artifact-only runs still run their
+source and package validation without publishing metadata.
 
 For pull requests, Essential Tests classifies the diff before starting the
 source suites. Changelog and documentation edits, plus generated release
