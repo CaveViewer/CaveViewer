@@ -37,4 +37,4 @@ run_caveviewer.sh
 .aiassistant/*
 !.aiassistant/rules/
 !.aiassistant/rules/*.md
-docs/development/.agents/
+/.work/

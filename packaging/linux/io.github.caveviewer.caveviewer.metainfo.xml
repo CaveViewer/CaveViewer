@@ -2,7 +2,7 @@
 <component type="desktop-application">
   <id>io.github.caveviewer.caveviewer</id>
   <metadata_license>CC0-1.0</metadata_license>
-  <project_license>GPL-3.0-only</project_license>
+  <project_license>AGPL-3.0-only</project_license>
   <name>CaveViewer</name>
   <summary>Explore very large 3D cave-survey maps</summary>
   <description>

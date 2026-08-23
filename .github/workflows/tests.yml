@@ -143,6 +143,11 @@ jobs:
           import xml.etree.ElementTree as ET
           from pathlib import Path
 
+          from scripts.common.release_metadata import (
+              appstream_release_entries,
+              appstream_releases_changed,
+          )
+
           base_sha = __import__("os").environ["PR_BASE_SHA"]
           head_sha = __import__("os").environ["PR_HEAD_SHA"]
           version_path = "src/caveviewer/version.py"
@@ -170,7 +175,16 @@ jobs:
           version_changed = version_path in changed_paths
           metainfo_changed = metainfo_path in changed_paths
 
-          if version_changed != metainfo_changed:
+          base_metainfo_text = git_show(base_sha, metainfo_path)
+          head_metainfo_text = git_show(head_sha, metainfo_path)
+          try:
+              appstream_release_changed = metainfo_changed and appstream_releases_changed(
+                  base_metainfo_text, head_metainfo_text
+              )
+          except (ET.ParseError, ValueError) as exc:
+              raise SystemExit(str(exc)) from exc
+
+          if version_changed != appstream_release_changed:
               raise SystemExit(
                   "Release metadata must update version.py and the AppStream release entry together."
               )
@@ -185,14 +199,8 @@ jobs:
               if normalized_base != normalized_head:
                   raise SystemExit("version.py changes more than APP_VERSION; run the source suites.")
 
-              def release_entries(text: str) -> list[str]:
-                  releases = ET.fromstring(text).find("releases")
-                  if releases is None:
-                      raise SystemExit("AppStream metadata has no releases element.")
-                  return [ET.tostring(entry, encoding="unicode") for entry in releases]
-
-              base_entries = release_entries(git_show(base_sha, metainfo_path))
-              head_entries = release_entries(git_show(head_sha, metainfo_path))
+              base_entries = appstream_release_entries(base_metainfo_text)
+              head_entries = appstream_release_entries(head_metainfo_text)
               if len(head_entries) != len(base_entries) + 1 or head_entries[1:] != base_entries:
                   raise SystemExit("AppStream metadata changes more than one prepended release entry.")
               release_entry = ET.fromstring(head_entries[0])

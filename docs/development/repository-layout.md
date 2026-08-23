@@ -126,8 +126,8 @@ ignored `.idea/` directory.
 `.aiassistant/rules/` is intentionally tracked and contains only short,
 secret-free adapters that direct JetBrains AI Chat to the canonical
 `AGENTS.md` hierarchy. Active work definitions under `docs/development/work/`
-are tracked with their implementation; ignored `docs/development/.agents/`
-contains disposable local notes only.
+are tracked with their implementation; ignored root `.work/` contains
+disposable local plans and notes only.
 
 ## Package layout
 

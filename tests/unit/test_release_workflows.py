@@ -1035,6 +1035,8 @@ def test_essential_workflow_reuses_validation_for_release_metadata_only_prs():
     assert "env.RUN_SOURCE_TESTS != 'true'" not in metadata_step
     assert 'git diff --check "$PR_BASE_SHA...$PR_HEAD_SHA"' in workflow
     assert "version.py changes more than APP_VERSION; run the source suites." in workflow
+    assert "appstream_releases_changed(" in workflow
+    assert "version_changed != appstream_release_changed" in workflow
     assert "AppStream metadata changes more than one prepended release entry." in workflow
     assert "Manifest changed without its signature:" in workflow
     assert 're.fullmatch(r"\\d+(?:\\.\\d+)+", current_version)' in workflow

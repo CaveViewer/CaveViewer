@@ -15,6 +15,8 @@
   design, artifacts, workflow inputs, and calibration policy.
 - [Releases](releases.md): canonical branch gates, `release/next` workflow,
   shared PyCharm launcher, channels, signing, and post-release verification.
+- [Licensing](licensing.md): authoritative project license, corresponding
+  release source, packaged notices, and third-party-license boundaries.
 - [Rendering](rendering.md): import/chunking model, runtime streaming, tuning,
   and cache compilation options.
 - [AI-assisted development](ai-assistance.md): canonical instructions,
@@ -43,9 +45,9 @@ then implement from that table. Keep the document's current implementation,
 desired solution, branch, and status fields synchronized through verification
 and merge. This requirement applies to human contributors and automated agents.
 
-`docs/development/.agents/` is ignored and reserved for disposable local notes,
-probes, and incomplete investigation. It is not authoritative and must not hold
-the only copy of an active work plan.
+Root `.work/` is ignored and reserved for disposable local plans, notes, probes,
+and incomplete investigation. It is not authoritative and must not hold the
+only copy of an active implementation plan.
 
 ## AI and agent instruction discovery
 
@@ -57,7 +59,7 @@ the only copy of an active work plan.
   it. Follow the [PyCharm contributor setup](ai-assistance.md#pycharm-contributor-setup)
   to confirm that the tracked rule and shared workflow actions are available.
 - Active, shareable plans live under [`work/`](work/) and travel with their
-  implementation branch. Ignored `.agents/` content is local and disposable.
+  implementation branch. Ignored root `.work/` content is local and disposable.
 - Shared, secret-free PyCharm workflow actions live under the tracked `.run/`
   directory. Personal run configurations and environment variables remain
   ignored.

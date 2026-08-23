@@ -16,9 +16,9 @@ Tasks that change GitHub or another external system without repository code use
 `External settings — no branch`.
 
 Shareable work documents are committed with their implementation under
-`docs/development/work/`. Use ignored `docs/development/.agents/` only for
-disposable local notes, probes, and incomplete thoughts; nothing there is an
-authoritative work record.
+`docs/development/work/`. Use ignored root `.work/` only for disposable local
+plans, notes, probes, and incomplete thoughts; nothing there is an authoritative
+work record.
 
 ## Status values
 

@@ -197,7 +197,7 @@ def test_macos_presentation_actions_register_tcl_only_about_handler():
             "_cv_about_detail",
             "CaveViewer created by Brian Deatherage & Zsolt Zsabo of\n"
             "BottomLine Projects Scientific Dive Team and other volunteers.\n\n"
-            "Licensed under the GNU General Public License v3.0.",
+            "Licensed under GNU AGPLv3-only.",
         ),
     ]
     assert "proc ::tk::mac::ShowAbout" in root.scripts[0]

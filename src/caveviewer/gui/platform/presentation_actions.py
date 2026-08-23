@@ -129,7 +129,7 @@ class MacOSPresentationActionsAdapter(DefaultPresentationActionsAdapter):
         detail = (
             "CaveViewer created by Brian Deatherage & Zsolt Zsabo of\n"
             "BottomLine Projects Scientific Dive Team and other volunteers.\n\n"
-            "Licensed under the GNU General Public License v3.0."
+            "Licensed under GNU AGPLv3-only."
         )
 
         # Register the About handler as PURE TCL PROCS rather than Python
