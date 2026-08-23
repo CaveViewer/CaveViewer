@@ -28,14 +28,19 @@ the most convenient rule.
 - `/src/AGENTS.md`, `/src/caveviewer/core/AGENTS.md`,
   `/src/caveviewer/gui/AGENTS.md`, and `/tests/AGENTS.md`: scoped constraints.
 - `/.github/copilot-instructions.md`: GitHub Copilot repository adapter.
+- `/.aiassistant/rules/repository-instructions.md`: tracked JetBrains AI Chat
+  adapter; configure it as an **Always** project rule in PyCharm.
 - `/.aiignore`: reduces accidental JetBrains AI Assistant access to generated
   output and likely secret files. It is defense in depth, not a security
   boundary.
 
-Do not add `CLAUDE.md`, `GEMINI.md`, editor-specific rules, skills, or agent
-definitions until that tool is actually part of the project workflow. When an
-adapter is needed, keep it short and point it at `AGENTS.md` and these
-development documents.
+Do not add `CLAUDE.md`, `GEMINI.md`, skills, or agent definitions until that
+tool is actually part of the project workflow. Keep tool-specific adapters
+short and point them at `AGENTS.md` and these development documents.
+
+Shareable execution plans live under `/docs/development/work/` and are
+committed with their implementation. `/docs/development/.agents/` is reserved
+for ignored, disposable local notes and is never authoritative.
 
 ## Expected workflow
 

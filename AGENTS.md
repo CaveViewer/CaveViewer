@@ -19,18 +19,32 @@ inside a subdirectory supplements these rules for that area.
 - `docs/development/source-setup.md` remains the detailed source setup,
   packaging-variable, and runtime-configuration reference.
 
+## Session startup
+
+Before taking repository action, every agent must:
+
+1. Resolve and report the repository root.
+2. Read this file and every applicable scoped `AGENTS.md`.
+3. Inspect the active branch and Git status without changing either.
+4. Identify or create the tracked work document under
+   `docs/development/work/`.
+5. State the focused and complete validation commands appropriate to the work.
+
 ## Working agreement
 
 - Before editing repository files or changing repository-related external
   state, create a work document from
   `docs/development/work-definition.md` at
-  `docs/development/.agents/<work-name>.md`. Complete its A3-style master table,
+  `docs/development/work/<work-name>.md`. Complete its A3-style master table,
   order rows by implementation sequence, and keep it current through
   verification and merge. Do not begin implementation until the work document
   identifies the problem, current implementation, desired solution, task
   details, branch, and status. This rule applies to every agent and every
   repository task; a more specific `AGENTS.md` may add requirements but may not
   waive the work definition.
+- Treat `docs/development/work/` as the tracked, reviewable execution record.
+  `docs/development/.agents/` is reserved for disposable local notes and is
+  neither authoritative nor a substitute for the active work document.
 - Inspect `git status` before editing and preserve unrelated user changes.
 - Keep behavior changes, file moves, and formatting-only changes separate so
   each can be reviewed and reverted independently.

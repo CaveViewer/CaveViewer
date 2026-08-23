@@ -22,4 +22,5 @@ release_signing_private_key.pem
 
 # Per-user IDE state
 .idea/workspace.xml
-.run/
+.run/*
+!.run/GitHub - *.run.xml

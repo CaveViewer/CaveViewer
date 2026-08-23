@@ -2,6 +2,8 @@
 
 - [Work definition template](work-definition.md): required A3-style master
   table for planning and tracking all repository work before implementation.
+- [`work/`](work/): tracked, reviewable execution plans committed with their
+  implementation branches.
 - [Architecture](architecture.md): component boundaries, data flow, and
   concurrency rules.
 - [Repository layout](repository-layout.md): current paths, stable contracts,
@@ -36,7 +38,29 @@ root project README.
 
 Before editing repository files or changing repository-related external state,
 copy [the work definition template](work-definition.md) to
-`docs/development/.agents/<work-name>.md`. Complete and order its master table,
+`docs/development/work/<work-name>.md`. Complete and order its master table,
 then implement from that table. Keep the document's current implementation,
 desired solution, branch, and status fields synchronized through verification
 and merge. This requirement applies to human contributors and automated agents.
+
+`docs/development/.agents/` is ignored and reserved for disposable local notes,
+probes, and incomplete investigation. It is not authoritative and must not hold
+the only copy of an active work plan.
+
+## AI and agent instruction discovery
+
+- Coding agents start with the tracked root [`AGENTS.md`](../../AGENTS.md) and
+  inherit the nearest scoped `AGENTS.md` for source, core, GUI, or tests.
+- PyCharm AI Chat uses the tracked
+  [JetBrains project rule](../../.aiassistant/rules/repository-instructions.md),
+  which points back to the canonical `AGENTS.md` hierarchy without duplicating
+  it. In PyCharm, confirm this rule is configured as **Always** under
+  **Settings → Tools → AI Assistant → Rules**.
+- Active, shareable plans live under [`work/`](work/) and travel with their
+  implementation branch. Ignored `.agents/` content is local and disposable.
+- Shared, secret-free PyCharm workflow actions live under the tracked `.run/`
+  directory. Personal run configurations and environment variables remain
+  ignored.
+- Provider selection, model choice, credentials, permissions, and
+  `.idea/workspace.xml` are intentionally personal and are never the source of
+  repository instructions.

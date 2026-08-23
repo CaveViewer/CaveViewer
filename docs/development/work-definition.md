@@ -1,7 +1,7 @@
 # Work definition template
 
 Use this template to define repository work before implementation begins. Copy
-it to `docs/development/.agents/<work-name>.md`, replace every instruction and
+it to `docs/development/work/<work-name>.md`, replace every instruction and
 placeholder, and keep its master table current throughout the work.
 
 The work document is the execution record, not a speculative essay. Describe
@@ -14,6 +14,11 @@ work definition records a different required base and explains why. Combine
 related tasks on one branch; do not stack unrelated work on an unmerged branch.
 Tasks that change GitHub or another external system without repository code use
 `External settings — no branch`.
+
+Shareable work documents are committed with their implementation under
+`docs/development/work/`. Use ignored `docs/development/.agents/` only for
+disposable local notes, probes, and incomplete thoughts; nothing there is an
+authoritative work record.
 
 ## Status values
 
