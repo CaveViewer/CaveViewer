@@ -57,6 +57,9 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ inputs.source_sha }}
+          # This environment-only deploy key is the sole actor allowed to
+          # bypass the release/next PR rule for the final metadata push.
+          ssh-key: ${{ secrets.CAVEVIEWER_RELEASE_METADATA_DEPLOY_KEY }}
 
       - name: Set up signing Python
         uses: actions/setup-python@v7.0.0
