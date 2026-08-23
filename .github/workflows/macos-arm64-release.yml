@@ -136,6 +136,7 @@ jobs:
     needs: build-macos-arm64
     if: ${{ inputs.publish && needs.build-macos-arm64.result == 'success' }}
     uses: ./.github/workflows/finalize-release.yml
+    secrets: inherit
     permissions:
       contents: read
     with:

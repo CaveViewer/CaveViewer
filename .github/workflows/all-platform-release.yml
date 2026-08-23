@@ -128,6 +128,9 @@ jobs:
           && needs['macos-arm64'].result == 'success'
           && needs['macos-x86_64'].result == 'success' }}
     uses: ./.github/workflows/finalize-release.yml
+    # Required for production-release environment secrets to cross the
+    # reusable-workflow boundary. No package or test call inherits secrets.
+    secrets: inherit
     permissions:
       contents: read
     with:

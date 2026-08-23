@@ -172,6 +172,7 @@ jobs:
     needs: build-macos-x86_64
     if: ${{ inputs.publish && needs.build-macos-x86_64.result == 'success' }}
     uses: ./.github/workflows/finalize-release.yml
+    secrets: inherit
     permissions:
       contents: read
     with:

@@ -408,8 +408,10 @@ branch-level concurrency lock.
 
 The `production-release` environment secret
 `CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY` must contain the Ed25519 private key
-used for update manifests. Only the approved finalizer resolves this secret;
-callers and package-only jobs cannot forward or receive it.
+used for update manifests. Each publisher's finalizer call explicitly inherits
+secrets across GitHub's reusable-workflow boundary, but only the called
+finalizer attaches the approved environment and resolves those values. Package,
+test, and artifact-only jobs neither inherit nor receive release secrets.
 
 The GitHub release workflows do not currently offer an Authenticode signing
 path. Selecting `publish` for Windows automatically builds the same named EXE
