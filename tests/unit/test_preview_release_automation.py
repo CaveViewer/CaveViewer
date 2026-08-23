@@ -356,6 +356,7 @@ def test_release_workflows_have_focused_shared_pycharm_actions():
         "linux-x86_64-release.yml",
         "macos-arm64-release.yml",
         "macos-x86_64-release.yml",
+        "prepare-release-next.yml",
         "preview-release-promotion.yml",
         "tests.yml",
         "windows-release.yml",
@@ -380,7 +381,10 @@ def test_release_workflows_have_focused_shared_pycharm_actions():
                 parameters = option.attrib.get("value", "")
                 if parameters.startswith("--workflow "):
                     generic_workflows.add(parameters.split()[1])
-                    if parameters.split()[1] != "tests.yml":
+                    if parameters.split()[1] not in {
+                        "prepare-release-next.yml",
+                        "tests.yml",
+                    }:
                         assert "--release" in parameters
 
     assert "Preview Release" in configuration_names
@@ -413,8 +417,12 @@ def test_preview_promotion_workflow_is_manual_serial_and_write_scoped():
     assert "source_branch:" in workflow
     assert "release_notes:" in workflow
     assert "actions: write" in workflow
-    assert "contents: write" in workflow
+    assert "contents: read" in workflow
+    assert "contents: write" not in workflow
     assert "pull-requests: write" not in workflow
+    assert "environment: production-release" in workflow
+    assert "actions/create-github-app-token@v3.2.0" in workflow
+    assert "token: ${{ steps.release-app-token.outputs.token }}" in workflow
     assert "group: caveviewer-preview-release-promotion" in workflow
     assert "cancel-in-progress: false" in workflow
     assert "timeout-minutes: 360" in workflow
@@ -446,7 +454,7 @@ def test_preview_automation_has_one_fixed_gated_promotion_sequence():
 
     source_gate = source.index("merge-base --is-ancestor")
     release_sync = source.index(
-        'git -C "$repo_root" merge --no-edit "origin/$main_branch"'
+        'git -C "$repo_root" merge --ff-only "origin/$main_branch"'
     )
     release_dispatch = source.index("--workflow=all-platform-release.yml")
     manual_handoff = source.index("Main remains unchanged")

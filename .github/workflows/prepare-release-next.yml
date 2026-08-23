@@ -1,0 +1,65 @@
+name: Prepare Release Next
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: caveviewer-prepare-release-next
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Fast-forward release/next to main
+    runs-on: ubuntu-latest
+    environment: production-release
+
+    steps:
+      - name: Require main workflow source
+        env:
+          SELECTED_BRANCH: ${{ github.ref_name }}
+        run: test "$SELECTED_BRANCH" = "main"
+
+      - name: Create release publisher token
+        id: release-app-token
+        uses: actions/create-github-app-token@v3.2.0
+        with:
+          app-id: ${{ secrets.CAVEVIEWER_RELEASE_APP_ID }}
+          private-key: ${{ secrets.CAVEVIEWER_RELEASE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+
+      - name: Check out main
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: main
+          token: ${{ steps.release-app-token.outputs.token }}
+
+      - name: Fast-forward release/next
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin \
+            refs/heads/main:refs/remotes/origin/main \
+            refs/heads/release/next:refs/remotes/origin/release/next
+          if ! git merge-base --is-ancestor origin/release/next origin/main; then
+            echo "Error: release/next contains changes not reconciled with main." >&2
+            echo "Merge the release metadata into main before preparing another release." >&2
+            exit 1
+          fi
+          git push origin \
+            refs/remotes/origin/main:refs/heads/release/next
+
+      - name: Summarize prepared source
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          {
+            echo "## release/next prepared"
+            echo
+            echo "release/next was fast-forwarded to protected main at \`$SOURCE_SHA\`."
+            echo "Run an individual-platform or All Platforms release from release/next."
+          } >> "$GITHUB_STEP_SUMMARY"

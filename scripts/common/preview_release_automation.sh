@@ -84,7 +84,7 @@ git -C "$repo_root" fetch --no-tags origin \
   "refs/heads/$main_branch:refs/remotes/origin/$main_branch" \
   "refs/heads/$release_branch:refs/remotes/origin/$release_branch"
 git -C "$repo_root" switch -C "$release_branch" "origin/$release_branch"
-git -C "$repo_root" merge --no-edit "origin/$main_branch"
+git -C "$repo_root" merge --ff-only "origin/$main_branch"
 git -C "$repo_root" push origin "HEAD:refs/heads/$release_branch"
 release_source_sha="$(git -C "$repo_root" rev-parse HEAD)"
 
