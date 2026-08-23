@@ -515,6 +515,15 @@ def test_release_finalizer_is_the_single_shared_state_writer():
     ).read_text(encoding="utf-8")
 
     assert "contents: write" in workflow
+    assert "runs-on: ubuntu-latest\n    # Approval is intentionally requested" in workflow
+    assert "environment: production-release" in workflow
+    assert workflow.index("environment: production-release") < workflow.index(
+        "Download platform packages"
+    )
+    environment_position = workflow.index("environment: production-release")
+    assert environment_position < workflow.index(
+        "CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY", environment_position
+    )
     assert "group: caveviewer-publish-${{ github.ref }}" in workflow
     assert "actions/download-artifact@v8" in workflow
     assert "merge-multiple: true" in workflow
@@ -565,6 +574,33 @@ def test_release_finalizer_is_the_single_shared_state_writer():
         "updates/macos/x86_64/$manifest_channel.json",
     ):
         assert manifest_path in finalizer
+
+
+def test_every_release_publisher_uses_the_protected_finalizer_environment():
+    finalizer_path = WORKFLOWS_DIR / "finalize-release.yml"
+    finalizer = finalizer_path.read_text(encoding="utf-8")
+    assert finalizer.count("environment: production-release") == 1
+
+    publisher_workflows = (
+        "all-platform-release.yml",
+        "linux-x86_64-release.yml",
+        "macos-arm64-release.yml",
+        "macos-x86_64-release.yml",
+        "windows-release.yml",
+    )
+    for workflow_name in publisher_workflows:
+        workflow = (WORKFLOWS_DIR / workflow_name).read_text(encoding="utf-8")
+        assert "uses: ./.github/workflows/finalize-release.yml" in workflow
+        assert "gh release create" not in workflow
+        assert "CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY" in workflow
+
+    other_workflows = set(WORKFLOWS_DIR.glob("*.yml")) - {
+        finalizer_path,
+        *(WORKFLOWS_DIR / name for name in publisher_workflows),
+    }
+    for workflow_path in other_workflows:
+        workflow = workflow_path.read_text(encoding="utf-8")
+        assert "CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY" not in workflow, workflow_path
 
 
 @requires_executable_shell_scripts
