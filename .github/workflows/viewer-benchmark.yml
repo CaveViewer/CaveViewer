@@ -8,7 +8,7 @@ on:
         required: false
         type: string
       benchmark_map_sha256:
-        description: Optional SHA-256 for the benchmark map zip.
+        description: Required 64-character SHA-256 when a benchmark map URL is supplied.
         required: false
         type: string
       benchmark_cache_subdir:
@@ -35,11 +35,6 @@ on:
         description: Candidate ref. Leave empty to use the workflow SHA.
         required: false
         default: ""
-        type: string
-      runner_label:
-        description: Runner label with a stable GPU/display stack.
-        required: true
-        default: ubuntu-latest
         type: string
       use_xvfb:
         description: Run the viewer under xvfb-run.
@@ -73,7 +68,7 @@ permissions:
 jobs:
   benchmark:
     name: Benchmark viewer FPS
-    runs-on: ${{ inputs.runner_label }}
+    runs-on: ubuntu-latest
     timeout-minutes: 60
 
     steps:
@@ -89,6 +84,7 @@ jobs:
         with:
           ref: ${{ inputs.baseline_ref }}
           path: baseline
+          persist-credentials: false
 
       - name: Checkout candidate
         if: ${{ inputs.benchmark_map_url != '' }}
@@ -96,6 +92,15 @@ jobs:
         with:
           ref: ${{ inputs.candidate_ref != '' && inputs.candidate_ref || github.sha }}
           path: candidate
+          persist-credentials: false
+
+      - name: Checkout trusted benchmark archive helper
+        if: ${{ inputs.benchmark_map_url != '' }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: main
+          path: automation
+          persist-credentials: false
 
       - name: Set up Python
         if: ${{ inputs.benchmark_map_url != '' }}
@@ -116,24 +121,11 @@ jobs:
           BENCHMARK_MAP_URL: ${{ inputs.benchmark_map_url }}
           BENCHMARK_MAP_SHA256: ${{ inputs.benchmark_map_sha256 }}
         run: |
-          python - <<'PY'
-          import hashlib
-          import os
-          import pathlib
-          import urllib.request
-
-          url = os.environ["BENCHMARK_MAP_URL"]
-          expected_sha = os.environ.get("BENCHMARK_MAP_SHA256", "").strip().lower()
-          archive = pathlib.Path("benchmark-map.zip")
-          urllib.request.urlretrieve(url, archive)
-          actual_sha = hashlib.sha256(archive.read_bytes()).hexdigest()
-          print(f"benchmark_map_sha256={actual_sha}")
-          if expected_sha and actual_sha != expected_sha:
-              raise SystemExit(
-                  f"benchmark map SHA-256 mismatch: expected {expected_sha}, got {actual_sha}"
-              )
-          PY
-          python -m zipfile -e benchmark-map.zip benchmark-map
+          python automation/scripts/benchmark/prepare_benchmark_archive.py \
+            --url "$BENCHMARK_MAP_URL" \
+            --sha256 "$BENCHMARK_MAP_SHA256" \
+            --archive benchmark-map.zip \
+            --destination benchmark-map
 
       - name: Create benchmark environment
         if: ${{ inputs.benchmark_map_url != '' }}

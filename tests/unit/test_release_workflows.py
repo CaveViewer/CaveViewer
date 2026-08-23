@@ -387,10 +387,18 @@ def test_viewer_benchmark_workflow_compares_refs_and_uploads_artifacts():
 
     assert "name: Viewer Benchmark" in workflow
     assert "workflow_dispatch:" in workflow
+    assert "permissions:\n  contents: read" in workflow
+    assert "runner_label:" not in workflow
+    assert "runs-on: ubuntu-latest" in workflow
     assert "benchmark_map_url:" in workflow
+    assert "Required 64-character SHA-256" in workflow
     assert "threshold_config_path:" in workflow
     assert "default: benchmarks/viewer-thresholds.v1.json" in workflow
     assert "No benchmark_map_url was supplied." in workflow
+    assert "automation/scripts/benchmark/prepare_benchmark_archive.py" in workflow
+    assert "python -m zipfile -e" not in workflow
+    assert "urlretrieve" not in workflow
+    assert workflow.count("persist-credentials: false") == 3
     assert "ref: ${{ inputs.baseline_ref }}" in workflow
     assert "inputs.candidate_ref != '' && inputs.candidate_ref || github.sha" in workflow
     assert "python -m venv .venv-benchmark" in workflow
