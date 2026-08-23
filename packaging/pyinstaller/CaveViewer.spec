@@ -88,9 +88,13 @@ a = Analysis(
     datas=[
         (str(resources_root / 'shaders'), 'caveviewer/resources/shaders'),
         (str(resources_root / 'images'), 'caveviewer/resources/images'),
-        (
-            str(resources_root / 'release_signing_public_key.pem'),
-            'caveviewer/resources',
+        *(
+            (str(resources_root / filename), 'caveviewer/resources')
+            for filename in (
+                'release_signing_primary_public_key.pem',
+                'release_signing_recovery_public_key.pem',
+                'release_signing_legacy_public_key.pem',
+            )
         ),
         (
             str(resources_root / 'map_library_catalog.v1.json'),

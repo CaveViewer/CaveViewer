@@ -157,7 +157,9 @@ CaveViewer/
 │       └── resources/
 │           ├── shaders/
 │           ├── images/
-│           ├── release_signing_public_key.pem
+│           ├── release_signing_primary_public_key.pem
+│           ├── release_signing_recovery_public_key.pem
+│           ├── release_signing_legacy_public_key.pem
 │           ├── map_library_catalog.v1.json
 │           └── cave_metadata_catalog.v1.json
 ├── tests/

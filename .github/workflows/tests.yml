@@ -281,11 +281,21 @@ jobs:
           for manifest in "${manifests[@]}"; do
             signature="$signature_dir/$(tr '/' '_' <<< "$manifest").sig"
             base64 --decode "$manifest.sig" > "$signature"
-            openssl pkeyutl -verify -pubin \
-              -inkey src/caveviewer/resources/release_signing_public_key.pem \
-              -rawin \
-              -in "$manifest" \
-              -sigfile "$signature"
+            verified=false
+            for identity in primary recovery legacy; do
+              if openssl pkeyutl -verify -pubin \
+                -inkey "src/caveviewer/resources/release_signing_${identity}_public_key.pem" \
+                -rawin \
+                -in "$manifest" \
+                -sigfile "$signature" >/dev/null 2>&1; then
+                verified=true
+                break
+              fi
+            done
+            if [ "$verified" != true ]; then
+              echo "Manifest signature did not match any trusted release key: $manifest"
+              exit 1
+            fi
           done
 
       - name: Set up Python

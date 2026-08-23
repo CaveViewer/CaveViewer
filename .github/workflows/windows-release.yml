@@ -21,6 +21,12 @@ on:
         required: false
         type: boolean
         default: true
+      signing_identity:
+        description: "Manifest signing identity"
+        required: false
+        type: choice
+        options: [primary, recovery, legacy]
+        default: primary
   workflow_call:
     inputs:
       version:
@@ -42,6 +48,11 @@ on:
         required: false
         type: boolean
         default: false
+      signing_identity:
+        description: "Manifest signing identity"
+        required: false
+        type: string
+        default: primary
       allow_unsigned_windows_community:
         description: "Mark a package as unsigned-community when publication is finalized by the calling workflow"
         required: false
@@ -178,4 +189,5 @@ jobs:
       platforms: windows
       source_sha: ${{ inputs.source_sha || github.sha }}
       target_branch: ${{ github.ref_name }}
+      signing_identity: ${{ inputs.signing_identity }}
       allow_unsigned_windows_community: ${{ inputs.publish || inputs.allow_unsigned_windows_community }}

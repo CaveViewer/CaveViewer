@@ -21,6 +21,12 @@ on:
         required: false
         type: boolean
         default: true
+      signing_identity:
+        description: "Manifest signing identity"
+        required: false
+        type: choice
+        options: [primary, recovery, legacy]
+        default: primary
   workflow_call:
     inputs:
       version:
@@ -42,6 +48,11 @@ on:
         required: false
         type: boolean
         default: false
+      signing_identity:
+        description: "Manifest signing identity"
+        required: false
+        type: string
+        default: primary
       skip_essential_tests:
         description: "Skip this workflow's test gate when the caller already ran it"
         required: false
@@ -146,3 +157,4 @@ jobs:
       platforms: macos-arm64
       source_sha: ${{ inputs.source_sha || github.sha }}
       target_branch: ${{ github.ref_name }}
+      signing_identity: ${{ inputs.signing_identity }}

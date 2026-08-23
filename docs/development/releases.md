@@ -407,23 +407,77 @@ revisions. Finalizers from complete and individual platform workflows share a
 branch-level concurrency lock.
 
 The `production-release` environment secret
-`CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY` must contain the Ed25519 private key
-used for update manifests. Each publisher's finalizer call explicitly inherits
-secrets across GitHub's reusable-workflow boundary, but only the called
-finalizer attaches the approved environment and resolves those values. Package,
-test, and artifact-only jobs neither inherit nor receive release secrets.
-Before downloading release artifacts or publishing anything, the finalizer
-derives the private key's Ed25519 public key and requires an exact match with
-`src/caveviewer/resources/release_signing_public_key.pem`. A malformed,
+`CAVEVIEWER_RELEASE_PRIMARY_PRIVATE_KEY` contains the Ed25519 private key used
+for normal update manifests. `CAVEVIEWER_RELEASE_RECOVERY_PRIVATE_KEY` is
+uploaded only for a controlled recovery operation, then removed; its durable
+copy remains offline. `CAVEVIEWER_RELEASE_LEGACY_PRIVATE_KEY` is optional and
+must be added only if the original private key is recovered and proves an exact
+match to the retained legacy public key. Each publisher's finalizer call
+explicitly inherits secrets across GitHub's reusable-workflow boundary, but
+only the called finalizer attaches the approved environment and resolves the
+one value selected by `signing_identity`. Package, test, and artifact-only jobs
+neither inherit nor receive release secrets. Before downloading release
+artifacts or publishing anything, the finalizer derives the selected private
+key's Ed25519 public key and requires an exact match with the corresponding
+`primary`, `recovery`, or `legacy` bundled public key. A missing, malformed,
 wrong-type, or mismatched key fails without creating a release or metadata.
+
+The updater checks the primary, recovery, and legacy public keys in that order.
+The first successful Ed25519 verification authenticates the exact manifest
+bytes. Key-selection details are logged but never shown in update labels or
+dialogs. Missing or malformed individual trust roots do not disable the others;
+an unsigned manifest or one rejected by all three keys exposes no update action.
+The legacy public key preserves the trust root used by older installations. If
+its private key remains unavailable, those installations require a manual
+bootstrap installation before they can trust the new primary and recovery
+keys.
+
+### Signing identities and recovery
+
+Normal GitHub releases leave **Manifest signing identity** set to `primary`.
+Selecting `recovery` is an emergency operation that requires explicit
+`production-release` approval and the temporary presence of
+`CAVEVIEWER_RELEASE_RECOVERY_PRIVATE_KEY`. Select `legacy` only after recovering
+the original key and proving it matches
+`release_signing_legacy_public_key.pem`. The workflow validates the selected
+identity before creating publisher credentials and fails before artifact
+download when its secret is absent or does not match.
+
+Generate primary and recovery pairs independently. Keep the output directory
+outside the repository and protect private files with mode `0600`:
+
+```bash
+openssl genpkey -algorithm Ed25519 -out primary-private.pem
+openssl pkey -in primary-private.pem -pubout -out primary-public.pem
+openssl genpkey -algorithm Ed25519 -out recovery-private.pem
+openssl pkey -in recovery-private.pem -pubout -out recovery-public.pem
+chmod 600 primary-private.pem recovery-private.pem
+```
+
+Commit only the public files after reviewing their fingerprints. Store the
+primary private key in the protected environment:
+
+```bash
+gh secret set CAVEVIEWER_RELEASE_PRIMARY_PRIVATE_KEY \
+  --repo CaveViewer/CaveViewer \
+  --env production-release \
+  < primary-private.pem
+```
+
+Keep the recovery private key offline. Upload it under
+`CAVEVIEWER_RELEASE_RECOVERY_PRIVATE_KEY` only for a recovery exercise or
+release, and delete that environment secret afterward. GitHub does not reveal
+stored secret values, so retain separately controlled offline copies and test
+the recovery procedure periodically. The GitHub App private key is a different
+credential and must never be used as a manifest-signing key.
 
 The GitHub release workflows do not currently offer an Authenticode signing
 path. Selecting `publish` for Windows automatically builds the same named EXE
 on `windows-latest`, marks its package metadata `unsigned-community`, and
 permits the finalizer to publish it. The finalizer verifies the installer size
 and SHA-256 locally and again against GitHub's uploaded asset metadata, then
-signs the Windows update manifest with
-`CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY`. Installed CaveViewer applications
+signs the Windows update manifest with the explicitly selected protected
+signing identity. Installed CaveViewer applications
 verify that manifest signature and require an explicit `Install and restart`
 click before launching the downloaded installer. This does not remove Windows
 SmartScreen or unknown-publisher warnings; users must accept those warnings
@@ -534,7 +588,8 @@ already passed. `--preview` is valid with `build`, `package`, and
 `release`; it selects the preview metadata embedded in every resulting
 package, while `release` also marks the GitHub release as a preview.
 Publishing also requires an authenticated GitHub CLI and a local
-`CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY`; local recovery publication cannot
+`CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY` pointing to the deliberately selected
+private key; local recovery publication cannot
 read GitHub environment secrets.
 Local publishing is an exceptional recovery path, not the normal contributor
 workflow. If it is required, check out synchronized `release/next`, publish
@@ -549,7 +604,8 @@ same required-check PR. Never publish locally from `main` or a feature branch.
 - Confirm `src/caveviewer/version.py` contains the released version.
 - Confirm every platform/channel manifest contains the expected version, URL,
   byte size, and SHA-256.
-- Verify every platform's `.json.sig` files with the bundled public key.
+- Verify every platform's `.json.sig` files with the selected bundled public
+  key and confirm the finalizer summary records the intended signing identity.
 - Confirm macOS legacy aliases still match the ARM64 manifests and signatures.
 - Confirm the selected branch contains the single release metadata commit and
   has no unexpected generated files.
