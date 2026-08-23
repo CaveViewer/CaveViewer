@@ -106,7 +106,7 @@ next_version="$(
     printf '%s\n' "$current_version"
     gh api --paginate "repos/$repo/releases?per_page=100" --jq '.[].tag_name'
     gh api --paginate "repos/$repo/tags?per_page=100" --jq '.[].name'
-  } | python3 "$version_selector"
+  } | python3 "$version_selector" --bump patch
 )"
 echo "Publishing Preview v$next_version from $release_branch at $release_source_sha."
 

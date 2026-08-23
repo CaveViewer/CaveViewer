@@ -94,6 +94,33 @@ GitHub workflow inputs must use the bare numeric version, not `v1.0.64`.
 Artifact upload paths use that input verbatim. Local release scripts normalize
 an optional leading `v`, and GitHub uses the tag `v<version>`.
 
+### Version increment policy
+
+CaveViewer uses `MAJOR.MINOR.PATCH` product versions. The components are
+independent integer counters, not decimal digits:
+
+- **PATCH** is the default for every ordinary published build. It is unbounded,
+  so `1.0.99` becomes `1.0.100`; it never rolls over automatically.
+- **MINOR** is an explicit feature milestone. It increments MINOR and resets
+  PATCH, so selecting minor after `1.0.99` produces `1.1.0`.
+- **MAJOR** is an explicit incompatible product, persisted-data, or update-system
+  generation. It increments MAJOR and resets the other components, so selecting
+  major after `1.0.99` produces `2.0.0`.
+
+Preview and stable are channels, not version components. Automatic selection
+uses the greatest non-draft numeric GitHub Release from either channel, ensuring
+every new release is newer than all published Preview and stable releases.
+Historical two-component versions are treated as having a zero patch component
+for bump calculation; new publication inputs must use canonical three-component
+form. Versions with more than three components require an explicit migration
+rather than an inferred bump.
+
+The shared PyCharm release actions prompt for `patch`, `minor`, or `major`, with
+patch as the default. Scripted callers can pass `--bump patch`, `--bump minor`,
+or `--bump major`. `--version MAJOR.MINOR.PATCH` is CLI-only and reserved for
+resuming an interrupted existing release from the same immutable source and
+channel. It is not a general override for choosing a new lower version.
+
 - A stable publish updates `stable.json`. A newly created GitHub release is a
   normal release.
 - A Preview publish updates `preview.json`. A newly created GitHub release is
@@ -269,9 +296,10 @@ Stable and individual-platform publishing use the same branch topology:
    do not push `release/next` with a contributor credential.
 3. Fetch and check out the prepared `release/next`, then run the tracked
    PyCharm **All Platform
-   Release** or desired **Release …** platform action. The launcher selects the
-   next version automatically, asks for `preview` or `stable` with Preview as
-   the default, and explicitly enables publication.
+   Release** or desired **Release …** platform action. The launcher asks for a
+   `patch`, `minor`, or `major` increment with Patch as the default, derives it
+   from the greatest stable or Preview release, asks for `preview` or `stable`
+   with Preview as the default, and explicitly enables publication.
 4. Wait for the workflow's Essential Tests and every package validation to
    succeed for the immutable release source.
 5. After successful publication, manually open, review, and merge the
@@ -549,6 +577,22 @@ must still use `release/next`; the launcher and finalizer both reject a feature
 branch or `main`. Use the same
 `release/next` commit, version, release notes, `publish`, and `preview` values
 when resuming an intentionally partial release.
+
+For a controlled resume through the common launcher, pass the already-created
+canonical version explicitly:
+
+```bash
+python scripts/common/launch_github_workflow.py \
+  --workflow linux-x86_64-release.yml \
+  --release \
+  --channel preview \
+  --version 1.0.100
+```
+
+Before tests or packaging, the workflow permits that exact version only when
+the existing GitHub Release has the requested channel and its tag resolves to
+the workflow's immutable source SHA. A lower version, channel mismatch, or tag
+from another source fails immediately.
 
 An all-platform build failure does not publish any platform or manifest because
 the finalizer requires all four package jobs to succeed. Inspect the retained

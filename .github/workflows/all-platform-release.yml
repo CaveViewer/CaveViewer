@@ -48,6 +48,20 @@ jobs:
         env:
           RELEASE_BRANCH: ${{ github.ref_name }}
         run: test "$RELEASE_BRANCH" = "release/next"
+      - name: Check out the immutable release source
+        if: ${{ inputs.publish }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+      - name: Validate release version before packaging
+        if: ${{ inputs.publish }}
+        env:
+          CAVEVIEWER_GITHUB_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_PREVIEW: ${{ inputs.preview }}
+          RELEASE_SOURCE_SHA: ${{ github.sha }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: bash scripts/common/validate_release_workflow.sh
 
   essential-tests:
     needs: validate-release-branch

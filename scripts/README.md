@@ -113,12 +113,20 @@ completion. The shared **Release …** configurations require checked-out
 `release/next`, prompt for Preview or Stable with Preview as the default, and
 explicitly enable publication plus gated metadata reconciliation. For release
 workflows, the launcher finds the greatest dotted version among
-all published stable and preview GitHub releases, increments the final number,
-and supplies that version automatically. This makes every new preview newer
-than the latest stable or preview and every stable newer than the latest
-preview. Draft releases are ignored. Other missing required inputs are prompted
-for, and optional inputs retain their workflow defaults. For scripted use or an
-intentional override, pass repeatable `--field name=value` arguments.
+all published stable and preview GitHub releases and prompts for a `patch`,
+`minor`, or `major` increment. Patch is the default and is unbounded:
+`1.0.99` becomes `1.0.100`. Minor produces `1.1.0`; major produces `2.0.0`.
+This makes every new preview newer than the latest stable or preview and every
+stable newer than the latest preview. Draft releases are ignored. Scripted
+callers can pass `--bump patch`, `--bump minor`, or `--bump major`.
+
+`--version MAJOR.MINOR.PATCH` is reserved for resuming an interrupted release
+from the same tag source and channel; it is not a routine version override.
+Direct workflow publication validates version ordering before tests and
+packaging, and an exact resume additionally verifies the existing release's
+channel and immutable tag source. Other missing required inputs are prompted
+for, and optional inputs retain their workflow defaults. Non-release scripted
+workflow inputs can still use repeatable `--field name=value` arguments.
 
 Release workflows live under `.github/workflows/` for macOS 15, Windows, and
 Linux x86_64. Each platform workflow can be dispatched directly or called by
