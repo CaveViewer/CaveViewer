@@ -34,11 +34,6 @@ on:
         required: false
         type: boolean
         default: false
-    secrets:
-      CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY:
-        description: "Private key used to sign published update manifests"
-        required: true
-
 permissions:
   contents: write
 
@@ -84,6 +79,8 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Configure release signing key
+        # This resolves only after the production-release environment is
+        # approved; callers cannot forward a repository-level signing key.
         env:
           SIGNING_PRIVATE_KEY_PEM: ${{ secrets.CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY }}
         run: |

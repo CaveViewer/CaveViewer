@@ -38,7 +38,7 @@ def test_macos_release_workflows_use_architecture_specific_contracts():
         assert "uses: ./.github/workflows/finalize-release.yml" in workflow
         assert f"platforms: {target}" in workflow
         assert "source_sha: ${{ inputs.source_sha || github.sha }}" in workflow
-        assert "CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY" in workflow
+        assert "CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY" not in workflow
         assert (
             f"dist/macos/packages/CaveViewer-${{{{ inputs.version }}}}-{target}.dmg"
         ) in workflow
@@ -79,7 +79,7 @@ def test_platform_release_workflows_package_immutable_source_before_finalizing()
         assert "workflow_call:" in workflow, workflow_name
         assert "publish:" in workflow, workflow_name
         assert "preview:" in workflow, workflow_name
-        assert "CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY:" in workflow, workflow_name
+        assert "CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY" not in workflow, workflow_name
         assert "uses: ./.github/workflows/tests.yml" in workflow, workflow_name
         assert "needs: essential-tests" in workflow, workflow_name
         assert "skip_essential_tests:" in workflow, workflow_name
@@ -592,12 +592,9 @@ def test_every_release_publisher_uses_the_protected_finalizer_environment():
         workflow = (WORKFLOWS_DIR / workflow_name).read_text(encoding="utf-8")
         assert "uses: ./.github/workflows/finalize-release.yml" in workflow
         assert "gh release create" not in workflow
-        assert "CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY" in workflow
+        assert "CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY" not in workflow
 
-    other_workflows = set(WORKFLOWS_DIR.glob("*.yml")) - {
-        finalizer_path,
-        *(WORKFLOWS_DIR / name for name in publisher_workflows),
-    }
+    other_workflows = set(WORKFLOWS_DIR.glob("*.yml")) - {finalizer_path}
     for workflow_path in other_workflows:
         workflow = workflow_path.read_text(encoding="utf-8")
         assert "CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY" not in workflow, workflow_path

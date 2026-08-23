@@ -138,5 +138,3 @@ jobs:
       source_sha: ${{ github.sha }}
       target_branch: ${{ github.ref_name }}
       allow_unsigned_windows_community: ${{ inputs.publish }}
-    secrets:
-      CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY: ${{ secrets.CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY }}
