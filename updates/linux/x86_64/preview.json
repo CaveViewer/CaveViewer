@@ -5,7 +5,7 @@
   "download_url_linux_appimage": "https://github.com/CaveViewer/CaveViewer/releases/download/v1.0.92/CaveViewer-1.0.92-x86_64.AppImage",
   "latest_version": "1.0.92",
   "release_channel": "preview",
-  "release_notes": "Linux x86_64 release",
-  "sha256": "87d166ba23080086c20ed672fa6d8d56f50b9c3def1f42a6ed8751acff8c95e8",
-  "sha256_linux_appimage": "87d166ba23080086c20ed672fa6d8d56f50b9c3def1f42a6ed8751acff8c95e8"
+  "release_notes": "CaveViewer 1.0.92 preview recovery-signing bootstrap release",
+  "sha256": "fe0eabedceba1d2f433465733015001aebddf4ea5c37e46044659c350b620d93",
+  "sha256_linux_appimage": "fe0eabedceba1d2f433465733015001aebddf4ea5c37e46044659c350b620d93"
 }
