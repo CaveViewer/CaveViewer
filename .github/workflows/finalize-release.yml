@@ -35,7 +35,7 @@ on:
         type: boolean
         default: false
 permissions:
-  contents: write
+  contents: read
 
 # Builds use target-specific concurrency groups. Only this shared-state writer
 # is serialized across release entry points for the selected source branch.
@@ -52,11 +52,21 @@ jobs:
     environment: production-release
 
     steps:
+      - name: Create release publisher token
+        id: release-app-token
+        uses: actions/create-github-app-token@v3.2.0
+        with:
+          app-id: ${{ secrets.CAVEVIEWER_RELEASE_APP_ID }}
+          private-key: ${{ secrets.CAVEVIEWER_RELEASE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+
       - name: Check out the immutable release source
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
           ref: ${{ inputs.source_sha }}
+          token: ${{ steps.release-app-token.outputs.token }}
 
       - name: Set up signing Python
         uses: actions/setup-python@v7.0.0
@@ -95,7 +105,7 @@ jobs:
 
       - name: Publish assets and signed update metadata
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.release-app-token.outputs.token }}
           CAVEVIEWER_GITHUB_REPO: ${{ github.repository }}
           RELEASE_VERSION: ${{ inputs.version }}
           RELEASE_NOTES: ${{ inputs.release_notes }}
