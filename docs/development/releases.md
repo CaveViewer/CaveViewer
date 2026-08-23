@@ -356,9 +356,10 @@ release safely instead of mixing artifacts and metadata from different source
 revisions. Finalizers from complete and individual platform workflows share a
 branch-level concurrency lock.
 
-The repository secret `CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY` must contain the
-Ed25519 private key used for update manifests. Only the finalizer receives this
-secret. Package-only runs do not require it.
+The `production-release` environment secret
+`CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY` must contain the Ed25519 private key
+used for update manifests. Only the approved finalizer resolves this secret;
+callers and package-only jobs cannot forward or receive it.
 
 The GitHub release workflows do not currently offer an Authenticode signing
 path. Selecting `publish` for Windows automatically builds the same named EXE
@@ -476,8 +477,9 @@ pytest suite. Use `--skip-tests` only when an equivalent external gate has
 already passed. `--preview` is valid with `build`, `package`, and
 `release`; it selects the preview metadata embedded in every resulting
 package, while `release` also marks the GitHub release as a preview.
-Publishing also requires an authenticated GitHub CLI and
-`CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY`.
+Publishing also requires an authenticated GitHub CLI and a local
+`CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY`; local recovery publication cannot
+read GitHub environment secrets.
 Local publishing is an exceptional recovery path, not the normal contributor
 workflow. If it is required, check out synchronized `release/next`, publish
 there, push its metadata commit, and merge that metadata into `main` through the

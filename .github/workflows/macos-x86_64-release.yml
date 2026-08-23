@@ -52,11 +52,6 @@ on:
         required: false
         type: string
         default: ""
-    secrets:
-      CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY:
-        description: "Private key used to sign published update manifests"
-        required: false
-
 # Nested reusable workflows cannot elevate permissions granted by their caller.
 # Keep write available for publish-macos-x86_64; executable jobs downgrade to read.
 permissions:
@@ -186,5 +181,3 @@ jobs:
       platforms: macos-x86_64
       source_sha: ${{ inputs.source_sha || github.sha }}
       target_branch: ${{ github.ref_name }}
-    secrets:
-      CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY: ${{ secrets.CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY }}
