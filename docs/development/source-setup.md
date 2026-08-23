@@ -37,7 +37,7 @@ Release packages should include:
 - `LICENSE`
 - `THIRD_PARTY_NOTICES.md`
 
-The application About text should identify CaveViewer as licensed under the GNU General Public License version 3.0.
+The application About text should identify CaveViewer as licensed under the GNU Affero General Public License version 3.0 only.
 
 ## Requirements
 

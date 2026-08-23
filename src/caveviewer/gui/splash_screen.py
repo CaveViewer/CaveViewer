@@ -219,7 +219,7 @@ _CREDITS_TEXT = (
     "Concept by Brian Deatherage and Zsolt Szabo of\n"
     "BottomLine Projects Scientific Dive Team.\n"
     "Engineering and design by magic mr_v.\n\n"
-    "Licensed under the GNU General Public License v3.0.\n")
+    "Licensed under GNU AGPLv3-only.\n")
 _CAVEVIEWER_WEBSITE_URL = "https://www.caveviewer.com"
 _BOTTOMLINE_PROJECTS_WEBSITE_URL = "https://www.bottomlineprojects.com"
 _ABOUT_WEBSITE_LINKS = (

@@ -79,7 +79,10 @@ release artifact. The DMGs and AppImages are bundled applications.
 GitHub automatically provides its own source-code ZIP and tarball for each tag.
 `scripts/common/package_source.sh` can create
 `CaveViewer-<version>-source.tar.gz` locally, but the current release workflows
-do not upload that tarball as a release asset.
+do not upload that tarball as a release asset. Each published `v<version>` tag
+is the corresponding-source reference for that exact release; post-release
+verification must confirm that it resolves to the immutable workflow source.
+Every packaged application retains `LICENSE` and `THIRD_PARTY_NOTICES.md`.
 
 ## Channels and update paths
 

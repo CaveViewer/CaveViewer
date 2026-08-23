@@ -39,8 +39,8 @@ tool is actually part of the project workflow. Keep tool-specific adapters
 short and point them at `AGENTS.md` and these development documents.
 
 Shareable execution plans live under `/docs/development/work/` and are
-committed with their implementation. `/docs/development/.agents/` is reserved
-for ignored, disposable local notes and is never authoritative.
+committed with their implementation. Root `/.work/` is reserved for ignored,
+disposable local plans and notes and is never authoritative.
 
 ## PyCharm contributor setup
 

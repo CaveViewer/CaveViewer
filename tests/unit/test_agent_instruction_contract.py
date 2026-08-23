@@ -29,6 +29,7 @@ def test_root_instructions_require_tracked_work_and_startup_checks() -> None:
 
     assert "docs/development/work/<work-name>.md" in instructions
     assert "docs/development/.agents/<work-name>.md" not in instructions
+    assert "Root `.work/`" in instructions
     assert "## Session startup" in instructions
     assert "Inspect the active branch and Git status" in instructions
     assert "focused and complete validation commands" in instructions
@@ -45,6 +46,8 @@ def test_jetbrains_rule_delegates_to_canonical_instructions() -> None:
     gitignore = _read(".gitignore")
     assert "!.aiassistant/rules/" in gitignore
     assert "!.aiassistant/rules/*.md" in gitignore
+    assert "/.work/" in gitignore
+    assert "docs/development/.agents/" not in gitignore
 
 
 def test_shared_pycharm_workflows_remain_visible_to_jetbrains_agents() -> None:
@@ -72,12 +75,16 @@ def test_work_definition_and_discovery_docs_use_tracked_work_directory() -> None
     )
 
     assert "docs/development/work/<work-name>.md" in template
+    assert "ignored root `.work/`" in template
+    assert "docs/development/.agents/" not in template
     assert "vertical-align: top" in template
     assert "failed build or release workflow" in template.lower()
     for column in required_columns:
         assert column in template
 
     assert "docs/development/work/<work-name>.md" in readme
+    assert "Root `.work/` is ignored" in readme
+    assert "docs/development/.agents/" not in readme
     assert ".aiassistant/rules/repository-instructions.md" in readme
 
     assistance = _read("docs/development/ai-assistance.md")

@@ -43,8 +43,8 @@ Before taking repository action, every agent must:
   repository task; a more specific `AGENTS.md` may add requirements but may not
   waive the work definition.
 - Treat `docs/development/work/` as the tracked, reviewable execution record.
-  `docs/development/.agents/` is reserved for disposable local notes and is
-  neither authoritative nor a substitute for the active work document.
+  Root `.work/` is reserved for ignored, disposable local plans and notes; it
+  is neither authoritative nor a substitute for the active work document.
 - Inspect `git status` before editing and preserve unrelated user changes.
 - Keep behavior changes, file moves, and formatting-only changes separate so
   each can be reviewed and reverted independently.

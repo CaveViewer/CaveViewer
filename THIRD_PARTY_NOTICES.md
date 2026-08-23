@@ -1,6 +1,6 @@
 # Third-Party Notices
 
-CaveViewer is licensed under the GNU General Public License version 3.0. See
+CaveViewer is licensed under the GNU Affero General Public License version 3.0 only. See
 `LICENSE` for the full license text.
 
 This project also uses third-party Python packages. The runtime dependency list
