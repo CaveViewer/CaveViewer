@@ -114,6 +114,40 @@ def test_platform_release_workflows_package_immutable_source_before_finalizing()
         assert "default: true" in dispatch_contract
         assert "Require release/next for publication" in workflow
         assert 'run: test "$RELEASE_BRANCH" = "release/next"' in workflow
+        assert "Validate release version before packaging" in workflow
+        assert "bash scripts/common/validate_release_workflow.sh" in workflow
+        assert "RELEASE_VERSION: ${{ inputs.version }}" in workflow
+        assert "RELEASE_PREVIEW: ${{ inputs.preview }}" in workflow
+        assert workflow.index("Validate release version before packaging") < workflow.index(
+            "uses: ./.github/workflows/tests.yml"
+        )
+
+
+def test_release_version_guard_validates_exact_resume_identity():
+    guard = (
+        REPOSITORY_ROOT / "scripts" / "common" / "validate_release_workflow.sh"
+    ).read_text(encoding="utf-8")
+
+    assert "select(.draft == false)" in guard
+    assert 'if [ "$classification" = "new" ]' in guard
+    assert "--json isPrerelease" in guard
+    assert 'if [ "$existing_preview" != "$RELEASE_PREVIEW" ]' in guard
+    assert "ls-remote --exit-code origin" in guard
+    assert 'tag_source_sha="$(git -C "$repo_root" rev-list -n 1 "$tag")"' in guard
+    assert 'if [ "$tag_source_sha" != "$RELEASE_SOURCE_SHA" ]' in guard
+
+
+def test_all_platform_release_validates_version_before_essential_tests():
+    workflow = (WORKFLOWS_DIR / "all-platform-release.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "Validate release version before packaging" in workflow
+    assert "bash scripts/common/validate_release_workflow.sh" in workflow
+    assert "RELEASE_SOURCE_SHA: ${{ github.sha }}" in workflow
+    assert workflow.index("Validate release version before packaging") < workflow.index(
+        "uses: ./.github/workflows/tests.yml"
+    )
 
 
 def test_release_channel_is_forwarded_to_all_platform_package_builds():
