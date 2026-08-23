@@ -153,7 +153,7 @@ def release_dispatch_fields(
     *,
     input_fn: Callable[[str], str] = input,
 ) -> tuple[str, ...]:
-    """Force publication/reconciliation and select the release channel."""
+    """Force publication and select the release channel."""
     selected_channel = channel
     if selected_channel is None:
         selected_channel = input_fn(
@@ -164,7 +164,7 @@ def release_dispatch_fields(
     if selected_channel not in {"stable", "preview"}:
         raise ValueError("Release channel must be 'stable' or 'preview'.")
 
-    reserved = {"publish", "preview", "reconcile_metadata"}
+    reserved = {"publish", "preview"}
     explicit_names = {field.partition("=")[0].strip() for field in supplied_fields}
     conflicts = reserved & explicit_names
     if conflicts:
@@ -174,7 +174,6 @@ def release_dispatch_fields(
         *supplied_fields,
         "publish=true",
         f"preview={'true' if selected_channel == 'preview' else 'false'}",
-        "reconcile_metadata=true",
     )
 
 

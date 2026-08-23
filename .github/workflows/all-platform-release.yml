@@ -23,11 +23,6 @@ on:
         required: false
         type: boolean
         default: true
-      reconcile_metadata:
-        description: "Validate and merge published metadata into main"
-        required: false
-        type: boolean
-        default: true
       reuse_pr_validation:
         description: "Reuse successful PR validation when app/package source has not changed; skip duplicate test suites"
         required: false
@@ -35,9 +30,7 @@ on:
         default: false
 
 permissions:
-  actions: write
-  contents: write
-  pull-requests: write
+  contents: read
 
 concurrency:
   group: caveviewer-all-platform-release-${{ github.ref }}
@@ -70,7 +63,7 @@ jobs:
     # Preserve write through the reusable-workflow call chain. The called
     # workflow downgrades its test and package jobs to read-only.
     permissions:
-      contents: write
+      contents: read
     with:
       version: ${{ inputs.version }}
       release_notes: ${{ inputs.release_notes }}
@@ -89,7 +82,7 @@ jobs:
     if: ${{ !cancelled() && (inputs.reuse_pr_validation == true || needs.essential-tests.result == 'success') }}
     uses: ./.github/workflows/linux-x86_64-release.yml
     permissions:
-      contents: write
+      contents: read
     with:
       version: ${{ inputs.version }}
       release_notes: ${{ inputs.release_notes }}
@@ -105,7 +98,7 @@ jobs:
     if: ${{ !cancelled() && (inputs.reuse_pr_validation == true || needs.essential-tests.result == 'success') }}
     uses: ./.github/workflows/macos-arm64-release.yml
     permissions:
-      contents: write
+      contents: read
     with:
       version: ${{ inputs.version }}
       release_notes: ${{ inputs.release_notes }}
@@ -121,7 +114,7 @@ jobs:
     if: ${{ !cancelled() && (inputs.reuse_pr_validation == true || needs.essential-tests.result == 'success') }}
     uses: ./.github/workflows/macos-x86_64-release.yml
     permissions:
-      contents: write
+      contents: read
     with:
       version: ${{ inputs.version }}
       release_notes: ${{ inputs.release_notes }}
@@ -146,9 +139,7 @@ jobs:
           && needs['macos-x86_64'].result == 'success' }}
     uses: ./.github/workflows/finalize-release.yml
     permissions:
-      actions: write
       contents: write
-      pull-requests: write
     with:
       version: ${{ inputs.version }}
       release_notes: ${{ inputs.release_notes }}
@@ -157,6 +148,5 @@ jobs:
       source_sha: ${{ github.sha }}
       target_branch: ${{ github.ref_name }}
       allow_unsigned_windows_community: ${{ inputs.publish }}
-      reconcile_metadata: ${{ inputs.reconcile_metadata }}
     secrets:
       CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY: ${{ secrets.CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY }}

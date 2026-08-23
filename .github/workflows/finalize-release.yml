@@ -34,20 +34,13 @@ on:
         required: false
         type: boolean
         default: false
-      reconcile_metadata:
-        description: "Validate and merge release/next metadata into protected main"
-        required: false
-        type: boolean
-        default: false
     secrets:
       CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY:
         description: "Private key used to sign published update manifests"
         required: true
 
 permissions:
-  actions: write
   contents: write
-  pull-requests: write
 
 # Builds use target-specific concurrency groups. Only this shared-state writer
 # is serialized across release entry points for the selected source branch.
@@ -126,14 +119,3 @@ jobs:
             finalize_args+=(--allow-unsigned-windows-community)
           fi
           ./scripts/common/finalize_release.sh "${finalize_args[@]}"
-
-      - name: Reconcile published metadata with main
-        if: ${{ inputs.reconcile_metadata }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_VERSION: ${{ inputs.version }}
-          RELEASE_CHANNEL: ${{ inputs.preview && 'preview' || 'stable' }}
-        run: |
-          ./scripts/common/reconcile_release_metadata.sh \
-            --version="$RELEASE_VERSION" \
-            --channel="$RELEASE_CHANNEL"

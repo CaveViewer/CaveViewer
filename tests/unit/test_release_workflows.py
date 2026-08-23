@@ -99,12 +99,11 @@ def test_platform_release_workflows_package_immutable_source_before_finalizing()
         assert "reuse_pr_validation" in dispatch_contract, workflow_name
         assert "ref: ${{ inputs.source_sha || github.sha }}" in workflow, workflow_name
         workflow_header = workflow.split("\njobs:\n", 1)[0]
-        assert "actions: write" in workflow_header, workflow_name
-        assert "contents: write" in workflow_header, workflow_name
-        assert "pull-requests: write" in workflow_header, workflow_name
+        assert "contents: read" in workflow_header, workflow_name
         assert workflow.count("permissions:\n      contents: read") == 3, workflow_name
-        assert "actions: write" in workflow, workflow_name
-        assert "pull-requests: write" in workflow, workflow_name
+        assert "actions: write" not in workflow, workflow_name
+        assert "pull-requests: write" not in workflow, workflow_name
+        assert workflow.count("permissions:\n      contents: write") == 1, workflow_name
         assert f"group: caveviewer-build-{target}-" in workflow, workflow_name
         assert "--action=package" in workflow, workflow_name
         assert "--action=release" not in workflow, workflow_name
@@ -113,7 +112,7 @@ def test_platform_release_workflows_package_immutable_source_before_finalizing()
         assert "uses: ./.github/workflows/finalize-release.yml" in workflow
         assert f"platforms: {target}" in workflow
         assert "inputs.publish" in workflow
-        assert "reconcile_metadata: ${{ inputs.reconcile_metadata }}" in workflow
+        assert "reconcile_metadata" not in workflow
         assert "default: true" in dispatch_contract
         assert "Require release/next for publication" in workflow
         assert 'run: test "$RELEASE_BRANCH" = "release/next"' in workflow
@@ -150,7 +149,7 @@ def test_release_channel_is_forwarded_to_all_platform_package_builds():
         assert "--release-channel=\"$RELEASE_CHANNEL\"" in workflow
 
 
-def test_direct_release_dispatches_publish_and_reconcile_by_default():
+def test_direct_release_dispatches_publish_without_reconciliation_input():
     workflow_names = (
         "all-platform-release.yml",
         "windows-release.yml",
@@ -166,14 +165,11 @@ def test_direct_release_dispatches_publish_and_reconcile_by_default():
             "      publish:\n", 1
         )[0]
         publish = dispatch.split("      publish:\n", 1)[1].split(
-            "      reconcile_metadata:\n", 1
-        )[0]
-        reconcile = dispatch.split("      reconcile_metadata:\n", 1)[1].split(
             "      reuse_pr_validation:\n", 1
         )[0]
         assert "default: true" in preview, workflow_name
         assert "default: true" in publish, workflow_name
-        assert "default: true" in reconcile, workflow_name
+        assert "reconcile_metadata" not in dispatch, workflow_name
 
         if "  workflow_call:" in workflow:
             called = workflow.split("  workflow_call:", 1)[1]
@@ -181,14 +177,11 @@ def test_direct_release_dispatches_publish_and_reconcile_by_default():
                 "      publish:\n", 1
             )[0]
             called_publish = called.split("      publish:\n", 1)[1].split(
-                "      reconcile_metadata:\n", 1
+                "      skip_essential_tests:\n", 1
             )[0]
-            called_reconcile = called.split(
-                "      reconcile_metadata:\n", 1
-            )[1][:250]
             assert "default: false" in called_preview, workflow_name
             assert "default: false" in called_publish, workflow_name
-            assert "default: false" in called_reconcile, workflow_name
+            assert "reconcile_metadata" not in called, workflow_name
 
 
 def test_linux_release_workflows_build_before_packaging_on_fresh_runners():
@@ -470,7 +463,7 @@ def test_all_platform_release_workflow_builds_platforms_in_parallel_then_finaliz
 
     assert "name: All Platform Release" in workflow
     assert "workflow_dispatch:" in workflow
-    assert "contents: write" in workflow
+    assert "permissions:\n  contents: read" in workflow
     assert "group: caveviewer-all-platform-release-${{ github.ref }}" in workflow
     assert workflow.count("uses: ./.github/workflows/tests.yml") == 1
     assert "reuse_pr_validation:" in workflow
@@ -496,7 +489,7 @@ def test_all_platform_release_workflow_builds_platforms_in_parallel_then_finaliz
         assert f"uses: ./.github/workflows/{called_workflow}" in job_block
         assert "needs: essential-tests" in job_block
         assert "inputs.reuse_pr_validation == true" in job_block
-        assert "permissions:\n      contents: write" in job_block
+        assert "permissions:\n      contents: read" in job_block
         assert "publish: false" in job_block
         assert "source_sha: ${{ github.sha }}" in job_block
         if job_name == "windows":
@@ -518,6 +511,7 @@ def test_all_platform_release_workflow_builds_platforms_in_parallel_then_finaliz
     assert "source_sha: ${{ github.sha }}" in finalizer
     assert "target_branch: ${{ github.ref_name }}" in finalizer
     assert "allow_unsigned_windows_community: ${{ inputs.publish }}" in finalizer
+    assert "permissions:\n      contents: write" in finalizer
     assert "inputs.publish && !cancelled()" in finalizer
     dispatch_contract = workflow.split("\njobs:\n", 1)[0]
     assert "allow_unsigned_windows_community" not in dispatch_contract
@@ -539,10 +533,10 @@ def test_release_finalizer_is_the_single_shared_state_writer():
     assert "CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY" in workflow
     assert "CAVEVIEWER_GITHUB_REPO: ${{ github.repository }}" in workflow
     assert "./scripts/common/finalize_release.sh" in workflow
-    assert "./scripts/common/reconcile_release_metadata.sh" in workflow
-    assert "reconcile_metadata:" in workflow
-    assert "actions: write" in workflow
-    assert "pull-requests: write" in workflow
+    assert "reconcile_release_metadata" not in workflow
+    assert "reconcile_metadata:" not in workflow
+    assert "actions: write" not in workflow
+    assert "pull-requests: write" not in workflow
     assert "--allow-unsigned-windows-community" in workflow
 
     assert finalizer.count("gh release create") == 1
@@ -601,30 +595,27 @@ def test_release_finalizer_help_and_shell_syntax():
 
 
 @requires_executable_shell_scripts
-def test_release_metadata_reconciler_is_gated_and_executable():
-    reconciler = (
+def test_release_automation_never_creates_or_merges_pull_requests():
+    assert not (
         REPOSITORY_ROOT / "scripts" / "common" / "reconcile_release_metadata.sh"
-    )
-    assert reconciler.is_file()
-    assert os.access(reconciler, os.X_OK)
-
-    source = reconciler.read_text(encoding="utf-8")
-    assert 'release_branch="release/next"' in source
-    assert 'main_branch="main"' in source
-    assert "--workflow=tests.yml" in source
-    assert 'gh pr create' in source
-    assert 'gh pr merge "$pr_number"' in source
-    assert "--delete-branch=false" in source
-
-    syntax = subprocess.run(
-        ["bash", "-n", str(reconciler)], capture_output=True, text=True
-    )
-    assert syntax.returncode == 0, syntax.stderr
-    help_result = subprocess.run(
-        [str(reconciler), "--help"], capture_output=True, text=True
-    )
-    assert help_result.returncode == 0
-    assert "--channel=<stable|preview>" in help_result.stdout
+    ).exists()
+    release_sources = [
+        *(WORKFLOWS_DIR / name for name in (
+            "all-platform-release.yml",
+            "finalize-release.yml",
+            "linux-x86_64-release.yml",
+            "macos-arm64-release.yml",
+            "macos-x86_64-release.yml",
+            "preview-release-promotion.yml",
+            "windows-release.yml",
+        )),
+        REPOSITORY_ROOT / "scripts" / "common" / "preview_release_automation.sh",
+    ]
+    combined = "\n".join(path.read_text(encoding="utf-8") for path in release_sources)
+    assert "gh pr create" not in combined
+    assert "gh pr merge" not in combined
+    assert "pull-requests: write" not in combined
+    assert "HEAD:refs/heads/main" not in combined
 
 
 @requires_executable_shell_scripts
