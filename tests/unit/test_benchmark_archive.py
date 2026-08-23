@@ -53,6 +53,15 @@ def test_archive_rejects_unsafe_paths(tmp_path: Path, member_name: str):
         module.extract_archive(archive, tmp_path / "map")
 
 
+def test_member_validation_uses_original_zip_filename():
+    module = _load_module()
+    member = zipfile.ZipInfo("safe/name")
+    member.orig_filename = "safe\\name"
+
+    with pytest.raises(ValueError, match="backslash path"):
+        module._member_path(member)
+
+
 @pytest.mark.parametrize("file_type", (stat.S_IFLNK, stat.S_IFCHR, stat.S_IFIFO))
 def test_archive_rejects_links_and_special_files(tmp_path: Path, file_type: int):
     module = _load_module()

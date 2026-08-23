@@ -67,8 +67,12 @@ def download_archive(url: str, expected_sha256: str, destination: Path) -> None:
 
 
 def _member_path(info: zipfile.ZipInfo) -> PurePosixPath:
-    if "\\" in info.filename:
-        raise ValueError(f"archive member uses a backslash path: {info.filename!r}")
+    # On Windows, ZipInfo normalizes backslashes in ``filename`` to forward
+    # slashes. ``orig_filename`` preserves the name encoded in the archive,
+    # which is what must be validated before treating ZIP paths as POSIX paths.
+    original_filename = info.orig_filename
+    if "\\" in original_filename:
+        raise ValueError(f"archive member uses a backslash path: {original_filename!r}")
     member = PurePosixPath(info.filename)
     if member.is_absolute() or not member.parts or any(part in {"", ".", ".."} for part in member.parts):
         raise ValueError(f"archive member has an unsafe path: {info.filename!r}")
