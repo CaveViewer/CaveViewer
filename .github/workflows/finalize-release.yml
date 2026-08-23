@@ -79,13 +79,6 @@ jobs:
           python -m pip install --disable-pip-version-check --only-binary=:all:
           --require-hashes -r requirements/release-finalizer-linux.txt
 
-      - name: Download platform packages
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
-        with:
-          pattern: CaveViewer-${{ inputs.version }}-*
-          path: release-artifacts
-          merge-multiple: true
-
       - name: Configure git identity
         run: |
           git config user.name "github-actions[bot]"
@@ -106,6 +99,19 @@ jobs:
           printf '%s' "$SIGNING_PRIVATE_KEY_PEM" > "$key_path"
           chmod 600 "$key_path"
           echo "CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY=$key_path" >> "$GITHUB_ENV"
+
+      - name: Verify release signing key pair
+        run: >-
+          python scripts/verify_release_signing_key.py
+          "$CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY"
+          src/caveviewer/resources/release_signing_public_key.pem
+
+      - name: Download platform packages
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: CaveViewer-${{ inputs.version }}-*
+          path: release-artifacts
+          merge-multiple: true
 
       - name: Publish assets and signed update metadata
         env:
