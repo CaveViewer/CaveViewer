@@ -54,8 +54,8 @@ the only copy of an active work plan.
 - PyCharm AI Chat uses the tracked
   [JetBrains project rule](../../.aiassistant/rules/repository-instructions.md),
   which points back to the canonical `AGENTS.md` hierarchy without duplicating
-  it. In PyCharm, confirm this rule is configured as **Always** under
-  **Settings → Tools → AI Assistant → Rules**.
+  it. Follow the [PyCharm contributor setup](ai-assistance.md#pycharm-contributor-setup)
+  to confirm that the tracked rule and shared workflow actions are available.
 - Active, shareable plans live under [`work/`](work/) and travel with their
   implementation branch. Ignored `.agents/` content is local and disposable.
 - Shared, secret-free PyCharm workflow actions live under the tracked `.run/`

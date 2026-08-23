@@ -39,6 +39,7 @@ def test_jetbrains_rule_delegates_to_canonical_instructions() -> None:
 
     assert "Always follow the root `AGENTS.md`" in rule
     assert "docs/development/work/" in rule
+    assert "apply: always" in rule
     assert "**Always** project rule" in rule
 
     gitignore = _read(".gitignore")
@@ -78,3 +79,10 @@ def test_work_definition_and_discovery_docs_use_tracked_work_directory() -> None
 
     assert "docs/development/work/<work-name>.md" in readme
     assert ".aiassistant/rules/repository-instructions.md" in readme
+
+    assistance = _read("docs/development/ai-assistance.md")
+    normalized_assistance = " ".join(assistance.split())
+    assert "## PyCharm contributor setup" in assistance
+    assert "Ctrl+Shift+N" in assistance
+    assert "it is not a browser for existing tracked rule files" in normalized_assistance
+    assert "Do not create a duplicate rule" in normalized_assistance

@@ -1,3 +1,7 @@
+---
+apply: always
+---
+
 # CaveViewer repository instructions
 
 Always follow the root `AGENTS.md` and every applicable scoped `AGENTS.md`.

@@ -22,6 +22,7 @@ table td {
 | 5 | Expose shared workflow actions to agents. | `.aiignore` hides all `.run/` files, including tracked GitHub actions useful to agents. | Git tracks `GitHub - *.run.xml`, but JetBrains agents that respect `.aiignore` cannot read them. | Shared GitHub actions remain visible while personal run configurations stay excluded. | Mirrored the `.gitignore` exception in `.aiignore` while retaining the credential exclusions. | `docs/work-definition-cleanup` | Complete |
 | 6 | Document automatic instruction discovery. | Contributors cannot easily distinguish canonical agent instructions, JetBrains Chat rules, active work, local notes, and shared actions. | The information is distributed across several documents and local IDE state. | The development README provides one concise discovery map and manual PyCharm step. | Added the discovery map and aligned `ai-assistance.md` and `repository-layout.md` with the supported tracked paths. | `docs/work-definition-cleanup` | Complete |
 | 7 | Guard instruction discovery with tests. | Ignore-rule or documentation cleanup can silently hide or break agent instructions. | No automated contract validates instruction inheritance, canonical links, JetBrains rules, visible shared actions, or required template columns. | A focused offline test fails when the discovery chain or work-definition contract breaks. | Added `tests/unit/test_agent_instruction_contract.py`; focused validation passed (5 tests), with complete-suite verification recorded below. | `docs/work-definition-cleanup` | Complete |
+| 8 | Document PyCharm contributor configuration. | PyCharm's Rules settings page looks like a rule browser but only creates files, so contributors may create duplicates or assume the tracked rule is missing. | The development README incorrectly instructed contributors to select the existing file from the Rules settings page. | Contributors have accurate steps for opening the tracked rule, confirming `Always` behavior, refreshing discovery, finding shared run configurations, and keeping personal settings private. | Added a dedicated PyCharm setup section, corrected the README pointer, documented the Rules-page behavior, and extended the discovery contract test. | `docs/work-definition-cleanup` | Complete |
 
 ## Verification
 
@@ -32,7 +33,7 @@ table td {
 
 ## Manual contributor action
 
-In PyCharm, open **Settings → Tools → AI Assistant → Rules**, select
-`.aiassistant/rules/repository-instructions.md`, and configure it as an
-**Always** project rule. Provider, model, credential, and permission settings
+The tracked JetBrains rule now contains `apply: always`. Contributors can open
+it with **Ctrl+Shift+N** to confirm the setting; the Rules settings page is only
+for creating new files. Provider, model, credential, and permission settings
 remain personal.

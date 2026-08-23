@@ -42,6 +42,32 @@ Shareable execution plans live under `/docs/development/work/` and are
 committed with their implementation. `/docs/development/.agents/` is reserved
 for ignored, disposable local notes and is never authoritative.
 
+## PyCharm contributor setup
+
+After cloning the repository or switching to a branch that introduces shared
+IDE configuration:
+
+1. Open the repository root as the PyCharm project. Do not open `.idea/` or a
+   source subdirectory as a separate project.
+2. Install and enable JetBrains AI Assistant if AI Chat will be used.
+3. Press **Ctrl+Shift+N** (**Navigate → File**) and open
+   `.aiassistant/rules/repository-instructions.md`.
+4. Confirm the editor's **Rule type** is **Always**. PyCharm records this in the
+   tracked rule as `apply: always`, so contributors normally inherit it without
+   making a local change.
+5. If the file is not found, run **File → Synchronize** and reopen the project.
+   **Settings → Tools → AI Assistant → Rules** offers creation of a new rule;
+   it is not a browser for existing tracked rule files. Do not create a
+   duplicate rule.
+6. Open **Run → Edit Configurations** and confirm the shared `GitHub - …`
+   actions are present. Keep tokens, environment variables, account selection,
+   models, permissions, and other personal values in local ignored settings.
+
+Coding agents use the root and scoped `AGENTS.md` files directly. The
+JetBrains project rule ensures regular AI Assistant chat is directed to the
+same canonical instructions. To verify the chat rule, start a new AI Assistant
+chat and inspect the attached rules/context shown with its first response.
+
 ## Expected workflow
 
 - Inspect the working tree and identify unrelated changes before editing.
