@@ -412,6 +412,10 @@ used for update manifests. Each publisher's finalizer call explicitly inherits
 secrets across GitHub's reusable-workflow boundary, but only the called
 finalizer attaches the approved environment and resolves those values. Package,
 test, and artifact-only jobs neither inherit nor receive release secrets.
+Before downloading release artifacts or publishing anything, the finalizer
+derives the private key's Ed25519 public key and requires an exact match with
+`src/caveviewer/resources/release_signing_public_key.pem`. A malformed,
+wrong-type, or mismatched key fails without creating a release or metadata.
 
 The GitHub release workflows do not currently offer an Authenticode signing
 path. Selecting `publish` for Windows automatically builds the same named EXE

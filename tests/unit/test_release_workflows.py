@@ -590,6 +590,10 @@ def test_release_finalizer_is_the_single_shared_state_writer():
     assert "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8" in workflow
     assert "merge-multiple: true" in workflow
     assert "CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY" in workflow
+    assert "scripts/verify_release_signing_key.py" in workflow
+    assert workflow.index("Verify release signing key pair") < workflow.index(
+        "Download platform packages"
+    )
     assert "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0" in workflow
     assert "app-id: ${{ secrets.CAVEVIEWER_RELEASE_APP_ID }}" in workflow
     assert "private-key: ${{ secrets.CAVEVIEWER_RELEASE_APP_PRIVATE_KEY }}" in workflow
