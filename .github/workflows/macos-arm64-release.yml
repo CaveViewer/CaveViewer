@@ -137,7 +137,7 @@ jobs:
     if: ${{ inputs.publish && needs.build-macos-arm64.result == 'success' }}
     uses: ./.github/workflows/finalize-release.yml
     permissions:
-      contents: write
+      contents: read
     with:
       version: ${{ inputs.version }}
       release_notes: ${{ inputs.release_notes }}

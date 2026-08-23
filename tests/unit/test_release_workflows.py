@@ -94,10 +94,10 @@ def test_platform_release_workflows_package_immutable_source_before_finalizing()
         assert "ref: ${{ inputs.source_sha || github.sha }}" in workflow, workflow_name
         workflow_header = workflow.split("\njobs:\n", 1)[0]
         assert "contents: read" in workflow_header, workflow_name
-        assert workflow.count("permissions:\n      contents: read") == 3, workflow_name
+        assert workflow.count("permissions:\n      contents: read") == 4, workflow_name
         assert "actions: write" not in workflow, workflow_name
         assert "pull-requests: write" not in workflow, workflow_name
-        assert workflow.count("permissions:\n      contents: write") == 1, workflow_name
+        assert "contents: write" not in workflow, workflow_name
         assert f"group: caveviewer-build-{target}-" in workflow, workflow_name
         assert "--action=package" in workflow, workflow_name
         assert "--action=release" not in workflow, workflow_name
@@ -499,7 +499,7 @@ def test_all_platform_release_workflow_builds_platforms_in_parallel_then_finaliz
     assert "source_sha: ${{ github.sha }}" in finalizer
     assert "target_branch: ${{ github.ref_name }}" in finalizer
     assert "allow_unsigned_windows_community: ${{ inputs.publish }}" in finalizer
-    assert "permissions:\n      contents: write" in finalizer
+    assert "permissions:\n      contents: read" in finalizer
     assert "inputs.publish && !cancelled()" in finalizer
     dispatch_contract = workflow.split("\njobs:\n", 1)[0]
     assert "allow_unsigned_windows_community" not in dispatch_contract
@@ -514,7 +514,8 @@ def test_release_finalizer_is_the_single_shared_state_writer():
         REPOSITORY_ROOT / "scripts" / "common" / "finalize_release.sh"
     ).read_text(encoding="utf-8")
 
-    assert "contents: write" in workflow
+    assert "permissions:\n  contents: read" in workflow
+    assert "contents: write" not in workflow
     assert "runs-on: ubuntu-latest\n    # Approval is intentionally requested" in workflow
     assert "environment: production-release" in workflow
     assert workflow.index("environment: production-release") < workflow.index(
@@ -528,6 +529,11 @@ def test_release_finalizer_is_the_single_shared_state_writer():
     assert "actions/download-artifact@v8" in workflow
     assert "merge-multiple: true" in workflow
     assert "CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY" in workflow
+    assert "actions/create-github-app-token@v3.2.0" in workflow
+    assert "app-id: ${{ secrets.CAVEVIEWER_RELEASE_APP_ID }}" in workflow
+    assert "private-key: ${{ secrets.CAVEVIEWER_RELEASE_APP_PRIVATE_KEY }}" in workflow
+    assert workflow.count("steps.release-app-token.outputs.token") == 2
+    assert "GH_TOKEN: ${{ github.token }}" not in workflow
     assert "CAVEVIEWER_GITHUB_REPO: ${{ github.repository }}" in workflow
     assert "./scripts/common/finalize_release.sh" in workflow
     assert "reconcile_release_metadata" not in workflow
@@ -593,11 +599,15 @@ def test_every_release_publisher_uses_the_protected_finalizer_environment():
         assert "uses: ./.github/workflows/finalize-release.yml" in workflow
         assert "gh release create" not in workflow
         assert "CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY" not in workflow
+        assert "CAVEVIEWER_RELEASE_APP_ID" not in workflow
+        assert "CAVEVIEWER_RELEASE_APP_PRIVATE_KEY" not in workflow
 
     other_workflows = set(WORKFLOWS_DIR.glob("*.yml")) - {finalizer_path}
     for workflow_path in other_workflows:
         workflow = workflow_path.read_text(encoding="utf-8")
         assert "CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY" not in workflow, workflow_path
+        assert "CAVEVIEWER_RELEASE_APP_ID" not in workflow, workflow_path
+        assert "CAVEVIEWER_RELEASE_APP_PRIVATE_KEY" not in workflow, workflow_path
 
 
 @requires_executable_shell_scripts

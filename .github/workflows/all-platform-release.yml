@@ -129,7 +129,7 @@ jobs:
           && needs['macos-x86_64'].result == 'success' }}
     uses: ./.github/workflows/finalize-release.yml
     permissions:
-      contents: write
+      contents: read
     with:
       version: ${{ inputs.version }}
       release_notes: ${{ inputs.release_notes }}

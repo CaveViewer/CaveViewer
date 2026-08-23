@@ -169,7 +169,7 @@ jobs:
     if: ${{ !cancelled() && inputs.publish && needs.build-windows.result == 'success' }}
     uses: ./.github/workflows/finalize-release.yml
     permissions:
-      contents: write
+      contents: read
     with:
       version: ${{ inputs.version }}
       release_notes: ${{ inputs.release_notes }}
