@@ -602,12 +602,42 @@ def test_every_release_publisher_uses_the_protected_finalizer_environment():
         assert "CAVEVIEWER_RELEASE_APP_ID" not in workflow
         assert "CAVEVIEWER_RELEASE_APP_PRIVATE_KEY" not in workflow
 
-    other_workflows = set(WORKFLOWS_DIR.glob("*.yml")) - {finalizer_path}
+    app_credential_workflows = {
+        finalizer_path,
+        WORKFLOWS_DIR / "prepare-release-next.yml",
+        WORKFLOWS_DIR / "preview-release-promotion.yml",
+    }
+    for workflow_path in app_credential_workflows:
+        workflow = workflow_path.read_text(encoding="utf-8")
+        assert "environment: production-release" in workflow
+        assert "CAVEVIEWER_RELEASE_APP_ID" in workflow
+        assert "CAVEVIEWER_RELEASE_APP_PRIVATE_KEY" in workflow
+
+    other_workflows = set(WORKFLOWS_DIR.glob("*.yml")) - app_credential_workflows
     for workflow_path in other_workflows:
         workflow = workflow_path.read_text(encoding="utf-8")
         assert "CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY" not in workflow, workflow_path
         assert "CAVEVIEWER_RELEASE_APP_ID" not in workflow, workflow_path
         assert "CAVEVIEWER_RELEASE_APP_PRIVATE_KEY" not in workflow, workflow_path
+
+
+def test_release_next_preparation_uses_only_the_approved_app_identity():
+    workflow = (WORKFLOWS_DIR / "prepare-release-next.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "workflow_dispatch:" in workflow
+    assert "permissions:\n  contents: read" in workflow
+    assert "contents: write" not in workflow
+    assert "actions: write" not in workflow
+    assert "pull-requests: write" not in workflow
+    assert "environment: production-release" in workflow
+    assert "actions/create-github-app-token@v3.2.0" in workflow
+    assert "token: ${{ steps.release-app-token.outputs.token }}" in workflow
+    assert 'run: test "$SELECTED_BRANCH" = "main"' in workflow
+    assert "git merge-base --is-ancestor origin/release/next origin/main" in workflow
+    assert "refs/remotes/origin/main:refs/heads/release/next" in workflow
+    assert "--force" not in workflow
 
 
 @requires_executable_shell_scripts
