@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en" class="page-contact-root">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#0a0a0d">
+    <title>Contact Us — CaveViewer</title>
+    <meta name="description" content="Contact the CaveViewer team with a question, bug report, or message.">
+    <link rel="stylesheet" href="assets/css/global.css">
+    <link rel="stylesheet" href="assets/css/readability.css">
+    <link rel="stylesheet" href="assets/css/page.css">
+    <link rel="stylesheet" href="assets/css/contact.css">
+    <link rel="stylesheet" href="assets/css/app-theme.css">
+</head>
+<body class="page-contact">
+<header class="site-header" data-site-header>
+    <div class="site-header__inner">
+        <a class="site-home" href="index.html" aria-label="CaveViewer home"><img class="site-home__mark" src="assets/icons/caveviewer-cave-profile.svg" alt=""></a>
+        <nav class="primary-nav" aria-label="Primary navigation">
+            <a href="features.html">Features</a>
+            <a href="about.html">Team</a>
+            <a href="contact.html" aria-current="page">Contact</a>
+        </nav>
+        <a class="header-download" href="index.html#get-caveviewer">Download</a>
+        <button class="menu-toggle" type="button" aria-label="Open navigation" aria-expanded="false" data-menu-toggle>
+            <span></span><span></span><span class="sr-only">Toggle navigation</span>
+        </button>
+    </div>
+</header>
+<main>
+    <section class="contact-page" aria-labelledby="contact-page-title">
+        <div class="contact-page__grid" aria-hidden="true"></div>
+        <div class="shell contact-page__layout">
+            <section class="contact-card" aria-labelledby="contact-form-title" data-reveal>
+                <h1 id="contact-page-title">Contact Us</h1>
+                <h2 id="contact-form-title" class="sr-only">Contact form</h2>
+
+                <form class="contact-form" action="https://formsubmit.co/azdeatherage@gmail.com" method="POST">
+                    <input type="hidden" name="_subject" value="CaveViewer contact form">
+                    <input type="hidden" name="_template" value="table">
+                    <div class="contact-form__honeypot" aria-hidden="true">
+                        <label for="cf-honey">Leave this field blank</label>
+                        <input type="text" id="cf-honey" name="_honey" tabindex="-1" autocomplete="off">
+                    </div>
+
+                    <div class="contact-form__identity">
+                        <div class="contact-form__field">
+                            <label for="cf-name">Your name</label>
+                            <input type="text" id="cf-name" name="name" placeholder="Paul" required>
+                        </div>
+                        <div class="contact-form__field">
+                            <label for="cf-email">Your email</label>
+                            <input type="email" id="cf-email" name="email" placeholder="you@example.com" required>
+                        </div>
+                    </div>
+                    <div class="contact-form__field">
+                        <label for="cf-message">Message</label>
+                        <textarea id="cf-message" name="message" placeholder="Tell us what's on your mind — if it's a problem, include which OS and which map." required></textarea>
+                    </div>
+                    <button class="button button--primary contact-form__submit" type="submit">Send message <span aria-hidden="true">→</span></button>
+                </form>
+            </section>
+        </div>
+    </section>
+</main>
+
+<footer class="site-endcap"><div class="site-endcap__inner"><img class="site-endcap__logo" src="assets/icons/caveviewer-cave-profile.svg" alt=""><span>&copy; 2026 CaveViewer</span></div></footer>
+<script src="assets/js/app.js" defer></script>
+</body>
+</html>

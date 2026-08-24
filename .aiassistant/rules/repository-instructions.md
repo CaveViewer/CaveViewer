@@ -12,7 +12,8 @@ Before changing repository files or repository-related external state:
 
 1. Resolve the repository root and inspect the current branch and Git status.
 2. Read the root and nearest scoped `AGENTS.md` files.
-3. Create or update the active work document under `docs/development/work/`.
+3. Create or update the active work document under root `.work/` by default;
+   promote it to `docs/development/work/` only when it must be shared or kept.
 4. State the applicable focused and complete validation commands.
 5. Preserve unrelated changes and keep the work document current through
    verification and merge.

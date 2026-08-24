@@ -39,15 +39,15 @@ root project README.
 ## Starting any work
 
 Before editing repository files or changing repository-related external state,
-copy [the work definition template](work-definition.md) to
-`docs/development/work/<work-name>.md`. Complete and order its master table,
-then implement from that table. Keep the document's current implementation,
-desired solution, branch, and status fields synchronized through verification
-and merge. This requirement applies to human contributors and automated agents.
+copy [the work definition template](work-definition.md) to ignored root
+`.work/<work-name>.md`. Complete and order its master table, then implement from
+that table. Keep the document's current implementation, desired solution,
+branch, and status fields synchronized through verification and merge. This
+requirement applies to human contributors and automated agents.
 
-Root `.work/` is ignored and reserved for disposable local plans, notes, probes,
-and incomplete investigation. It is not authoritative and must not hold the
-only copy of an active implementation plan.
+Move or copy the plan to `docs/development/work/<work-name>.md` only when it
+needs contributor sharing, pull-request review, or durable retention. Once a
+tracked copy exists, it is authoritative and travels with the implementation.
 
 ## AI and agent instruction discovery
 
@@ -58,8 +58,9 @@ only copy of an active implementation plan.
   which points back to the canonical `AGENTS.md` hierarchy without duplicating
   it. Follow the [PyCharm contributor setup](ai-assistance.md#pycharm-contributor-setup)
   to confirm that the tracked rule and shared workflow actions are available.
-- Active, shareable plans live under [`work/`](work/) and travel with their
-  implementation branch. Ignored root `.work/` content is local and disposable.
+- Active plans live under ignored root `.work/` by default. Plans that need to
+  be shared or retained move to [`work/`](work/) and travel with their
+  implementation branch.
 - Shared, secret-free PyCharm workflow actions live under the tracked `.run/`
   directory. Personal run configurations and environment variables remain
   ignored.

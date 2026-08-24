@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#0a0a0d">
+    <title>Features — CaveViewer</title>
+    <meta name="description" content="CaveViewer features: unmatched rendering, a standard map library, and dive capture sharing.">
+    <link rel="stylesheet" href="assets/css/global.css">
+    <link rel="stylesheet" href="assets/css/readability.css">
+    <link rel="stylesheet" href="assets/css/page.css">
+    <link rel="stylesheet" href="assets/css/features.css">
+    <link rel="stylesheet" href="assets/css/app-theme.css">
+</head>
+<body class="page-features">
+<header class="site-header" data-site-header>
+    <div class="site-header__inner">
+        <a class="site-home" href="index.html" aria-label="CaveViewer home"><img class="site-home__mark" src="assets/icons/caveviewer-cave-profile.svg" alt=""></a>
+        <nav class="primary-nav" aria-label="Primary navigation">
+            <a href="features.html" aria-current="page">Features</a>
+            <a href="about.html">Team</a>
+            <a href="contact.html">Contact</a>
+        </nav>
+        <a class="header-download" href="index.html#get-caveviewer">Download</a>
+        <button class="menu-toggle" type="button" aria-label="Open navigation" aria-expanded="false" data-menu-toggle>
+            <span></span><span></span><span class="sr-only">Toggle navigation</span>
+        </button>
+    </div>
+</header>
+
+<main>
+    <section class="features-page" aria-label="Features">
+        <div class="features-page__grid" aria-hidden="true"></div>
+        <div class="shell">
+            <div class="features-page__sections">
+                <section class="feature-section" id="rendering" aria-labelledby="rendering-title" data-reveal>
+                    <div class="feature-section__copy">
+                        <h2 id="rendering-title">Render What Others Can’t</h2>
+                        <p>Huge cave scans often exceed the practical limits of a conventional viewer, leaving people waiting for a model to load or forced to simplify it. CaveViewer builds a reusable spatial cache and loads nearby chunks as you move, keeping a large map responsive without holding the whole model in memory at once. It lets teams inspect a survey at its original scale on lighter laptops as well as powerful workstations.</p>
+                        <ul class="feature-section__capabilities">
+                            <li><strong>Explore larger surveys.</strong> Open detailed maps that would otherwise be difficult to load all at once.</li>
+                            <li><strong>Stay in motion.</strong> CaveViewer brings nearby parts of the map into view as you fly, keeping exploration responsive.</li>
+                            <li><strong>Return faster.</strong> Once a map has been prepared, CaveViewer keeps its local working data for quicker future openings.</li>
+                        </ul>
+                        <aside class="feature-section__note" aria-label="Hardware note">
+                            <strong>Hardware note.</strong> CaveViewer is designed with consumer-grade hardware in mind, but exceptionally old systems can still struggle with rendering. Older Intel-based Macs, for example, may offer lower performance.
+                        </aside>
+                    </div>
+                    <figure class="feature-section__visual">
+                        <img src="assets/images/features/rendering-engine.png" alt="CaveViewer rendering a textured cave passage with a minimap and viewer controls">
+                    </figure>
+                </section>
+
+                <section class="feature-section" id="map-library" aria-labelledby="map-library-title" data-reveal>
+                    <div class="feature-section__copy">
+                        <h2 id="map-library-title">Explore the Map Library</h2>
+                        <p>Getting started with unfamiliar mapping software is difficult when you do not have a prepared data set. Map Library offers a catalog of standard maps that can be downloaded on demand, reopened locally, and used to check that CaveViewer is ready. Its bundled or cached catalog keeps a known selection available when a network connection is unavailable.</p>
+                        <ul class="feature-section__capabilities">
+                            <li><strong>Start without your own data.</strong> Try a ready-to-use cave map as soon as you open CaveViewer.</li>
+                            <li><strong>Download only what you need.</strong> Choose the maps you want instead of installing a large collection you may never use.</li>
+                            <li><strong>Keep maps close at hand.</strong> Downloaded maps and the most recently known catalog remain useful when you have limited connectivity.</li>
+                        </ul>
+                        <aside class="feature-section__note" aria-label="Map format note">
+                            <strong>Map format note.</strong> Currently, CaveViewer supports textured OBJ maps with matching MTL files.
+                        </aside>
+                    </div>
+                    <figure class="feature-section__visual">
+                        <img src="assets/images/features/map-library.png" alt="CaveViewer Map Library showing available standard cave maps">
+                    </figure>
+                </section>
+
+                <section class="feature-section" id="capture" aria-labelledby="capture-title" data-reveal>
+                    <div class="feature-section__copy">
+                        <h2 id="capture-title">Record &amp; Share Dives</h2>
+                        <p>A fly-through is hard to explain once the map window is closed. Capture turns what you see into a video and lets you save the route you take through the map. Everything stays in local files, ready to revisit or share through the tools your team already uses.</p>
+                        <ul class="feature-section__capabilities">
+                            <li><strong>Record a dive.</strong> Save a video fly-through for a quick review or a clear visual explanation.</li>
+                            <li><strong>Trace a route.</strong> Save the path you take so someone else can replay that same route on the same map.</li>
+                            <li><strong>Slice a cave.</strong> Mark two points to pull out a smaller, standalone part of a large map—useful when you want to focus on one passage or share only the relevant area.</li>
+                        </ul>
+                    </div>
+                    <figure class="feature-section__visual">
+                        <img src="assets/images/features/capture-recording.png" alt="CaveViewer confirming that a cave-dive recording was saved">
+                    </figure>
+                </section>
+            </div>
+        </div>
+    </section>
+</main>
+
+<footer class="site-endcap"><div class="site-endcap__inner"><img class="site-endcap__logo" src="assets/icons/caveviewer-cave-profile.svg" alt=""><span>&copy; 2026 CaveViewer</span></div></footer>
+
+<script src="assets/js/app.js" defer></script>
+</body>
+</html>

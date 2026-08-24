@@ -1,0 +1,31 @@
+/* CaveViewer shared readability foundation.
+   IMPORTANT: this file is loaded BEFORE page CSS. It must contain only
+   shared typography/gutters/rhythm — never page-specific component fixes. */
+body {
+    font-size: 16px;
+    line-height: 1.6;
+}
+
+.section { padding: clamp(76px, 7.5vw, 118px) 0; }
+.content-section { padding: 78px 0 98px; }
+
+@media (max-width: 760px) {
+    body { font-size: 16px; }
+    .shell,
+    .site-header__inner,
+    .site-footer__grid,
+    .site-footer__bottom {
+        width: min(calc(100% - 32px), var(--max));
+    }
+    .section { padding: 68px 0; }
+    .content-section { padding: 64px 0 78px; }
+}
+
+@media (max-width: 420px) {
+    .shell,
+    .site-header__inner,
+    .site-footer__grid,
+    .site-footer__bottom {
+        width: min(calc(100% - 26px), var(--max));
+    }
+}
