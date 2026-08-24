@@ -21,6 +21,15 @@ async function expectNoHorizontalOverflow(page) {
     expect(overflow).toBeLessThanOrEqual(1);
 }
 
+async function expectContactTargetsReachable(page) {
+    for (const selector of ["#cf-message", ".contact-form__submit", ".site-endcap"]) {
+        const target = page.locator(selector);
+
+        await target.scrollIntoViewIfNeeded();
+        await expect(target).toBeInViewport();
+    }
+}
+
 test.describe("canonical website-preview routes", () => {
     for (const viewport of reviewViewports) {
         test(`${viewport.name} renders every canonical route without horizontal overflow`, async ({ page }) => {
@@ -91,13 +100,64 @@ test("the mobile navigation is keyboard-operable", async ({ page }) => {
     await expect(menuToggle).toBeFocused();
 });
 
-test("the Contact route remains horizontally reachable at a 200%-zoom-equivalent viewport", async ({ page }) => {
-    // A 720 CSS-pixel viewport approximates a 1440-pixel desktop window at 200% zoom.
-    await page.setViewportSize({ width: 720, height: 900 });
+test("Contact preserves its normal desktop composition while short screens scroll", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto("contact.html", { waitUntil: "networkidle" });
+
+    expect(
+        await page.evaluate(
+            () => document.documentElement.scrollHeight - document.documentElement.clientHeight,
+        ),
+    ).toBeLessThanOrEqual(1);
+    await expect(page.locator(".site-endcap")).toBeInViewport();
+
+    await page.setViewportSize({ width: 1440, height: 400 });
+    await page.goto("contact.html", { waitUntil: "networkidle" });
+
+    expect(
+        await page.evaluate(
+            () => document.documentElement.scrollHeight - document.documentElement.clientHeight,
+        ),
+    ).toBeGreaterThan(1);
+    await expectContactTargetsReachable(page);
+});
+
+test("the Contact route remains reachable at a 200%-zoom-equivalent viewport", async ({ page }) => {
+    // A 720 × 450 CSS-pixel viewport approximates a 1440 × 900 desktop window at 200% zoom.
+    await page.setViewportSize({ width: 720, height: 450 });
     await page.goto("contact.html", { waitUntil: "networkidle" });
 
     await expect(page.getByRole("heading", { name: "Contact Us" })).toBeVisible();
     await expectNoHorizontalOverflow(page);
+    await expectContactTargetsReachable(page);
+});
+
+test("Contact keeps simulated large text and mobile content reachable", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 500 });
+    await page.goto("contact.html", { waitUntil: "networkidle" });
+    await page.addStyleTag({
+        content: `
+            .page-contact .contact-card h1,
+            .page-contact .contact-form label,
+            .page-contact .contact-form input:not([type="hidden"]),
+            .page-contact .contact-form textarea,
+            .page-contact .contact-form__submit { font-size: 200% !important; }
+        `,
+    });
+
+    await expect(page.locator("#cf-name")).toHaveCSS("font-size", "32px");
+    expect(
+        await page.evaluate(
+            () => document.documentElement.scrollHeight - document.documentElement.clientHeight,
+        ),
+    ).toBeGreaterThan(1);
+    await expectContactTargetsReachable(page);
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("contact.html", { waitUntil: "networkidle" });
+
+    await expectNoHorizontalOverflow(page);
+    await expectContactTargetsReachable(page);
 });
 
 test("reduced motion keeps primary Home content reachable", async ({ page }) => {

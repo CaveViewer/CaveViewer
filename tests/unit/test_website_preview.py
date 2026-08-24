@@ -243,6 +243,31 @@ def test_contact_page_preserves_the_current_form_submission_contract() -> None:
     assert 'no contact backend or database' in readme
 
 
+def test_contact_layout_uses_content_safe_document_flow() -> None:
+    styles = (PREVIEW_ROOT / "assets/css/contact.css").read_text(encoding="utf-8")
+
+    assert "html.page-contact-root {\n    overflow-y: auto;\n}" in styles
+    assert (
+        "body.page-contact {\n"
+        "    display: flex;\n"
+        "    flex-direction: column;\n"
+        "    min-height: 100vh;\n"
+        "    min-height: 100svh;\n"
+        "    overflow: visible;\n"
+        "}"
+    ) in styles
+    assert (
+        ".page-contact main {\n"
+        "    flex: 1 0 auto;\n"
+        "    min-height: 0;\n"
+        "    overflow: visible;\n"
+        "}"
+    ) in styles
+    assert "grid-template-rows: minmax(0, 1fr) 36px;" not in styles
+    assert "    height: 100svh;" not in styles
+    assert "min-height: calc(100svh - 36px);" in styles
+
+
 def test_about_team_captions_use_compact_spacing() -> None:
     styles = (PREVIEW_ROOT / "assets/css/about.css").read_text(encoding="utf-8")
 

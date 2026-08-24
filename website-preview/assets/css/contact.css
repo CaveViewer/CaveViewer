@@ -1,19 +1,19 @@
 html.page-contact-root {
-    overflow-y: hidden;
+    overflow-y: auto;
 }
 
 body.page-contact {
-    display: grid;
-    grid-template-rows: minmax(0, 1fr) 36px;
-    height: 100vh;
-    height: 100svh;
-    min-height: 0;
-    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+    min-height: 100svh;
+    overflow: visible;
 }
 
 .page-contact main {
+    flex: 1 0 auto;
     min-height: 0;
-    overflow: hidden;
+    overflow: visible;
 }
 
 .contact-page {
@@ -21,8 +21,10 @@ body.page-contact {
     isolation: isolate;
     display: grid;
     align-items: center;
-    height: 100%;
-    overflow: hidden;
+    /* Fill a normal viewport, but let the document grow when its form does. */
+    min-height: calc(100vh - 36px);
+    min-height: calc(100svh - 36px);
+    overflow: visible;
     padding: calc(var(--header-h) + 28px) 0 48px;
     background:
         radial-gradient(circle at 82% 14%, rgba(57, 172, 215, .17), transparent 24%),
@@ -147,24 +149,8 @@ body.page-contact {
 }
 
 @media (max-width: 620px) {
-    html.page-contact-root {
-        overflow-y: auto;
-    }
-
-    body.page-contact {
-        display: flex;
-        height: auto;
-        min-height: 100svh;
-        overflow: visible;
-    }
-
-    .page-contact main {
-        overflow: visible;
-    }
-
     .contact-page {
         display: block;
-        height: auto;
         padding-top: calc(var(--header-h) + 28px);
         padding-bottom: 40px;
     }
