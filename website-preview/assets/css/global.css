@@ -627,16 +627,6 @@ html.reveal-enhanced [data-reveal].is-visible { opacity:1; transform:none; }
     .brand__name { font-size:18px; }
 }
 
-@media (prefers-reduced-motion: reduce) {
-    .primary-nav.is-open::before,
-    .primary-nav.is-open::after,
-    .primary-nav.is-open > a {
-        animation: none;
-        opacity: 1;
-        transform: none;
-    }
-}
-
 /* Mobile survey menu — equal visual weight for every destination. */
 @media (max-width: 1180px) {
     .primary-nav > a,
@@ -1351,4 +1341,25 @@ main [id] {
     height: 14px;
     margin-left: auto;
     object-fit: contain;
+}
+
+/* Motion is an enhancement, not a requirement. Keep every page settled for
+   visitors who opt out: this lives after the shared rules and uses !important
+   so page-specific effects cannot reintroduce it. */
+@media (prefers-reduced-motion: reduce) {
+    html {
+        scroll-behavior: auto;
+    }
+
+    *,
+    *::before,
+    *::after {
+        animation: none !important;
+        transition: none !important;
+    }
+
+    html.reveal-enhanced [data-reveal] {
+        opacity: 1 !important;
+        transform: none !important;
+    }
 }

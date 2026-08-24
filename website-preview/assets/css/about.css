@@ -71,10 +71,6 @@
     color: inherit;
     text-decoration: none;
 }
-.about-person:focus-visible .about-person__media {
-    border-color: rgba(81,199,243,.34);
-    box-shadow: 0 0 0 1px rgba(81,199,243,.10);
-}
 .about-person__media {
     position: relative;
     aspect-ratio: 4 / 5.15;
@@ -106,15 +102,7 @@
     height: 100%;
     object-fit: cover;
     object-position: var(--photo-position, 50% 20%);
-    filter: grayscale(1) saturate(0) contrast(1.06) brightness(.86);
-    transform: scale(1.01);
-    transition: filter .48s ease, transform .55s cubic-bezier(.2,.8,.2,1);
-}
-.about-person:hover .about-person__media img,
-.about-person:focus .about-person__media img,
-.about-person:focus-within .about-person__media img {
     filter: grayscale(0) saturate(1) contrast(1.02) brightness(.97);
-    transform: scale(1.03);
 }
 .about-person__placeholder {
     position: absolute;
@@ -151,31 +139,6 @@
     letter-spacing: .18em;
     font-size: 9px;
 }
-.about-person__scan {
-    position: absolute;
-    z-index: 2;
-    left: 0;
-    right: 0;
-    top: 0;
-    height: 1px;
-    background: linear-gradient(90deg, transparent, rgba(81,199,243,.72), transparent);
-    box-shadow: 0 0 12px rgba(81,199,243,.28);
-    opacity: 0;
-    transform: translateY(-20px);
-    transition: opacity .25s ease;
-}
-.about-person:hover .about-person__scan,
-.about-person:focus .about-person__scan,
-.about-person:focus-within .about-person__scan {
-    opacity: .6;
-    animation: cv-scan 2.2s ease-in-out infinite;
-}
-@keyframes cv-scan {
-    0% { transform: translateY(10px); }
-    50% { transform: translateY(390px); }
-    100% { transform: translateY(10px); }
-}
-
 .about-person__caption {
     flex: 1;
     padding: 14px 3px 0;
@@ -295,29 +258,6 @@
     .about-person__role { font-size: 9px; }
     .about-person__affiliation { font-size: 8px; }
 }
-
-
-/* Static member cards ----------------------------------------- */
-.about-person { color:inherit; text-decoration:none; }
-.about-person__profile-link {
-    display:inline-flex;
-    align-items:center;
-    gap:7px;
-    margin-top:auto;
-    padding-top:17px;
-    color:#7196a4;
-    text-transform:uppercase;
-    letter-spacing:.11em;
-    font-size:8px;
-    font-weight:700;
-    transition:color .22s ease,gap .22s ease;
-}
-.about-person:hover .about-person__profile-link,
-.about-person:focus-visible .about-person__profile-link { color:var(--cyan); gap:10px; }
-@media(max-width:620px){
-    .about-person__profile-link { padding-top:11px; font-size:7px; letter-spacing:.08em; }
-}
-
 .about-team__intro {
     max-width: 760px;
     margin: 28px 0 0;

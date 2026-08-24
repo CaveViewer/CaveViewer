@@ -156,21 +156,11 @@ body {
         linear-gradient(155deg, var(--panel-2) 0%, var(--panel) 58%, var(--bg) 100%);
 }
 
-.page-about .about-person:focus-visible .about-person__media {
-    border-color: var(--focus);
-    box-shadow: 0 0 0 1px rgba(93, 111, 138, .24);
-}
-
 .page-about .about-person__media::after {
     background:
         linear-gradient(180deg, transparent 46%, rgba(10, 10, 13, .08) 64%, rgba(10, 10, 13, .56) 100%),
         linear-gradient(90deg, rgba(var(--accent-rgb), .035) 1px, transparent 1px),
         linear-gradient(rgba(var(--accent-rgb), .035) 1px, transparent 1px);
-}
-
-.page-about .about-person__scan {
-    background: linear-gradient(90deg, transparent, rgba(var(--accent-rgb), .72), transparent);
-    box-shadow: 0 0 12px rgba(var(--accent-rgb), .28);
 }
 
 body.page-contact {

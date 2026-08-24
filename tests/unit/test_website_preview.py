@@ -212,6 +212,37 @@ def test_reveal_content_is_visible_without_javascript() -> None:
     assert "reveal.forEach(el => el.classList.add('is-visible'));" in script
 
 
+def test_reduced_motion_settles_all_pages_and_team_cards_stay_presentational() -> None:
+    global_styles = (PREVIEW_ROOT / "assets/css/global.css").read_text(
+        encoding="utf-8"
+    )
+    about_styles = (PREVIEW_ROOT / "assets/css/about.css").read_text(
+        encoding="utf-8"
+    )
+    theme_styles = (PREVIEW_ROOT / "assets/css/app-theme.css").read_text(
+        encoding="utf-8"
+    )
+    about = (PREVIEW_ROOT / "about.html").read_text(encoding="utf-8")
+    script = (PREVIEW_ROOT / "assets/js/app.js").read_text(encoding="utf-8")
+
+    assert "@media (prefers-reduced-motion: reduce)" in global_styles
+    assert "animation: none !important;" in global_styles
+    assert "transition: none !important;" in global_styles
+    assert "html.reveal-enhanced [data-reveal] {\n        opacity: 1 !important;" in global_styles
+    assert "const prefersReducedMotion = window.matchMedia?.(" in script
+    assert "if (!prefersReducedMotion && 'IntersectionObserver' in window)" in script
+
+    assert "about-person__scan" not in about
+    assert "about-person__scan" not in about_styles
+    assert "about-person__scan" not in theme_styles
+    assert ".about-person:hover" not in about_styles
+    assert ".about-person:focus" not in about_styles
+    assert "cv-scan" not in about_styles
+    assert "transition: filter" not in about_styles
+    assert "transform: scale(1.01)" not in about_styles
+    assert "filter: grayscale(0) saturate(1) contrast(1.02) brightness(.97);" in about_styles
+
+
 def test_pages_expose_skip_paths_headings_and_noncolor_navigation_cues() -> None:
     styles = (PREVIEW_ROOT / "assets/css/global.css").read_text(encoding="utf-8")
     expected_headings = {

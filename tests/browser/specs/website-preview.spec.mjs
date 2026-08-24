@@ -167,14 +167,68 @@ test("Contact keeps simulated large text and mobile content reachable", async ({
     await expectContactTargetsReachable(page);
 });
 
-test("reduced motion keeps primary Home content reachable", async ({ page }) => {
+test("reduced motion settles primary Home content without hiding reveals", async ({ page }) => {
     await page.emulateMedia({ reducedMotion: "reduce" });
     await page.goto("index.html", { waitUntil: "networkidle" });
 
     await expect(page.getByRole("heading", { name: /Explore what/i })).toBeVisible();
-    expect(
-        await page.evaluate(() => matchMedia("(prefers-reduced-motion: reduce)").matches),
-    ).toBe(true);
+    const motionState = await page.evaluate(() => ({
+        heroAnimation: getComputedStyle(document.querySelector(".hero__media")).animationName,
+        heroTransition: getComputedStyle(document.querySelector(".hero__media")).transitionProperty,
+        reducedMotion: matchMedia("(prefers-reduced-motion: reduce)").matches,
+        revealEnhanced: document.documentElement.classList.contains("reveal-enhanced"),
+        revealTargets: [...document.querySelectorAll("[data-reveal]")].map(target => {
+            const style = getComputedStyle(target);
+
+            return {
+                opacity: style.opacity,
+                transform: style.transform,
+                transition: style.transitionProperty,
+            };
+        }),
+    }));
+
+    expect(motionState.reducedMotion).toBe(true);
+    expect(motionState.revealEnhanced).toBe(false);
+    expect(motionState.heroAnimation).toBe("none");
+    expect(motionState.heroTransition).toBe("none");
+    expect(motionState.revealTargets).not.toHaveLength(0);
+    for (const target of motionState.revealTargets) {
+        expect(target).toEqual({ opacity: "1", transform: "none", transition: "none" });
+    }
+});
+
+test("Team cards remain static presentational articles on hover", async ({ page }) => {
+    await page.goto("about.html", { waitUntil: "networkidle" });
+
+    const card = page.locator(".about-person").first();
+    const portrait = card.locator(".about-person__media img");
+    await expect(page.locator(".about-person__scan")).toHaveCount(0);
+    expect(await card.evaluate(element => element.tabIndex)).toBe(-1);
+
+    const beforeHover = await portrait.evaluate(image => {
+        const style = getComputedStyle(image);
+
+        return {
+            filter: style.filter,
+            transform: style.transform,
+            transition: style.transitionProperty,
+        };
+    });
+    await card.hover();
+    const afterHover = await portrait.evaluate(image => {
+        const style = getComputedStyle(image);
+
+        return {
+            filter: style.filter,
+            transform: style.transform,
+            transition: style.transitionProperty,
+        };
+    });
+
+    expect(beforeHover).toEqual(afterHover);
+    expect(beforeHover.transform).toBe("none");
+    expect(beforeHover.transition).toBe("all");
 });
 
 test("modern browsers choose responsive images with reserved layout geometry", async ({ page }) => {
