@@ -11,13 +11,13 @@ prototype's Features, Formats, Controls, Recording, and Preferences routes and
 their page-specific assets. It contains no PHP runtime, server application,
 persistent storage, or database.
 
-The dedicated Contact Us page carries forward the current site's FormSubmit
-submission contract: required name, email, and message fields, plus the
-existing hidden `_honey` honeypot. It posts directly to FormSubmit, so do not
-submit it during local design review unless a live message is intended.
+The dedicated Contact Us page posts directly to FormSubmit with required name,
+email, and message fields. FormSubmit's default CAPTCHA remains enabled: do
+not add its `_captcha=false` opt-out. The existing hidden `_honey` honeypot is
+kept as an additional filter. FormSubmit applies its own hosted abuse controls;
 CaveViewer stores no contact data and runs no contact backend or database.
-The stronger server-verified human-validation work remains deferred until its
-external configuration and publication boundary are authorized.
+Do not submit the form during local design review unless a live message is
+intended.
 
 ## Review locally
 

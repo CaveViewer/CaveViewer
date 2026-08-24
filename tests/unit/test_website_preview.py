@@ -411,6 +411,7 @@ def test_contact_page_preserves_the_current_form_submission_contract() -> None:
     assert '<input type="hidden" name="_subject" value="CaveViewer contact form">' in contact
     assert '<input type="hidden" name="_template" value="table">' in contact
     assert 'name="_honey" tabindex="-1" autocomplete="off"' in contact
+    assert 'name="_captcha" value="false"' not in contact
     assert '<label for="cf-name">Your name</label>' in contact
     assert '<input type="text" id="cf-name" name="name" placeholder="Paul" required>' in contact
     assert '<label for="cf-email">Your email</label>' in contact
@@ -421,6 +422,8 @@ def test_contact_page_preserves_the_current_form_submission_contract() -> None:
     assert 'assets/css/contact.css' in contact
     assert '.contact-form__honeypot {' in styles
     assert 'FormSubmit' in readme
+    assert "default CAPTCHA remains enabled" in readme
+    assert "`_captcha=false` opt-out" in readme
     assert 'no contact backend or database' in readme
 
 
