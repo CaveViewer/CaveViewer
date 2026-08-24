@@ -118,6 +118,24 @@ test("the mobile navigation is keyboard-operable", async ({ page }) => {
     await expect(menuToggle).toBeFocused();
 });
 
+test("the shared header switches cleanly between inline and compact navigation", async ({ page }) => {
+    const navigation = page.getByRole("navigation", { name: "Primary navigation" });
+    const menuToggle = page.locator("[data-menu-toggle]");
+
+    await page.setViewportSize({ width: 900, height: 900 });
+    await page.goto("features.html", { waitUntil: "networkidle" });
+    await expect(navigation).toHaveCSS("position", "static");
+    await expect(menuToggle).toHaveCSS("display", "none");
+    await expectNoHorizontalOverflow(page);
+
+    await page.setViewportSize({ width: 820, height: 900 });
+    await expect(navigation).toHaveCSS("position", "fixed");
+    await expect(menuToggle).toHaveCSS("display", "grid");
+    await menuToggle.click();
+    await expect(navigation).toHaveClass(/is-open/);
+    await expectNoHorizontalOverflow(page);
+});
+
 test("Contact preserves its normal desktop composition while short screens scroll", async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto("contact.html", { waitUntil: "networkidle" });
@@ -307,10 +325,18 @@ test("modern browsers choose responsive images with reserved layout geometry", a
 
         return {
             currentSrc: image.currentSrc,
+            naturalHeight: image.naturalHeight,
+            naturalWidth: image.naturalWidth,
+            opacity: getComputedStyle(image).opacity,
             ratio: bounds.width / bounds.height,
+            visibility: getComputedStyle(image).visibility,
         };
     });
     expect(renderingMetrics.currentSrc).toMatch(/rendering-engine-(800|1600)\.webp$/);
+    expect(renderingMetrics.naturalWidth).toBeGreaterThan(0);
+    expect(renderingMetrics.naturalHeight).toBeGreaterThan(0);
+    expect(renderingMetrics.opacity).toBe("1");
+    expect(renderingMetrics.visibility).toBe("visible");
     expect(renderingMetrics.ratio).toBeCloseTo(2558 / 1556, 2);
 
     await page.goto("about.html", { waitUntil: "networkidle" });

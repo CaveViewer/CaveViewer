@@ -202,9 +202,14 @@ def test_reveal_content_is_visible_without_javascript() -> None:
         assert 'assets/css/global.css' in page_text
         assert "data-reveal" in page_text
 
-    assert "html.reveal-enhanced [data-reveal] { opacity:0;" in styles
-    assert "html.reveal-enhanced [data-reveal].is-visible { opacity:1;" in styles
-    assert "\n[data-reveal] { opacity:0;" not in styles
+    assert re.search(
+        r"html\.reveal-enhanced \[data-reveal\] \{\s*opacity:\s*0;", styles
+    )
+    assert re.search(
+        r"html\.reveal-enhanced \[data-reveal\]\.is-visible \{\s*opacity:\s*1;",
+        styles,
+    )
+    assert not re.search(r"(?m)^\[data-reveal\]\s*\{\s*opacity:\s*0;", styles)
     assert "document.documentElement.classList.add('reveal-enhanced');" in script
     assert script.index("reveal.forEach(el => observer.observe(el));") < script.index(
         "document.documentElement.classList.add('reveal-enhanced');"
@@ -263,6 +268,33 @@ def test_pages_expose_skip_paths_headings_and_noncolor_navigation_cues() -> None
     assert ".primary-nav > a[aria-current=\"page\"]" in styles
     assert "text-decoration-thickness: 2px;" in styles
     assert ".primary-nav > a:focus-visible {\n    outline: 2px solid" in styles
+
+
+def test_shared_styles_have_one_current_header_and_endcap_contract() -> None:
+    global_styles = (PREVIEW_ROOT / "assets/css/global.css").read_text(
+        encoding="utf-8"
+    )
+    readability_styles = (PREVIEW_ROOT / "assets/css/readability.css").read_text(
+        encoding="utf-8"
+    )
+
+    assert global_styles.count(".site-header {\n") == 1
+    assert "/* Shared header" in global_styles
+    assert "/* Intermediate desktop keeps the primary navigation inline. */" in global_styles
+    assert "/* Small screens replace the inline destinations with a focused menu. */" in global_styles
+    assert "@media (max-width: 1180px)" not in global_styles
+
+    for retired_selector in (
+        ".site-footer",
+        ".footer-",
+        ".header-action",
+        ".brand__",
+        ".cv-survey",
+    ):
+        assert retired_selector not in global_styles
+
+    for retired_selector in (".site-footer", ".section", ".content-section"):
+        assert retired_selector not in readability_styles
 
 
 def test_preview_uses_one_header_and_has_no_member_profile_routes() -> None:
