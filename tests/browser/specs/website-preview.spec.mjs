@@ -213,7 +213,7 @@ test("modern browsers choose responsive images with reserved layout geometry", a
 
 test.describe("wide Home hero art direction", () => {
     for (const viewport of wideHeroViewports) {
-        test(`${viewport.name} keeps the copy and media inside one aligned composition`, async ({ page }) => {
+        test(`${viewport.name} keeps the cave image as a centered full-hero background`, async ({ page }) => {
             await page.setViewportSize(viewport);
             await page.goto("index.html", { waitUntil: "networkidle" });
 
@@ -222,37 +222,43 @@ test.describe("wide Home hero art direction", () => {
                 const hero = document.querySelector(".hero").getBoundingClientRect();
                 const content = document.querySelector(".hero__content").getBoundingClientRect();
                 const copy = document.querySelector(".hero__copy").getBoundingClientRect();
-                const mediaBounds = document.querySelector(".hero__media").getBoundingClientRect();
                 const media = getComputedStyle(document.querySelector(".hero__media"));
 
                 return {
                     headerLeft: header.left,
+                    headerRight: header.right,
                     contentLeft: content.left,
                     contentRight: content.right,
                     heroCenter: hero.top + hero.height / 2,
                     copyCenter: copy.top + copy.height / 2,
-                    copyRight: copy.right,
-                    headerBottom: header.bottom,
-                    heroBottom: hero.bottom,
-                    mediaBottom: mediaBounds.bottom,
-                    mediaLeft: mediaBounds.left,
-                    mediaRight: mediaBounds.right,
-                    mediaTop: mediaBounds.top,
                     backgroundPosition: media.backgroundPosition,
                     backgroundSize: media.backgroundSize,
+                    mediaBottom: media.bottom,
+                    mediaLeft: media.left,
+                    mediaRight: media.right,
+                    mediaTop: media.top,
+                    viewportWidth: window.innerWidth,
                 };
             });
 
+            const normalShellGutter = Math.max(32, (geometry.viewportWidth - 1480) / 2);
+            const cappedWideGutter = Math.min(
+                normalShellGutter,
+                Math.min(Math.max(176, geometry.viewportWidth * .11), 320),
+            );
+
             expect(Math.abs(geometry.headerLeft - geometry.contentLeft)).toBeLessThanOrEqual(1);
+            expect(Math.abs(geometry.contentLeft - cappedWideGutter)).toBeLessThanOrEqual(1);
+            expect(Math.abs(geometry.viewportWidth - geometry.contentRight - cappedWideGutter)).toBeLessThanOrEqual(1);
+            expect(Math.abs(geometry.headerRight - geometry.contentRight)).toBeLessThanOrEqual(1);
             // The fixed header reserves extra space above the centered copy.
             expect(Math.abs(geometry.copyCenter - geometry.heroCenter)).toBeLessThanOrEqual(32);
             expect(geometry.backgroundSize).toContain("cover");
             expect(geometry.backgroundPosition).toContain("50% 50%");
-            expect(geometry.mediaLeft).toBeGreaterThan(geometry.copyRight + 32);
-            // The hero's subtle introductory scale animation affects its visual box by ~3px.
-            expect(Math.abs(geometry.mediaRight - geometry.contentRight)).toBeLessThanOrEqual(4);
-            expect(geometry.mediaTop).toBeGreaterThan(geometry.headerBottom);
-            expect(geometry.mediaBottom).toBeLessThan(geometry.heroBottom);
+            expect(geometry.mediaTop).toBe("0px");
+            expect(geometry.mediaRight).toBe("0px");
+            expect(geometry.mediaBottom).toBe("0px");
+            expect(geometry.mediaLeft).toBe("0px");
             await expectNoHorizontalOverflow(page);
         });
     }

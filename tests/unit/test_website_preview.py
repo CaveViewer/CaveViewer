@@ -426,10 +426,13 @@ def test_wide_home_hero_has_explicit_art_direction_and_aligned_gutters() -> None
     )
 
     assert '<h1 id="hero-title">Explore what<br><span>lies beneath</span></h1>' in index
-    assert "@media (min-width: 1600px)" in home_styles
-    assert "padding-bottom: clamp(32px, 6svh, 72px);\n        align-items: center;" in home_styles
-    assert "calc(50% + 16px)" in home_styles
+    assert "@media (min-width: 1600px) and (min-height: 900px)" in home_styles
+    assert ".page-home .hero__content { align-items: center; }" in home_styles
+    assert ".hero__media {\n    --hero-photo:" in home_styles
+    assert "100% 100%, 100% 100%, 100% 100%, 100% 100%, cover" in home_styles
+    assert "background-position: center, center, center, center, center;" in home_styles
+    assert "clamp(176px, 11vw, 320px)" in home_styles
     assert "max(32px, calc((100% - var(--max)) / 2))" in home_styles
-    assert "max-width: min(620px, calc(50% - 32px));" in home_styles
-    assert "--hero-wide-photo" not in home_styles
+    assert "auto 100%" not in home_styles
+    assert "right center" not in home_styles
     assert "width: min(calc(100% - 64px), var(--max));" in global_styles
