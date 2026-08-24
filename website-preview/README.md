@@ -29,6 +29,23 @@ python3 -m http.server 4173 --bind 127.0.0.1 --directory website-preview
 
 Open <http://127.0.0.1:4173/>.
 
+## Browser smoke checks
+
+The browser checks reuse the review server above; they do not start another
+server or publish any files. After starting the preview server, run:
+
+```bash
+cd tests/browser
+npm ci
+npx playwright install chromium
+npm test
+```
+
+The suite covers the canonical pages at desktop, tablet, and mobile widths,
+keyboard menu operation, a 200%-zoom-equivalent viewport, reduced motion, and
+the no-JavaScript reveal baseline. To target another local host, set
+`CAVEVIEWER_WEBSITE_URL` before running `npm test`.
+
 ## Deployment isolation
 
 CaveViewer's Pages workflow uploads only `docs/`. This root-level
