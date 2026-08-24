@@ -312,6 +312,11 @@ def test_preview_uses_one_header_and_has_no_member_profile_routes() -> None:
         assert 'href="features.html">Features</a>' in text or (
             'href="features.html" aria-current="page">Features</a>' in text
         )
+        expected_performance = (
+            '#performance' if page.name == "features.html" else "features.html#performance"
+        )
+        assert f'href="{expected_performance}">Performance</a>' in text
+        assert text.index(">Features</a>") < text.index(">Performance</a>") < text.index(">Team</a>")
         assert 'href="about.html">Team</a>' in text or (
             'href="about.html" aria-current="page">Team</a>' in text
         )
@@ -343,8 +348,41 @@ def test_preview_uses_one_header_and_has_no_member_profile_routes() -> None:
         "Render What Others Can’t",
         "Explore the Map Library",
         "Record &amp; Share Dives",
+        "Big caves, practical choices.",
     ):
         assert f">{feature}<" in features
+
+
+def test_performance_section_uses_the_real_preferences_and_capabilities() -> None:
+    features = (PREVIEW_ROOT / "features.html").read_text(encoding="utf-8")
+    styles = (PREVIEW_ROOT / "assets/css/features.css").read_text(encoding="utf-8")
+
+    assert '<section class="performance-section" id="performance"' in features
+    assert '<a href="#performance">Performance</a>' in features
+    for text in (
+        "available system and graphics memory",
+        "smaller texture size before upload",
+        "fine surface detail may look softer",
+        "Import chunk size",
+        "Max upload group size",
+        "Cache-building worker limit",
+        "System RAM target",
+        "GPU memory target",
+        "Loading worker limit",
+        "standalone slice",
+        "No ads, no accounts, no subscriptions, no gimmicks, and no trackers.",
+        "Recent Windows, macOS, Ubuntu, or Fedora",
+        "16 GB of RAM",
+        "At least 256 GB of free disk space",
+        "early M1 systems",
+        "Older Intel-based Macs",
+    ):
+        assert text in features
+
+    assert ".performance-section {" in styles
+    assert "scroll-margin-top: calc(var(--header-h) + 24px);" in styles
+    assert ".performance-section__grid {" in styles
+    assert ".performance-card--requirements {" in styles
 
 
 def test_contact_page_preserves_the_current_form_submission_contract() -> None:

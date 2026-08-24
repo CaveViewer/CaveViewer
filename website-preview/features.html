@@ -4,8 +4,8 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <meta name="theme-color" content="#0a0a0d">
-    <title>Features — CaveViewer</title>
-    <meta name="description" content="CaveViewer features: unmatched rendering, a standard map library, and dive capture sharing.">
+    <title>Features &amp; Performance — CaveViewer</title>
+    <meta name="description" content="CaveViewer features, performance controls, practical hardware guidance, and free cross-platform cave exploration.">
     <link rel="stylesheet" href="assets/css/global.css">
     <link rel="stylesheet" href="assets/css/readability.css">
     <link rel="stylesheet" href="assets/css/page.css">
@@ -19,6 +19,7 @@
         <a class="site-home" href="index.html" aria-label="CaveViewer home"><img class="site-home__mark" src="assets/icons/caveviewer-cave-profile.svg" width="64" height="32" alt=""></a>
         <nav class="primary-nav" aria-label="Primary navigation">
             <a href="features.html" aria-current="page">Features</a>
+            <a href="#performance">Performance</a>
             <a href="about.html">Team</a>
             <a href="contact.html">Contact</a>
         </nav>
@@ -95,6 +96,64 @@
                     </figure>
                 </section>
             </div>
+
+            <section class="performance-section" id="performance" aria-labelledby="performance-title" data-reveal>
+                <div class="performance-section__intro">
+                    <p class="performance-section__eyebrow">Performance &amp; compatibility</p>
+                    <h2 id="performance-title">Big caves, practical choices.</h2>
+                    <p>CaveViewer is built for the reality of photogrammetry: maps can be much larger than the memory a desktop can comfortably hold at once. It makes cautious choices first, then gives you a small set of useful controls when a particular cave or computer needs them.</p>
+                </div>
+
+                <div class="performance-section__grid">
+                    <article class="performance-card performance-card--adaptive">
+                        <h3>Adapts to the hardware in front of it</h3>
+                        <p>CaveViewer uses available system and graphics memory to set a working budget. It keeps a manageable set of nearby map chunks ready instead of trying to hold an entire cave in memory. If a map’s textures exceed the graphics budget, it can select a smaller texture size before upload. You can still explore the map, though fine surface detail may look softer.</p>
+                    </article>
+
+                    <article class="performance-card">
+                        <h3>Tune the map, not your whole day</h3>
+                        <p>Preferences keeps the useful choices close at hand. For a dense source map, adjust the import settings before building or rebuilding its cache; for viewing, give CaveViewer only the memory and background work your desktop can comfortably spare.</p>
+                        <dl class="performance-card__settings">
+                            <div>
+                                <dt>Preferences → Import</dt>
+                                <dd><strong>Import chunk size</strong>, <strong>Max upload group size</strong>, and <strong>Cache-building worker limit</strong> help shape a new cache for the map.</dd>
+                            </div>
+                            <div>
+                                <dt>Preferences → Streaming</dt>
+                                <dd><strong>System RAM target</strong>, <strong>GPU memory target</strong>, and <strong>Loading worker limit</strong> balance map residency and background loading while you explore.</dd>
+                            </div>
+                        </dl>
+                    </article>
+
+                    <article class="performance-card">
+                        <h3>Save the part worth returning to</h3>
+                        <p>Choose a start and end point in a precompiled map and save a standalone slice. A focused restriction, landmark, or passage becomes its own portable map with the geometry and textures it needs—so it can open without making you wait on the full parent cave.</p>
+                    </article>
+
+                    <article class="performance-card">
+                        <h3>Free means free</h3>
+                        <p>CaveViewer and its maps are free. No ads, no accounts, no subscriptions, no gimmicks, and no trackers. Just the tools and maps you need, kept in files you control.</p>
+                    </article>
+
+                    <article class="performance-card">
+                        <h3>Desktop-first, cross-platform from day one</h3>
+                        <p>Explore on recent Windows, macOS, or Linux systems, including Ubuntu and Fedora. Mobile support is not ready yet: maps this complex need desktop-class resources. It is a direction we are thinking about, not a promise for today.</p>
+                    </article>
+
+                    <article class="performance-card performance-card--requirements">
+                        <div>
+                            <h3>A practical starting point</h3>
+                            <p>Every cave is different, but these are sensible baseline expectations for smaller maps.</p>
+                            <ul class="performance-card__requirements">
+                                <li>Recent Windows, macOS, Ubuntu, or Fedora</li>
+                                <li>16 GB of RAM</li>
+                                <li>At least 256 GB of free disk space</li>
+                            </ul>
+                        </div>
+                        <p class="performance-card__limits"><strong>A candid note on Macs.</strong> We have had good results on Apple hardware, including early M1 systems. Older Intel-based Macs have generally been the most constrained systems in testing. CaveViewer aims to work well on consumer-grade hardware, but map size, textures, available memory, and graphics hardware still set real limits.</p>
+                    </article>
+                </div>
+            </section>
         </div>
     </section>
 </main>

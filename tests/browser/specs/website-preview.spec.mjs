@@ -81,7 +81,7 @@ test("navigation current and focus states have non-color indicators", async ({ p
 
     const navigation = page.getByRole("navigation", { name: "Primary navigation" });
     const currentLink = navigation.getByRole("link", { name: "Features" });
-    const focusedLink = navigation.getByRole("link", { name: "Team" });
+    const focusedLink = navigation.getByRole("link", { name: "Performance" });
 
     await page.keyboard.press("Tab");
     await page.keyboard.press("Tab");
@@ -110,6 +110,8 @@ test("the mobile navigation is keyboard-operable", async ({ page }) => {
     await expect(navigation.getByRole("link", { name: "Features" })).toBeFocused();
 
     await page.keyboard.press("Tab");
+    await expect(navigation.getByRole("link", { name: "Performance" })).toBeFocused();
+    await page.keyboard.press("Tab");
     await expect(navigation.getByRole("link", { name: "Team" })).toBeFocused();
 
     await page.keyboard.press("Escape");
@@ -133,6 +135,31 @@ test("the shared header switches cleanly between inline and compact navigation",
     await expect(menuToggle).toHaveCSS("display", "grid");
     await menuToggle.click();
     await expect(navigation).toHaveClass(/is-open/);
+    await expectNoHorizontalOverflow(page);
+});
+
+test("the Performance link reaches practical, readable map guidance", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto("index.html", { waitUntil: "networkidle" });
+
+    await page.getByRole("navigation", { name: "Primary navigation" })
+        .getByRole("link", { name: "Performance" })
+        .click();
+    await expect(page).toHaveURL(/features\.html#performance$/);
+
+    const performance = page.locator("#performance");
+    await expect(performance).toBeInViewport();
+    await expect(performance.getByRole("heading", { name: "Big caves, practical choices." }))
+        .toBeVisible();
+    await expect(performance).toContainText("System RAM target");
+    await expect(performance).toContainText("Older Intel-based Macs");
+    await expectNoHorizontalOverflow(page);
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("features.html#performance", { waitUntil: "networkidle" });
+    await expectFontSizeAtLeast(page.locator(
+        ".performance-section__intro > p:last-child, .performance-card > p, .performance-card__settings dd, .performance-card__requirements",
+    ), 14);
     await expectNoHorizontalOverflow(page);
 });
 
@@ -214,6 +241,9 @@ test("essential labels, metadata, and prose retain readable minimums at mobile a
     await page.goto("features.html", { waitUntil: "networkidle" });
     await expectFontSizeAtLeast(page.locator(
         ".feature-section__copy p, .feature-section__note, .feature-section__capabilities",
+    ), 14);
+    await expectFontSizeAtLeast(page.locator(
+        ".performance-section__intro > p:last-child, .performance-card > p, .performance-card__settings dd, .performance-card__requirements",
     ), 14);
     await expectNoHorizontalOverflow(page);
 
