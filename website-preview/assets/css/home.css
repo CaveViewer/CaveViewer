@@ -58,20 +58,38 @@
 }
 .hero__copy { max-width: min(700px, 52vw); }
 
-/* The source photo is 3:2. On wide displays, an unrestricted `cover` crop
-   discards too much of it. Retain the two-line heading, center the full copy
-   on tall desktops, and use a modest height crop with a stable rightward focal
-   area once there is sufficient horizontal room. */
-@media (min-width: 1600px) and (min-height: 900px) {
+/* At wide desktop widths, Home stops treating the whole viewport as a single
+   photo canvas. The copy and cave visual occupy the same centered shell used
+   by the rest of the site, so increasing window width adds balanced gutters
+   instead of stretching the background independently of the content. */
+@media (min-width: 1600px) {
+    .page-home .hero__media {
+        inset:
+            calc(var(--header-h) + clamp(24px, 4svh, 56px))
+            max(32px, calc((100% - var(--max)) / 2))
+            clamp(32px, 6svh, 72px)
+            calc(50% + 16px);
+        border: 1px solid rgba(242, 217, 140, .22);
+        box-shadow: 0 30px 80px rgba(0, 0, 0, .56);
+        background-position: center, center, center, center, 56% center;
+    }
+
+    .page-home .hero__veil {
+        opacity: .35;
+    }
+
+    .page-home .hero::after {
+        height: 24svh;
+    }
+
     .page-home .hero__content {
+        padding-top: calc(var(--header-h) + clamp(24px, 4svh, 56px));
+        padding-bottom: clamp(32px, 6svh, 72px);
         align-items: center;
     }
-}
 
-@media (min-width: 1600px) and (min-aspect-ratio: 16 / 9) {
-    .page-home .hero__media {
-        background-size: 100% 100%, 100% 100%, 100% 100%, 100% 100%, auto 120%;
-        background-position: center, center, center, center, 70% center;
+    .page-home .hero__copy {
+        max-width: min(620px, calc(50% - 32px));
     }
 }
 

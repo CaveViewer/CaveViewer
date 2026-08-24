@@ -17,6 +17,7 @@ const wideHeroViewports = [
     { name: "1920 × 1080", width: 1920, height: 1080 },
     { name: "2560 × 1440", width: 2560, height: 1440 },
     { name: "2560 × 1080", width: 2560, height: 1080 },
+    { name: "2625 × 1187", width: 2625, height: 1187 },
 ];
 
 async function expectNoHorizontalOverflow(page) {
@@ -212,7 +213,7 @@ test("modern browsers choose responsive images with reserved layout geometry", a
 
 test.describe("wide Home hero art direction", () => {
     for (const viewport of wideHeroViewports) {
-        test(`${viewport.name} keeps the copy centered and gutters aligned`, async ({ page }) => {
+        test(`${viewport.name} keeps the copy and media inside one aligned composition`, async ({ page }) => {
             await page.setViewportSize(viewport);
             await page.goto("index.html", { waitUntil: "networkidle" });
 
@@ -221,22 +222,37 @@ test.describe("wide Home hero art direction", () => {
                 const hero = document.querySelector(".hero").getBoundingClientRect();
                 const content = document.querySelector(".hero__content").getBoundingClientRect();
                 const copy = document.querySelector(".hero__copy").getBoundingClientRect();
+                const mediaBounds = document.querySelector(".hero__media").getBoundingClientRect();
                 const media = getComputedStyle(document.querySelector(".hero__media"));
 
                 return {
                     headerLeft: header.left,
                     contentLeft: content.left,
+                    contentRight: content.right,
                     heroCenter: hero.top + hero.height / 2,
                     copyCenter: copy.top + copy.height / 2,
+                    copyRight: copy.right,
+                    headerBottom: header.bottom,
+                    heroBottom: hero.bottom,
+                    mediaBottom: mediaBounds.bottom,
+                    mediaLeft: mediaBounds.left,
+                    mediaRight: mediaBounds.right,
+                    mediaTop: mediaBounds.top,
                     backgroundPosition: media.backgroundPosition,
                     backgroundSize: media.backgroundSize,
                 };
             });
 
             expect(Math.abs(geometry.headerLeft - geometry.contentLeft)).toBeLessThanOrEqual(1);
-            expect(Math.abs(geometry.copyCenter - geometry.heroCenter)).toBeLessThanOrEqual(28);
-            expect(geometry.backgroundSize).toContain("auto 120%");
-            expect(geometry.backgroundPosition).toContain("70%");
+            // The fixed header reserves extra space above the centered copy.
+            expect(Math.abs(geometry.copyCenter - geometry.heroCenter)).toBeLessThanOrEqual(32);
+            expect(geometry.backgroundSize).toContain("cover");
+            expect(geometry.backgroundPosition).toContain("50% 50%");
+            expect(geometry.mediaLeft).toBeGreaterThan(geometry.copyRight + 32);
+            // The hero's subtle introductory scale animation affects its visual box by ~3px.
+            expect(Math.abs(geometry.mediaRight - geometry.contentRight)).toBeLessThanOrEqual(4);
+            expect(geometry.mediaTop).toBeGreaterThan(geometry.headerBottom);
+            expect(geometry.mediaBottom).toBeLessThan(geometry.heroBottom);
             await expectNoHorizontalOverflow(page);
         });
     }
