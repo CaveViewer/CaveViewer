@@ -3,6 +3,7 @@ import { expect, test } from "@playwright/test";
 const canonicalPages = [
     { name: "Home", path: "index.html", content: "Explore what" },
     { name: "Features", path: "features.html", content: "Render What Others Can’t" },
+    { name: "Advantage", path: "advantage.html", content: "Keep more cave within reach." },
     { name: "Team", path: "about.html", content: "Magic Mr_V" },
     { name: "Contact", path: "contact.html", content: "Contact Us" },
 ];
@@ -140,12 +141,16 @@ test("the shared header switches cleanly between inline and compact navigation",
 
 test("the Advantage link reaches practical, readable map guidance", async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto("features.html", { waitUntil: "networkidle" });
+    await expect(page.getByRole("heading", { name: "Record & Share Dives" })).toBeVisible();
+    await expect(page.locator("#advantage")).toHaveCount(0);
+
     await page.goto("index.html", { waitUntil: "networkidle" });
 
     await page.getByRole("navigation", { name: "Primary navigation" })
         .getByRole("link", { name: "Advantage" })
         .click();
-    await expect(page).toHaveURL(/features\.html#advantage$/);
+    await expect(page).toHaveURL(/advantage\.html$/);
 
     const advantage = page.locator("#advantage");
     await expect(advantage).toBeInViewport();
@@ -163,7 +168,7 @@ test("the Advantage link reaches practical, readable map guidance", async ({ pag
     await expectNoHorizontalOverflow(page);
 
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.goto("features.html#advantage", { waitUntil: "networkidle" });
+    await page.goto("advantage.html", { waitUntil: "networkidle" });
     await expectFontSizeAtLeast(page.locator(
         ".feature-section--advantage .feature-section__copy p, .feature-section--advantage .feature-section__note, .feature-section--advantage .feature-section__capabilities",
     ), 14);
@@ -249,6 +254,8 @@ test("essential labels, metadata, and prose retain readable minimums at mobile a
     await expectFontSizeAtLeast(page.locator(
         ".feature-section__copy p, .feature-section__note, .feature-section__capabilities",
     ), 14);
+
+    await page.goto("advantage.html", { waitUntil: "networkidle" });
     await expectFontSizeAtLeast(page.locator(
         ".feature-section--advantage .feature-section__copy p, .feature-section--advantage .feature-section__note, .feature-section--advantage .feature-section__capabilities",
     ), 14);

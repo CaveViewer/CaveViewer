@@ -4,8 +4,8 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <meta name="theme-color" content="#0a0a0d">
-    <title>Features &amp; Advantages — CaveViewer</title>
-    <meta name="description" content="CaveViewer features, practical import and streaming controls, hardware guidance, and free cross-platform cave exploration.">
+    <title>Features — CaveViewer</title>
+    <meta name="description" content="CaveViewer rendering, Map Library, and local cave-dive capture features.">
     <link rel="stylesheet" href="assets/css/global.css">
     <link rel="stylesheet" href="assets/css/readability.css">
     <link rel="stylesheet" href="assets/css/page.css">
@@ -19,7 +19,7 @@
         <a class="site-home" href="index.html" aria-label="CaveViewer home"><img class="site-home__mark" src="assets/icons/caveviewer-cave-profile.svg" width="64" height="32" alt=""></a>
         <nav class="primary-nav" aria-label="Primary navigation">
             <a href="features.html" aria-current="page">Features</a>
-            <a href="#advantage">Advantage</a>
+            <a href="advantage.html">Advantage</a>
             <a href="about.html">Team</a>
             <a href="contact.html">Contact</a>
         </nav>
@@ -31,7 +31,7 @@
 </header>
 
 <main id="main-content" tabindex="-1">
-    <h1 class="sr-only">CaveViewer features and advantages</h1>
+    <h1 class="sr-only">CaveViewer features</h1>
     <section class="features-page" aria-label="Features">
         <div class="features-page__grid" aria-hidden="true"></div>
         <div class="shell">
@@ -99,58 +99,6 @@
         </div>
     </section>
 
-    <section class="advantages-page" id="advantage" aria-labelledby="advantage-title">
-        <div class="advantages-page__grid" aria-hidden="true"></div>
-        <div class="shell">
-            <div class="advantages-page__sections">
-                <section class="feature-section feature-section--advantage" aria-labelledby="advantage-title" data-reveal>
-                    <div class="feature-section__copy">
-                        <p class="feature-section__eyebrow">Advantage</p>
-                        <h2 id="advantage-title">Keep more cave within reach.</h2>
-                        <p>Large cave maps should not become an all-or-nothing hardware test. CaveViewer prepares a reusable local cache and works to a conservative memory budget when a map or computer needs it, instead of asking a desktop to hold every chunk and texture at once. The map remains useful, while the choices that matter stay available in Preferences.</p>
-                        <ul class="feature-section__capabilities">
-                            <li><strong>Start with a safer fit.</strong> CaveViewer uses available system and graphics memory to set a working budget. If textures exceed the graphics budget, it can use a smaller texture size before uploading them; the cave remains explorable, though fine surface detail may look softer.</li>
-                            <li><strong>Shape a cache for the source map.</strong> <strong>Import chunk size</strong> and <strong>Max upload group size</strong> let you prepare a new cache with the map’s density and your hardware in mind.</li>
-                            <li><strong>Leave the rest of the desktop usable.</strong> <strong>Cache-building worker limit</strong> lets you decide how much background work an import should take on.</li>
-                        </ul>
-                        <aside class="feature-section__note" aria-label="Import preference note">
-                            <strong>A visible trade-off, not a dead end.</strong> The defaults aim to make a demanding map practical first. You can adjust the import choices before building or rebuilding its cache when a survey needs a different balance.
-                        </aside>
-                    </div>
-                    <figure class="feature-section__visual">
-                        <picture>
-                            <source type="image/webp" srcset="assets/images/features/preferences-import-800.webp 800w, assets/images/features/preferences-import-1600.webp 1600w" sizes="(max-width: 840px) calc(100vw - 64px), 680px">
-                            <img src="assets/images/features/preferences-import.png" width="1982" height="1656" loading="lazy" decoding="async" alt="CaveViewer Preferences with the Import tab selected, showing cache and worker settings">
-                        </picture>
-                        <figcaption>Preferences → Import</figcaption>
-                    </figure>
-                </section>
-
-                <section class="feature-section feature-section--advantage" id="advantage-streaming" aria-labelledby="advantage-streaming-title" data-reveal>
-                    <div class="feature-section__copy">
-                        <h2 id="advantage-streaming-title">Stay with the cave, not the wait.</h2>
-                        <p>As you explore, CaveViewer keeps a useful working set of nearby chunks ready rather than treating a full cave as an all-at-once load. That approach keeps the trade-offs understandable: use the resources your computer has, tune them when a particular map calls for it, and keep the result in files you control.</p>
-                        <ul class="feature-section__capabilities">
-                            <li><strong>Give viewing a clear budget.</strong> <strong>System RAM target</strong> and <strong>GPU memory target</strong> balance how much of a map stays ready against the memory available to the rest of the system.</li>
-                            <li><strong>Keep background work in its place.</strong> <strong>Loading worker limit</strong> and <strong>Loading CPUs to keep free</strong> let you preserve room for the rest of your desktop while the map streams in.</li>
-                            <li><strong>Carry the useful part.</strong> Save a standalone slice of a precompiled map for a restriction, landmark, or passage. It carries the geometry and textures it needs, without reopening the full parent cave.</li>
-                            <li><strong>Keep it in your hands.</strong> CaveViewer and its maps are free. No ads, accounts, subscriptions, gimmicks, or trackers. They work on recent Windows, macOS, Ubuntu, and Fedora systems.</li>
-                        </ul>
-                        <aside class="feature-section__note" aria-label="Desktop compatibility note">
-                            <strong>Desktop-first, with honest limits.</strong> For smaller maps, start with recent Windows, macOS, Ubuntu, or Fedora; 16 GB of RAM; and at least 256 GB of free disk space. We have had good results with Apple hardware, including early M1 systems. Older Intel-based Macs have generally been the most constrained in testing. Mobile support is not ready yet: maps this complex still need desktop-class resources.
-                        </aside>
-                    </div>
-                    <figure class="feature-section__visual">
-                        <picture>
-                            <source type="image/webp" srcset="assets/images/features/preferences-streaming-800.webp 800w, assets/images/features/preferences-streaming-1600.webp 1600w" sizes="(max-width: 840px) calc(100vw - 64px), 680px">
-                            <img src="assets/images/features/preferences-streaming.png" width="1982" height="1656" loading="lazy" decoding="async" alt="CaveViewer Preferences with the Streaming tab selected, showing memory, loading, and upload settings">
-                        </picture>
-                        <figcaption>Preferences → Streaming</figcaption>
-                    </figure>
-                </section>
-            </div>
-        </div>
-    </section>
 </main>
 
 <footer class="site-endcap"><div class="site-endcap__inner"><img class="site-endcap__logo" src="assets/icons/caveviewer-cave-profile.svg" width="64" height="32" alt=""><span>&copy; 2026 CaveViewer</span></div></footer>

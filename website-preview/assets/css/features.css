@@ -27,7 +27,7 @@
     position: relative;
     isolation: isolate;
     overflow: hidden;
-    padding: clamp(56px, 6vw, 96px) 0 clamp(56px, 6vw, 88px);
+    padding: calc(var(--header-h) + clamp(40px, 5vw, 72px)) 0 clamp(56px, 6vw, 88px);
     scroll-margin-top: calc(var(--header-h) + 24px);
     background:
         radial-gradient(circle at 16% 14%, rgba(var(--accent-rgb), .1), transparent 28%),
@@ -212,7 +212,7 @@
     }
 
     .advantages-page {
-        padding: 48px 0 56px;
+        padding: calc(var(--header-h) + 32px) 0 56px;
     }
 
 }

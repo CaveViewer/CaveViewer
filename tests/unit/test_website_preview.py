@@ -56,6 +56,7 @@ def test_preview_is_outside_the_github_pages_artifact() -> None:
 def test_preview_contains_only_the_canonical_public_routes() -> None:
     expected_pages = {
         "about.html",
+        "advantage.html",
         "contact.html",
         "features.html",
         "index.html",
@@ -251,7 +252,8 @@ def test_reduced_motion_settles_all_pages_and_team_cards_stay_presentational() -
 def test_pages_expose_skip_paths_headings_and_noncolor_navigation_cues() -> None:
     styles = (PREVIEW_ROOT / "assets/css/global.css").read_text(encoding="utf-8")
     expected_headings = {
-            "features.html": '<h1 class="sr-only">CaveViewer features and advantages</h1>',
+        "features.html": '<h1 class="sr-only">CaveViewer features</h1>',
+        "advantage.html": '<h1 class="sr-only">CaveViewer advantages</h1>',
         "about.html": '<h1 class="sr-only">CaveViewer team</h1>',
     }
 
@@ -312,10 +314,9 @@ def test_preview_uses_one_header_and_has_no_member_profile_routes() -> None:
         assert 'href="features.html">Features</a>' in text or (
             'href="features.html" aria-current="page">Features</a>' in text
         )
-        expected_advantage = (
-            '#advantage' if page.name == "features.html" else "features.html#advantage"
+        assert 'href="advantage.html">Advantage</a>' in text or (
+            'href="advantage.html" aria-current="page">Advantage</a>' in text
         )
-        assert f'href="{expected_advantage}">Advantage</a>' in text
         assert text.index(">Features</a>") < text.index(">Advantage</a>") < text.index(">Team</a>")
         assert 'href="about.html">Team</a>' in text or (
             'href="about.html" aria-current="page">Team</a>' in text
@@ -348,25 +349,27 @@ def test_preview_uses_one_header_and_has_no_member_profile_routes() -> None:
         "Render What Others Can’t",
         "Explore the Map Library",
         "Record &amp; Share Dives",
-            "Keep more cave within reach.",
     ):
         assert f">{feature}<" in features
+    assert "advantages-page" not in features
+    assert "Keep more cave within reach." not in features
+
+    advantage = (PREVIEW_ROOT / "advantage.html").read_text(encoding="utf-8")
+    assert 'href="advantage.html" aria-current="page">Advantage</a>' in advantage
+    assert ">Keep more cave within reach.<" in advantage
 
 
 def test_advantage_section_uses_the_real_preferences_and_capabilities() -> None:
     features = (PREVIEW_ROOT / "features.html").read_text(encoding="utf-8")
+    advantage = (PREVIEW_ROOT / "advantage.html").read_text(encoding="utf-8")
     styles = (PREVIEW_ROOT / "assets/css/features.css").read_text(encoding="utf-8")
 
-    assert '<section class="advantages-page" id="advantage"' in features
-    assert '<a href="#advantage">Advantage</a>' in features
-    assert features.count('class="feature-section feature-section--advantage"') == 2
-    features_only = features[
-        features.index('<section class="features-page"') : features.index(
-            '<section class="advantages-page"'
-        )
-    ]
-    assert features_only.count('<section class="feature-section"') == 3
-    assert "feature-section--advantage" not in features_only
+    assert '<section class="advantages-page" id="advantage"' in advantage
+    assert '<a href="advantage.html" aria-current="page">Advantage</a>' in advantage
+    assert advantage.count('class="feature-section feature-section--advantage"') == 2
+    assert features.count('<section class="feature-section"') == 3
+    assert "advantages-page" not in features
+    assert "feature-section--advantage" not in features
     for text in (
         "all-or-nothing hardware test",
         "available system and graphics memory",
@@ -389,7 +392,7 @@ def test_advantage_section_uses_the_real_preferences_and_capabilities() -> None:
         "preferences-import-1600.webp",
         "preferences-streaming-1600.webp",
     ):
-        assert text in features
+        assert text in advantage
 
     assert ".advantages-page {" in styles
     assert ".advantages-page__sections {" in styles
@@ -521,6 +524,7 @@ def test_preview_documents_static_and_database_free_boundary() -> None:
 def test_image_delivery_uses_responsive_webp_and_reserves_layout_space() -> None:
     index = (PREVIEW_ROOT / "index.html").read_text(encoding="utf-8")
     features = (PREVIEW_ROOT / "features.html").read_text(encoding="utf-8")
+    advantage = (PREVIEW_ROOT / "advantage.html").read_text(encoding="utf-8")
     about = (PREVIEW_ROOT / "about.html").read_text(encoding="utf-8")
     home_styles = (PREVIEW_ROOT / "assets/css/home.css").read_text(encoding="utf-8")
     feature_styles = (PREVIEW_ROOT / "assets/css/features.css").read_text(
@@ -540,11 +544,16 @@ def test_image_delivery_uses_responsive_webp_and_reserves_layout_space() -> None
             ),
         ),
         "Features": (
-            450_000,
+            400_000,
             (
                 "assets/images/features/rendering-engine-1600.webp",
                 "assets/images/features/map-library-1600.webp",
                 "assets/images/features/capture-recording-1600.webp",
+            ),
+        ),
+        "Advantage": (
+            120_000,
+            (
                 "assets/images/features/preferences-import-1600.webp",
                 "assets/images/features/preferences-streaming-1600.webp",
             ),
@@ -575,7 +584,7 @@ def test_image_delivery_uses_responsive_webp_and_reserves_layout_space() -> None
     assert "image-set(" in home_styles
     assert 'width="64" height="32"' in index
 
-    assert features.count("<picture>") == 5
+    assert features.count("<picture>") == 3
     for source in (
         "rendering-engine-800.webp",
         "rendering-engine-1600.webp",
@@ -583,15 +592,21 @@ def test_image_delivery_uses_responsive_webp_and_reserves_layout_space() -> None
         "map-library-1600.webp",
         "capture-recording-800.webp",
         "capture-recording-1600.webp",
+    ):
+        assert source in features
+    assert 'width="2558" height="1556" loading="eager" fetchpriority="high"' in features
+    assert features.count('loading="lazy" decoding="async"') == 2
+    assert ".feature-section__visual picture" in feature_styles
+
+    assert advantage.count("<picture>") == 2
+    for source in (
         "preferences-import-800.webp",
         "preferences-import-1600.webp",
         "preferences-streaming-800.webp",
         "preferences-streaming-1600.webp",
     ):
-        assert source in features
-    assert 'width="2558" height="1556" loading="eager" fetchpriority="high"' in features
-    assert features.count('loading="lazy" decoding="async"') == 4
-    assert ".feature-section__visual picture" in feature_styles
+        assert source in advantage
+    assert advantage.count('loading="lazy" decoding="async"') == 2
 
     assert about.count("<picture>") == 6
     assert about.count('sizes="(max-width: 900px) 50vw, 476px"') == 6
