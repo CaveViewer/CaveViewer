@@ -211,6 +211,39 @@ test("modern browsers choose responsive images with reserved layout geometry", a
     );
 });
 
+test("the generated release manifest preserves the Windows primary action and macOS chooser", async ({ page }) => {
+    await page.addInitScript(() => {
+        Object.defineProperty(navigator, "userAgentData", {
+            configurable: true,
+            value: { platform: "Windows" },
+        });
+        Object.defineProperty(navigator, "platform", {
+            configurable: true,
+            value: "Win32",
+        });
+    });
+    await page.goto("index.html", { waitUntil: "networkidle" });
+
+    const release = await page.locator("[data-release-data]").evaluate(element => (
+        JSON.parse(element.textContent)
+    ));
+    const windowsUrl = (
+        `${release.repository}/releases/download/v${release.version}/`
+        + release.platforms.windows.artifact
+    );
+    const primary = page.locator("[data-primary-download]");
+    const dialog = page.locator("[data-platform-dialog]");
+
+    await expect(primary).toHaveAttribute("href", windowsUrl);
+    await expect(primary).toContainText(release.platforms.windows.primary_label);
+    await expect(primary).toContainText(`${release.channel} ${release.version}`);
+
+    await page.locator("[data-platform-dialog-open]").click();
+    await expect(dialog).toHaveAttribute("open", "");
+    await page.locator("[data-mac-download-toggle]").click();
+    await expect(page.locator("[data-mac-download-options]")).toBeVisible();
+});
+
 test.describe("wide Home hero art direction", () => {
     for (const viewport of wideHeroViewports) {
         test(`${viewport.name} keeps the cave image as a centered full-hero background`, async ({ page }) => {

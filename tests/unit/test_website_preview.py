@@ -1,5 +1,9 @@
 """Contracts for the isolated static Lognova website mirror."""
 
+import json
+import re
+import subprocess
+import sys
 from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import urlparse
@@ -128,6 +132,65 @@ def test_lognova_design_assets_are_local() -> None:
     assert "See the whole cave" not in index
     assert "home-moment-grid" not in index
     assert "formats home-formats" not in index
+
+
+def test_preview_release_manifest_generates_every_download_reference() -> None:
+    manifest_path = PREVIEW_ROOT / "assets/data/release.json"
+    generator = REPOSITORY_ROOT / "scripts/sync_website_preview_release.py"
+    index_path = PREVIEW_ROOT / "index.html"
+    index = index_path.read_text(encoding="utf-8")
+    script = (PREVIEW_ROOT / "assets/js/platform-download.js").read_text(
+        encoding="utf-8"
+    )
+
+    generated = subprocess.run(
+        [sys.executable, str(generator), "--check"],
+        cwd=REPOSITORY_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert generated.returncode == 0, generated.stderr
+
+    release = json.loads(manifest_path.read_text(encoding="utf-8"))
+    base_url = (
+        f"{release['repository']}/releases/download/v{release['version']}/"
+    )
+    platforms = release["platforms"]
+    expected_urls = {
+        "windows": f"{base_url}{platforms['windows']['artifact']}",
+        "linux": f"{base_url}{platforms['linux']['artifact']}",
+        "macos-arm64": f"{base_url}{platforms['macos']['architectures']['arm64']['artifact']}",
+        "macos-x86_64": f"{base_url}{platforms['macos']['architectures']['x86_64']['artifact']}",
+    }
+    inline_manifest = re.search(
+        r'<script type="application/json" data-release-data>\s*(.*?)\s*</script>',
+        index,
+        flags=re.DOTALL,
+    )
+
+    assert inline_manifest is not None
+    assert json.loads(inline_manifest.group(1)) == release
+    assert '<!-- Generated from assets/data/release.json by ' in index
+    assert f'href="{expected_urls["windows"]}" data-primary-download' in index
+    assert all(url in index for url in expected_urls.values())
+
+    noscript = index[index.index("<noscript>") : index.index("</noscript>")]
+    assert all(url in noscript for url in expected_urls.values())
+    assert release["channel"] in index
+    assert release["version"] in index
+    assert release["repository"] not in script
+    assert release["version"] not in script
+    assert all(
+        artifact not in script
+        for artifact in (
+            platforms["windows"]["artifact"],
+            platforms["linux"]["artifact"],
+            platforms["macos"]["architectures"]["arm64"]["artifact"],
+            platforms["macos"]["architectures"]["x86_64"]["artifact"],
+        )
+    )
+    assert "data-release-data" in script
 
 
 def test_reveal_content_is_visible_without_javascript() -> None:

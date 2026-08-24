@@ -1,8 +1,22 @@
 (() => {
-    // Keep one clear default action for the reported desktop platform while
-    // leaving every supported installer available through the chooser.
+    // Release facts come from the generated JSON block in index.html. The
+    // static block and its no-script links are rendered from the same manifest.
     const picker = document.querySelector('[data-platform-download]');
-    if (!picker) return;
+    const releaseData = picker?.querySelector('[data-release-data]');
+    if (!picker || !releaseData) return;
+
+    let release;
+    try {
+        release = JSON.parse(releaseData.textContent);
+    } catch {
+        return;
+    }
+
+    const { chooser, platforms } = release;
+    if (!release.product || !release.repository || !release.channel || !release.version
+        || !chooser || !platforms?.windows || !platforms?.macos || !platforms?.linux) {
+        return;
+    }
 
     const primary = picker.querySelector('[data-primary-download]');
     const primaryLabel = picker.querySelector('[data-primary-label]');
@@ -13,33 +27,32 @@
     const dialogClose = picker.querySelector('[data-platform-dialog-close]');
     const macToggle = picker.querySelector('[data-mac-download-toggle]');
     const macOptions = picker.querySelector('[data-mac-download-options]');
-    const linuxToggle = picker.querySelector('[data-linux-download-toggle]');
-    const linuxOptions = picker.querySelector('[data-linux-download-options]');
 
+    if (!primary || !primaryLabel || !primaryDetail || !dialog) return;
+
+    const releaseUrl = artifact => (
+        `${release.repository}/releases/download/v${release.version}/${artifact}`
+    );
+    const platformDownload = platform => ({
+        label: platform.primary_label,
+        detail: `${release.channel} ${release.version} · ${platform.detail}`,
+        href: releaseUrl(platform.artifact),
+        installNote: platform.install_note,
+    });
     const downloads = {
-        windows: {
-            label: 'Get CaveViewer for Windows',
-            detail: 'Preview 1.0.92 · Windows 10 or 11',
-            href: 'https://github.com/CaveViewer/CaveViewer/releases/download/v1.0.92/CaveViewer-1.0.92-windows.exe',
-            installNote: 'After downloading, open the setup file and follow its prompts.',
-        },
-        linux: {
-            label: 'Get CaveViewer for Linux',
-            detail: 'Preview 1.0.92 · x86_64 AppImage',
-            href: 'https://github.com/CaveViewer/CaveViewer/releases/download/v1.0.92/CaveViewer-1.0.92-x86_64.AppImage',
-            installNote: 'After downloading, allow the AppImage to run in your file manager, then open it.',
-        },
+        windows: platformDownload(platforms.windows),
+        linux: platformDownload(platforms.linux),
         macos: {
-            label: 'Get CaveViewer for macOS',
-            detail: 'Preview 1.0.92 · Choose Apple silicon or Intel',
+            label: platforms.macos.primary_label,
+            detail: `${release.channel} ${release.version} · ${platforms.macos.detail}`,
             href: '#mac-download-options',
-            installNote: 'Choose your Mac type in the next step, then drag CaveViewer into Applications.',
+            installNote: platforms.macos.install_note,
         },
         unknown: {
-            label: 'Choose your desktop platform',
-            detail: 'CaveViewer Preview 1.0.92',
+            label: chooser.unknown_primary_label,
+            detail: `${release.product} ${release.channel} ${release.version}`,
             href: '#other-platforms',
-            installNote: 'Choose your platform to see the simple next steps.',
+            installNote: chooser.unknown_install_note,
         },
     };
 
@@ -65,19 +78,11 @@
         if (open && focus) macOptions.querySelector('a')?.focus();
     };
 
-    const setLinuxChoices = (open, { focus = false } = {}) => {
-        if (!linuxToggle || !linuxOptions) return;
-        linuxToggle.setAttribute('aria-expanded', String(open));
-        linuxOptions.hidden = !open;
-        if (open && focus) linuxOptions.querySelector('a')?.focus();
-    };
-
-    const openDialog = ({ mac = false, linux = false } = {}) => {
+    const openDialog = ({ mac = false } = {}) => {
         if (typeof dialog.showModal === 'function') dialog.showModal();
         else dialog.setAttribute('open', '');
         document.body.classList.add('platform-dialog-open');
         setMacChoices(mac, { focus: mac });
-        setLinuxChoices(linux, { focus: linux });
     };
 
     const closeDialog = () => {
@@ -85,7 +90,6 @@
         else {
             dialog.removeAttribute('open');
             setMacChoices(false);
-            setLinuxChoices(false);
         }
         document.body.classList.remove('platform-dialog-open');
     };
@@ -93,25 +97,17 @@
     macToggle?.addEventListener('click', () => {
         const open = macToggle.getAttribute('aria-expanded') !== 'true';
         setMacChoices(open);
-        if (open) setLinuxChoices(false);
     });
-    linuxToggle?.addEventListener('click', () => {
-        const open = linuxToggle.getAttribute('aria-expanded') !== 'true';
-        setLinuxChoices(open);
-        if (open) setMacChoices(false);
-    });
-
     dialogOpen?.addEventListener('click', () => openDialog());
     dialogClose?.addEventListener('click', closeDialog);
-    dialog?.addEventListener('close', () => {
+    dialog.addEventListener('close', () => {
         document.body.classList.remove('platform-dialog-open');
         setMacChoices(false);
-        setLinuxChoices(false);
     });
-    dialog?.addEventListener('click', event => {
+    dialog.addEventListener('click', event => {
         if (event.target === dialog) closeDialog();
     });
-    dialog?.querySelectorAll('a').forEach(link => link.addEventListener('click', closeDialog));
+    dialog.querySelectorAll('a').forEach(link => link.addEventListener('click', closeDialog));
 
     const platform = reportedPlatform();
     const selected = downloads[platform];
@@ -124,11 +120,6 @@
         primary.addEventListener('click', event => {
             event.preventDefault();
             openDialog({ mac: true });
-        });
-    } else if (platform === 'linux' && linuxToggle && linuxOptions) {
-        primary.addEventListener('click', event => {
-            event.preventDefault();
-            openDialog({ linux: true });
         });
     } else if (platform === 'unknown') {
         primary.addEventListener('click', event => {

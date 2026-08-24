@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "product": "CaveViewer",
+  "repository": "https://github.com/CaveViewer/CaveViewer",
+  "channel": "Preview",
+  "version": "1.0.92",
+  "chooser": {
+    "other_platforms_label": "Other platforms",
+    "title": "Choose your platform",
+    "unknown_primary_label": "Choose your desktop platform",
+    "unknown_install_note": "Choose your platform to see the simple next steps.",
+    "dialog_note": "Downloads start directly from the official {version} build."
+  },
+  "platforms": {
+    "windows": {
+      "label": "Windows",
+      "primary_label": "Get CaveViewer for Windows",
+      "detail": "Windows 10 or 11",
+      "artifact": "CaveViewer-1.0.92-windows.exe",
+      "install_note": "After downloading, open the setup file and follow its prompts."
+    },
+    "macos": {
+      "label": "macOS",
+      "primary_label": "Get CaveViewer for macOS",
+      "detail": "Choose Apple silicon or Intel",
+      "install_note": "Choose your Mac type in the next step, then drag CaveViewer into Applications.",
+      "help": "Check Apple menu → About This Mac. Look for “Chip” or “Processor.”",
+      "architectures": {
+        "arm64": {
+          "label": "Apple silicon",
+          "detail": "M1 or newer",
+          "artifact": "CaveViewer-1.0.92-macos-arm64.dmg"
+        },
+        "x86_64": {
+          "label": "Intel",
+          "detail": "Intel processor",
+          "artifact": "CaveViewer-1.0.92-macos-x86_64.dmg"
+        }
+      }
+    },
+    "linux": {
+      "label": "Linux",
+      "primary_label": "Get CaveViewer for Linux",
+      "detail": "x86_64 AppImage",
+      "artifact": "CaveViewer-1.0.92-x86_64.AppImage",
+      "install_note": "After downloading, allow the AppImage to run in your file manager, then open it."
+    }
+  }
+}
