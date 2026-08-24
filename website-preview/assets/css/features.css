@@ -61,7 +61,7 @@
 .feature-section {
     display: grid;
     grid-template-columns: minmax(0, .9fr) minmax(320px, 1.1fr);
-    align-items: center;
+    align-items: start;
     gap: clamp(24px, 3.5vw, 48px);
     padding: clamp(32px, 3.4vw, 52px) 0;
     scroll-margin-top: calc(var(--header-h) + 24px);
@@ -92,58 +92,7 @@
     line-height: 1.56;
 }
 
-.feature-section__eyebrow {
-    margin: 0 0 12px;
-    color: var(--accent);
-    font-size: var(--small-text-min);
-    font-weight: 700;
-    letter-spacing: .14em;
-    text-transform: uppercase;
-}
-
-.feature-section__note {
-    max-width: 42rem;
-    margin: 14px 0 0;
-    color: var(--muted);
-    font-size: clamp(14px, 1vw, 15px);
-    line-height: 1.5;
-    opacity: .82;
-}
-
-.feature-section__note strong {
-    color: var(--text);
-    font-weight: 600;
-}
-
-.feature-section__capabilities {
-    display: grid;
-    gap: 8px;
-    max-width: 48rem;
-    margin: 18px 0 0;
-    padding: 0;
-    color: var(--muted);
-    font-size: clamp(14px, 1vw, 16px);
-    line-height: 1.42;
-    list-style: none;
-}
-
-.feature-section__capabilities li {
-    position: relative;
-    padding-left: 18px;
-}
-
-.feature-section__capabilities li::before {
-    position: absolute;
-    top: .6em;
-    left: 0;
-    width: 6px;
-    height: 6px;
-    background: var(--accent);
-    content: "";
-    transform: rotate(45deg);
-}
-
-.feature-section__capabilities strong {
+.feature-section--advantage .feature-section__copy p strong {
     color: var(--text);
     font-weight: 600;
 }
@@ -175,20 +124,33 @@
     scroll-margin-top: calc(var(--header-h) + 24px);
 }
 
+.feature-section--freedom {
+    grid-template-columns: minmax(0, 48rem);
+}
+
+.feature-section--freedom .feature-section__copy a {
+    color: var(--text);
+    font-weight: 600;
+    text-decoration-color: var(--accent);
+    text-decoration-thickness: 1px;
+    text-underline-offset: .18em;
+}
+
+.feature-section--freedom .feature-section__copy a:hover,
+.feature-section--freedom .feature-section__copy a:focus-visible {
+    color: var(--accent);
+}
+
 .advantages-page .feature-section:first-child {
+    padding-top: 0;
+}
+
+.features-page .feature-section:first-child {
     padding-top: 0;
 }
 
 .advantages-page .feature-section:last-child {
     padding-bottom: 0;
-}
-
-.feature-section__visual figcaption {
-    padding: 12px 16px 13px;
-    border-top: 1px solid rgba(92, 92, 110, .34);
-    color: var(--muted);
-    font-size: var(--small-text-min);
-    line-height: 1.35;
 }
 
 @media (max-width: 840px) {

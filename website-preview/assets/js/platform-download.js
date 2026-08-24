@@ -21,7 +21,6 @@
     const primary = picker.querySelector('[data-primary-download]');
     const primaryLabel = picker.querySelector('[data-primary-label]');
     const primaryDetail = picker.querySelector('[data-primary-detail]');
-    const installNote = picker.parentElement?.querySelector('[data-platform-install-note]');
     const dialog = picker.querySelector('[data-platform-dialog]');
     const dialogOpen = picker.querySelector('[data-platform-dialog-open]');
     const dialogClose = picker.querySelector('[data-platform-dialog-close]');
@@ -37,7 +36,6 @@
         label: platform.primary_label,
         detail: `${release.channel} ${release.version} · ${platform.detail}`,
         href: releaseUrl(platform.artifact),
-        installNote: platform.install_note,
     });
     const downloads = {
         windows: platformDownload(platforms.windows),
@@ -46,13 +44,11 @@
             label: platforms.macos.primary_label,
             detail: `${release.channel} ${release.version} · ${platforms.macos.detail}`,
             href: '#mac-download-options',
-            installNote: platforms.macos.install_note,
         },
         unknown: {
             label: chooser.unknown_primary_label,
             detail: `${release.product} ${release.channel} ${release.version}`,
             href: '#other-platforms',
-            installNote: chooser.unknown_install_note,
         },
     };
 
@@ -114,7 +110,6 @@
     primaryLabel.textContent = selected.label;
     primaryDetail.textContent = selected.detail;
     primary.href = selected.href;
-    if (installNote) installNote.textContent = selected.installNote;
 
     if (platform === 'macos') {
         primary.addEventListener('click', event => {

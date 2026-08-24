@@ -2,8 +2,8 @@ import { expect, test } from "@playwright/test";
 
 const canonicalPages = [
     { name: "Home", path: "index.html", content: "Explore what" },
-    { name: "Features", path: "features.html", content: "Render What Others Can’t" },
-    { name: "Advantage", path: "advantage.html", content: "Keep more cave within reach." },
+    { name: "Features", path: "features.html", content: "View Huge Maps" },
+    { name: "Advantage", path: "advantage.html", content: "Flexible large map support" },
     { name: "Team", path: "about.html", content: "Magic Mr_V" },
     { name: "Contact", path: "contact.html", content: "Contact Us" },
 ];
@@ -154,7 +154,7 @@ test("the Advantage link reaches practical, readable map guidance", async ({ pag
 
     const advantage = page.locator("#advantage");
     await expect(advantage).toBeInViewport();
-    await expect(advantage.getByRole("heading", { name: "Keep more cave within reach." }))
+    await expect(advantage.getByRole("heading", { name: "Flexible large map support" }))
         .toBeVisible();
     await expect(advantage).toContainText("Import chunk size");
     await expect(advantage.getByRole("img", { name: "CaveViewer Preferences with the Import tab selected, showing cache and worker settings" }))
@@ -162,15 +162,20 @@ test("the Advantage link reaches practical, readable map guidance", async ({ pag
     const streaming = page.locator("#advantage-streaming");
     await streaming.scrollIntoViewIfNeeded();
     await expect(streaming).toContainText("System RAM target");
-    await expect(streaming).toContainText("Older Intel-based Macs");
+    await expect(streaming).toContainText("Loading CPUs to keep free");
     await expect(streaming.getByRole("img", { name: "CaveViewer Preferences with the Streaming tab selected, showing memory, loading, and upload settings" }))
         .toBeVisible();
+    const freedom = page.locator("#advantage-freedom");
+    await freedom.scrollIntoViewIfNeeded();
+    await expect(freedom.getByRole("heading", { name: "Free software and maps" })).toBeVisible();
+    await expect(freedom.getByRole("link", { name: "GNU Affero General Public License v3.0 (AGPLv3)" }))
+        .toHaveAttribute("href", "https://www.gnu.org/licenses/agpl-3.0.en.html");
     await expectNoHorizontalOverflow(page);
 
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto("advantage.html", { waitUntil: "networkidle" });
     await expectFontSizeAtLeast(page.locator(
-        ".feature-section--advantage .feature-section__copy p, .feature-section--advantage .feature-section__note, .feature-section--advantage .feature-section__capabilities",
+        ".feature-section--advantage .feature-section__copy p",
     ), 14);
     await expectNoHorizontalOverflow(page);
 });
@@ -252,12 +257,12 @@ test("essential labels, metadata, and prose retain readable minimums at mobile a
 
     await page.goto("features.html", { waitUntil: "networkidle" });
     await expectFontSizeAtLeast(page.locator(
-        ".feature-section__copy p, .feature-section__note, .feature-section__capabilities",
+        ".feature-section__copy p",
     ), 14);
 
     await page.goto("advantage.html", { waitUntil: "networkidle" });
     await expectFontSizeAtLeast(page.locator(
-        ".feature-section--advantage .feature-section__copy p, .feature-section--advantage .feature-section__note, .feature-section--advantage .feature-section__capabilities",
+        ".feature-section--advantage .feature-section__copy p",
     ), 14);
     await expectNoHorizontalOverflow(page);
 
@@ -421,6 +426,12 @@ test("the generated release manifest preserves the Windows primary action and ma
 
     await page.locator("[data-platform-dialog-open]").click();
     await expect(dialog).toHaveAttribute("open", "");
+    await expect(page.locator('[data-platform-install-note="windows"]'))
+        .toHaveText(release.platforms.windows.install_note);
+    await expect(page.locator('[data-platform-install-note="macos"]'))
+        .toHaveText(release.platforms.macos.install_note);
+    await expect(page.locator('[data-platform-install-note="linux"]'))
+        .toHaveText(release.platforms.linux.install_note);
     await page.locator("[data-mac-download-toggle]").click();
     await expect(page.locator("[data-mac-download-options]")).toBeVisible();
 });

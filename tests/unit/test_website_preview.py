@@ -175,6 +175,9 @@ def test_preview_release_manifest_generates_every_download_reference() -> None:
     assert '<!-- Generated from assets/data/release.json by ' in index
     assert f'href="{expected_urls["windows"]}" data-primary-download' in index
     assert all(url in index for url in expected_urls.values())
+    assert index.count("data-platform-install-note=") == 3
+    for platform in (platforms["windows"], platforms["macos"], platforms["linux"]):
+        assert platform["install_note"] in index
 
     noscript = index[index.index("<noscript>") : index.index("</noscript>")]
     assert all(url in noscript for url in expected_urls.values())
@@ -346,8 +349,8 @@ def test_preview_uses_one_header_and_has_no_member_profile_routes() -> None:
     features = (PREVIEW_ROOT / "features.html").read_text(encoding="utf-8")
     assert 'href="features.html" aria-current="page">Features</a>' in features
     for feature in (
-        "Render What Others Can’t",
-        "Explore the Map Library",
+        "View Huge Maps",
+        "Enjoy Free Maps",
         "Record &amp; Share Dives",
     ):
         assert f">{feature}<" in features
@@ -356,7 +359,7 @@ def test_preview_uses_one_header_and_has_no_member_profile_routes() -> None:
 
     advantage = (PREVIEW_ROOT / "advantage.html").read_text(encoding="utf-8")
     assert 'href="advantage.html" aria-current="page">Advantage</a>' in advantage
-    assert ">Keep more cave within reach.<" in advantage
+    assert ">Flexible large map support<" in advantage
 
 
 def test_advantage_section_uses_the_real_preferences_and_capabilities() -> None:
@@ -366,14 +369,14 @@ def test_advantage_section_uses_the_real_preferences_and_capabilities() -> None:
 
     assert '<section class="advantages-page" id="advantage"' in advantage
     assert '<a href="advantage.html" aria-current="page">Advantage</a>' in advantage
-    assert advantage.count('class="feature-section feature-section--advantage"') == 2
+    assert advantage.count("feature-section--advantage") == 3
     assert features.count('<section class="feature-section"') == 3
     assert "advantages-page" not in features
     assert "feature-section--advantage" not in features
     for text in (
-        "all-or-nothing hardware test",
+        "CaveViewer builds a local cache",
         "available system and graphics memory",
-        "smaller texture size before uploading them",
+        "selects a smaller size before upload",
         "fine surface detail may look softer",
         "Import chunk size",
         "Max upload group size",
@@ -381,14 +384,12 @@ def test_advantage_section_uses_the_real_preferences_and_capabilities() -> None:
         "System RAM target",
         "GPU memory target",
         "Loading worker limit",
-        "standalone slice",
-        "No ads, accounts, subscriptions, gimmicks, or trackers.",
-        "recent Windows, macOS, Ubuntu, or Fedora",
-        "16 GB of RAM",
-        "at least 256 GB of free disk space",
-        "early M1 systems",
-        "Older Intel-based Macs",
-        "Mobile support is not ready yet",
+        "portable precompiled map",
+        "Free software and maps",
+        "CaveViewer and its maps are free.",
+        "no accounts, subscriptions, ads, or trackers.",
+        "GNU Affero General Public License v3.0 (AGPLv3)",
+        "https://www.gnu.org/licenses/agpl-3.0.en.html",
         "preferences-import-1600.webp",
         "preferences-streaming-1600.webp",
     ):
@@ -397,7 +398,7 @@ def test_advantage_section_uses_the_real_preferences_and_capabilities() -> None:
     assert ".advantages-page {" in styles
     assert ".advantages-page__sections {" in styles
     assert ".feature-section--advantage {" in styles
-    assert ".feature-section__visual figcaption {" in styles
+    assert ".feature-section--freedom {" in styles
     assert "scroll-margin-top: calc(var(--header-h) + 24px);" in styles
 
 

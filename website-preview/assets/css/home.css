@@ -103,6 +103,10 @@
     font-size: clamp(14px, 1vw, 15px);
     line-height: 1.55;
 }
+.hero__formats strong {
+    color: #c6d2d6;
+    font-weight: 600;
+}
 .hero__actions {
     display: flex;
     flex-wrap: wrap;
@@ -159,6 +163,7 @@
     background: rgba(2,27,37,.16);
     font-size: 18px;
     font-weight: 400;
+    line-height: 1;
 }
 .platform-download__alternatives {
     width: max-content;
@@ -221,12 +226,16 @@ body.platform-dialog-open { overflow: hidden; }
     width: 38px;
     height: 38px;
     flex: 0 0 auto;
+    display: grid;
+    padding: 0;
+    place-items: center;
     border: 1px solid rgba(171,216,233,.17);
     background: rgba(255,255,255,.025);
     color: #a8bbc2;
     cursor: pointer;
     font-size: 23px;
     font-weight: 300;
+    line-height: 1;
 }
 .platform-download__dialog-header > button:hover { color: #fff; border-color: rgba(81,199,243,.48); }
 .platform-download__options {
@@ -261,6 +270,15 @@ body.platform-dialog-open { overflow: hidden; }
 }
 .platform-download__options strong { font-size: 13px; font-weight: 650; }
 .platform-download__options small { color: #718891; font-size: var(--small-text-min); }
+.platform-download__options .platform-download__install-note {
+    max-width: 330px;
+    margin-top: 1px;
+    color: var(--muted);
+    font-size: var(--small-text-min);
+    font-weight: 400;
+    letter-spacing: 0;
+    line-height: 1.4;
+}
 .platform-download__options b { color: var(--cyan); font-size: 15px; font-weight: 400; }
 .platform-download__mac-choices {
     padding: 10px;

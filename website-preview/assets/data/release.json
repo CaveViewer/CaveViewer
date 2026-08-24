@@ -8,7 +8,6 @@
     "other_platforms_label": "Other platforms",
     "title": "Choose your platform",
     "unknown_primary_label": "Choose your desktop platform",
-    "unknown_install_note": "Choose your platform to see the simple next steps.",
     "dialog_note": "Downloads start directly from the official {version} build."
   },
   "platforms": {
@@ -17,13 +16,13 @@
       "primary_label": "Get CaveViewer for Windows",
       "detail": "Windows 10 or 11",
       "artifact": "CaveViewer-1.0.92-windows.exe",
-      "install_note": "After downloading, open the setup file and follow its prompts."
+      "install_note": "Run the setup file. If Windows flags an unrecognized publisher, verify the official CaveViewer download and inspect the warning before proceeding."
     },
     "macos": {
       "label": "macOS",
       "primary_label": "Get CaveViewer for macOS",
       "detail": "Choose Apple silicon or Intel",
-      "install_note": "Choose your Mac type in the next step, then drag CaveViewer into Applications.",
+      "install_note": "Choose your Mac type, then drag CaveViewer into Applications.",
       "help": "Check Apple menu → About This Mac. Look for “Chip” or “Processor.”",
       "architectures": {
         "arm64": {
@@ -43,7 +42,7 @@
       "primary_label": "Get CaveViewer for Linux",
       "detail": "x86_64 AppImage",
       "artifact": "CaveViewer-1.0.92-x86_64.AppImage",
-      "install_note": "After downloading, allow the AppImage to run in your file manager, then open it."
+      "install_note": "Allow the AppImage to run in your file manager, then open it."
     }
   }
 }
