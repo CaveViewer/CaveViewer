@@ -357,9 +357,16 @@ def test_advantage_section_uses_the_real_preferences_and_capabilities() -> None:
     features = (PREVIEW_ROOT / "features.html").read_text(encoding="utf-8")
     styles = (PREVIEW_ROOT / "assets/css/features.css").read_text(encoding="utf-8")
 
-    assert '<section class="feature-section feature-section--advantage" id="advantage"' in features
+    assert '<section class="advantages-page" id="advantage"' in features
     assert '<a href="#advantage">Advantage</a>' in features
     assert features.count('class="feature-section feature-section--advantage"') == 2
+    features_only = features[
+        features.index('<section class="features-page"') : features.index(
+            '<section class="advantages-page"'
+        )
+    ]
+    assert features_only.count('<section class="feature-section"') == 3
+    assert "feature-section--advantage" not in features_only
     for text in (
         "all-or-nothing hardware test",
         "available system and graphics memory",
@@ -384,6 +391,8 @@ def test_advantage_section_uses_the_real_preferences_and_capabilities() -> None:
     ):
         assert text in features
 
+    assert ".advantages-page {" in styles
+    assert ".advantages-page__sections {" in styles
     assert ".feature-section--advantage {" in styles
     assert ".feature-section__visual figcaption {" in styles
     assert "scroll-margin-top: calc(var(--header-h) + 24px);" in styles
