@@ -1262,6 +1262,43 @@ main [id] {
     scroll-margin-top: calc(var(--header-h) + 18px);
 }
 
+/* Keyboard users can bypass repeated navigation and land below the fixed header. */
+.skip-link {
+    position: fixed;
+    top: 10px;
+    left: 10px;
+    z-index: 200;
+    padding: 10px 14px;
+    border: 1px solid var(--accent-border);
+    background: var(--accent);
+    color: var(--accent-text);
+    font-size: 14px;
+    font-weight: 700;
+    transform: translateY(-160%);
+}
+
+.skip-link:focus-visible {
+    transform: translateY(0);
+    outline: 2px solid var(--title);
+    outline-offset: 3px;
+}
+
+#main-content {
+    scroll-margin-top: calc(var(--header-h) + 18px);
+}
+
+.primary-nav > a:focus-visible,
+.primary-nav > a[aria-current="page"] {
+    text-decoration: underline;
+    text-decoration-thickness: 2px;
+    text-underline-offset: 5px;
+}
+
+.primary-nav > a:focus-visible {
+    outline: 2px solid rgba(242, 217, 140, .82);
+    outline-offset: 4px;
+}
+
 @media (max-width: 820px) {
     .site-header__inner {
         justify-content: flex-start;

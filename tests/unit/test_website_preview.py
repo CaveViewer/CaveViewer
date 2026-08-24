@@ -149,6 +149,28 @@ def test_reveal_content_is_visible_without_javascript() -> None:
     assert "reveal.forEach(el => el.classList.add('is-visible'));" in script
 
 
+def test_pages_expose_skip_paths_headings_and_noncolor_navigation_cues() -> None:
+    styles = (PREVIEW_ROOT / "assets/css/global.css").read_text(encoding="utf-8")
+    expected_headings = {
+        "features.html": '<h1 class="sr-only">CaveViewer features</h1>',
+        "about.html": '<h1 class="sr-only">CaveViewer team</h1>',
+    }
+
+    for page in _html_pages():
+        page_text = page.read_text(encoding="utf-8")
+        assert '<a class="skip-link" href="#main-content">Skip to main content</a>' in page_text
+        assert '<main id="main-content" tabindex="-1">' in page_text
+
+    for page_name, heading in expected_headings.items():
+        assert heading in (PREVIEW_ROOT / page_name).read_text(encoding="utf-8")
+
+    assert ".skip-link:focus-visible" in styles
+    assert "#main-content {\n    scroll-margin-top:" in styles
+    assert ".primary-nav > a[aria-current=\"page\"]" in styles
+    assert "text-decoration-thickness: 2px;" in styles
+    assert ".primary-nav > a:focus-visible {\n    outline: 2px solid" in styles
+
+
 def test_preview_uses_one_header_and_has_no_member_profile_routes() -> None:
     pages = _html_pages()
 

@@ -36,6 +36,37 @@ test.describe("canonical website-preview routes", () => {
     }
 });
 
+test("the skip link moves keyboard focus to main content", async ({ page }) => {
+    await page.goto("features.html", { waitUntil: "networkidle" });
+
+    const skipLink = page.getByRole("link", { name: "Skip to main content" });
+    const main = page.locator("#main-content");
+
+    await page.keyboard.press("Tab");
+    await expect(skipLink).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(main).toBeFocused();
+});
+
+test("navigation current and focus states have non-color indicators", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto("features.html", { waitUntil: "networkidle" });
+
+    const navigation = page.getByRole("navigation", { name: "Primary navigation" });
+    const currentLink = navigation.getByRole("link", { name: "Features" });
+    const focusedLink = navigation.getByRole("link", { name: "Team" });
+
+    await page.keyboard.press("Tab");
+    await page.keyboard.press("Tab");
+    await page.keyboard.press("Tab");
+    await expect(currentLink).toBeFocused();
+    await expect(currentLink).toHaveCSS("text-decoration-line", "underline");
+
+    await page.keyboard.press("Tab");
+    await expect(focusedLink).toBeFocused();
+    await expect(focusedLink).toHaveCSS("outline-style", "solid");
+});
+
 test("the mobile navigation is keyboard-operable", async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto("features.html", { waitUntil: "networkidle" });
@@ -49,10 +80,15 @@ test("the mobile navigation is keyboard-operable", async ({ page }) => {
     await expect(menuToggle).toHaveAttribute("aria-expanded", "true");
     await expect(menuToggle).toHaveAttribute("aria-label", "Close navigation");
     await expect(navigation).toHaveClass(/is-open/);
+    await expect(navigation.getByRole("link", { name: "Features" })).toBeFocused();
+
+    await page.keyboard.press("Tab");
+    await expect(navigation.getByRole("link", { name: "Team" })).toBeFocused();
 
     await page.keyboard.press("Escape");
     await expect(menuToggle).toHaveAttribute("aria-expanded", "false");
     await expect(navigation).not.toHaveClass(/is-open/);
+    await expect(menuToggle).toBeFocused();
 });
 
 test("the Contact route remains horizontally reachable at a 200%-zoom-equivalent viewport", async ({ page }) => {

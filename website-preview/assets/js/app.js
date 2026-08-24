@@ -19,14 +19,34 @@
     const menuToggle = document.querySelector('[data-menu-toggle]');
 
     if (navigation && menuToggle) {
-        const setMenuOpen = isOpen => {
+        const firstNavigationLink = navigation.querySelector('a');
+        const setMenuOpen = (isOpen, { restoreFocus = false } = {}) => {
+            const wasOpen = navigation.classList.contains('is-open');
+
             navigation.classList.toggle('is-open', isOpen);
             menuToggle.setAttribute('aria-expanded', String(isOpen));
             menuToggle.setAttribute('aria-label', isOpen ? 'Close navigation' : 'Open navigation');
+
+            // Opening begins at the first destination; closing by keyboard returns
+            // to the control. Normal Tab order remains unrestricted inside the menu.
+            if (isOpen && !wasOpen) {
+                // The first frame applies the menu's visible state; focus in the
+                // following frame so browsers do not reject a hidden link.
+                window.requestAnimationFrame(() => {
+                    window.requestAnimationFrame(() => {
+                        if (navigation.classList.contains('is-open')) {
+                            firstNavigationLink?.focus();
+                        }
+                    });
+                });
+            } else if (!isOpen && wasOpen && restoreFocus) {
+                menuToggle.focus();
+            }
         };
 
         menuToggle.addEventListener('click', () => {
-            setMenuOpen(!navigation.classList.contains('is-open'));
+            const isOpen = navigation.classList.contains('is-open');
+            setMenuOpen(!isOpen, { restoreFocus: isOpen });
         });
 
         navigation.addEventListener('click', event => {
@@ -36,13 +56,15 @@
         });
 
         document.addEventListener('keydown', event => {
-            if (event.key === 'Escape') {
-                setMenuOpen(false);
+            if (event.key === 'Escape' && navigation.classList.contains('is-open')) {
+                setMenuOpen(false, { restoreFocus: true });
             }
         });
 
-        window.matchMedia('(min-width: 821px)').addEventListener('change', () => {
-            setMenuOpen(false);
+        window.matchMedia('(min-width: 821px)').addEventListener('change', event => {
+            if (event.matches) {
+                setMenuOpen(false);
+            }
         });
     }
 })();

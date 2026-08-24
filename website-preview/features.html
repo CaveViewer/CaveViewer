@@ -13,6 +13,7 @@
     <link rel="stylesheet" href="assets/css/app-theme.css">
 </head>
 <body class="page-features">
+<a class="skip-link" href="#main-content">Skip to main content</a>
 <header class="site-header" data-site-header>
     <div class="site-header__inner">
         <a class="site-home" href="index.html" aria-label="CaveViewer home"><img class="site-home__mark" src="assets/icons/caveviewer-cave-profile.svg" alt=""></a>
@@ -28,7 +29,8 @@
     </div>
 </header>
 
-<main>
+<main id="main-content" tabindex="-1">
+    <h1 class="sr-only">CaveViewer features</h1>
     <section class="features-page" aria-label="Features">
         <div class="features-page__grid" aria-hidden="true"></div>
         <div class="shell">
