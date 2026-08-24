@@ -10,6 +10,7 @@
             });
         }, { threshold: .12, rootMargin: '0px 0px -5% 0px' });
         reveal.forEach(el => observer.observe(el));
+        document.documentElement.classList.add('reveal-enhanced');
     } else {
         reveal.forEach(el => el.classList.add('is-visible'));
     }

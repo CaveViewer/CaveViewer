@@ -130,6 +130,25 @@ def test_lognova_design_assets_are_local() -> None:
     assert "formats home-formats" not in index
 
 
+def test_reveal_content_is_visible_without_javascript() -> None:
+    styles = (PREVIEW_ROOT / "assets/css/global.css").read_text(encoding="utf-8")
+    script = (PREVIEW_ROOT / "assets/js/app.js").read_text(encoding="utf-8")
+
+    for page in _html_pages():
+        page_text = page.read_text(encoding="utf-8")
+        assert 'assets/css/global.css' in page_text
+        assert "data-reveal" in page_text
+
+    assert "html.reveal-enhanced [data-reveal] { opacity:0;" in styles
+    assert "html.reveal-enhanced [data-reveal].is-visible { opacity:1;" in styles
+    assert "\n[data-reveal] { opacity:0;" not in styles
+    assert "document.documentElement.classList.add('reveal-enhanced');" in script
+    assert script.index("reveal.forEach(el => observer.observe(el));") < script.index(
+        "document.documentElement.classList.add('reveal-enhanced');"
+    )
+    assert "reveal.forEach(el => el.classList.add('is-visible'));" in script
+
+
 def test_preview_uses_one_header_and_has_no_member_profile_routes() -> None:
     pages = _html_pages()
 

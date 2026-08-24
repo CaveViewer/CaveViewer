@@ -238,8 +238,10 @@ body.menu-open { overscroll-behavior: none; }
 .site-footer__bottom a:hover { color: var(--cyan); }
 .footer-credit-sep { margin: 0 .55em; color: #3e535c; }
 
-[data-reveal] { opacity:0; transform:translateY(24px); transition:opacity .75s cubic-bezier(.2,.8,.2,1), transform .75s cubic-bezier(.2,.8,.2,1); }
-[data-reveal].is-visible { opacity:1; transform:none; }
+/* Reveal targets stay visible in the HTML/CSS baseline. The script adds this
+   class only after its observer is ready, so a blocked script cannot hide content. */
+html.reveal-enhanced [data-reveal] { opacity:0; transform:translateY(24px); transition:opacity .75s cubic-bezier(.2,.8,.2,1), transform .75s cubic-bezier(.2,.8,.2,1); }
+html.reveal-enhanced [data-reveal].is-visible { opacity:1; transform:none; }
 
 
 @media (max-width: 760px) {
