@@ -66,7 +66,7 @@
     max-width: 42rem;
     margin: 14px 0 0;
     color: var(--muted);
-    font-size: clamp(13px, 1vw, 15px);
+    font-size: clamp(14px, 1vw, 15px);
     line-height: 1.5;
     opacity: .82;
 }

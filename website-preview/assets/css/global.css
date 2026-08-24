@@ -37,6 +37,9 @@
     --hero-lead-size: clamp(16px, 1.2vw, 18px);
     --hero-title-line-height: .93;
     --hero-title-letter-spacing: -.055em;
+    /* Visible labels and metadata use this floor; decorative symbols and
+       visually hidden form controls do not carry essential information. */
+    --small-text-min: 12px;
 }
 * { box-sizing: border-box; }
 html {
@@ -66,7 +69,7 @@ img, svg { display: block; max-width: 100%; }
 button, input, textarea, select { font: inherit; }
 .shell { width: min(calc(100% - 64px), var(--max)); margin-inline: auto; }
 .section { padding: clamp(90px, 10vw, 160px) 0; }
-.eyebrow { margin: 0 0 22px; color: var(--title); text-transform: uppercase; letter-spacing: .22em; font-size: 11px; font-weight: 700; }
+.eyebrow { margin: 0 0 22px; color: var(--title); text-transform: uppercase; letter-spacing: .22em; font-size: var(--small-text-min); font-weight: 700; }
 
 /* The header keeps the original CaveViewer transparent overlay treatment.
    Anchored content only needs a small breathing space because the header scrolls with the page. */
@@ -111,7 +114,7 @@ body.menu-open { overscroll-behavior: none; }
 .menu-toggle span:last-child { top:26px; }
 .menu-toggle[aria-expanded="true"] span:first-child { transform:translateY(4.5px) rotate(45deg); }
 .menu-toggle[aria-expanded="true"] span:last-child { transform:translateY(-4.5px) rotate(-45deg); }
-.button { min-height:54px; padding:0 25px; display:inline-flex; align-items:center; justify-content:center; gap:22px; text-transform:uppercase; letter-spacing:.095em; font-weight:700; font-size:11px; border:1px solid transparent; transition:transform .2s ease, background .2s ease, border-color .2s ease, color .2s ease; }
+.button { min-height:54px; padding:0 25px; display:inline-flex; align-items:center; justify-content:center; gap:22px; text-transform:uppercase; letter-spacing:.095em; font-weight:700; font-size:var(--small-text-min); border:1px solid transparent; transition:transform .2s ease, background .2s ease, border-color .2s ease, color .2s ease; }
 .button:hover { transform:translateY(-2px); }
 .button--primary { background:var(--accent); border-color:var(--accent-border); color:var(--accent-text); box-shadow:0 10px 32px rgba(var(--accent-rgb),.16); }
 .button--primary:hover { background:var(--accent-hover); border-color:var(--accent); }
@@ -1303,7 +1306,7 @@ main [id] {
         min-height: 36px;
         margin-left: auto;
         padding-inline: 11px;
-        font-size: 11px;
+        font-size: var(--small-text-min);
     }
 }
 
@@ -1311,7 +1314,7 @@ main [id] {
     .header-download {
         min-width: 88px;
         padding-inline: 9px;
-        font-size: 10px;
+        font-size: var(--small-text-min);
     }
 }
 
@@ -1331,7 +1334,7 @@ main [id] {
     height: 100%;
     margin-inline: auto;
     color: var(--muted);
-    font-size: 10px;
+    font-size: var(--small-text-min);
     line-height: 1;
 }
 

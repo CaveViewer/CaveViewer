@@ -28,6 +28,17 @@ async function expectNoHorizontalOverflow(page) {
     expect(overflow).toBeLessThanOrEqual(1);
 }
 
+async function expectFontSizeAtLeast(locator, minimumPixels = 12) {
+    const sizes = await locator.evaluateAll(elements => elements
+        .filter(element => element.getClientRects().length > 0)
+        .map(element => Number.parseFloat(getComputedStyle(element).fontSize)));
+
+    expect(sizes).not.toHaveLength(0);
+    for (const size of sizes) {
+        expect(size).toBeGreaterThanOrEqual(minimumPixels);
+    }
+}
+
 async function expectContactTargetsReachable(page) {
     for (const selector of ["#cf-message", ".contact-form__submit", ".site-endcap"]) {
         const target = page.locator(selector);
@@ -165,6 +176,52 @@ test("Contact keeps simulated large text and mobile content reachable", async ({
 
     await expectNoHorizontalOverflow(page);
     await expectContactTargetsReachable(page);
+});
+
+test("essential labels, metadata, and prose retain readable minimums at mobile and zoomed layouts", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("index.html", { waitUntil: "networkidle" });
+
+    await expectFontSizeAtLeast(page.locator(".hero__formats"), 14);
+    await expectFontSizeAtLeast(page.locator(
+        ".header-download, .platform-download__primary small, .platform-download__alternatives, .site-endcap__inner",
+    ));
+    await page.locator("[data-platform-dialog-open]").click();
+    await page.locator("[data-mac-download-toggle]").click();
+    await expectFontSizeAtLeast(page.locator(
+        ".platform-download__dialog-header small, .platform-download__options small, .platform-download__mac-choices p, .platform-download__dialog-note",
+    ));
+    await expectNoHorizontalOverflow(page);
+
+    await page.goto("features.html", { waitUntil: "networkidle" });
+    await expectFontSizeAtLeast(page.locator(
+        ".feature-section__copy p, .feature-section__note, .feature-section__capabilities",
+    ), 14);
+    await expectNoHorizontalOverflow(page);
+
+    await page.goto("about.html", { waitUntil: "networkidle" });
+    await expectFontSizeAtLeast(page.locator(
+        ".about-person__role, .about-person__affiliation, .site-endcap__inner",
+    ));
+    await expectNoHorizontalOverflow(page);
+
+    await page.goto("contact.html", { waitUntil: "networkidle" });
+    await expectFontSizeAtLeast(page.locator(
+        ".header-download, .contact-form__field > label, .contact-form__submit, .site-endcap__inner",
+    ));
+    await expectNoHorizontalOverflow(page);
+
+    // A 720 × 450 CSS-pixel viewport approximates a 1440 × 900 window at 200% zoom.
+    await page.setViewportSize({ width: 720, height: 450 });
+    await page.goto("index.html", { waitUntil: "networkidle" });
+    await expectFontSizeAtLeast(page.locator(".hero__formats"), 14);
+    await expectNoHorizontalOverflow(page);
+
+    await page.goto("about.html", { waitUntil: "networkidle" });
+    await expectFontSizeAtLeast(page.locator(".about-person__role, .about-person__affiliation"));
+    await page.locator(".about-person").nth(2).scrollIntoViewIfNeeded();
+    await expect(page.locator(".about-person").nth(2)).toBeInViewport();
+    await expectNoHorizontalOverflow(page);
 });
 
 test("reduced motion settles primary Home content without hiding reveals", async ({ page }) => {

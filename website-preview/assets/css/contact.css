@@ -63,7 +63,7 @@ body.page-contact {
 .contact-form label {
     margin: 0;
     color: #8fc9dc;
-    font-size: 10px;
+    font-size: var(--small-text-min);
     font-weight: 700;
     letter-spacing: .16em;
     line-height: 1.4;

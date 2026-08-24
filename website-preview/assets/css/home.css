@@ -100,8 +100,8 @@
     max-width: 640px;
     margin: 12px 0 0;
     color: var(--muted);
-    font-size: 12px;
-    line-height: 1.5;
+    font-size: clamp(14px, 1vw, 15px);
+    line-height: 1.55;
 }
 .hero__actions {
     display: flex;
@@ -145,7 +145,7 @@
 }
 .platform-download__primary small {
     color: rgba(236,249,253,.72);
-    font-size: 9px;
+    font-size: var(--small-text-min);
     font-weight: 650;
     letter-spacing: .055em;
 }
@@ -169,7 +169,7 @@
     color: #a6bac1;
     cursor: pointer;
     font: inherit;
-    font-size: 10px;
+    font-size: var(--small-text-min);
     font-weight: 700;
     letter-spacing: .08em;
     text-transform: uppercase;
@@ -204,7 +204,7 @@ body.platform-dialog-open { overflow: hidden; }
     display: block;
     margin-bottom: 5px;
     color: #6f8993;
-    font-size: 8px;
+    font-size: var(--small-text-min);
     font-weight: 750;
     letter-spacing: .12em;
     text-transform: uppercase;
@@ -260,7 +260,7 @@ body.platform-dialog-open { overflow: hidden; }
     gap: 4px;
 }
 .platform-download__options strong { font-size: 13px; font-weight: 650; }
-.platform-download__options small { color: #718891; font-size: 10px; }
+.platform-download__options small { color: #718891; font-size: var(--small-text-min); }
 .platform-download__options b { color: var(--cyan); font-size: 15px; font-weight: 400; }
 .platform-download__mac-choices {
     padding: 10px;
@@ -287,20 +287,20 @@ body.platform-dialog-open { overflow: hidden; }
     grid-column: 1 / -1;
     margin: 2px 2px 0;
     color: #718891;
-    font-size: 9px;
+    font-size: var(--small-text-min);
     line-height: 1.45;
 }
 .platform-download__dialog-note {
     margin: 0;
     padding: 13px 18px;
     color: #657d86;
-    font-size: 9px;
+    font-size: var(--small-text-min);
     line-height: 1.45;
 }
 .platform-download__noscript {
     margin: 8px 0 0;
     color: #8ca1a9;
-    font-size: 10px;
+    font-size: var(--small-text-min);
     line-height: 1.55;
 }
 .platform-download__noscript a { color: var(--cyan); text-decoration: underline; text-underline-offset: 3px; }
