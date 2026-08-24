@@ -122,6 +122,10 @@
         0 0 52px rgba(var(--accent-rgb), .07);
 }
 
+.feature-section__visual picture {
+    display: block;
+}
+
 .feature-section__visual img {
     display: block;
     width: 100%;

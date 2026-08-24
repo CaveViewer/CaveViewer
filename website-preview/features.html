@@ -16,7 +16,7 @@
 <a class="skip-link" href="#main-content">Skip to main content</a>
 <header class="site-header" data-site-header>
     <div class="site-header__inner">
-        <a class="site-home" href="index.html" aria-label="CaveViewer home"><img class="site-home__mark" src="assets/icons/caveviewer-cave-profile.svg" alt=""></a>
+        <a class="site-home" href="index.html" aria-label="CaveViewer home"><img class="site-home__mark" src="assets/icons/caveviewer-cave-profile.svg" width="64" height="32" alt=""></a>
         <nav class="primary-nav" aria-label="Primary navigation">
             <a href="features.html" aria-current="page">Features</a>
             <a href="about.html">Team</a>
@@ -49,7 +49,10 @@
                         </aside>
                     </div>
                     <figure class="feature-section__visual">
-                        <img src="assets/images/features/rendering-engine.png" alt="CaveViewer rendering a textured cave passage with a minimap and viewer controls">
+                        <picture>
+                            <source type="image/webp" srcset="assets/images/features/rendering-engine-800.webp 800w, assets/images/features/rendering-engine-1600.webp 1600w" sizes="(max-width: 840px) calc(100vw - 64px), 680px">
+                            <img src="assets/images/features/rendering-engine.png" width="2558" height="1556" loading="eager" fetchpriority="high" decoding="async" alt="CaveViewer rendering a textured cave passage with a minimap and viewer controls">
+                        </picture>
                     </figure>
                 </section>
 
@@ -67,7 +70,10 @@
                         </aside>
                     </div>
                     <figure class="feature-section__visual">
-                        <img src="assets/images/features/map-library.png" alt="CaveViewer Map Library showing available standard cave maps">
+                        <picture>
+                            <source type="image/webp" srcset="assets/images/features/map-library-800.webp 800w, assets/images/features/map-library-1600.webp 1600w" sizes="(max-width: 840px) calc(100vw - 64px), 680px">
+                            <img src="assets/images/features/map-library.png" width="1980" height="1654" loading="lazy" decoding="async" alt="CaveViewer Map Library showing available standard cave maps">
+                        </picture>
                     </figure>
                 </section>
 
@@ -82,7 +88,10 @@
                         </ul>
                     </div>
                     <figure class="feature-section__visual">
-                        <img src="assets/images/features/capture-recording.png" alt="CaveViewer confirming that a cave-dive recording was saved">
+                        <picture>
+                            <source type="image/webp" srcset="assets/images/features/capture-recording-800.webp 800w, assets/images/features/capture-recording-1600.webp 1600w" sizes="(max-width: 840px) calc(100vw - 64px), 680px">
+                            <img src="assets/images/features/capture-recording.png" width="2558" height="1556" loading="lazy" decoding="async" alt="CaveViewer confirming that a cave-dive recording was saved">
+                        </picture>
                     </figure>
                 </section>
             </div>
@@ -90,7 +99,7 @@
     </section>
 </main>
 
-<footer class="site-endcap"><div class="site-endcap__inner"><img class="site-endcap__logo" src="assets/icons/caveviewer-cave-profile.svg" alt=""><span>&copy; 2026 CaveViewer</span></div></footer>
+<footer class="site-endcap"><div class="site-endcap__inner"><img class="site-endcap__logo" src="assets/icons/caveviewer-cave-profile.svg" width="64" height="32" alt=""><span>&copy; 2026 CaveViewer</span></div></footer>
 
 <script src="assets/js/app.js" defer></script>
 </body>

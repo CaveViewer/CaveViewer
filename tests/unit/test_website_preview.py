@@ -339,3 +339,80 @@ def test_preview_documents_static_and_database_free_boundary() -> None:
     assert "no PHP runtime" in readme
     assert "persistent storage, or database" in normalized
     assert "uploads only `docs/`" in readme
+
+
+def test_image_delivery_uses_responsive_webp_and_reserves_layout_space() -> None:
+    index = (PREVIEW_ROOT / "index.html").read_text(encoding="utf-8")
+    features = (PREVIEW_ROOT / "features.html").read_text(encoding="utf-8")
+    about = (PREVIEW_ROOT / "about.html").read_text(encoding="utf-8")
+    home_styles = (PREVIEW_ROOT / "assets/css/home.css").read_text(encoding="utf-8")
+    feature_styles = (PREVIEW_ROOT / "assets/css/features.css").read_text(
+        encoding="utf-8"
+    )
+    about_styles = (PREVIEW_ROOT / "assets/css/about.css").read_text(
+        encoding="utf-8"
+    )
+    readme = (PREVIEW_ROOT / "README.md").read_text(encoding="utf-8")
+
+    page_budgets = {
+        "Home": (
+            1_300_000,
+            (
+                "assets/images/ginnie1.webp",
+                "assets/images/software-hero-cave-strokes-full.webp",
+            ),
+        ),
+        "Features": (
+            400_000,
+            (
+                "assets/images/features/rendering-engine-1600.webp",
+                "assets/images/features/map-library-1600.webp",
+                "assets/images/features/capture-recording-1600.webp",
+            ),
+        ),
+        "Team": (
+            800_000,
+            (
+                "storage/uploads/2026/08/e02af4158100878810221f4cc8db33f52026e293-960.webp",
+                "storage/uploads/2026/08/46afd31b727aa673872050329b90d75db21bd831-960.webp",
+                "assets/images/magic-mr-v-cat-hacker-960.webp",
+                "storage/uploads/2026/08/0dfffc22c2177fa30ec1e13d531c71b8eb71100d-850.webp",
+                "storage/uploads/2026/08/32c8839d88fe923a90c84a1206c967245f98ef57-960.webp",
+                "storage/uploads/2026/08/4278cd57d55958ba1979cfc0ef999019c70455de-960.webp",
+            ),
+        ),
+    }
+
+    for route, (budget, assets) in page_budgets.items():
+        sizes = [(PREVIEW_ROOT / asset).stat().st_size for asset in assets]
+        assert sum(sizes) <= budget, f"{route} preferred image budget exceeded"
+
+    assert "## Image delivery budget" in readme
+    assert "picture`/`srcset`" in readme
+    assert "CSS `image-set`" in readme
+
+    assert "ginnie1.webp" in home_styles
+    assert "software-hero-cave-strokes-full.webp" in home_styles
+    assert "image-set(" in home_styles
+    assert 'width="64" height="32"' in index
+
+    assert features.count("<picture>") == 3
+    for source in (
+        "rendering-engine-800.webp",
+        "rendering-engine-1600.webp",
+        "map-library-800.webp",
+        "map-library-1600.webp",
+        "capture-recording-800.webp",
+        "capture-recording-1600.webp",
+    ):
+        assert source in features
+    assert 'width="2558" height="1556" loading="eager" fetchpriority="high"' in features
+    assert features.count('loading="lazy" decoding="async"') == 2
+    assert ".feature-section__visual picture" in feature_styles
+
+    assert about.count("<picture>") == 6
+    assert about.count('sizes="(max-width: 900px) 50vw, 476px"') == 6
+    assert about.count('loading="lazy" decoding="async"') == 3
+    assert 'loading="eager" fetchpriority="high"' in about
+    assert about.count(' width="') >= 6
+    assert ".about-person__media picture" in about_styles

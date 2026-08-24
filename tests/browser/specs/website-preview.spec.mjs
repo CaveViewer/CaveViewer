@@ -170,6 +170,40 @@ test("reduced motion keeps primary Home content reachable", async ({ page }) => 
     ).toBe(true);
 });
 
+test("modern browsers choose responsive images with reserved layout geometry", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto("index.html", { waitUntil: "networkidle" });
+
+    const heroBackground = await page.locator(".hero__media").evaluate(
+        element => getComputedStyle(element).backgroundImage,
+    );
+    expect(heroBackground).toContain("ginnie1.webp");
+
+    await page.goto("features.html", { waitUntil: "networkidle" });
+    const renderingImage = page.locator("#rendering picture img");
+    await expect(renderingImage).toHaveAttribute("width", "2558");
+    await expect(renderingImage).toHaveAttribute("height", "1556");
+
+    const renderingMetrics = await renderingImage.evaluate(image => {
+        const bounds = image.getBoundingClientRect();
+
+        return {
+            currentSrc: image.currentSrc,
+            ratio: bounds.width / bounds.height,
+        };
+    });
+    expect(renderingMetrics.currentSrc).toMatch(/rendering-engine-(800|1600)\.webp$/);
+    expect(renderingMetrics.ratio).toBeCloseTo(2558 / 1556, 2);
+
+    await page.goto("about.html", { waitUntil: "networkidle" });
+    const firstPortrait = page.locator(".about-person picture img").first();
+    await expect(firstPortrait).toHaveAttribute("width", "1206");
+    await expect(firstPortrait).toHaveAttribute("height", "1193");
+    expect(await firstPortrait.evaluate(image => image.currentSrc)).toMatch(
+        /e02af4158100878810221f4cc8db33f52026e293-(640|960)\.webp$/,
+    );
+});
+
 test("disabling JavaScript leaves every reveal target visible", async ({ browser, browserName }, testInfo) => {
     test.skip(browserName !== "chromium", "The suite currently targets Chromium only.");
 

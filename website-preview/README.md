@@ -46,6 +46,29 @@ keyboard menu operation, a 200%-zoom-equivalent viewport, reduced motion, and
 the no-JavaScript reveal baseline. To target another local host, set
 `CAVEVIEWER_WEBSITE_URL` before running `npm test`.
 
+## Image delivery budget
+
+The preview keeps the original PNG and JPEG files as fallbacks, while modern
+browsers select WebP candidates through `picture`/`srcset` or CSS `image-set`.
+The markup supplies intrinsic image dimensions so each visual reserves space
+before it loads. Initially visible visuals load eagerly; later feature and Team
+portraits load lazily.
+
+The following route budgets measure the highest-resolution WebP candidate for
+each visual shown on that route. They intentionally exclude fallback files and
+unused `srcset` alternatives, because a supporting browser downloads one
+candidate rather than the complete asset catalog.
+
+| Route | Before | Preferred modern candidates | Budget |
+| --- | ---: | ---: | ---: |
+| Home | 2.19 MB | 1.21 MB | 1.30 MB |
+| Features | 9.10 MB | 0.33 MB | 0.40 MB |
+| Team | 7.24 MB | 0.76 MB | 0.80 MB |
+
+`tests/unit/test_website_preview.py` enforces these byte budgets and the
+responsive markup contracts. Recheck the measurements whenever source imagery
+or quality settings change.
+
 ## Deployment isolation
 
 CaveViewer's Pages workflow uploads only `docs/`. This root-level

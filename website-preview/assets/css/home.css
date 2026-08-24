@@ -9,6 +9,7 @@
     overflow: hidden;
 }
 .hero__media {
+    --hero-photo: url('../images/ginnie1.jpg');
     position: absolute;
     inset: 0;
     z-index: -4;
@@ -21,7 +22,7 @@
         linear-gradient(90deg, #02070a 0%, #02070a 21%, rgba(2,7,10,.94) 28%, rgba(2,7,10,.54) 36%, transparent 47%),
         linear-gradient(0deg, #02070a 0%, rgba(2,7,10,.82) 8%, rgba(2,7,10,.34) 18%, transparent 29%),
         linear-gradient(270deg, #02070a 0%, rgba(2,7,10,.74) 3%, rgba(2,7,10,.20) 8%, transparent 13%),
-        url('../images/ginnie1.jpg');
+        var(--hero-photo);
     background-repeat: no-repeat;
     background-size: 100% 100%, 100% 100%, 100% 100%, 100% 100%, cover;
     background-position: center, center, center, center, center;
@@ -612,6 +613,7 @@ body.platform-dialog-open { overflow: hidden; }
     border-top:1px solid rgba(122,177,196,.10);
 }
 .home-cta__art {
+    --home-cta-art: url('../images/software-hero-cave-strokes-full.png');
     position:absolute;
     inset:0;
     z-index:-2;
@@ -619,7 +621,25 @@ body.platform-dialog-open { overflow: hidden; }
     background:
         linear-gradient(90deg,#03090d 3%,rgba(3,9,13,.94) 26%,rgba(3,9,13,.48) 64%,#03090d 100%),
         linear-gradient(180deg,#03090d 0%,transparent 28%,transparent 68%,#03090d 100%),
-        url('../images/software-hero-cave-strokes-full.png') center right/cover no-repeat;
+        var(--home-cta-art) center right/cover no-repeat;
+}
+
+/* Modern browsers receive smaller WebP art; the JPEG/PNG variables above
+   remain the static fallback for engines without image-set support. */
+@supports (background-image: image-set(url('../images/ginnie1.webp') type('image/webp') 1x)) {
+    .hero__media {
+        --hero-photo: image-set(
+            url('../images/ginnie1.webp') type('image/webp') 1x,
+            url('../images/ginnie1.jpg') type('image/jpeg') 1x
+        );
+    }
+
+    .home-cta__art {
+        --home-cta-art: image-set(
+            url('../images/software-hero-cave-strokes-full.webp') type('image/webp') 1x,
+            url('../images/software-hero-cave-strokes-full.png') type('image/png') 1x
+        );
+    }
 }
 .home-cta::after {
     content:"";
