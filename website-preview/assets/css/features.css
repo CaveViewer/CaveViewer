@@ -62,6 +62,15 @@
     line-height: 1.56;
 }
 
+.feature-section__eyebrow {
+    margin: 0 0 12px;
+    color: var(--accent);
+    font-size: var(--small-text-min);
+    font-weight: 700;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+}
+
 .feature-section__note {
     max-width: 42rem;
     margin: 14px 0 0;
@@ -132,148 +141,16 @@
     height: auto;
 }
 
-.performance-section {
-    padding: clamp(56px, 6vw, 96px) 0 clamp(32px, 4vw, 56px);
-    border-top: 1px solid rgba(92, 92, 110, .36);
+.feature-section--advantage {
     scroll-margin-top: calc(var(--header-h) + 24px);
 }
 
-.performance-section__intro {
-    max-width: 850px;
-}
-
-.performance-section__eyebrow {
-    margin: 0 0 12px;
-    color: var(--accent);
+.feature-section__visual figcaption {
+    padding: 12px 16px 13px;
+    border-top: 1px solid rgba(92, 92, 110, .34);
+    color: var(--muted);
     font-size: var(--small-text-min);
-    font-weight: 700;
-    letter-spacing: .14em;
-    text-transform: uppercase;
-}
-
-.performance-section h2,
-.performance-card h3 {
-    margin: 0;
-    color: var(--title);
-    font-family: var(--display);
-    font-weight: var(--display-weight);
-    letter-spacing: -.04em;
-    line-height: 1.04;
-}
-
-.performance-section h2 {
-    font-size: clamp(34px, 3.7vw, 54px);
-}
-
-.performance-section__intro > p:last-child {
-    max-width: 760px;
-    margin: 16px 0 0;
-    color: var(--muted);
-    font-size: clamp(16px, 1.15vw, 18px);
-    line-height: 1.6;
-}
-
-.performance-section__grid {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 16px;
-    margin-top: clamp(30px, 4vw, 52px);
-}
-
-.performance-card {
-    min-width: 0;
-    padding: clamp(24px, 3vw, 36px);
-    border: 1px solid rgba(92, 92, 110, .42);
-    background: linear-gradient(145deg, rgba(28, 28, 36, .78), rgba(18, 18, 26, .82));
-    box-shadow: 0 22px 54px rgba(0, 0, 0, .15);
-}
-
-.performance-card--adaptive,
-.performance-card--requirements {
-    grid-column: 1 / -1;
-}
-
-.performance-card--adaptive {
-    background:
-        radial-gradient(circle at 88% 28%, rgba(var(--accent-rgb), .12), transparent 34%),
-        linear-gradient(145deg, rgba(35, 31, 21, .92), rgba(18, 18, 26, .88));
-}
-
-.performance-card h3 {
-    font-size: clamp(22px, 2vw, 30px);
-}
-
-.performance-card > p,
-.performance-card__limits {
-    margin: 14px 0 0;
-    color: var(--muted);
-    font-size: clamp(14px, 1vw, 16px);
-    line-height: 1.6;
-}
-
-.performance-card__settings {
-    display: grid;
-    gap: 14px;
-    margin: 22px 0 0;
-}
-
-.performance-card__settings > div {
-    padding-top: 14px;
-    border-top: 1px solid rgba(92, 92, 110, .36);
-}
-
-.performance-card__settings dt {
-    color: var(--title);
-    font-size: 13px;
-    font-weight: 700;
-    letter-spacing: .035em;
-}
-
-.performance-card__settings dd {
-    margin: 6px 0 0;
-    color: var(--muted);
-    font-size: clamp(14px, 1vw, 15px);
-    line-height: 1.55;
-}
-
-.performance-card__settings strong,
-.performance-card__limits strong {
-    color: var(--text);
-    font-weight: 600;
-}
-
-.performance-card--requirements {
-    display: grid;
-    grid-template-columns: minmax(0, .85fr) minmax(0, 1.15fr);
-    gap: clamp(28px, 5vw, 80px);
-    align-items: start;
-}
-
-.performance-card__requirements {
-    display: grid;
-    gap: 8px;
-    margin: 18px 0 0;
-    padding: 0;
-    color: var(--text);
-    font-size: clamp(14px, 1vw, 16px);
-    line-height: 1.5;
-    list-style: none;
-}
-
-.performance-card__requirements li {
-    position: relative;
-    padding-left: 18px;
-}
-
-.performance-card__requirements li::before {
-    position: absolute;
-    top: .58em;
-    left: 0;
-    width: 6px;
-    height: 6px;
-    background: var(--accent);
-    content: "";
-    transform: rotate(45deg);
+    line-height: 1.35;
 }
 
 @media (max-width: 840px) {
@@ -288,10 +165,6 @@
         justify-self: start;
     }
 
-    .performance-card--requirements {
-        grid-template-columns: 1fr;
-        gap: 20px;
-    }
 }
 
 @media (max-width: 620px) {
@@ -300,16 +173,4 @@
         padding-bottom: 56px;
     }
 
-    .performance-section {
-        padding-top: 48px;
-    }
-
-    .performance-section__grid {
-        grid-template-columns: 1fr;
-        gap: 12px;
-    }
-
-    .performance-card {
-        padding: 22px;
-    }
 }

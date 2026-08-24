@@ -81,7 +81,7 @@ test("navigation current and focus states have non-color indicators", async ({ p
 
     const navigation = page.getByRole("navigation", { name: "Primary navigation" });
     const currentLink = navigation.getByRole("link", { name: "Features" });
-    const focusedLink = navigation.getByRole("link", { name: "Performance" });
+    const focusedLink = navigation.getByRole("link", { name: "Advantage" });
 
     await page.keyboard.press("Tab");
     await page.keyboard.press("Tab");
@@ -110,7 +110,7 @@ test("the mobile navigation is keyboard-operable", async ({ page }) => {
     await expect(navigation.getByRole("link", { name: "Features" })).toBeFocused();
 
     await page.keyboard.press("Tab");
-    await expect(navigation.getByRole("link", { name: "Performance" })).toBeFocused();
+    await expect(navigation.getByRole("link", { name: "Advantage" })).toBeFocused();
     await page.keyboard.press("Tab");
     await expect(navigation.getByRole("link", { name: "Team" })).toBeFocused();
 
@@ -138,27 +138,34 @@ test("the shared header switches cleanly between inline and compact navigation",
     await expectNoHorizontalOverflow(page);
 });
 
-test("the Performance link reaches practical, readable map guidance", async ({ page }) => {
+test("the Advantage link reaches practical, readable map guidance", async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto("index.html", { waitUntil: "networkidle" });
 
     await page.getByRole("navigation", { name: "Primary navigation" })
-        .getByRole("link", { name: "Performance" })
+        .getByRole("link", { name: "Advantage" })
         .click();
-    await expect(page).toHaveURL(/features\.html#performance$/);
+    await expect(page).toHaveURL(/features\.html#advantage$/);
 
-    const performance = page.locator("#performance");
-    await expect(performance).toBeInViewport();
-    await expect(performance.getByRole("heading", { name: "Big caves, practical choices." }))
+    const advantage = page.locator("#advantage");
+    await expect(advantage).toBeInViewport();
+    await expect(advantage.getByRole("heading", { name: "Keep more cave within reach." }))
         .toBeVisible();
-    await expect(performance).toContainText("System RAM target");
-    await expect(performance).toContainText("Older Intel-based Macs");
+    await expect(advantage).toContainText("Import chunk size");
+    await expect(advantage.getByRole("img", { name: "CaveViewer Preferences with the Import tab selected, showing cache and worker settings" }))
+        .toBeVisible();
+    const streaming = page.locator("#advantage-streaming");
+    await streaming.scrollIntoViewIfNeeded();
+    await expect(streaming).toContainText("System RAM target");
+    await expect(streaming).toContainText("Older Intel-based Macs");
+    await expect(streaming.getByRole("img", { name: "CaveViewer Preferences with the Streaming tab selected, showing memory, loading, and upload settings" }))
+        .toBeVisible();
     await expectNoHorizontalOverflow(page);
 
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.goto("features.html#performance", { waitUntil: "networkidle" });
+    await page.goto("features.html#advantage", { waitUntil: "networkidle" });
     await expectFontSizeAtLeast(page.locator(
-        ".performance-section__intro > p:last-child, .performance-card > p, .performance-card__settings dd, .performance-card__requirements",
+        ".feature-section--advantage .feature-section__copy p, .feature-section--advantage .feature-section__note, .feature-section--advantage .feature-section__capabilities",
     ), 14);
     await expectNoHorizontalOverflow(page);
 });
@@ -243,7 +250,7 @@ test("essential labels, metadata, and prose retain readable minimums at mobile a
         ".feature-section__copy p, .feature-section__note, .feature-section__capabilities",
     ), 14);
     await expectFontSizeAtLeast(page.locator(
-        ".performance-section__intro > p:last-child, .performance-card > p, .performance-card__settings dd, .performance-card__requirements",
+        ".feature-section--advantage .feature-section__copy p, .feature-section--advantage .feature-section__note, .feature-section--advantage .feature-section__capabilities",
     ), 14);
     await expectNoHorizontalOverflow(page);
 

@@ -251,7 +251,7 @@ def test_reduced_motion_settles_all_pages_and_team_cards_stay_presentational() -
 def test_pages_expose_skip_paths_headings_and_noncolor_navigation_cues() -> None:
     styles = (PREVIEW_ROOT / "assets/css/global.css").read_text(encoding="utf-8")
     expected_headings = {
-        "features.html": '<h1 class="sr-only">CaveViewer features</h1>',
+            "features.html": '<h1 class="sr-only">CaveViewer features and advantages</h1>',
         "about.html": '<h1 class="sr-only">CaveViewer team</h1>',
     }
 
@@ -312,11 +312,11 @@ def test_preview_uses_one_header_and_has_no_member_profile_routes() -> None:
         assert 'href="features.html">Features</a>' in text or (
             'href="features.html" aria-current="page">Features</a>' in text
         )
-        expected_performance = (
-            '#performance' if page.name == "features.html" else "features.html#performance"
+        expected_advantage = (
+            '#advantage' if page.name == "features.html" else "features.html#advantage"
         )
-        assert f'href="{expected_performance}">Performance</a>' in text
-        assert text.index(">Features</a>") < text.index(">Performance</a>") < text.index(">Team</a>")
+        assert f'href="{expected_advantage}">Advantage</a>' in text
+        assert text.index(">Features</a>") < text.index(">Advantage</a>") < text.index(">Team</a>")
         assert 'href="about.html">Team</a>' in text or (
             'href="about.html" aria-current="page">Team</a>' in text
         )
@@ -348,20 +348,22 @@ def test_preview_uses_one_header_and_has_no_member_profile_routes() -> None:
         "Render What Others Can’t",
         "Explore the Map Library",
         "Record &amp; Share Dives",
-        "Big caves, practical choices.",
+            "Keep more cave within reach.",
     ):
         assert f">{feature}<" in features
 
 
-def test_performance_section_uses_the_real_preferences_and_capabilities() -> None:
+def test_advantage_section_uses_the_real_preferences_and_capabilities() -> None:
     features = (PREVIEW_ROOT / "features.html").read_text(encoding="utf-8")
     styles = (PREVIEW_ROOT / "assets/css/features.css").read_text(encoding="utf-8")
 
-    assert '<section class="performance-section" id="performance"' in features
-    assert '<a href="#performance">Performance</a>' in features
+    assert '<section class="feature-section feature-section--advantage" id="advantage"' in features
+    assert '<a href="#advantage">Advantage</a>' in features
+    assert features.count('class="feature-section feature-section--advantage"') == 2
     for text in (
+        "all-or-nothing hardware test",
         "available system and graphics memory",
-        "smaller texture size before upload",
+        "smaller texture size before uploading them",
         "fine surface detail may look softer",
         "Import chunk size",
         "Max upload group size",
@@ -370,19 +372,21 @@ def test_performance_section_uses_the_real_preferences_and_capabilities() -> Non
         "GPU memory target",
         "Loading worker limit",
         "standalone slice",
-        "No ads, no accounts, no subscriptions, no gimmicks, and no trackers.",
-        "Recent Windows, macOS, Ubuntu, or Fedora",
+        "No ads, accounts, subscriptions, gimmicks, or trackers.",
+        "recent Windows, macOS, Ubuntu, or Fedora",
         "16 GB of RAM",
-        "At least 256 GB of free disk space",
+        "at least 256 GB of free disk space",
         "early M1 systems",
         "Older Intel-based Macs",
+        "Mobile support is not ready yet",
+        "preferences-import-1600.webp",
+        "preferences-streaming-1600.webp",
     ):
         assert text in features
 
-    assert ".performance-section {" in styles
+    assert ".feature-section--advantage {" in styles
+    assert ".feature-section__visual figcaption {" in styles
     assert "scroll-margin-top: calc(var(--header-h) + 24px);" in styles
-    assert ".performance-section__grid {" in styles
-    assert ".performance-card--requirements {" in styles
 
 
 def test_contact_page_preserves_the_current_form_submission_contract() -> None:
@@ -527,11 +531,13 @@ def test_image_delivery_uses_responsive_webp_and_reserves_layout_space() -> None
             ),
         ),
         "Features": (
-            400_000,
+            450_000,
             (
                 "assets/images/features/rendering-engine-1600.webp",
                 "assets/images/features/map-library-1600.webp",
                 "assets/images/features/capture-recording-1600.webp",
+                "assets/images/features/preferences-import-1600.webp",
+                "assets/images/features/preferences-streaming-1600.webp",
             ),
         ),
         "Team": (
@@ -560,7 +566,7 @@ def test_image_delivery_uses_responsive_webp_and_reserves_layout_space() -> None
     assert "image-set(" in home_styles
     assert 'width="64" height="32"' in index
 
-    assert features.count("<picture>") == 3
+    assert features.count("<picture>") == 5
     for source in (
         "rendering-engine-800.webp",
         "rendering-engine-1600.webp",
@@ -568,10 +574,14 @@ def test_image_delivery_uses_responsive_webp_and_reserves_layout_space() -> None
         "map-library-1600.webp",
         "capture-recording-800.webp",
         "capture-recording-1600.webp",
+        "preferences-import-800.webp",
+        "preferences-import-1600.webp",
+        "preferences-streaming-800.webp",
+        "preferences-streaming-1600.webp",
     ):
         assert source in features
     assert 'width="2558" height="1556" loading="eager" fetchpriority="high"' in features
-    assert features.count('loading="lazy" decoding="async"') == 2
+    assert features.count('loading="lazy" decoding="async"') == 4
     assert ".feature-section__visual picture" in feature_styles
 
     assert about.count("<picture>") == 6
