@@ -13,6 +13,12 @@ const reviewViewports = [
     { name: "mobile", width: 390, height: 844 },
 ];
 
+const wideHeroViewports = [
+    { name: "1920 × 1080", width: 1920, height: 1080 },
+    { name: "2560 × 1440", width: 2560, height: 1440 },
+    { name: "2560 × 1080", width: 2560, height: 1080 },
+];
+
 async function expectNoHorizontalOverflow(page) {
     const overflow = await page.evaluate(
         () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
@@ -202,6 +208,38 @@ test("modern browsers choose responsive images with reserved layout geometry", a
     expect(await firstPortrait.evaluate(image => image.currentSrc)).toMatch(
         /e02af4158100878810221f4cc8db33f52026e293-(640|960)\.webp$/,
     );
+});
+
+test.describe("wide Home hero art direction", () => {
+    for (const viewport of wideHeroViewports) {
+        test(`${viewport.name} keeps the copy centered and gutters aligned`, async ({ page }) => {
+            await page.setViewportSize(viewport);
+            await page.goto("index.html", { waitUntil: "networkidle" });
+
+            const geometry = await page.evaluate(() => {
+                const header = document.querySelector(".site-header__inner").getBoundingClientRect();
+                const hero = document.querySelector(".hero").getBoundingClientRect();
+                const content = document.querySelector(".hero__content").getBoundingClientRect();
+                const copy = document.querySelector(".hero__copy").getBoundingClientRect();
+                const media = getComputedStyle(document.querySelector(".hero__media"));
+
+                return {
+                    headerLeft: header.left,
+                    contentLeft: content.left,
+                    heroCenter: hero.top + hero.height / 2,
+                    copyCenter: copy.top + copy.height / 2,
+                    backgroundPosition: media.backgroundPosition,
+                    backgroundSize: media.backgroundSize,
+                };
+            });
+
+            expect(Math.abs(geometry.headerLeft - geometry.contentLeft)).toBeLessThanOrEqual(1);
+            expect(Math.abs(geometry.copyCenter - geometry.heroCenter)).toBeLessThanOrEqual(28);
+            expect(geometry.backgroundSize).toContain("auto 120%");
+            expect(geometry.backgroundPosition).toContain("70%");
+            await expectNoHorizontalOverflow(page);
+        });
+    }
 });
 
 test("disabling JavaScript leaves every reveal target visible", async ({ browser, browserName }, testInfo) => {

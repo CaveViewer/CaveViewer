@@ -416,3 +416,19 @@ def test_image_delivery_uses_responsive_webp_and_reserves_layout_space() -> None
     assert 'loading="eager" fetchpriority="high"' in about
     assert about.count(' width="') >= 6
     assert ".about-person__media picture" in about_styles
+
+
+def test_wide_home_hero_has_explicit_art_direction_and_aligned_gutters() -> None:
+    index = (PREVIEW_ROOT / "index.html").read_text(encoding="utf-8")
+    home_styles = (PREVIEW_ROOT / "assets/css/home.css").read_text(encoding="utf-8")
+    global_styles = (PREVIEW_ROOT / "assets/css/global.css").read_text(
+        encoding="utf-8"
+    )
+
+    assert '<h1 id="hero-title">Explore what<br><span>lies beneath</span></h1>' in index
+    assert "@media (min-width: 1600px) and (min-height: 900px)" in home_styles
+    assert ".page-home .hero__content {\n        align-items: center;" in home_styles
+    assert "@media (min-width: 1600px) and (min-aspect-ratio: 16 / 9)" in home_styles
+    assert "auto 120%" in home_styles
+    assert "70% center" in home_styles
+    assert "width: min(calc(100% - 64px), var(--max));" in global_styles

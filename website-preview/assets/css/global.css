@@ -91,7 +91,7 @@ body.menu-open { overscroll-behavior: none; }
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
 }
-.site-header__inner { height: 100%; width: min(calc(100% - 64px), 1540px); margin: auto; display: flex; justify-content: flex-end; align-items: center; gap: 36px; }
+.site-header__inner { height: 100%; width: min(calc(100% - 64px), var(--max)); margin: auto; display: flex; justify-content: flex-end; align-items: center; gap: 36px; }
 .brand { display: inline-flex; align-items: center; gap: 12px; min-width: max-content; }
 .brand__mark { width: 42px; height: 42px; display:grid; place-items:center; flex:0 0 auto; }
 .brand__mark img { display:block; width:100%; height:100%; object-fit:contain; }
@@ -622,7 +622,7 @@ html.reveal-enhanced [data-reveal].is-visible { opacity:1; transform:none; }
 
 @media (max-height: 560px) and (min-width: 761px) {
     :root { --header-h: 68px; }
-    .site-header__inner { width:min(calc(100% - 40px), 1540px); }
+    .site-header__inner { width:min(calc(100% - 40px), var(--max)); }
     .brand__mark { width:34px; height:34px; }
     .brand__name { font-size:18px; }
 }
@@ -1055,7 +1055,7 @@ html.reveal-enhanced [data-reveal].is-visible { opacity:1; transform:none; }
 
 @media (max-width: 900px) {
     .site-header__inner {
-        width: min(calc(100% - 40px), 1540px);
+        width: min(calc(100% - 40px), var(--max));
         gap: 18px;
     }
 
@@ -1083,7 +1083,7 @@ html.reveal-enhanced [data-reveal].is-visible { opacity:1; transform:none; }
     }
 
     .site-header__inner {
-        width: min(calc(100% - 32px), 1540px);
+        width: min(calc(100% - 32px), var(--max));
         gap: 12px;
     }
 

@@ -57,6 +57,24 @@
     align-items: flex-start;
 }
 .hero__copy { max-width: min(700px, 52vw); }
+
+/* The source photo is 3:2. On wide displays, an unrestricted `cover` crop
+   discards too much of it. Retain the two-line heading, center the full copy
+   on tall desktops, and use a modest height crop with a stable rightward focal
+   area once there is sufficient horizontal room. */
+@media (min-width: 1600px) and (min-height: 900px) {
+    .page-home .hero__content {
+        align-items: center;
+    }
+}
+
+@media (min-width: 1600px) and (min-aspect-ratio: 16 / 9) {
+    .page-home .hero__media {
+        background-size: 100% 100%, 100% 100%, 100% 100%, 100% 100%, auto 120%;
+        background-position: center, center, center, center, 70% center;
+    }
+}
+
 .hero h1 {
     margin: 0;
     font-family: var(--display);
