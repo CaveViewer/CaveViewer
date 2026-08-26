@@ -529,7 +529,7 @@ def test_release_finalizer_dependency_lock_is_exact_and_hash_checked():
     lock = lock_path.read_text(encoding="utf-8")
     workflow = (WORKFLOWS_DIR / "finalize-release.yml").read_text(encoding="utf-8")
 
-    assert "cryptography==49.0.0" in lock
+    assert "cryptography==50.0.0" in lock
     assert "cffi==2.1.1" in lock
     assert "pycparser==3.0" in lock
     assert lock.count("--hash=sha256:") == 3
