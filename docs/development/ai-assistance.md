@@ -38,9 +38,10 @@ Do not add `CLAUDE.md`, `GEMINI.md`, skills, or agent definitions until that
 tool is actually part of the project workflow. Keep tool-specific adapters
 short and point them at `AGENTS.md` and these development documents.
 
-Shareable execution plans live under `/docs/development/work/` and are
-committed with their implementation. Root `/.work/` is reserved for ignored,
-disposable local plans and notes and is never authoritative.
+Execution plans live under ignored root `/.work/` by default. Move or copy a
+plan to `/docs/development/work/` only when it must be shared, reviewed, or
+retained with its implementation; once promoted, the tracked copy is
+authoritative.
 
 ## PyCharm contributor setup
 

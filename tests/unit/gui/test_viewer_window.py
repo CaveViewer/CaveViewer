@@ -812,7 +812,7 @@ def test_paused_recorded_dive_keyboard_input_allows_look_only():
         look=lambda yaw, pitch: look_calls.append((yaw, pitch)),
         barrel_roll=lambda _roll: pytest.fail("paused inspection must not roll"),
     )
-    window._move_camera_guarded = lambda *_args: pytest.fail(
+    window._move_camera = lambda *_args: pytest.fail(
         "paused inspection must not move"
     )
     window._continuous_input_intent = lambda _dt: SimpleNamespace(
@@ -3174,71 +3174,16 @@ class _FakeMoveCamera:
 
 
 
-def test_navigation_guard_rejects_position_above_local_vertical_span():
+def test_camera_move_allows_flight_beyond_cave_volume():
     window = object.__new__(viewer_window.CaveViewerWindow)
-    window._navigation_guard_enabled = True
-    window._navigation_guard_cells = {(0, 0, 0)}
-    window._navigation_guard_chunk_size = 10.0
-    window._navigation_guard_radius_cells = 2
-    window._navigation_guard_bounds = (
-        np.array([0.0, 0.0, 0.0], dtype=np.float64),
-        np.array([10.0, 10.0, 10.0], dtype=np.float64),
-    )
-    window._navigation_guard_vertical_columns = {
-        (0, 0): ((0.0, 10.0),),
-    }
-
-    assert window._navigation_position_is_allowed(
-        np.array([5.0, 12.0, 5.0], dtype=np.float64)
-    ) is False
-    assert window._navigation_position_is_allowed(
-        np.array([5.0, 8.0, 5.0], dtype=np.float64)
-    ) is True
-
-
-def test_guarded_camera_move_clamps_to_local_vertical_span():
-    window = object.__new__(viewer_window.CaveViewerWindow)
-    window._navigation_guard_enabled = True
-    window._navigation_guard_cells = {(0, 0, 0)}
-    window._navigation_guard_chunk_size = 10.0
-    window._navigation_guard_radius_cells = 2
-    window._navigation_guard_bounds = (
-        np.array([0.0, 0.0, 0.0], dtype=np.float64),
-        np.array([10.0, 10.0, 10.0], dtype=np.float64),
-    )
-    window._navigation_guard_vertical_columns = {
-        (0, 0): ((0.0, 10.0),),
-    }
     window.camera = _FakeMoveCamera(
         position=[5.0, 9.0, 5.0],
-        moved_position=[5.0, 25.0, 5.0],
+        moved_position=[500.0, 250.0, -400.0],
     )
 
-    window._move_camera_guarded(0.0, 0.0, 1.0, 1.0, 1.0)
+    window._move_camera(0.0, 0.0, 1.0, 1.0, 1.0)
 
-    assert window.camera.position.tolist() == [5.0, 10.0, 5.0]
-
-
-def test_navigation_guard_preserves_position_inside_upper_vertical_span():
-    window = object.__new__(viewer_window.CaveViewerWindow)
-    window._navigation_guard_chunk_size = 40.0
-    window._navigation_guard_vertical_columns = {
-        (-3, 2): (
-            (-4.39140510559082, 0.33984100818634033),
-            (-0.418537, 26.631416),
-        ),
-    }
-    position = np.array([-91.522311, 5.510557, 101.700638], dtype=np.float64)
-
-    assert window._navigation_vertical_band_for_position(position) == (
-        -0.418537,
-        26.631416,
-    )
-    assert window._clamp_navigation_position_to_bounds(position).tolist() == [
-        -91.522311,
-        5.510557,
-        101.700638,
-    ]
+    assert window.camera.position.tolist() == [500.0, 250.0, -400.0]
 
 
 

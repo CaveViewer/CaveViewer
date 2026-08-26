@@ -1,8 +1,10 @@
 # Work definition template
 
 Use this template to define repository work before implementation begins. Copy
-it to `docs/development/work/<work-name>.md`, replace every instruction and
-placeholder, and keep its master table current throughout the work.
+it to ignored root `.work/<work-name>.md` by default, replace every instruction
+and placeholder, and keep its master table current throughout the work. Move or
+copy it to `docs/development/work/<work-name>.md` only when the plan needs to be
+shared, reviewed, or retained with the implementation.
 
 The work document is the execution record, not a speculative essay. Describe
 the observed problem, current implementation, desired outcome, concrete work,
@@ -15,10 +17,10 @@ related tasks on one branch; do not stack unrelated work on an unmerged branch.
 Tasks that change GitHub or another external system without repository code use
 `External settings — no branch`.
 
-Shareable work documents are committed with their implementation under
-`docs/development/work/`. Use ignored root `.work/` only for disposable local
-plans, notes, probes, and incomplete thoughts; nothing there is an authoritative
-work record.
+Work documents remain ignored under root `.work/` unless a durable repository
+record is useful. Shareable or long-lived work documents are committed with
+their implementation under `docs/development/work/`; once promoted, that
+tracked copy is authoritative.
 
 ## Status values
 

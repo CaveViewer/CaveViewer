@@ -418,8 +418,6 @@ runtime snapshot.
 | `CAVEVIEWER_IO_NICE` | environment | `5` | Best-effort positive niceness increment for streaming workers. |
 | `CAVEVIEWER_OBJ_BUCKET_WORKERS` | environment | `2` | Maximum worker count for incremental OBJ bucket preparation. |
 | `CAVEVIEWER_MAX_TEXTURE_SIZE` | environment | _(unset)_ | Optional maximum texture dimension in pixels before decode. |
-| `CAVEVIEWER_NAVIGATION_GUARD` | environment | `True` | Keep free-fly navigation near occupied map chunks. |
-| `CAVEVIEWER_NAVIGATION_GUARD_RADIUS_CELLS` | environment | `2` | Number of cells around occupied map chunks that remain navigable. |
 | `CAVEVIEWER_FFMPEG` | environment | _(unset)_ | Optional explicit ffmpeg executable used by recording. |
 | `CAVEVIEWER_RECORDING_FPS` | environment | `30` | Target MP4 recording frame rate. |
 | `CAVEVIEWER_RECORDING_MAX_HEIGHT` | environment | `720` | Maximum encoded recording height in pixels. |
@@ -697,8 +695,6 @@ compact layout.
 | `CAVEVIEWER_VSYNC` | `1` | Set to `0` to disable vertical sync. Recommended for virtual machines where the virtual display driver can block `swap_buffers()` long enough to freeze the render thread during heavy imports, making the window appear hung. |
 | `CAVEVIEWER_WINDOW_SYSTEM` | `auto` | Linux viewer backend: `auto` prefers X11/XWayland when `DISPLAY` is available so source and AppImage launches get the same GNOME titlebar and resize behavior, then retries Wayland on recognized initialization failures. `wayland` and `x11` require that protocol without fallback. |
 | `LIBGL_ALWAYS_SOFTWARE` | _(unset)_ | Linux OpenGL/Mesa setting. Set to `1` to force software rendering when a VM or GPU driver crashes, freezes, or leaves the app stuck in the graphics driver. |
-| `CAVEVIEWER_NAVIGATION_GUARD` | `1` | Set to `0` to disable the navigation boundary that keeps free-fly movement near occupied map chunks. |
-| `CAVEVIEWER_NAVIGATION_GUARD_RADIUS_CELLS` | `2` | Number of chunk cells around occupied map chunks that remain navigable. Larger values allow more free space around the cave; smaller values keep users closer to rendered chunks. |
 | `CAVEVIEWER_FFMPEG` | _(auto)_ | Path to an `ffmpeg` executable for MP4 recording. If unset, CaveViewer tries system `ffmpeg`, then the bundled `imageio-ffmpeg` executable. |
 | `CAVEVIEWER_RECORDING_DIR` | `~/Movies/CaveViewer` | Folder where saved recordings are stored. The Preferences panel saves this value. |
 | `CAVEVIEWER_MAP_LIBRARY_DIR` | User Downloads folder | Folder where CaveViewer stores downloaded Map Library maps. The Preferences panel saves this value. |

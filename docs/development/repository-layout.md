@@ -113,7 +113,7 @@ scripts/                                      development and release automation
 scripts/benchmark/                            benchmark comparison helpers and compatibility wrappers
 .run/                                         shared, secret-free JetBrains run configurations
 .aiassistant/rules/                           shared JetBrains AI Chat rule adapters
-docs/development/work/                        tracked work-definition execution records
+docs/development/work/                        selected durable work-definition records
 updates/                                      published update manifests/signatures
 ```
 
@@ -125,9 +125,10 @@ ignored `.idea/` directory.
 
 `.aiassistant/rules/` is intentionally tracked and contains only short,
 secret-free adapters that direct JetBrains AI Chat to the canonical
-`AGENTS.md` hierarchy. Active work definitions under `docs/development/work/`
-are tracked with their implementation; ignored root `.work/` contains
-disposable local plans and notes only.
+`AGENTS.md` hierarchy. Active work definitions stay under ignored root `.work/`
+by default. Plans selected for contributor sharing, pull-request review, or
+durable retention move to `docs/development/work/` and are tracked with their
+implementation.
 
 ## Package layout
 

@@ -24,12 +24,16 @@ def test_instruction_hierarchy_is_present_and_scoped() -> None:
         assert "Inherits:" in _read(relative_path)
 
 
-def test_root_instructions_require_tracked_work_and_startup_checks() -> None:
+def test_root_instructions_require_work_planning_and_startup_checks() -> None:
     instructions = _read("AGENTS.md")
+    normalized_instructions = " ".join(instructions.split())
 
+    assert ".work/<work-name>.md" in instructions
     assert "docs/development/work/<work-name>.md" in instructions
     assert "docs/development/.agents/<work-name>.md" not in instructions
-    assert "Root `.work/`" in instructions
+    assert "root `.work/`" in instructions
+    assert "by default" in instructions
+    assert "only when it needs to be shared" in normalized_instructions
     assert "## Session startup" in instructions
     assert "Inspect the active branch and Git status" in instructions
     assert "focused and complete validation commands" in instructions
@@ -39,6 +43,7 @@ def test_jetbrains_rule_delegates_to_canonical_instructions() -> None:
     rule = _read(".aiassistant/rules/repository-instructions.md")
 
     assert "Always follow the root `AGENTS.md`" in rule
+    assert "root `.work/` by default" in rule
     assert "docs/development/work/" in rule
     assert "apply: always" in rule
     assert "**Always** project rule" in rule
@@ -62,7 +67,7 @@ def test_shared_pycharm_workflows_remain_visible_to_jetbrains_agents() -> None:
         assert "$PROJECT_DIR$" in action_text
 
 
-def test_work_definition_and_discovery_docs_use_tracked_work_directory() -> None:
+def test_work_definition_and_discovery_docs_use_local_work_by_default() -> None:
     template = _read("docs/development/work-definition.md")
     readme = _read("docs/development/README.md")
     required_columns = (
@@ -74,16 +79,19 @@ def test_work_definition_and_discovery_docs_use_tracked_work_directory() -> None
         "Status",
     )
 
+    assert ".work/<work-name>.md" in template
     assert "docs/development/work/<work-name>.md" in template
-    assert "ignored root `.work/`" in template
+    assert "only when" in template
+    assert "ignored root `.work/<work-name>.md`" in template
     assert "docs/development/.agents/" not in template
     assert "vertical-align: top" in template
     assert "failed build or release workflow" in template.lower()
     for column in required_columns:
         assert column in template
 
+    assert ".work/<work-name>.md" in readme
     assert "docs/development/work/<work-name>.md" in readme
-    assert "Root `.work/` is ignored" in readme
+    assert "only when" in readme
     assert "docs/development/.agents/" not in readme
     assert ".aiassistant/rules/repository-instructions.md" in readme
 
