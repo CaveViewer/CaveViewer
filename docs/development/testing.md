@@ -148,8 +148,10 @@ Release source follows two gated transitions: feature branch to `main`, then
 `main` to `release/next` for the publish build. The finalizer writes release
 metadata only to `release/next`, and that metadata returns to `main` through a
 second required-check PR. No `publish: true` workflow should run on `main` or a
-feature branch. Preview Release Promotion never creates or merges a PR; the
-final metadata pull request and its normal required checks remain manual.
+feature branch. Preview Release Promotion accepts an exact protected `main`
+revision as its source, but publishes only after synchronizing that revision to
+`release/next`. It never creates or merges a PR; the final metadata pull request
+and its normal required checks remain manual.
 
 An individually dispatched platform release workflow calls the Essential Tests
 workflow before its package job. `All Platform Release` calls Essential Tests

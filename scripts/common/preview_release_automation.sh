@@ -4,24 +4,24 @@ set -euo pipefail
 print_usage() {
   cat <<'EOF'
 Usage:
-  preview_release_automation.sh --source-branch=<branch> \
+  preview_release_automation.sh --main-sha=<commit> \
     --release-notes=<notes>
 
-Verify that one source branch has already reached main, publish the next
+Verify the exact protected main revision, publish the next
 all-platform Preview from release/next, and leave the generated release
 metadata there for a maintainer-managed pull request into main. This helper is
 intended for the Preview Release Promotion GitHub workflow.
 EOF
 }
 
-source_branch=""
+main_sha=""
 release_notes=""
 release_branch="release/next"
 main_branch="main"
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --source-branch=*) source_branch="${1#--source-branch=}" ;;
+    --main-sha=*) main_sha="${1#--main-sha=}" ;;
     --release-notes=*) release_notes="${1#--release-notes=}" ;;
     -h|--help) print_usage; exit 0 ;;
     *) echo "Error: unknown argument '$1'" >&2; print_usage >&2; exit 2 ;;
@@ -29,12 +29,12 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 
-if [ -z "$source_branch" ] || [ -z "$release_notes" ]; then
-  echo "Error: --source-branch and --release-notes are required." >&2
+if [ -z "$main_sha" ] || [ -z "$release_notes" ]; then
+  echo "Error: --main-sha and --release-notes are required." >&2
   exit 2
 fi
-if [ "$source_branch" = "$main_branch" ] || [ "$source_branch" = "$release_branch" ]; then
-  echo "Error: select a feature branch, not $source_branch." >&2
+if [[ ! "$main_sha" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "Error: --main-sha must be a full lowercase commit SHA." >&2
   exit 2
 fi
 
@@ -56,33 +56,34 @@ fi
 
 git -C "$repo_root" fetch --no-tags origin \
   "refs/heads/$main_branch:refs/remotes/origin/$main_branch" \
-  "refs/heads/$release_branch:refs/remotes/origin/$release_branch" \
-  "refs/heads/$source_branch:refs/remotes/origin/$source_branch"
+  "refs/heads/$release_branch:refs/remotes/origin/$release_branch"
 
 # Do not stack another release on metadata that has not reached main. This
 # check happens before release/next changes so a failed run is side-effect free
 # and can be resumed after a maintainer reconciles the previous release.
-if ! git -C "$repo_root" diff --quiet "origin/$main_branch" "origin/$release_branch"; then
+if ! git -C "$repo_root" merge-base --is-ancestor \
+  "origin/$release_branch" "origin/$main_branch"; then
   echo "Error: $release_branch contains changes not reconciled with $main_branch." >&2
   echo "Merge the existing release metadata PR before starting another Preview." >&2
   exit 1
 fi
 
-# Source promotion is intentionally outside release automation. Accept a
-# feature branch only when its current remote tip is already reachable from
-# protected main, proving that a maintainer-managed PR supplied the source.
-source_sha="$(git -C "$repo_root" rev-parse "origin/$source_branch^{commit}")"
-if ! git -C "$repo_root" merge-base --is-ancestor \
-  "$source_sha" "origin/$main_branch"; then
-  echo "Error: origin/$source_branch at $source_sha is not present in origin/$main_branch." >&2
-  echo "Merge the source through a maintainer-managed PR before starting a Preview release." >&2
+remote_main_sha="$(git -C "$repo_root" rev-parse "origin/$main_branch^{commit}")"
+if [ "$remote_main_sha" != "$main_sha" ]; then
+  echo "Error: origin/$main_branch changed ($main_sha requested, $remote_main_sha current)." >&2
+  echo "Update your local main and start the Preview release again." >&2
   exit 1
 fi
-echo "Verified source $source_branch at $source_sha is present in $main_branch."
+echo "Verified protected $main_branch at $main_sha."
 
 git -C "$repo_root" fetch --no-tags origin \
   "refs/heads/$main_branch:refs/remotes/origin/$main_branch" \
   "refs/heads/$release_branch:refs/remotes/origin/$release_branch"
+remote_main_sha="$(git -C "$repo_root" rev-parse "origin/$main_branch^{commit}")"
+if [ "$remote_main_sha" != "$main_sha" ]; then
+  echo "Error: origin/$main_branch advanced before promotion; start again." >&2
+  exit 1
+fi
 git -C "$repo_root" switch -C "$release_branch" "origin/$release_branch"
 git -C "$repo_root" merge --ff-only "origin/$main_branch"
 git -C "$repo_root" push origin "HEAD:refs/heads/$release_branch"

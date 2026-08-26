@@ -73,9 +73,10 @@ PyCharm contributors should use the versioned **Release Actions** run
 configurations under `.run/` for release workflows and their Essential Tests
 gate. Package-smoke, benchmark, Pages, and other maintenance workflows are
 intentionally omitted from the PyCharm menu. In particular, **Preview Release**
-is the supported release launcher: it checks the current branch and remote
-state, asks for confirmation, dispatches the repository-owned promotion
-workflow, and watches the exact GitHub Actions run.
+is the supported release launcher: it requires a clean checked-out `main` whose
+HEAD exactly matches `origin/main`, asks for confirmation, dispatches that exact
+protected revision to the repository-owned promotion workflow, and watches the
+exact GitHub Actions run.
 
 For a direct Stable or individual-platform release, run the shared
 **Prepare Release Next** action from checked-out `main`, then fetch and check out

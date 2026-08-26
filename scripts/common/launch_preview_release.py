@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Safely dispatch and watch a Preview release from the current branch."""
+"""Safely dispatch and watch a Preview release from protected main."""
 
 from __future__ import annotations
 
@@ -37,13 +37,13 @@ def _output(command: Sequence[str]) -> str:
     return _run(command).stdout.strip()
 
 
-def validate_source_branch_name(branch: str) -> None:
-    """Reject branches that cannot be promoted as a Preview source."""
+def validate_checked_out_branch(branch: str) -> None:
+    """Require the protected branch used as the Preview source."""
     if not branch or branch == "HEAD":
         raise ValueError("Cannot create a Preview release from a detached HEAD.")
-    if branch in {"main", "release/next"}:
+    if branch != WORKFLOW_REF:
         raise ValueError(
-            f"Cannot use {branch!r} as the Preview source; select a feature branch."
+            f"Check out {WORKFLOW_REF!r} before creating a Preview release."
         )
 
 
@@ -86,7 +86,7 @@ def _preflight() -> str:
 
     _run(["gh", "auth", "status"])
     branch = _output(["git", "branch", "--show-current"])
-    validate_source_branch_name(branch)
+    validate_checked_out_branch(branch)
 
     if _output(["git", "status", "--porcelain"]):
         raise RuntimeError("Commit or stash local changes before creating a release.")
@@ -107,11 +107,11 @@ def _preflight() -> str:
             f"({local_sha[:8]} != "
             f"{remote_sha[:8]})."
         )
-    return branch
+    return local_sha
 
 
-def _confirm(branch: str, notes: str, assume_yes: bool) -> None:
-    print(f"Source branch: {branch}")
+def _confirm(main_sha: str, notes: str, assume_yes: bool) -> None:
+    print(f"Source revision: origin/{WORKFLOW_REF} at {main_sha}")
     print(f"Release notes: {notes or '(none)'}")
     print("The workflow may merge pull requests and publish a Preview release.")
     if assume_yes:
@@ -137,7 +137,7 @@ def _wait_for_new_run(previous_ids: set[int], timeout_seconds: int) -> dict[str,
 
 def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Create and watch a Preview release from the current branch."
+        description="Create and watch a Preview release from protected main."
     )
     parser.add_argument("--notes", default="", help="Optional Preview release notes")
     parser.add_argument(
@@ -152,11 +152,11 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parse_args(argv)
     try:
-        branch = _preflight()
+        main_sha = _preflight()
         notes = args.notes
         if not notes and sys.stdin.isatty():
             notes = input("Preview release notes (optional): ").strip()
-        _confirm(branch, notes, args.yes)
+        _confirm(main_sha, notes, args.yes)
 
         previous_ids = {int(run["databaseId"]) for run in _list_runs()}
         command = [
@@ -167,7 +167,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "--ref",
             WORKFLOW_REF,
             "-f",
-            f"source_branch={branch}",
+            f"main_sha={main_sha}",
         ]
         if notes:
             command.extend(("-f", f"release_notes={notes}"))

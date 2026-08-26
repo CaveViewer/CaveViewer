@@ -7,10 +7,10 @@ For the canonical release sequence, channel behavior, resume procedure, and
 post-release checklist, see `../docs/development/releases.md`.
 
 The one-action Preview path is `.github/workflows/preview-release-promotion.yml`.
-It verifies that the selected feature branch is already present in `main`,
-synchronizes `release/next`, and dispatches the all-platform Preview publish
-with the next patch version. Generated metadata remains on `release/next` for a
-maintainer-managed pull request.
+It verifies an exact protected `main` revision, synchronizes `release/next`, and
+dispatches the all-platform Preview publish with the next patch version.
+Generated metadata remains on `release/next` for a maintainer-managed pull
+request.
 The workflow calls `scripts/common/preview_release_automation.sh`; that helper
 is CI-internal and is not a replacement for `release.sh` during local builds.
 

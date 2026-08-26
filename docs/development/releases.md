@@ -232,39 +232,39 @@ does not create a release or commit release metadata.
 
 ### One-action Preview promotion
 
-Use **Preview Release Promotion** when a validated feature branch is ready to
-become the next Preview. The selected source branch must already be present in
-protected `main`; all publication still occurs exclusively from `release/next`.
+Use **Preview Release Promotion** after all intended changes have reached
+protected `main`. The selected source is one exact `origin/main` revision; all
+publication still occurs exclusively from `release/next`.
 
-From a local checkout of the branch to release, one command starts the entire
+From a clean, fully pushed checkout of `main`, one command starts the entire
 promotion:
 
 ```bash
 gh workflow run preview-release-promotion.yml \
   --ref main \
-  -f source_branch="$(git branch --show-current)" \
+  -f main_sha="$(git rev-parse origin/main)" \
   -f release_notes="Describe this Preview"
 ```
 
 The preferred entry point is PyCharm's shared **Preview Release** run
-configuration. It validates that the current feature branch is
-clean and fully pushed, prompts for optional notes and an explicit confirmation,
-dispatches the same workflow, resolves the exact new run, and watches it to
+configuration. It requires checked-out `main` to be clean and exactly equal to
+`origin/main`, prompts for optional notes and an explicit confirmation,
+dispatches that exact revision, resolves the new run, and watches it to
 completion. The configuration is stored in the tracked `.run/` directory; it
 contains no token, account name, personal path, or release secret.
 
 The `gh workflow run` command above is the supported terminal fallback. The
-GitHub Actions web interface exposes the same `source_branch` and
+GitHub Actions web interface exposes the same `main_sha` and
 `release_notes` inputs, but contributors should normally use the shared
-PyCharm configuration so its clean-tree, pushed-branch, confirmation, and exact
-run-tracking checks are not skipped. When dispatching manually, run the
-promotion workflow definition from `main` and explicitly name the feature
-source branch.
+PyCharm configuration so its clean-tree, synchronized-main, confirmation, and
+exact run-tracking checks are not skipped. When dispatching manually, run the
+promotion workflow definition from `main` and explicitly supply the current
+`origin/main` SHA. A blank web input uses the selected workflow revision.
 
 The promotion is Preview-only and performs one strictly ordered sequence:
 
 1. Confirm `release/next` has no release metadata still missing from `main`.
-2. Confirm the selected source branch tip is already reachable from `main`.
+2. Confirm the requested revision is still the current `origin/main` tip.
 3. Merge current `main` into `release/next` and push that exact source.
 4. Choose one greater patch version from the current application version and
    all existing numeric GitHub release tags (including tags without a release).
@@ -273,16 +273,17 @@ The promotion is Preview-only and performs one strictly ordered sequence:
 6. Report the release, source SHA, metadata commit, and compare URL. A
    maintainer opens, reviews, and merges `release/next` into `main` manually.
 
-Every mutation follows a successful preflight or workflow. A source branch not
-already present in `main` leaves both long-lived branches unchanged. A failed
+Every mutation follows a successful preflight or workflow. If `main` advances
+after dispatch, the workflow stops before changing `release/next`. A failed
 package workflow remains visible in **All Platform Release**. Rerun only after
 correcting the reported failure. The repository-wide promotion concurrency
 group prevents two Preview promotions from overlapping.
 
-The workflow intentionally rejects `main` and `release/next` as source-branch
-inputs. It also refuses to begin while `release/next` differs from `main`; merge
-the preceding release-metadata PR first. This prevents two release versions
-from accumulating on the long-lived release branch.
+The workflow accepts only a precise protected `main` revision. It also refuses
+to begin when `release/next` contains commits not yet present in `main`; merge
+the preceding release-metadata PR first. `main` may safely be ahead, because the
+workflow fast-forwards `release/next` to the selected revision. This prevents
+two release versions from accumulating on the long-lived release branch.
 
 The orchestrator needs `actions: write` to dispatch the immutable release run
 and `contents: write` to synchronize `release/next`; it has no pull-request

@@ -88,12 +88,50 @@ def test_next_release_version_rejects_an_empty_valid_candidate_set():
         module.next_release_version(["preview", "v1.0.0-rc1"])
 
 
-@pytest.mark.parametrize("branch", ("", "HEAD", "main", "release/next"))
-def test_shared_preview_launcher_rejects_unsafe_source_branches(branch):
+@pytest.mark.parametrize("branch", ("", "HEAD", "feature/example", "release/next"))
+def test_shared_preview_launcher_requires_main(branch):
     launcher = _load_launcher_module()
 
     with pytest.raises(ValueError):
-        launcher.validate_source_branch_name(branch)
+        launcher.validate_checked_out_branch(branch)
+
+
+def test_shared_preview_launcher_accepts_main():
+    launcher = _load_launcher_module()
+
+    launcher.validate_checked_out_branch("main")
+
+
+def test_shared_preview_launcher_dispatches_exact_main_sha(monkeypatch):
+    launcher = _load_launcher_module()
+    main_sha = "a" * 40
+    commands = []
+    monkeypatch.setattr(launcher, "_preflight", lambda: main_sha)
+    monkeypatch.setattr(launcher, "_list_runs", lambda: [])
+    monkeypatch.setattr(
+        launcher,
+        "_wait_for_new_run",
+        lambda *_args: {"databaseId": 42, "url": "https://example.test/run/42"},
+    )
+    monkeypatch.setattr(
+        launcher,
+        "_run",
+        lambda command, **_kwargs: commands.append(list(command)),
+    )
+
+    assert launcher.main(["--yes", "--notes", "Preview notes"]) == 0
+    assert [
+        "gh",
+        "workflow",
+        "run",
+        "preview-release-promotion.yml",
+        "--ref",
+        "main",
+        "-f",
+        f"main_sha={main_sha}",
+        "-f",
+        "release_notes=Preview notes",
+    ] in commands
 
 
 def test_shared_preview_launcher_resolves_only_one_new_workflow_run():
@@ -505,7 +543,7 @@ def test_preview_promotion_workflow_is_manual_serial_and_write_scoped():
     workflow = PROMOTION_WORKFLOW.read_text(encoding="utf-8")
 
     assert "workflow_dispatch:" in workflow
-    assert "source_branch:" in workflow
+    assert "main_sha:" in workflow
     assert "release_notes:" in workflow
     assert "actions: write" in workflow
     assert "contents: read" in workflow
@@ -534,6 +572,7 @@ def test_preview_automation_has_one_fixed_gated_promotion_sequence():
     assert 'release_branch="release/next"' in source
     assert 'main_branch="main"' in source
     assert "contains changes not reconciled" in source
+    assert '"origin/$release_branch" "origin/$main_branch"' in source
     assert '--workflow=all-platform-release.yml' in source
     assert '--field="preview=true"' in source
     assert '--field="publish=true"' in source
@@ -543,12 +582,13 @@ def test_preview_automation_has_one_fixed_gated_promotion_sequence():
     assert "gh pr create" not in source
     assert "gh pr merge" not in source
     assert "reconcile_release_metadata" not in source
-    assert "merge-base --is-ancestor" in source
-    assert "is not present in origin/$main_branch" in source
+    assert source.count("merge-base --is-ancestor") == 1
+    assert 'remote_main_sha" != "$main_sha' in source
+    assert "origin/$main_branch advanced before promotion" in source
     assert "Main remains unchanged" in source
     assert "compare/$main_branch...$release_branch?expand=1" in source
 
-    source_gate = source.index("merge-base --is-ancestor")
+    source_gate = source.index('remote_main_sha" != "$main_sha')
     release_sync = source.index(
         'git -C "$repo_root" merge --ff-only "origin/$main_branch"'
     )
