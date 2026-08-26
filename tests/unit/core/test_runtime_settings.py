@@ -84,8 +84,6 @@ def test_registry_inventories_runtime_settings_and_excludes_tooling_variables():
         "CAVEVIEWER_MAP_LIBRARY_RELEASE_TAG",
         "CAVEVIEWER_MAP_LIBRARY_REPO",
         "CAVEVIEWER_MAX_TEXTURE_SIZE",
-        "CAVEVIEWER_NAVIGATION_GUARD",
-        "CAVEVIEWER_NAVIGATION_GUARD_RADIUS_CELLS",
         "CAVEVIEWER_OBJ_BUCKET_WORKERS",
         "CAVEVIEWER_RECORDING_CRF",
         "CAVEVIEWER_RECORDING_FPS",
@@ -316,12 +314,10 @@ def test_range_clamping_and_fail_fast_window_system_validation(tmp_path):
         tmp_path,
         environ={
             "CAVEVIEWER_RECORDING_FPS": "999",
-            "CAVEVIEWER_NAVIGATION_GUARD_RADIUS_CELLS": "-3",
         },
     )
 
     assert snapshot["recording_fps"] == 60
-    assert snapshot["navigation_guard_radius_cells"] == 0
 
     with pytest.raises(settings.RuntimeSettingsResolutionError) as exc_info:
         _resolve(

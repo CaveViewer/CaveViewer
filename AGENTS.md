@@ -57,6 +57,20 @@ Before taking repository action, every agent must:
 - Never commit generated caches, virtual environments, coverage output, build
   artifacts, downloaded maps, or private signing keys.
 
+## Shared run configurations
+
+- Treat every file under `.run/` as shared, cross-machine project
+  configuration. Changes must work from an arbitrary checkout location and
+  must not contain a contributor's username, home directory, absolute checkout
+  path, personal interpreter path, credentials, tokens, or other machine-local
+  state.
+- Use JetBrains macros such as `$PROJECT_DIR$`, repository-relative arguments,
+  module SDK selection, and portable commands instead of hardcoded filesystem
+  paths. Keep personal run configurations and environment values in ignored
+  IDE state rather than `.run/`.
+- When changing `.run/`, parse the edited files as XML and audit the directory
+  for absolute paths, user-specific paths, and secrets before handoff.
+
 ## Architecture and compatibility
 
 - Follow the boundaries and dependency direction in

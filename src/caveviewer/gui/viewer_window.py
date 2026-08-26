@@ -870,16 +870,6 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._current_upload_time_budget_ms = self._upload_time_budget_ms
         self._vbo_upload_slice_bytes = _RENDER_UPLOAD_INITIAL_SLICE_BYTES
         self._texture_upload_slice_bytes = _RENDER_UPLOAD_INITIAL_SLICE_BYTES
-        self._navigation_guard_enabled = (
-            _env_bool("CAVEVIEWER_NAVIGATION_GUARD", True)
-            if viewer_settings is None
-            else viewer_settings.navigation_guard
-        )
-        self._navigation_guard_radius_cells = (
-            _env_int("CAVEVIEWER_NAVIGATION_GUARD_RADIUS_CELLS", 2, 0, 12)
-            if viewer_settings is None
-            else viewer_settings.navigation_guard_radius_cells
-        )
         self._bookmarks_path: str | None = None
         self._bookmarks: viewer_bookmarks.BookmarkSlots = {}
         self._manual_dive_trace: (
@@ -1113,13 +1103,6 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._chunk_aabbs: dict[tuple, tuple] = {}
         self._view_culling_cache = view_culling.FrustumCullingCache()
         self._chunk_visibility_generation = 0
-        self._navigation_guard_cells: set[tuple[int, int, int]] = set()
-        self._navigation_guard_chunk_size: float | None = None
-        self._navigation_guard_bounds: tuple[np.ndarray, np.ndarray] | None = None
-        self._navigation_guard_vertical_columns: dict[
-            tuple[int, int],
-            tuple[tuple[float, float], ...],
-        ] = {}
         self._texture_validation_executor: ThreadPoolExecutor | None = None
         self._texture_validation_future: Future | None = None
         self._texture_validation_manager: TextureManager | None = None
@@ -1831,18 +1814,6 @@ class CaveViewerWindow(mglw.WindowConfig):
             vbo_upload_slice_bytes=self._vbo_upload_slice_bytes,
             texture_upload_slice_bytes=self._texture_upload_slice_bytes,
         )
-        self._navigation_guard_cells = self.world.available_cells
-        self._navigation_guard_chunk_size = chunk_size
-        self._navigation_guard_bounds = self._manifest_navigation_bounds(self.manifest)
-        self._navigation_guard_vertical_columns = (
-            self._manifest_navigation_vertical_columns(self.manifest)
-        )
-        if self._navigation_guard_enabled:
-            _LOG.info(
-                "Navigation guard enabled: "
-                f"{len(self._navigation_guard_cells)} occupied cells, "
-                f"radius={self._navigation_guard_radius_cells} cell(s)."
-            )
 
         # Render-distance slider's current value should drive the new
         # map's streaming config immediately, rather than resetting back
@@ -2131,156 +2102,12 @@ class CaveViewerWindow(mglw.WindowConfig):
         }
         benchmark_controller.update_environment(update)
 
-    def _navigation_position_is_allowed(self, position: np.ndarray) -> bool:
-        """
-        Keep free-fly navigation near occupied chunk cells, preventing users
-        from drifting into empty map space where nothing will render.
-        """
-        if not self._navigation_guard_enabled:
-            return True
-        if not self._navigation_guard_cells or self._navigation_guard_chunk_size is None:
-            return True
-        if not self._navigation_position_is_within_bounds(position):
-            return False
-        if not self._navigation_position_is_within_vertical_band(position):
-            return False
-
-        cell = chunker.world_to_cell(np.asarray(position, dtype=np.float32), self._navigation_guard_chunk_size)
-        radius = self._navigation_guard_radius_cells
-        for dx in range(-radius, radius + 1):
-            for dy in range(-radius, radius + 1):
-                for dz in range(-radius, radius + 1):
-                    if (cell[0] + dx, cell[1] + dy, cell[2] + dz) in self._navigation_guard_cells:
-                        return True
-        return False
-
-    def _navigation_position_is_within_bounds(self, position: np.ndarray) -> bool:
-        bounds = getattr(self, "_navigation_guard_bounds", None)
-        if bounds is None:
-            return True
-        bounds_min, bounds_max = bounds
-        pos = np.asarray(position, dtype=np.float64)
-        return bool(np.all(pos >= bounds_min) and np.all(pos <= bounds_max))
-
-    def _navigation_position_is_within_vertical_band(self, position: np.ndarray) -> bool:
-        vertical_bounds = self._navigation_vertical_band_for_position(position)
-        if vertical_bounds is None:
-            return True
-        low_y, high_y = vertical_bounds
-        y = float(np.asarray(position, dtype=np.float64)[1])
-        return low_y <= y <= high_y
-
-    def _clamp_navigation_position_to_bounds(self, position: np.ndarray) -> np.ndarray:
-        bounds = getattr(self, "_navigation_guard_bounds", None)
-        pos = np.asarray(position, dtype=np.float64)
-        clamped = pos.copy()
-        if bounds is not None:
-            bounds_min, bounds_max = bounds
-            clamped = np.minimum(np.maximum(clamped, bounds_min), bounds_max)
-        vertical_bounds = self._navigation_vertical_band_for_position(clamped)
-        if vertical_bounds is not None:
-            clamped[1] = min(max(clamped[1], vertical_bounds[0]), vertical_bounds[1])
-        return clamped
-
-    def _navigation_vertical_band_for_position(
-        self,
-        position: np.ndarray,
-    ) -> tuple[float, float] | None:
-        span = self._navigation_vertical_span_for_position(position)
-        if span is None:
-            return None
-        return span
-
-    def _navigation_vertical_span_for_position(
-        self,
-        position: np.ndarray,
-    ) -> tuple[float, float] | None:
-        columns = getattr(self, "_navigation_guard_vertical_columns", {})
-        chunk_size = getattr(self, "_navigation_guard_chunk_size", None)
-        if not columns or chunk_size is None:
-            return None
-
-        pos = np.asarray(position, dtype=np.float64)
-        target_cx = int(math.floor(float(pos[0]) / float(chunk_size)))
-        target_cz = int(math.floor(float(pos[2]) / float(chunk_size)))
-
-        spans = columns.get((target_cx, target_cz))
-        if spans is None:
-            spans = self._nearest_navigation_vertical_column(target_cx, target_cz)
-        if not spans:
-            return None
-
-        y = float(pos[1])
-        for span in spans:
-            if span[0] <= y <= span[1]:
-                return span
-        return min(
-            spans,
-            key=lambda span: (abs(((span[0] + span[1]) * 0.5) - y), span),
-        )
-
-    def _nearest_navigation_vertical_column(
-        self,
-        target_cx: int,
-        target_cz: int,
-    ) -> tuple[tuple[float, float], ...] | None:
-        columns = getattr(self, "_navigation_guard_vertical_columns", {})
-        if not columns:
-            return None
-        best_col = min(
-            columns,
-            key=lambda col: (
-                (col[0] - target_cx) ** 2 + (col[1] - target_cz) ** 2,
-                col,
-            ),
-        )
-        return columns.get(best_col)
-
-    def _nearest_navigation_guard_position(self, position: np.ndarray) -> np.ndarray | None:
-        """Return the nearest occupied chunk center for rare invalid camera positions."""
-        if not self._navigation_guard_cells or self._navigation_guard_chunk_size is None:
-            return None
-
-        pos = self._clamp_navigation_position_to_bounds(position)
-        if self._navigation_position_is_allowed(pos):
-            return pos
-        best_cell = None
-        best_dist_sq = None
-        chunk_size = float(self._navigation_guard_chunk_size)
-        for cell in self._navigation_guard_cells:
-            aabb = self._chunk_aabbs.get(cell)
-            if aabb is not None:
-                center = (aabb[0].astype(np.float64) + aabb[1].astype(np.float64)) * 0.5
-            else:
-                center = (np.array(cell, dtype=np.float64) + 0.5) * chunk_size
-            dist_sq = float(np.sum((center - pos) ** 2))
-            if best_dist_sq is None or dist_sq < best_dist_sq:
-                best_dist_sq = dist_sq
-                best_cell = cell
-
-        if best_cell is None:
-            return None
-
-        aabb = self._chunk_aabbs.get(best_cell)
-        if aabb is not None:
-            return (aabb[0].astype(np.float64) + aabb[1].astype(np.float64)) * 0.5
-        return (np.array(best_cell, dtype=np.float64) + 0.5) * chunk_size
-
-    def _move_camera_guarded(self, forward_amt: float, right_amt: float, up_amt: float,
-                             dt: float, speed_multiplier: float) -> None:
+    def _move_camera(self, forward_amt: float, right_amt: float, up_amt: float,
+                     dt: float, speed_multiplier: float) -> None:
+        """Move the camera freely without constraining it to map geometry."""
         if self.camera is None:
             return
-
-        old_position = self.camera.position.copy()
         self.camera.move(forward_amt, right_amt, up_amt, dt, speed_multiplier)
-        if self._navigation_guard_enabled:
-            self.camera.position = self._clamp_navigation_position_to_bounds(
-                self.camera.position
-            )
-        if self._navigation_position_is_allowed(self.camera.position):
-            return
-
-        self.camera.position = old_position
 
     def _recording_is_armed(self) -> bool:
         return self._ensure_recording_controller().is_armed(
@@ -3446,10 +3273,6 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._chunk_aabbs.clear()
         self._chunk_upload_manager = None
         self._invalidate_visible_chunk_cache()
-        self._navigation_guard_cells = set()
-        self._navigation_guard_chunk_size = None
-        self._navigation_guard_bounds = None
-        self._navigation_guard_vertical_columns = {}
         self._recorded_dive_trace = None
         self._recorded_dive_controller = None
 
@@ -4550,70 +4373,6 @@ class CaveViewerWindow(mglw.WindowConfig):
         if bounds_min.shape != (3,) or bounds_max.shape != (3,):
             return None
         return bounds_min, bounds_max
-
-    def _manifest_navigation_bounds(
-        self,
-        manifest: Mapping[str, Any],
-    ) -> tuple[np.ndarray, np.ndarray] | None:
-        chunks = manifest.get("chunks", {}) if isinstance(manifest, Mapping) else {}
-        if not isinstance(chunks, Mapping):
-            return None
-
-        global_min: np.ndarray | None = None
-        global_max: np.ndarray | None = None
-        for chunk_info in chunks.values():
-            if not isinstance(chunk_info, Mapping):
-                continue
-            try:
-                bounds_min = np.asarray(chunk_info["bounds_min"], dtype=np.float64)
-                bounds_max = np.asarray(chunk_info["bounds_max"], dtype=np.float64)
-            except (KeyError, TypeError, ValueError):
-                continue
-            if bounds_min.shape != (3,) or bounds_max.shape != (3,):
-                continue
-            chunk_min = np.minimum(bounds_min, bounds_max)
-            chunk_max = np.maximum(bounds_min, bounds_max)
-            if global_min is None:
-                global_min = chunk_min.copy()
-                global_max = chunk_max.copy()
-            else:
-                np.minimum(global_min, chunk_min, out=global_min)
-                np.maximum(global_max, chunk_max, out=global_max)
-
-        if global_min is None or global_max is None:
-            return None
-        return global_min, global_max
-
-    def _manifest_navigation_vertical_columns(
-        self,
-        manifest: Mapping[str, Any],
-    ) -> dict[tuple[int, int], tuple[tuple[float, float], ...]]:
-        chunks = manifest.get("chunks", {}) if isinstance(manifest, Mapping) else {}
-        if not isinstance(chunks, Mapping):
-            return {}
-
-        columns: dict[tuple[int, int], list[tuple[float, float]]] = {}
-        for cell_key, chunk_info in chunks.items():
-            if not isinstance(chunk_info, Mapping):
-                continue
-            try:
-                cx, _cy, cz = (int(value) for value in str(cell_key).split("_"))
-                bounds_min = np.asarray(chunk_info["bounds_min"], dtype=np.float64)
-                bounds_max = np.asarray(chunk_info["bounds_max"], dtype=np.float64)
-            except (KeyError, TypeError, ValueError):
-                continue
-            if bounds_min.shape != (3,) or bounds_max.shape != (3,):
-                continue
-            low_y = float(min(bounds_min[1], bounds_max[1]))
-            high_y = float(max(bounds_min[1], bounds_max[1]))
-            columns.setdefault((cx, cz), []).append((low_y, high_y))
-
-        return {
-            column: tuple(
-                sorted(spans, key=lambda span: ((span[0] + span[1]) * 0.5, span))
-            )
-            for column, spans in columns.items()
-        }
 
     def _failed_cells_snapshot(self) -> frozenset[tuple[int, int, int]]:
         world = getattr(self, "world", None)
@@ -6764,11 +6523,6 @@ class CaveViewerWindow(mglw.WindowConfig):
         trace_pose_before_recall = self._manual_dive_trace_pose()
         pos = data["position"]
         self.camera.position = np.array([float(pos[0]), float(pos[1]), float(pos[2])], dtype=np.float64)
-        if not self._navigation_position_is_allowed(self.camera.position):
-            safe_position = self._nearest_navigation_guard_position(self.camera.position)
-            if safe_position is not None:
-                self.camera.position = safe_position
-                _LOG.info(f"Bookmark {slot} was outside the navigable map area; moved to nearest cave chunk.")
         self.camera.yaw = float(data["yaw"])
         pitch = float(data["pitch"])
         pitch_limit = getattr(self.camera, "_pitch_limit", None)
@@ -6877,7 +6631,7 @@ class CaveViewerWindow(mglw.WindowConfig):
     def _handle_continuous_input(self, dt: float):
         intent = self._continuous_input_intent(dt)
         if intent.has_motion:
-            self._move_camera_guarded(
+            self._move_camera(
                 intent.forward_amount,
                 intent.right_amount,
                 intent.up_amount,
