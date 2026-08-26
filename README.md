@@ -1,6 +1,6 @@
 # CaveViewer
 
-CaveViewer makes exploring massive 3-D maps accessible to everyone. Designed for cave divers, explorers, cartographers, and 3-D mapping enthusiasts, it uses an innovative rendering technique to display extremely large maps on anything from lightweight laptops to high-end workstations. Released as open-source software under the GNU GPL v3 license, CaveViewer is completely free—no advertisements, no subscriptions, no online accounts, and no hidden costs.
+CaveViewer makes exploring massive 3-D maps accessible to everyone. Designed for cave divers, explorers, cartographers, and 3-D mapping enthusiasts, it uses an innovative rendering technique to display extremely large maps on anything from lightweight laptops to high-end workstations. Released as open-source software under the GNU AGPL v3 license, CaveViewer is completely free—no advertisements, no subscriptions, no online accounts, and no hidden costs.
 
 CaveViewer supports several common 3-D map formats, including OBJ models exported from Agisoft Metashape, GLB files, and previously optimized CaveViewer cache files.
 
@@ -195,6 +195,6 @@ layout, coding, testing, and AI-assisted development standards.
 
 ## License
 
-CaveViewer is free software licensed under the GNU General Public License version 3.0. See `LICENSE` for the full license text.
+CaveViewer is free software licensed under the GNU Affero General Public License version 3.0 only. See `LICENSE` for the full license text.
 
 Third-party dependency notices are listed in `THIRD_PARTY_NOTICES.md`.

@@ -101,8 +101,6 @@ class ViewerRuntimeSettings:
     app_icon: str | None
     force_startup_focus: bool
     gpu_draw_timer: bool
-    navigation_guard: bool
-    navigation_guard_radius_cells: int
     text_antialiasing_mode: str
     tk_scale: float | None
     ui_font: str | None
@@ -399,10 +397,6 @@ class RuntimeSettings(Mapping[str, RuntimeValue]):
             app_icon=_optional_runtime_text(self["app_icon"]),
             force_startup_focus=_runtime_boolean(self["force_startup_focus"]),
             gpu_draw_timer=_runtime_boolean(self["gpu_draw_timer"]),
-            navigation_guard=_runtime_boolean(self["navigation_guard"]),
-            navigation_guard_radius_cells=_runtime_integer(
-                self["navigation_guard_radius_cells"]
-            ),
             text_antialiasing_mode=_runtime_text(self["text_antialiasing_mode"]),
             tk_scale=_optional_runtime_float(self["tk_scale"]),
             ui_font=_optional_runtime_text(self["ui_font"]),
@@ -914,24 +908,6 @@ RUNTIME_SETTING_SPECS = (
         default=None,
         minimum=512,
         maximum=16384,
-    ),
-    _environment_setting(
-        "navigation_guard",
-        "CAVEVIEWER_NAVIGATION_GUARD",
-        "Keep free-fly navigation near occupied map chunks.",
-        value_type=RuntimeValueType.BOOLEAN,
-        parser=_boolean,
-        default=True,
-    ),
-    _environment_setting(
-        "navigation_guard_radius_cells",
-        "CAVEVIEWER_NAVIGATION_GUARD_RADIUS_CELLS",
-        "Number of cells around occupied map chunks that remain navigable.",
-        value_type=RuntimeValueType.INTEGER,
-        parser=_integer(minimum=0, maximum=12, clamp=True),
-        default=2,
-        minimum=0,
-        maximum=12,
     ),
     _environment_setting(
         "ffmpeg_path",

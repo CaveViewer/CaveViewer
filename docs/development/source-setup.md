@@ -37,7 +37,7 @@ Release packages should include:
 - `LICENSE`
 - `THIRD_PARTY_NOTICES.md`
 
-The application About text should identify CaveViewer as licensed under the GNU General Public License version 3.0.
+The application About text should identify CaveViewer as licensed under the GNU Affero General Public License version 3.0 only.
 
 ## Requirements
 
@@ -76,6 +76,13 @@ intentionally omitted from the PyCharm menu. In particular, **Preview Release**
 is the supported release launcher: it checks the current branch and remote
 state, asks for confirmation, dispatches the repository-owned promotion
 workflow, and watches the exact GitHub Actions run.
+
+For a direct Stable or individual-platform release, run the shared
+**Prepare Release Next** action from checked-out `main`, then fetch and check out
+`release/next` before running **All Platform Release** or the selected
+**… Release** action. Release actions publish metadata only to `release/next`;
+opening, reviewing, and merging the final metadata PR into `main` is always a
+separate maintainer action.
 
 The tracked configurations contain no credentials or machine-specific paths.
 Keep personal settings, interpreter choices, window layout, and local
@@ -411,8 +418,6 @@ runtime snapshot.
 | `CAVEVIEWER_IO_NICE` | environment | `5` | Best-effort positive niceness increment for streaming workers. |
 | `CAVEVIEWER_OBJ_BUCKET_WORKERS` | environment | `2` | Maximum worker count for incremental OBJ bucket preparation. |
 | `CAVEVIEWER_MAX_TEXTURE_SIZE` | environment | _(unset)_ | Optional maximum texture dimension in pixels before decode. |
-| `CAVEVIEWER_NAVIGATION_GUARD` | environment | `True` | Keep free-fly navigation near occupied map chunks. |
-| `CAVEVIEWER_NAVIGATION_GUARD_RADIUS_CELLS` | environment | `2` | Number of cells around occupied map chunks that remain navigable. |
 | `CAVEVIEWER_FFMPEG` | environment | _(unset)_ | Optional explicit ffmpeg executable used by recording. |
 | `CAVEVIEWER_RECORDING_FPS` | environment | `30` | Target MP4 recording frame rate. |
 | `CAVEVIEWER_RECORDING_MAX_HEIGHT` | environment | `720` | Maximum encoded recording height in pixels. |
@@ -458,11 +463,11 @@ runtime snapshot.
 | `CAVEVIEWER_MACOS_ARCH` | _(auto)_ | Low-level macOS packaging override. The top-level release dispatcher uses `--target=macos-arm64` or `--target=macos-x86_64`; normal app update checks detect the running process architecture automatically. |
 | `CAVEVIEWER_LINUX_UPDATE_ARCH` | `x86_64` | Linux publish helper only. Linux distribution is x86_64-only; set to `x86_64` when invoking lower-level publish helpers directly. |
 
-The update checker requires manifests to be signed with the release Ed25519
-private key. The bundled public key lives at
-`src/caveviewer/resources/release_signing_public_key.pem`. Startup update
+The update checker requires manifests to be signed by a trusted release
+Ed25519 identity. The bundled primary, offline-recovery, and retained legacy
+public keys live under `src/caveviewer/resources/`. Startup update
 checks read the branch/channel manifest first; if it advertises a newer version,
-the app verifies the manifest signature and confirms that the package URL
+the app checks those keys in primary, recovery, legacy order and confirms that the package URL
 resolves before offering the download. Missing or invalid signatures and
 unavailable packages are logged and do not expose an update action. An absent
 preview manifest is the normal empty-channel state and likewise leaves the
@@ -637,8 +642,10 @@ python3 scripts/sign_update_manifest.py \
 This writes `updates/macos/arm64/stable.json.sig`. An ARM64 publish copies the
 signed manifest and signature to the top-level legacy aliases. Release publish
 scripts do not use a default private-key path; set
-`CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY` before publishing either channel. When
-signing manually, either set that variable or pass `--private-key`.
+`CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY` to the deliberately selected private
+key before publishing either channel. When signing manually, either set that
+variable or pass `--private-key`; verify it matches the intended bundled public
+identity first.
 
 ### UI & Rendering
 
@@ -688,8 +695,6 @@ compact layout.
 | `CAVEVIEWER_VSYNC` | `1` | Set to `0` to disable vertical sync. Recommended for virtual machines where the virtual display driver can block `swap_buffers()` long enough to freeze the render thread during heavy imports, making the window appear hung. |
 | `CAVEVIEWER_WINDOW_SYSTEM` | `auto` | Linux viewer backend: `auto` prefers X11/XWayland when `DISPLAY` is available so source and AppImage launches get the same GNOME titlebar and resize behavior, then retries Wayland on recognized initialization failures. `wayland` and `x11` require that protocol without fallback. |
 | `LIBGL_ALWAYS_SOFTWARE` | _(unset)_ | Linux OpenGL/Mesa setting. Set to `1` to force software rendering when a VM or GPU driver crashes, freezes, or leaves the app stuck in the graphics driver. |
-| `CAVEVIEWER_NAVIGATION_GUARD` | `1` | Set to `0` to disable the navigation boundary that keeps free-fly movement near occupied map chunks. |
-| `CAVEVIEWER_NAVIGATION_GUARD_RADIUS_CELLS` | `2` | Number of chunk cells around occupied map chunks that remain navigable. Larger values allow more free space around the cave; smaller values keep users closer to rendered chunks. |
 | `CAVEVIEWER_FFMPEG` | _(auto)_ | Path to an `ffmpeg` executable for MP4 recording. If unset, CaveViewer tries system `ffmpeg`, then the bundled `imageio-ffmpeg` executable. |
 | `CAVEVIEWER_RECORDING_DIR` | `~/Movies/CaveViewer` | Folder where saved recordings are stored. The Preferences panel saves this value. |
 | `CAVEVIEWER_MAP_LIBRARY_DIR` | User Downloads folder | Folder where CaveViewer stores downloaded Map Library maps. The Preferences panel saves this value. |

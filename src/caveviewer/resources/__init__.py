@@ -23,8 +23,20 @@ def shader_path(filename: str) -> Path:
     return resource_path("shaders", filename)
 
 
-def release_public_key_path() -> Path:
-    return resource_path("release_signing_public_key.pem")
+RELEASE_PUBLIC_KEY_FILENAMES = {
+    "primary": "release_signing_primary_public_key.pem",
+    "recovery": "release_signing_recovery_public_key.pem",
+    "legacy": "release_signing_legacy_public_key.pem",
+}
+
+
+def release_public_key_path(identity: str = "primary") -> Path:
+    """Return one bundled update-manifest trust root by stable identity."""
+    try:
+        filename = RELEASE_PUBLIC_KEY_FILENAMES[identity]
+    except KeyError as exc:
+        raise ValueError(f"unknown release public-key identity: {identity}") from exc
+    return resource_path(filename)
 
 
 def map_library_catalog_path() -> Path:

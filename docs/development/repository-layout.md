@@ -112,6 +112,8 @@ packaging/windows/CaveViewerSetup.iss          Inno Setup installer definition
 scripts/                                      development and release automation
 scripts/benchmark/                            benchmark comparison helpers and compatibility wrappers
 .run/                                         shared, secret-free JetBrains run configurations
+.aiassistant/rules/                           shared JetBrains AI Chat rule adapters
+docs/development/work/                        selected durable work-definition records
 updates/                                      published update manifests/signatures
 ```
 
@@ -120,6 +122,13 @@ build output, and imported map caches are not repository architecture. They
 must stay untracked. `.run/` is intentionally tracked and contains only shared,
 secret-free JetBrains run configurations; personal IDE state remains in the
 ignored `.idea/` directory.
+
+`.aiassistant/rules/` is intentionally tracked and contains only short,
+secret-free adapters that direct JetBrains AI Chat to the canonical
+`AGENTS.md` hierarchy. Active work definitions stay under ignored root `.work/`
+by default. Plans selected for contributor sharing, pull-request review, or
+durable retention move to `docs/development/work/` and are tracked with their
+implementation.
 
 ## Package layout
 
@@ -157,7 +166,9 @@ CaveViewer/
 │       └── resources/
 │           ├── shaders/
 │           ├── images/
-│           ├── release_signing_public_key.pem
+│           ├── release_signing_primary_public_key.pem
+│           ├── release_signing_recovery_public_key.pem
+│           ├── release_signing_legacy_public_key.pem
 │           ├── map_library_catalog.v1.json
 │           └── cave_metadata_catalog.v1.json
 ├── tests/

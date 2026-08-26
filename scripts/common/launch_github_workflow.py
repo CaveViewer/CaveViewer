@@ -20,7 +20,11 @@ COMMON_SCRIPTS_ROOT = Path(__file__).resolve().parent
 if str(COMMON_SCRIPTS_ROOT) not in sys.path:
     sys.path.insert(0, str(COMMON_SCRIPTS_ROOT))
 
-from next_release_version import next_release_version  # noqa: E402
+from next_release_version import (  # noqa: E402
+    BumpMode,
+    next_release_version,
+    normalize_release_version,
+)
 
 
 def _run(
@@ -122,8 +126,8 @@ def resolve_dispatch_fields(
     return tuple(f"{name}={value}" for name, value in values.items())
 
 
-def next_published_release_version() -> str:
-    """Increment the highest stable or preview GitHub release version."""
+def next_published_release_version(bump: BumpMode = "patch") -> str:
+    """Apply a bump to the highest stable or preview GitHub release version."""
     repository = _output(
         ["gh", "repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"]
     )
@@ -140,7 +144,7 @@ def next_published_release_version() -> str:
         ]
     ).splitlines()
     try:
-        return next_release_version(tags)
+        return next_release_version(tags, bump)
     except ValueError as error:
         raise RuntimeError(
             "No dotted numeric stable or preview GitHub release was found."
@@ -164,7 +168,7 @@ def release_dispatch_fields(
     if selected_channel not in {"stable", "preview"}:
         raise ValueError("Release channel must be 'stable' or 'preview'.")
 
-    reserved = {"publish", "preview"}
+    reserved = {"publish", "preview", "version"}
     explicit_names = {field.partition("=")[0].strip() for field in supplied_fields}
     conflicts = reserved & explicit_names
     if conflicts:
@@ -175,6 +179,33 @@ def release_dispatch_fields(
         "publish=true",
         f"preview={'true' if selected_channel == 'preview' else 'false'}",
     )
+
+
+def select_release_version(
+    bump: BumpMode | None,
+    exact_version: str | None,
+    *,
+    input_fn: Callable[[str], str] = input,
+) -> tuple[str, str]:
+    """Resolve an explicit or interactively selected release version."""
+    if exact_version is not None:
+        normalized = normalize_release_version(exact_version)
+        if normalized != exact_version:
+            raise ValueError(
+                "--version must be a canonical three-component version, "
+                "for example 1.2.3"
+            )
+        return normalized, "exact"
+
+    selected_bump = bump
+    if selected_bump is None:
+        answer = input_fn(
+            "Version bump [patch/minor/major] (patch): "
+        ).strip().lower()
+        selected_bump = answer or "patch"
+    if selected_bump not in {"patch", "minor", "major"}:
+        raise ValueError("Version bump must be 'patch', 'minor', or 'major'.")
+    return next_published_release_version(selected_bump), selected_bump
 
 
 def select_new_workflow_run(
@@ -263,12 +294,22 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--release",
         action="store_true",
-        help="Publish from release/next and reconcile metadata into main.",
+        help="Publish from release/next; metadata reconciliation into main remains manual.",
     )
     parser.add_argument(
         "--channel",
         choices=("stable", "preview"),
         help="Release channel; release mode prompts when omitted.",
+    )
+    version_group = parser.add_mutually_exclusive_group()
+    version_group.add_argument(
+        "--bump",
+        choices=("patch", "minor", "major"),
+        help="Release version increment; release mode prompts when omitted.",
+    )
+    version_group.add_argument(
+        "--version",
+        help="Exact canonical version for a controlled release recovery.",
     )
     parser.add_argument(
         "--field",
@@ -276,8 +317,8 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default=[],
         metavar="NAME=VALUE",
         help=(
-            "Workflow input; repeat as needed. The release version is selected "
-            "automatically unless explicitly supplied."
+            "Workflow input; repeat as needed. Release mode controls version, "
+            "preview, and publish inputs."
         ),
     )
     parser.add_argument(
@@ -300,8 +341,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             supplied_fields = list(
                 release_dispatch_fields(supplied_fields, args.channel)
             )
-        elif args.channel is not None:
-            raise ValueError("--channel requires --release")
+            selected_version, version_mode = select_release_version(
+                args.bump, args.version
+            )
+            supplied_fields.append(f"version={selected_version}")
+            print(f"Version selection: {version_mode} -> {selected_version}.")
+        elif (
+            args.channel is not None
+            or args.bump is not None
+            or args.version is not None
+        ):
+            raise ValueError("--channel, --bump, and --version require --release")
         fields = resolve_dispatch_fields(
             workflow_path,
             supplied_fields,

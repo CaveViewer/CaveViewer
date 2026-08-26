@@ -50,20 +50,35 @@ def _load_generic_launcher_module():
 
 
 @pytest.mark.parametrize(
-    ("candidates", "expected"),
+    ("candidates", "bump", "expected"),
     [
-        (["1.0.89", "v1.0.91", "not-a-release"], "1.0.92"),
-        (["2.4", "2.3.99"], "2.5"),
-        (["1.0.009"], "1.0.10"),
+        (["1.0.89", "v1.0.99", "not-a-release"], "patch", "1.0.100"),
+        (["1.0.89", "v1.0.99"], "minor", "1.1.0"),
+        (["1.0.89", "v1.0.99"], "major", "2.0.0"),
+        (["2.4", "2.3.99"], "patch", "2.4.1"),
+        (["1.0.009"], "patch", "1.0.10"),
     ],
 )
-def test_next_release_version_increments_the_greatest_numeric_candidate(
-    candidates,
-    expected,
+def test_next_release_version_applies_bump_to_greatest_numeric_candidate(
+    candidates, bump, expected
 ):
     module = _load_version_module()
 
-    assert module.next_release_version(candidates) == expected
+    assert module.next_release_version(candidates, bump) == expected
+
+
+def test_next_release_version_rejects_unsupported_component_count():
+    module = _load_version_module()
+
+    with pytest.raises(ValueError, match="two or three components"):
+        module.next_release_version(["1.2.3.4"])
+
+
+def test_next_release_version_rejects_unknown_bump():
+    module = _load_version_module()
+
+    with pytest.raises(ValueError, match="unsupported release version bump"):
+        module.next_release_version(["1.2.3"], "calendar")
 
 
 def test_next_release_version_rejects_an_empty_valid_candidate_set():
@@ -121,14 +136,15 @@ def test_shared_generic_launcher_resolves_release_version_automatically():
 
 
 @pytest.mark.parametrize(
-    ("published_tags", "expected"),
+    ("published_tags", "bump", "expected"),
     [
-        ("1.0.88\n1.0.90", "1.0.91"),
-        ("1.0.92\n1.0.91", "1.0.93"),
+        ("1.0.88\n1.0.90", "patch", "1.0.91"),
+        ("1.0.92\n1.0.91", "minor", "1.1.0"),
+        ("1.0.92\n1.0.91", "major", "2.0.0"),
     ],
 )
 def test_shared_generic_launcher_increments_highest_published_release(
-    monkeypatch, published_tags, expected
+    monkeypatch, published_tags, bump, expected
 ):
     launcher = _load_generic_launcher_module()
     commands = []
@@ -141,7 +157,7 @@ def test_shared_generic_launcher_increments_highest_published_release(
 
     monkeypatch.setattr(launcher, "_output", fake_output)
 
-    assert launcher.next_published_release_version() == expected
+    assert launcher.next_published_release_version(bump) == expected
     assert commands[1] == [
         "gh",
         "api",
@@ -194,11 +210,68 @@ def test_shared_generic_launcher_release_mode_controls_publish_contract(
     assert not any(field.startswith("reconcile_metadata=") for field in fields)
 
 
-def test_shared_generic_launcher_release_mode_rejects_flag_overrides():
+@pytest.mark.parametrize("field", ("publish=false", "preview=false", "version=1.2.3"))
+def test_shared_generic_launcher_release_mode_rejects_flag_overrides(field):
     launcher = _load_generic_launcher_module()
 
     with pytest.raises(ValueError, match="controls workflow input"):
-        launcher.release_dispatch_fields(["publish=false"], "preview")
+        launcher.release_dispatch_fields([field], "preview")
+
+
+@pytest.mark.parametrize(
+    ("bump", "answer", "expected_version", "expected_mode"),
+    [
+        ("patch", "unused", "1.0.100", "patch"),
+        ("minor", "unused", "1.1.0", "minor"),
+        ("major", "unused", "2.0.0", "major"),
+        (None, "", "1.0.100", "patch"),
+        (None, "minor", "1.1.0", "minor"),
+    ],
+)
+def test_shared_generic_launcher_selects_explicit_or_interactive_bump(
+    monkeypatch, bump, answer, expected_version, expected_mode
+):
+    launcher = _load_generic_launcher_module()
+    monkeypatch.setattr(
+        launcher,
+        "next_published_release_version",
+        lambda selected_bump: {
+            "patch": "1.0.100",
+            "minor": "1.1.0",
+            "major": "2.0.0",
+        }[selected_bump],
+    )
+
+    assert launcher.select_release_version(
+        bump, None, input_fn=lambda _prompt: answer
+    ) == (expected_version, expected_mode)
+
+
+def test_shared_generic_launcher_exact_version_is_canonical_and_does_not_lookup(
+    monkeypatch,
+):
+    launcher = _load_generic_launcher_module()
+    monkeypatch.setattr(
+        launcher,
+        "next_published_release_version",
+        lambda _bump: pytest.fail("exact recovery must not select a new version"),
+    )
+
+    assert launcher.select_release_version(None, "1.0.99") == (
+        "1.0.99",
+        "exact",
+    )
+    with pytest.raises(ValueError, match="canonical three-component"):
+        launcher.select_release_version(None, "v1.0.99")
+
+
+def test_shared_generic_launcher_rejects_invalid_interactive_bump():
+    launcher = _load_generic_launcher_module()
+
+    with pytest.raises(ValueError, match="Version bump must be"):
+        launcher.select_release_version(
+            None, None, input_fn=lambda _prompt: "exact"
+        )
 
 
 def test_shared_generic_launcher_passes_resolved_fields_to_gh(monkeypatch):
@@ -277,7 +350,7 @@ def test_shared_generic_launcher_release_mode_dispatches_complete_preview(monkey
     monkeypatch.setattr(launcher, "_preflight", lambda _workflow: "release/next")
     monkeypatch.setattr(launcher, "_list_runs", lambda _workflow, _branch: [])
     monkeypatch.setattr(
-        launcher, "next_published_release_version", lambda: "1.0.94"
+        launcher, "next_published_release_version", lambda _bump: "1.0.94"
     )
     monkeypatch.setattr(
         launcher,
@@ -297,6 +370,8 @@ def test_shared_generic_launcher_release_mode_dispatches_complete_preview(monkey
             "--release",
             "--channel",
             "preview",
+            "--bump",
+            "patch",
         ]
     )
 
@@ -405,9 +480,25 @@ def test_release_documentation_preserves_branch_and_pycharm_policy():
     assert "Every `publish: true` release" in releases
     assert "must run from `release/next`" in releases
     assert "merge `release/next` back into protected `main`" in releases
+    assert "No workflow creates, approves, or merges" in releases
+    assert "do not select or publish a newer version" in releases
+    assert "Prepare Release Next" in source_setup
+    assert "final metadata PR into `main` is always" in source_setup
     assert "No third-party GitHub Actions PyCharm plug-in" in source_setup
     assert "Preview Release" in source_setup
     assert "never add `GH_TOKEN`" in source_setup
+
+
+def test_release_launcher_describes_manual_metadata_reconciliation(capsys):
+    module = _load_generic_launcher_module()
+
+    with pytest.raises(SystemExit) as exc_info:
+        module._parse_args(["--help"])
+
+    assert exc_info.value.code == 0
+    help_output = capsys.readouterr().out
+    assert "metadata reconciliation" in help_output
+    assert "into main remains manual" in help_output
 
 
 def test_preview_promotion_workflow_is_manual_serial_and_write_scoped():

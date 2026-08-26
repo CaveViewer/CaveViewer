@@ -322,7 +322,9 @@ CAVEVIEWER_APP_ICON="" \
   --collect-all=glfw \
   --add-data "$repo_root/src/caveviewer/resources/shaders:caveviewer/resources/shaders" \
   --add-data "$repo_root/src/caveviewer/resources/images:caveviewer/resources/images" \
-  --add-data "$repo_root/src/caveviewer/resources/release_signing_public_key.pem:caveviewer/resources" \
+  --add-data "$repo_root/src/caveviewer/resources/release_signing_primary_public_key.pem:caveviewer/resources" \
+  --add-data "$repo_root/src/caveviewer/resources/release_signing_recovery_public_key.pem:caveviewer/resources" \
+  --add-data "$repo_root/src/caveviewer/resources/release_signing_legacy_public_key.pem:caveviewer/resources" \
   --add-data "$repo_root/src/caveviewer/resources/cave_metadata_catalog.v1.json:caveviewer/resources" \
   --add-data "$release_metadata_path:caveviewer/resources" \
   --add-data "$repo_root/LICENSE:." \

@@ -13,9 +13,11 @@ developer feature branch or directly from `main`:
 1. Merge the intended source branch into protected `main` through a pull
    request after every required Essential Tests status check succeeds against
    the current base.
-2. Merge the resulting `main` into `release/next`. Every `publish: true` release
-   build must run from `release/next`; this is the only release-producing
-   branch.
+2. Run the protected **Prepare Release Next** workflow from `main`. Its approved
+   release App fast-forwards `release/next` to that exact protected `main` tip.
+   Every `publish: true` release build must run from `release/next`; this is the
+   only release-producing branch. Contributors do not push this synchronization
+   directly.
 3. After the finalizer commits version, AppStream, and signed update metadata to
    `release/next`, merge `release/next` back into protected `main` through a
    second pull request. The metadata PR must pass its required lightweight
@@ -77,7 +79,10 @@ release artifact. The DMGs and AppImages are bundled applications.
 GitHub automatically provides its own source-code ZIP and tarball for each tag.
 `scripts/common/package_source.sh` can create
 `CaveViewer-<version>-source.tar.gz` locally, but the current release workflows
-do not upload that tarball as a release asset.
+do not upload that tarball as a release asset. Each published `v<version>` tag
+is the corresponding-source reference for that exact release; post-release
+verification must confirm that it resolves to the immutable workflow source.
+Every packaged application retains `LICENSE` and `THIRD_PARTY_NOTICES.md`.
 
 ## Channels and update paths
 
@@ -91,6 +96,33 @@ prerelease flag, and the `preview.json` channel—not by a version suffix.
 GitHub workflow inputs must use the bare numeric version, not `v1.0.64`.
 Artifact upload paths use that input verbatim. Local release scripts normalize
 an optional leading `v`, and GitHub uses the tag `v<version>`.
+
+### Version increment policy
+
+CaveViewer uses `MAJOR.MINOR.PATCH` product versions. The components are
+independent integer counters, not decimal digits:
+
+- **PATCH** is the default for every ordinary published build. It is unbounded,
+  so `1.0.99` becomes `1.0.100`; it never rolls over automatically.
+- **MINOR** is an explicit feature milestone. It increments MINOR and resets
+  PATCH, so selecting minor after `1.0.99` produces `1.1.0`.
+- **MAJOR** is an explicit incompatible product, persisted-data, or update-system
+  generation. It increments MAJOR and resets the other components, so selecting
+  major after `1.0.99` produces `2.0.0`.
+
+Preview and stable are channels, not version components. Automatic selection
+uses the greatest non-draft numeric GitHub Release from either channel, ensuring
+every new release is newer than all published Preview and stable releases.
+Historical two-component versions are treated as having a zero patch component
+for bump calculation; new publication inputs must use canonical three-component
+form. Versions with more than three components require an explicit migration
+rather than an inferred bump.
+
+The shared PyCharm release actions prompt for `patch`, `minor`, or `major`, with
+patch as the default. Scripted callers can pass `--bump patch`, `--bump minor`,
+or `--bump major`. `--version MAJOR.MINOR.PATCH` is CLI-only and reserved for
+resuming an interrupted existing release from the same immutable source and
+channel. It is not a general override for choosing a new lower version.
 
 - A stable publish updates `stable.json`. A newly created GitHub release is a
   normal release.
@@ -262,16 +294,46 @@ merges a pull request.
 Stable and individual-platform publishing use the same branch topology:
 
 1. Merge the release candidate into `main` through its fully gated source PR.
-2. Merge current `main` into `release/next` and push `release/next`.
-3. From checked-out `release/next`, run the tracked PyCharm **All Platform
-   Release** or desired **Release …** platform action. The launcher selects the
-   next version automatically, asks for `preview` or `stable` with Preview as
-   the default, and explicitly enables publication.
+2. From checked-out `main`, run the tracked PyCharm **Prepare Release Next**
+   action. Wait for it to fast-forward protected `release/next` successfully;
+   do not push `release/next` with a contributor credential.
+3. Fetch and check out the prepared `release/next`, then run the tracked
+   PyCharm **All Platform
+   Release** or desired **Release …** platform action. The launcher asks for a
+   `patch`, `minor`, or `major` increment with Patch as the default, derives it
+   from the greatest stable or Preview release, asks for `preview` or `stable`
+   with Preview as the default, and explicitly enables publication.
 4. Wait for the workflow's Essential Tests and every package validation to
    succeed for the immutable release source.
 5. After successful publication, manually open, review, and merge the
    `release/next` to `main` metadata PR after its required checks pass. Do not
    start another release first.
+
+### Manual metadata reconciliation
+
+No workflow creates, approves, or merges the final metadata pull request. After
+publication succeeds, a maintainer performs this gate explicitly:
+
+```bash
+git fetch origin main release/next
+gh pr create \
+  --base main \
+  --head release/next \
+  --title "Reconcile release metadata" \
+  --body "Merge the published release metadata from release/next."
+gh pr checks --watch "$(gh pr view release/next --json number --jq .number)"
+```
+
+Review the diff and confirm it contains only the expected version, AppStream,
+changelog, and signed update-manifest metadata. Merge the PR through the normal
+protected-branch control only after every required check succeeds. The next
+release starts with **Prepare Release Next**, which fast-forwards
+`release/next` to the newly reconciled `main` tip. PyCharm's bundled pull-request
+support or the GitHub website may be used for this human review; no workflow
+plug-in or stored IDE token is required.
+
+If a pull request for `release/next` is already open, review and use that PR
+instead of opening a duplicate.
 
 For package-only validation, dispatch through GitHub and clear `publish`, or use
 the package-smoke workflow. GitHub retains workflow artifacts without creating
@@ -291,6 +353,25 @@ publishing, merge its release-metadata pull request into `main`, then synchroniz
 rejects a release target whose version, AppStream, or update metadata differs
 from `origin/main`; this prevents multiple unmerged AppStream release entries
 from accumulating in one pull request.
+
+If publication succeeds but reconciliation is interrupted, stop the release
+queue: do not select or publish a newer version. Fetch both branches and inspect
+the published workflow summary, GitHub Release, and `origin/release/next`:
+
+- If the finalizer's metadata commit is on `release/next`, open or resume the
+  manual metadata PR above and merge it after required checks pass.
+- If assets exist but no metadata commit reached `release/next`, the release is
+  not advertised to updaters. Preserve the immutable source and inspect the
+  failed finalizer. After correcting the failure, manually dispatch the same
+  release workflow with the same numeric version, channel, platform set, and
+  `publish: true`; do not let the automatic next-version launcher skip to a new
+  version. The finalizer must verify the existing remote assets and create the
+  one metadata commit before reconciliation.
+- If metadata has reached `main` but `release/next` is behind it, run **Prepare
+  Release Next**. Do not repair either protected branch with a force push.
+
+Resume normal version selection only when the metadata PR is merged and
+**Prepare Release Next** reports that `release/next` matches protected `main`.
 
 An intentionally partial platform publish may be resumed with the same version:
 the finalizer permits that only when the branch has exactly one new AppStream
@@ -357,17 +438,77 @@ revisions. Finalizers from complete and individual platform workflows share a
 branch-level concurrency lock.
 
 The `production-release` environment secret
-`CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY` must contain the Ed25519 private key
-used for update manifests. Only the approved finalizer resolves this secret;
-callers and package-only jobs cannot forward or receive it.
+`CAVEVIEWER_RELEASE_PRIMARY_PRIVATE_KEY` contains the Ed25519 private key used
+for normal update manifests. `CAVEVIEWER_RELEASE_RECOVERY_PRIVATE_KEY` is
+uploaded only for a controlled recovery operation, then removed; its durable
+copy remains offline. `CAVEVIEWER_RELEASE_LEGACY_PRIVATE_KEY` is optional and
+must be added only if the original private key is recovered and proves an exact
+match to the retained legacy public key. Each publisher's finalizer call
+explicitly inherits secrets across GitHub's reusable-workflow boundary, but
+only the called finalizer attaches the approved environment and resolves the
+one value selected by `signing_identity`. Package, test, and artifact-only jobs
+neither inherit nor receive release secrets. Before downloading release
+artifacts or publishing anything, the finalizer derives the selected private
+key's Ed25519 public key and requires an exact match with the corresponding
+`primary`, `recovery`, or `legacy` bundled public key. A missing, malformed,
+wrong-type, or mismatched key fails without creating a release or metadata.
+
+The updater checks the primary, recovery, and legacy public keys in that order.
+The first successful Ed25519 verification authenticates the exact manifest
+bytes. Key-selection details are logged but never shown in update labels or
+dialogs. Missing or malformed individual trust roots do not disable the others;
+an unsigned manifest or one rejected by all three keys exposes no update action.
+The legacy public key preserves the trust root used by older installations. If
+its private key remains unavailable, those installations require a manual
+bootstrap installation before they can trust the new primary and recovery
+keys.
+
+### Signing identities and recovery
+
+Normal GitHub releases leave **Manifest signing identity** set to `primary`.
+Selecting `recovery` is an emergency operation that requires explicit
+`production-release` approval and the temporary presence of
+`CAVEVIEWER_RELEASE_RECOVERY_PRIVATE_KEY`. Select `legacy` only after recovering
+the original key and proving it matches
+`release_signing_legacy_public_key.pem`. The workflow validates the selected
+identity before creating publisher credentials and fails before artifact
+download when its secret is absent or does not match.
+
+Generate primary and recovery pairs independently. Keep the output directory
+outside the repository and protect private files with mode `0600`:
+
+```bash
+openssl genpkey -algorithm Ed25519 -out primary-private.pem
+openssl pkey -in primary-private.pem -pubout -out primary-public.pem
+openssl genpkey -algorithm Ed25519 -out recovery-private.pem
+openssl pkey -in recovery-private.pem -pubout -out recovery-public.pem
+chmod 600 primary-private.pem recovery-private.pem
+```
+
+Commit only the public files after reviewing their fingerprints. Store the
+primary private key in the protected environment:
+
+```bash
+gh secret set CAVEVIEWER_RELEASE_PRIMARY_PRIVATE_KEY \
+  --repo CaveViewer/CaveViewer \
+  --env production-release \
+  < primary-private.pem
+```
+
+Keep the recovery private key offline. Upload it under
+`CAVEVIEWER_RELEASE_RECOVERY_PRIVATE_KEY` only for a recovery exercise or
+release, and delete that environment secret afterward. GitHub does not reveal
+stored secret values, so retain separately controlled offline copies and test
+the recovery procedure periodically. The GitHub App private key is a different
+credential and must never be used as a manifest-signing key.
 
 The GitHub release workflows do not currently offer an Authenticode signing
 path. Selecting `publish` for Windows automatically builds the same named EXE
 on `windows-latest`, marks its package metadata `unsigned-community`, and
 permits the finalizer to publish it. The finalizer verifies the installer size
 and SHA-256 locally and again against GitHub's uploaded asset metadata, then
-signs the Windows update manifest with
-`CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY`. Installed CaveViewer applications
+signs the Windows update manifest with the explicitly selected protected
+signing identity. Installed CaveViewer applications
 verify that manifest signature and require an explicit `Install and restart`
 click before launching the downloaded installer. This does not remove Windows
 SmartScreen or unknown-publisher warnings; users must accept those warnings
@@ -440,6 +581,22 @@ branch or `main`. Use the same
 `release/next` commit, version, release notes, `publish`, and `preview` values
 when resuming an intentionally partial release.
 
+For a controlled resume through the common launcher, pass the already-created
+canonical version explicitly:
+
+```bash
+python scripts/common/launch_github_workflow.py \
+  --workflow linux-x86_64-release.yml \
+  --release \
+  --channel preview \
+  --version 1.0.100
+```
+
+Before tests or packaging, the workflow permits that exact version only when
+the existing GitHub Release has the requested channel and its tag resolves to
+the workflow's immutable source SHA. A lower version, channel mismatch, or tag
+from another source fails immediately.
+
 An all-platform build failure does not publish any platform or manifest because
 the finalizer requires all four package jobs to succeed. Inspect the retained
 workflow artifacts and correct the failure before rerunning All Platform
@@ -478,7 +635,8 @@ already passed. `--preview` is valid with `build`, `package`, and
 `release`; it selects the preview metadata embedded in every resulting
 package, while `release` also marks the GitHub release as a preview.
 Publishing also requires an authenticated GitHub CLI and a local
-`CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY`; local recovery publication cannot
+`CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY` pointing to the deliberately selected
+private key; local recovery publication cannot
 read GitHub environment secrets.
 Local publishing is an exceptional recovery path, not the normal contributor
 workflow. If it is required, check out synchronized `release/next`, publish
@@ -493,7 +651,8 @@ same required-check PR. Never publish locally from `main` or a feature branch.
 - Confirm `src/caveviewer/version.py` contains the released version.
 - Confirm every platform/channel manifest contains the expected version, URL,
   byte size, and SHA-256.
-- Verify every platform's `.json.sig` files with the bundled public key.
+- Verify every platform's `.json.sig` files with the selected bundled public
+  key and confirm the finalizer summary records the intended signing identity.
 - Confirm macOS legacy aliases still match the ARM64 manifests and signatures.
 - Confirm the selected branch contains the single release metadata commit and
   has no unexpected generated files.

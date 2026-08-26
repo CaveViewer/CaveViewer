@@ -80,6 +80,9 @@ def test_platform_release_workflows_package_immutable_source_before_finalizing()
         assert "workflow_call:" in workflow, workflow_name
         assert "publish:" in workflow, workflow_name
         assert "preview:" in workflow, workflow_name
+        assert "signing_identity:" in workflow, workflow_name
+        assert "options: [primary, recovery, legacy]" in workflow, workflow_name
+        assert "signing_identity: ${{ inputs.signing_identity }}" in workflow, workflow_name
         assert "CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY" not in workflow, workflow_name
         assert "uses: ./.github/workflows/tests.yml" in workflow, workflow_name
         assert "needs: essential-tests" in workflow, workflow_name
@@ -111,6 +114,40 @@ def test_platform_release_workflows_package_immutable_source_before_finalizing()
         assert "default: true" in dispatch_contract
         assert "Require release/next for publication" in workflow
         assert 'run: test "$RELEASE_BRANCH" = "release/next"' in workflow
+        assert "Validate release version before packaging" in workflow
+        assert "bash scripts/common/validate_release_workflow.sh" in workflow
+        assert "RELEASE_VERSION: ${{ inputs.version }}" in workflow
+        assert "RELEASE_PREVIEW: ${{ inputs.preview }}" in workflow
+        assert workflow.index("Validate release version before packaging") < workflow.index(
+            "uses: ./.github/workflows/tests.yml"
+        )
+
+
+def test_release_version_guard_validates_exact_resume_identity():
+    guard = (
+        REPOSITORY_ROOT / "scripts" / "common" / "validate_release_workflow.sh"
+    ).read_text(encoding="utf-8")
+
+    assert "select(.draft == false)" in guard
+    assert 'if [ "$classification" = "new" ]' in guard
+    assert "--json isPrerelease" in guard
+    assert 'if [ "$existing_preview" != "$RELEASE_PREVIEW" ]' in guard
+    assert "ls-remote --exit-code origin" in guard
+    assert 'tag_source_sha="$(git -C "$repo_root" rev-list -n 1 "$tag")"' in guard
+    assert 'if [ "$tag_source_sha" != "$RELEASE_SOURCE_SHA" ]' in guard
+
+
+def test_all_platform_release_validates_version_before_essential_tests():
+    workflow = (WORKFLOWS_DIR / "all-platform-release.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "Validate release version before packaging" in workflow
+    assert "bash scripts/common/validate_release_workflow.sh" in workflow
+    assert "RELEASE_SOURCE_SHA: ${{ github.sha }}" in workflow
+    assert workflow.index("Validate release version before packaging") < workflow.index(
+        "uses: ./.github/workflows/tests.yml"
+    )
 
 
 def test_release_channel_is_forwarded_to_all_platform_package_builds():
@@ -521,7 +558,7 @@ def test_all_platform_release_workflow_builds_platforms_in_parallel_then_finaliz
     assert "needs.essential-tests.result == 'success'" in workflow
     assert workflow.count("skip_essential_tests: true") == len(job_contracts)
     assert workflow.count("publish: false") == len(job_contracts)
-    assert "secrets: inherit" not in workflow
+    assert workflow.count("secrets: inherit") == 1
 
     job_positions = []
     for index, (job_name, called_workflow) in enumerate(job_contracts):
@@ -537,6 +574,7 @@ def test_all_platform_release_workflow_builds_platforms_in_parallel_then_finaliz
         assert "needs: essential-tests" in job_block
         assert "needs.essential-tests.result == 'success'" in job_block
         assert "permissions:\n      contents: read" in job_block
+        assert "secrets: inherit" not in job_block
         assert "publish: false" in job_block
         assert "source_sha: ${{ github.sha }}" in job_block
         if job_name == "windows":
@@ -557,8 +595,10 @@ def test_all_platform_release_workflow_builds_platforms_in_parallel_then_finaliz
     assert "platforms: all" in finalizer
     assert "source_sha: ${{ github.sha }}" in finalizer
     assert "target_branch: ${{ github.ref_name }}" in finalizer
+    assert "signing_identity: ${{ inputs.signing_identity }}" in finalizer
     assert "allow_unsigned_windows_community: ${{ inputs.publish }}" in finalizer
     assert "permissions:\n      contents: read" in finalizer
+    assert "secrets: inherit" in finalizer
     assert "inputs.publish && !cancelled()" in finalizer
     dispatch_contract = workflow.split("\njobs:\n", 1)[0]
     assert "allow_unsigned_windows_community" not in dispatch_contract
@@ -588,6 +628,24 @@ def test_release_finalizer_is_the_single_shared_state_writer():
     assert "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8" in workflow
     assert "merge-multiple: true" in workflow
     assert "CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY" in workflow
+    for identity in ("PRIMARY", "RECOVERY", "LEGACY"):
+        secret_name = f"CAVEVIEWER_RELEASE_{identity}_PRIVATE_KEY"
+        assert workflow.count(secret_name) == 2
+    assert "options: [primary, recovery, legacy]" not in workflow
+    assert 'default: primary' in workflow
+    assert 'primary|recovery|legacy' in workflow
+    assert workflow.index("Validate signing identity") < workflow.index(
+        "Create release publisher token"
+    )
+    for identity in ("primary", "recovery", "legacy"):
+        assert f"inputs.signing_identity == '{identity}'" in workflow
+        assert (
+            f"release_signing_{identity}_public_key.pem" in workflow
+        )
+    assert "scripts/verify_release_signing_key.py" in workflow
+    assert workflow.index("Verify release signing key pair") < workflow.index(
+        "Download platform packages"
+    )
     assert "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0" in workflow
     assert "app-id: ${{ secrets.CAVEVIEWER_RELEASE_APP_ID }}" in workflow
     assert "private-key: ${{ secrets.CAVEVIEWER_RELEASE_APP_PRIVATE_KEY }}" in workflow
@@ -665,8 +723,13 @@ def test_every_release_publisher_uses_the_protected_finalizer_environment():
     for workflow_name in publisher_workflows:
         workflow = (WORKFLOWS_DIR / workflow_name).read_text(encoding="utf-8")
         assert "uses: ./.github/workflows/finalize-release.yml" in workflow
+        finalizer_call = workflow[workflow.index("uses: ./.github/workflows/finalize-release.yml") :]
+        assert "secrets: inherit" in finalizer_call.split("    with:\n", 1)[0]
         assert "gh release create" not in workflow
         assert "CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY" not in workflow
+        assert "CAVEVIEWER_RELEASE_PRIMARY_PRIVATE_KEY" not in workflow
+        assert "CAVEVIEWER_RELEASE_RECOVERY_PRIVATE_KEY" not in workflow
+        assert "CAVEVIEWER_RELEASE_LEGACY_PRIVATE_KEY" not in workflow
         assert "CAVEVIEWER_RELEASE_APP_ID" not in workflow
         assert "CAVEVIEWER_RELEASE_APP_PRIVATE_KEY" not in workflow
 
@@ -972,6 +1035,8 @@ def test_essential_workflow_reuses_validation_for_release_metadata_only_prs():
     assert "env.RUN_SOURCE_TESTS != 'true'" not in metadata_step
     assert 'git diff --check "$PR_BASE_SHA...$PR_HEAD_SHA"' in workflow
     assert "version.py changes more than APP_VERSION; run the source suites." in workflow
+    assert "appstream_releases_changed(" in workflow
+    assert "version_changed != appstream_release_changed" in workflow
     assert "AppStream metadata changes more than one prepended release entry." in workflow
     assert "Manifest changed without its signature:" in workflow
     assert 're.fullmatch(r"\\d+(?:\\.\\d+)+", current_version)' in workflow

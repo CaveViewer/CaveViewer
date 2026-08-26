@@ -21,6 +21,12 @@ on:
         required: false
         type: boolean
         default: true
+      signing_identity:
+        description: "Manifest signing identity"
+        required: false
+        type: choice
+        options: [primary, recovery, legacy]
+        default: primary
   workflow_call:
     inputs:
       version:
@@ -42,6 +48,11 @@ on:
         required: false
         type: boolean
         default: false
+      signing_identity:
+        description: "Manifest signing identity"
+        required: false
+        type: string
+        default: primary
       allow_unsigned_windows_community:
         description: "Mark a package as unsigned-community when publication is finalized by the calling workflow"
         required: false
@@ -77,6 +88,20 @@ jobs:
         env:
           RELEASE_BRANCH: ${{ github.ref_name }}
         run: test "$RELEASE_BRANCH" = "release/next"
+      - name: Check out the immutable release source
+        if: ${{ inputs.publish }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+      - name: Validate release version before packaging
+        if: ${{ inputs.publish }}
+        env:
+          CAVEVIEWER_GITHUB_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_PREVIEW: ${{ inputs.preview }}
+          RELEASE_SOURCE_SHA: ${{ inputs.source_sha || github.sha }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: bash scripts/common/validate_release_workflow.sh
 
   essential-tests:
     needs: validate-release-branch
@@ -168,6 +193,7 @@ jobs:
     needs: build-windows
     if: ${{ !cancelled() && inputs.publish && needs.build-windows.result == 'success' }}
     uses: ./.github/workflows/finalize-release.yml
+    secrets: inherit
     permissions:
       contents: read
     with:
@@ -177,4 +203,5 @@ jobs:
       platforms: windows
       source_sha: ${{ inputs.source_sha || github.sha }}
       target_branch: ${{ github.ref_name }}
+      signing_identity: ${{ inputs.signing_identity }}
       allow_unsigned_windows_community: ${{ inputs.publish || inputs.allow_unsigned_windows_community }}

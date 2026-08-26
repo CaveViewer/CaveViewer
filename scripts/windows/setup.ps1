@@ -337,7 +337,7 @@ $logBox.BorderStyle = "FixedSingle"
 $form.Controls.Add($logBox)
 
 $footerLabel = New-Object System.Windows.Forms.Label
-$footerLabel.Text = "Licensed under GNU GPLv3. See LICENSE and THIRD_PARTY_NOTICES.md included with this setup folder."
+$footerLabel.Text = "GNU AGPLv3-only. LICENSE and THIRD_PARTY_NOTICES.md are included."
 $footerLabel.Font = $FontSmall
 $footerLabel.ForeColor = $ColorMuted
 $footerLabel.Location = Point-S 28 500
@@ -1189,7 +1189,7 @@ Write-Log "Setup log is retained at: $SetupLogPath"
 if ($IoWorkers -gt 0) {
     Write-Log "Runtime worker override enabled: CAVEVIEWER_IO_WORKERS=$IoWorkers"
 }
-Write-Log "CaveViewer is licensed under the GNU General Public License v3.0."
+Write-Log "CaveViewer is licensed under the GNU Affero General Public License v3.0 only."
 Write-Log "License files are included with this setup folder: LICENSE and THIRD_PARTY_NOTICES.md."
 Write-Log "Setup does not change system Python, PATH, firewall, or administrator-owned locations."
 
