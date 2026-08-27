@@ -13,15 +13,14 @@ developer feature branch or directly from `main`:
 1. Merge the intended source branch into protected `main` through a pull
    request after every required Essential Tests status check succeeds against
    the current base.
-2. Run the protected **Prepare Release Next** workflow from `main`. Its approved
-   release App fast-forwards `release/next` to that exact protected `main` tip.
-   Every `publish: true` release build must run from `release/next`; this is the
-   only release-producing branch. Contributors do not push this synchronization
-   directly.
+2. Run **Create Preview Release** or **Create Stable Release** from a clean,
+   synchronized `main`. The approved release App fast-forwards `release/next`
+   to that exact protected `main` tip. Every `publish: true` build still runs
+   from `release/next`; contributors do not manipulate that branch directly.
 3. After the finalizer commits version, AppStream, and signed update metadata to
-   `release/next`, merge `release/next` back into protected `main` through a
-   second pull request. The metadata PR must pass its required lightweight
-   release-metadata validation before merge.
+   `release/next`, review the automatically opened pull request back into
+   protected `main`. The workflow never merges it; the metadata PR must pass
+   its required release-metadata validation and human review before merge.
 
 The repository ruleset requires pull requests and strict required status
 checks for `main`; nobody has a bypass. A branch that passed against an older
@@ -29,10 +28,9 @@ checks for `main`; nobody has a bypass. A branch that passed against an older
 accumulate a second release while metadata from the preceding release remains
 unmerged.
 
-Contributors using PyCharm should run the tracked **Preview Release** promotion
-or the appropriate **Release …** platform configuration from `.run/`. These are
-the supported local front ends to the repository-owned release automation and
-GitHub CLI. Keep personal IDE state in
+Contributors using PyCharm should normally run only **Create Preview Release**
+or **Create Stable Release** from `.run/`. Low-level branch and platform actions
+are grouped under **Release Actions - Advanced Recovery**. Keep personal IDE state in
 ignored `.idea/` files, authenticate locally with `gh auth login`, and do not
 store tokens in a run configuration. A GitHub Actions IDE plug-in is not
 required or recommended for dispatching releases; PyCharm's bundled GitHub
@@ -230,89 +228,92 @@ release it is dispatched on `release/next`, never on `main` or a feature branch.
 Package-only (`publish: false`) validation may run on another branch because it
 does not create a release or commit release metadata.
 
-### One-action Preview promotion
+### One-action release promotion
 
-Use **Preview Release Promotion** when a validated feature branch is ready to
-become the next Preview. The selected source branch must already be present in
-protected `main`; all publication still occurs exclusively from `release/next`.
+Use **Release Promotion** after all intended changes have reached protected
+`main`. The selected source is one exact `origin/main` revision; all publication
+still occurs exclusively from `release/next`.
 
-From a local checkout of the branch to release, one command starts the entire
+From a clean, fully pushed checkout of `main`, one command starts the entire
 promotion:
 
 ```bash
 gh workflow run preview-release-promotion.yml \
   --ref main \
-  -f source_branch="$(git branch --show-current)" \
-  -f release_notes="Describe this Preview"
+  -f main_sha="$(git rev-parse origin/main)" \
+  -f channel=preview \
+  -f bump=patch \
+  -f release_notes="Describe this release"
 ```
 
-The preferred entry point is PyCharm's shared **Preview Release** run
-configuration. It validates that the current feature branch is
-clean and fully pushed, prompts for optional notes and an explicit confirmation,
-dispatches the same workflow, resolves the exact new run, and watches it to
-completion. The configuration is stored in the tracked `.run/` directory; it
-contains no token, account name, personal path, or release secret.
+The preferred entry points are PyCharm's shared **Create Preview Release** and
+**Create Stable Release** configurations. Each requires checked-out `main` to
+be clean and exactly equal to `origin/main`, calculates and displays the next
+patch version, prompts for optional notes and a yes/no confirmation, dispatches
+that exact revision and version, and watches the run to completion.
 
 The `gh workflow run` command above is the supported terminal fallback. The
-GitHub Actions web interface exposes the same `source_branch` and
-`release_notes` inputs, but contributors should normally use the shared
-PyCharm configuration so its clean-tree, pushed-branch, confirmation, and exact
-run-tracking checks are not skipped. When dispatching manually, run the
-promotion workflow definition from `main` and explicitly name the feature
-source branch.
+GitHub Actions exposes the same `main_sha`, `channel`, `bump`, `version`, and
+`release_notes` inputs, but contributors should normally use PyCharm so its
+clean-tree, synchronized-main, confirmation, and exact run-tracking checks are
+not skipped. A blank web `main_sha` uses the selected workflow revision; a blank
+`version` lets the workflow select the requested increment.
 
-The promotion is Preview-only and performs one strictly ordered sequence:
+The promotion performs one strictly ordered sequence for either channel:
 
 1. Confirm `release/next` has no release metadata still missing from `main`.
-2. Confirm the selected source branch tip is already reachable from `main`.
+2. Confirm the requested revision is still the current `origin/main` tip.
 3. Merge current `main` into `release/next` and push that exact source.
-4. Choose one greater patch version from the current application version and
-   all existing numeric GitHub release tags (including tags without a release).
-5. Dispatch **All Platform Release** on `release/next` with `preview` and
-   `publish` enabled, then wait for its complete Essential Tests and package run.
-6. Report the release, source SHA, metadata commit, and compare URL. A
-   maintainer opens, reviews, and merges `release/next` into `main` manually.
+4. Verify the displayed patch, minor, or major version against the current
+   application version and every numeric GitHub release or tag.
+5. Dispatch **All Platform Release** on `release/next` with the selected channel
+   and publication enabled, then wait for Essential Tests and every package.
+6. Create or reuse the `release/next` metadata PR and report its review link. A
+   maintainer reviews and merges it only after required checks pass.
 
-Every mutation follows a successful preflight or workflow. A source branch not
-already present in `main` leaves both long-lived branches unchanged. A failed
+Every mutation follows a successful preflight or workflow. If `main` advances
+after dispatch, the workflow stops before changing `release/next`. A failed
 package workflow remains visible in **All Platform Release**. Rerun only after
 correcting the reported failure. The repository-wide promotion concurrency
-group prevents two Preview promotions from overlapping.
+group prevents two release promotions from overlapping.
 
-The workflow intentionally rejects `main` and `release/next` as source-branch
-inputs. It also refuses to begin while `release/next` differs from `main`; merge
-the preceding release-metadata PR first. This prevents two release versions
-from accumulating on the long-lived release branch.
+The workflow accepts only a precise protected `main` revision. It also refuses
+to begin when `release/next` contains commits not yet present in `main`; merge
+the preceding release-metadata PR first. `main` may safely be ahead, because the
+workflow fast-forwards `release/next` to the selected revision. This prevents
+two release versions from accumulating on the long-lived release branch.
 
-The orchestrator needs `actions: write` to dispatch the immutable release run
-and `contents: write` to synchronize `release/next`; it has no pull-request
-permission. No personal access token is required, and no workflow creates or
-merges a pull request.
+The workflow token needs `actions: write` to dispatch the immutable release run.
+The release App token is limited to `contents: write` for `release/next` and
+`pull-requests: write` for the metadata PR. No personal access token is required,
+and no workflow approves or merges a pull request.
 
-### Direct stable and platform release procedure
+The installed release GitHub App must grant repository **Contents: Read and
+write** and **Pull requests: Read and write**. The workflow requests only those
+permissions when minting its short-lived promotion token. Update the App
+installation before merging this workflow if Pull requests permission is not
+already enabled; otherwise promotion will stop before publication during token
+creation.
 
-Stable and individual-platform publishing use the same branch topology:
+### Normal Preview and Stable procedure
+
+Both normal channels use the same developer-facing procedure:
 
 1. Merge the release candidate into `main` through its fully gated source PR.
-2. From checked-out `main`, run the tracked PyCharm **Prepare Release Next**
-   action. Wait for it to fast-forward protected `release/next` successfully;
-   do not push `release/next` with a contributor credential.
-3. Fetch and check out the prepared `release/next`, then run the tracked
-   PyCharm **All Platform
-   Release** or desired **Release …** platform action. The launcher asks for a
-   `patch`, `minor`, or `major` increment with Patch as the default, derives it
-   from the greatest stable or Preview release, asks for `preview` or `stable`
-   with Preview as the default, and explicitly enables publication.
-4. Wait for the workflow's Essential Tests and every package validation to
-   succeed for the immutable release source.
-5. After successful publication, manually open, review, and merge the
-   `release/next` to `main` metadata PR after its required checks pass. Do not
-   start another release first.
+2. Update the local `main`, then run **Create Preview Release** or **Create Stable
+   Release**. Confirm the displayed version and optional release notes.
+3. Wait for the launcher to finish the exact GitHub Actions run.
+4. Open the reported metadata PR, review it, and merge it after required checks
+   pass. Do not start another release first.
 
-### Manual metadata reconciliation
+### Metadata reconciliation
 
-No workflow creates, approves, or merges the final metadata pull request. After
-publication succeeds, a maintainer performs this gate explicitly:
+Promotion creates or reuses the final metadata pull request. It never approves
+or merges it. Review the diff and confirm it contains only the expected version,
+AppStream, changelog, and signed update-manifest metadata. Merge through the
+normal protected-branch control only after every required check succeeds.
+
+If automatic PR creation fails after publication, use this recovery command:
 
 ```bash
 git fetch origin main release/next
@@ -324,13 +325,9 @@ gh pr create \
 gh pr checks --watch "$(gh pr view release/next --json number --jq .number)"
 ```
 
-Review the diff and confirm it contains only the expected version, AppStream,
-changelog, and signed update-manifest metadata. Merge the PR through the normal
-protected-branch control only after every required check succeeds. The next
-release starts with **Prepare Release Next**, which fast-forwards
-`release/next` to the newly reconciled `main` tip. PyCharm's bundled pull-request
-support or the GitHub website may be used for this human review; no workflow
-plug-in or stored IDE token is required.
+The next promotion fast-forwards `release/next` to the newly reconciled `main`
+tip. PyCharm's bundled pull-request support or GitHub may be used for human
+review; no workflow plug-in or stored IDE token is required.
 
 If a pull request for `release/next` is already open, review and use that PR
 instead of opening a duplicate.
@@ -359,7 +356,7 @@ queue: do not select or publish a newer version. Fetch both branches and inspect
 the published workflow summary, GitHub Release, and `origin/release/next`:
 
 - If the finalizer's metadata commit is on `release/next`, open or resume the
-  manual metadata PR above and merge it after required checks pass.
+  metadata PR and merge it after required checks pass.
 - If assets exist but no metadata commit reached `release/next`, the release is
   not advertised to updaters. Preserve the immutable source and inspect the
   failed finalizer. After correcting the failure, manually dispatch the same
@@ -656,6 +653,8 @@ same required-check PR. Never publish locally from `main` or a feature branch.
 - Confirm macOS legacy aliases still match the ARM64 manifests and signatures.
 - Confirm the selected branch contains the single release metadata commit and
   has no unexpected generated files.
+- Confirm promotion created or reused the metadata PR and that it remains
+  unmerged until its required checks and human review complete.
 - Confirm either the full Essential Tests gate passed or the pull request was
   classified as release-only metadata and its lightweight metadata validation
   passed. Inspect any separate push-triggered CI runs.

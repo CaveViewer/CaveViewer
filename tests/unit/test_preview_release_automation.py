@@ -1,4 +1,4 @@
-"""Validate the one-click Preview release promotion contract."""
+"""Validate the one-click release promotion contract."""
 
 from __future__ import annotations
 
@@ -88,12 +88,81 @@ def test_next_release_version_rejects_an_empty_valid_candidate_set():
         module.next_release_version(["preview", "v1.0.0-rc1"])
 
 
-@pytest.mark.parametrize("branch", ("", "HEAD", "main", "release/next"))
-def test_shared_preview_launcher_rejects_unsafe_source_branches(branch):
+@pytest.mark.parametrize("branch", ("", "HEAD", "feature/example", "release/next"))
+def test_shared_preview_launcher_requires_main(branch):
     launcher = _load_launcher_module()
 
     with pytest.raises(ValueError):
-        launcher.validate_source_branch_name(branch)
+        launcher.validate_checked_out_branch(branch)
+
+
+def test_shared_preview_launcher_accepts_main():
+    launcher = _load_launcher_module()
+
+    launcher.validate_checked_out_branch("main")
+
+
+def test_shared_release_launcher_selects_version_from_app_releases_and_tags(
+    monkeypatch, tmp_path
+):
+    launcher = _load_launcher_module()
+    outputs = iter(("CaveViewer/CaveViewer", "v1.0.90", "v1.0.92"))
+    monkeypatch.setattr(launcher, "_output", lambda _command: next(outputs))
+    version_file = tmp_path / "version.py"
+    version_file.write_text('APP_VERSION = "1.0.91"\n', encoding="utf-8")
+    monkeypatch.setattr(launcher, "VERSION_FILE", version_file)
+
+    assert launcher.select_release_version("patch") == "1.0.93"
+
+
+@pytest.mark.parametrize(
+    ("channel", "bump", "notes_args", "expected_notes"),
+    (
+        ("preview", "patch", ["--notes", "Notes"], "Notes"),
+        ("stable", "minor", [], "CaveViewer stable release"),
+    ),
+)
+def test_shared_release_launcher_dispatches_exact_main_and_version(
+    monkeypatch, channel, bump, notes_args, expected_notes
+):
+    launcher = _load_launcher_module()
+    main_sha = "a" * 40
+    commands = []
+    monkeypatch.setattr(launcher, "_preflight", lambda: main_sha)
+    monkeypatch.setattr(launcher, "select_release_version", lambda _bump: "1.2.0")
+    monkeypatch.setattr(launcher, "_list_runs", lambda: [])
+    monkeypatch.setattr(
+        launcher,
+        "_wait_for_new_run",
+        lambda *_args: {"databaseId": 42, "url": "https://example.test/run/42"},
+    )
+    monkeypatch.setattr(
+        launcher,
+        "_run",
+        lambda command, **_kwargs: commands.append(list(command)),
+    )
+
+    assert launcher.main(
+        ["--yes", "--channel", channel, "--bump", bump, *notes_args]
+    ) == 0
+    assert [
+        "gh",
+        "workflow",
+        "run",
+        "preview-release-promotion.yml",
+        "--ref",
+        "main",
+        "-f",
+        f"main_sha={main_sha}",
+        "-f",
+        f"channel={channel}",
+        "-f",
+        f"bump={bump}",
+        "-f",
+        "version=1.2.0",
+        "-f",
+        f"release_notes={expected_notes}",
+    ] in commands
 
 
 def test_shared_preview_launcher_resolves_only_one_new_workflow_run():
@@ -104,7 +173,7 @@ def test_shared_preview_launcher_resolves_only_one_new_workflow_run():
     assert launcher.select_new_workflow_run(
         existing, [{"databaseId": 12, "url": "https://example.test/run/12"}]
     )["databaseId"] == 12
-    with pytest.raises(RuntimeError, match="Multiple new Preview workflow runs"):
+    with pytest.raises(RuntimeError, match="Multiple new release workflow runs"):
         launcher.select_new_workflow_run(
             existing, [{"databaseId": 12}, {"databaseId": 13}]
         )
@@ -414,15 +483,36 @@ def test_shared_generic_launcher_rejects_malformed_workflow_fields(field):
         launcher.resolve_dispatch_fields(workflow, [field])
 
 
-def test_shared_pycharm_preview_configuration_contains_no_credentials():
-    configuration = (
-        REPOSITORY_ROOT / ".run" / "GitHub - Preview Release.run.xml"
-    ).read_text(encoding="utf-8")
+@pytest.mark.parametrize(
+    ("filename", "name", "parameters"),
+    (
+        (
+            "GitHub - Create Preview Release.run.xml",
+            "Create Preview Release",
+            "--channel preview --bump patch",
+        ),
+        (
+            "GitHub - Create Stable Release.run.xml",
+            "Create Stable Release",
+            "--channel stable --bump patch",
+        ),
+    ),
+)
+def test_shared_pycharm_release_configurations_are_portable(
+    filename, name, parameters
+):
+    root = ET.parse(REPOSITORY_ROOT / ".run" / filename).getroot()
+    configuration = root.find("configuration")
+    assert configuration is not None
+    text = ET.tostring(root, encoding="unicode")
 
-    assert "launch_preview_release.py" in configuration
-    assert "$PROJECT_DIR$" in configuration
-    assert "TOKEN" not in configuration.upper()
-    assert str(Path.home()) not in configuration
+    assert configuration.attrib["name"] == name
+    assert configuration.attrib["folderName"] == "Release Actions"
+    assert "launch_preview_release.py" in text
+    assert parameters in text
+    assert "$PROJECT_DIR$" in text
+    assert "TOKEN" not in text.upper()
+    assert str(Path.home()) not in text
 
 
 def test_release_workflows_have_focused_shared_pycharm_actions():
@@ -438,7 +528,7 @@ def test_release_workflows_have_focused_shared_pycharm_actions():
     }
     configurations = sorted((REPOSITORY_ROOT / ".run").glob("GitHub - *.run.xml"))
 
-    assert len(configurations) == len(workflow_names)
+    assert len(configurations) == len(workflow_names) + 1
     generic_workflows = set()
     configuration_names = set()
     for path in configurations:
@@ -448,7 +538,13 @@ def test_release_workflows_have_focused_shared_pycharm_actions():
         name = configuration.attrib["name"]
         configuration_names.add(name)
         assert "Current Branch" not in name
-        assert configuration.attrib.get("folderName") == "Release Actions"
+        folder = configuration.attrib.get("folderName")
+        if name in {"Create Preview Release", "Create Stable Release"}:
+            assert folder == "Release Actions"
+        elif name == "Essential Tests":
+            assert folder == "Validation"
+        else:
+            assert folder == "Release Actions - Advanced Recovery"
         text = path.read_text(encoding="utf-8")
         assert "TOKEN" not in text.upper()
         assert str(Path.home()) not in text
@@ -462,7 +558,7 @@ def test_release_workflows_have_focused_shared_pycharm_actions():
                     }:
                         assert "--release" in parameters
 
-    assert "Preview Release" in configuration_names
+    assert {"Create Preview Release", "Create Stable Release"} <= configuration_names
     assert generic_workflows == workflow_names - {"preview-release-promotion.yml"}
     assert not any("Smoke" in name for name in configuration_names)
     assert configuration_names.isdisjoint({"Pages", "Viewer Benchmark"})
@@ -477,15 +573,16 @@ def test_release_documentation_preserves_branch_and_pycharm_policy():
     ).read_text(encoding="utf-8")
 
     assert "All published releases use pull-request and branch gates" in releases
-    assert "Every `publish: true` release" in releases
-    assert "must run from `release/next`" in releases
-    assert "merge `release/next` back into protected `main`" in releases
-    assert "No workflow creates, approves, or merges" in releases
+    assert "Every `publish: true` build" in releases
+    assert "still occurs exclusively from `release/next`" in releases
+    assert "automatically opened pull request" in releases
+    assert "no workflow approves or merges" in releases
     assert "do not select or publish a newer version" in releases
-    assert "Prepare Release Next" in source_setup
-    assert "final metadata PR into `main` is always" in source_setup
+    assert "Advanced Recovery" in source_setup
+    assert "metadata pull request" in source_setup
     assert "No third-party GitHub Actions PyCharm plug-in" in source_setup
-    assert "Preview Release" in source_setup
+    assert "Create Preview Release" in source_setup
+    assert "Create Stable Release" in source_setup
     assert "never add `GH_TOKEN`" in source_setup
 
 
@@ -501,16 +598,20 @@ def test_release_launcher_describes_manual_metadata_reconciliation(capsys):
     assert "into main remains manual" in help_output
 
 
-def test_preview_promotion_workflow_is_manual_serial_and_write_scoped():
+def test_release_promotion_workflow_is_manual_serial_and_app_scoped():
     workflow = PROMOTION_WORKFLOW.read_text(encoding="utf-8")
 
     assert "workflow_dispatch:" in workflow
-    assert "source_branch:" in workflow
+    assert "main_sha:" in workflow
+    assert "channel:" in workflow
+    assert "bump:" in workflow
+    assert "version:" in workflow
     assert "release_notes:" in workflow
     assert "actions: write" in workflow
     assert "contents: read" in workflow
-    assert "contents: write" not in workflow
-    assert "pull-requests: write" not in workflow
+    assert "permissions:\n  actions: write\n  contents: read" in workflow
+    assert "permission-pull-requests: write" in workflow
+    assert "permission-contents: write" in workflow
     assert "environment: production-release" in workflow
     assert (
         "actions/create-github-app-token@"
@@ -519,14 +620,14 @@ def test_preview_promotion_workflow_is_manual_serial_and_write_scoped():
     assert "token: ${{ steps.release-app-token.outputs.token }}" in workflow
     assert "persist-credentials: false" in workflow
     assert "RELEASE_PUSH_TOKEN: ${{ steps.release-app-token.outputs.token }}" in workflow
-    assert "group: caveviewer-preview-release-promotion" in workflow
+    assert "group: caveviewer-release-promotion" in workflow
     assert "cancel-in-progress: false" in workflow
     assert "timeout-minutes: 360" in workflow
     assert "runs-on: ubuntu-latest" in workflow
     assert "./scripts/common/preview_release_automation.sh" in workflow
 
 
-def test_preview_automation_has_one_fixed_gated_promotion_sequence():
+def test_release_automation_has_one_fixed_gated_promotion_sequence():
     source = (COMMON_SCRIPTS / "preview_release_automation.sh").read_text(
         encoding="utf-8"
     )
@@ -534,27 +635,31 @@ def test_preview_automation_has_one_fixed_gated_promotion_sequence():
     assert 'release_branch="release/next"' in source
     assert 'main_branch="main"' in source
     assert "contains changes not reconciled" in source
+    assert '"origin/$release_branch" "origin/$main_branch"' in source
     assert '--workflow=all-platform-release.yml' in source
-    assert '--field="preview=true"' in source
+    assert '--field="preview=$preview"' in source
     assert '--field="publish=true"' in source
     assert "reuse_pr_validation" not in source
     assert 'repos/$repo/releases?per_page=100' in source
     assert 'repos/$repo/tags?per_page=100' in source
-    assert "gh pr create" not in source
+    assert "gh pr create" in source
+    assert "gh pr list" in source
     assert "gh pr merge" not in source
     assert "reconcile_release_metadata" not in source
-    assert "merge-base --is-ancestor" in source
-    assert "is not present in origin/$main_branch" in source
+    assert source.count("merge-base --is-ancestor") == 1
+    assert 'remote_main_sha" != "$main_sha' in source
+    assert "origin/$main_branch advanced before promotion" in source
     assert "Main remains unchanged" in source
-    assert "compare/$main_branch...$release_branch?expand=1" in source
+    assert "Review the release metadata pull request" in source
 
-    source_gate = source.index("merge-base --is-ancestor")
+    source_gate = source.index('remote_main_sha" != "$main_sha')
+    version_gate = source.index("requested v$requested_version")
     release_sync = source.index(
         'git -C "$repo_root" merge --ff-only "origin/$main_branch"'
     )
     release_dispatch = source.index("--workflow=all-platform-release.yml")
-    manual_handoff = source.index("Main remains unchanged")
-    assert source_gate < release_sync < release_dispatch < manual_handoff
+    pr_handoff = source.index("gh pr create")
+    assert source_gate < version_gate < release_sync < release_dispatch < pr_handoff
 
 
 def test_explicit_pr_validation_preserves_required_checks_and_legacy_aliases():

@@ -1,16 +1,37 @@
-name: Preview Release Promotion
+name: Release Promotion
 
 on:
   workflow_dispatch:
     inputs:
-      source_branch:
-        description: "Feature branch already merged into main; blank uses the selected workflow branch"
+      main_sha:
+        description: "Exact origin/main revision to release; blank uses the selected main workflow revision"
+        required: false
+        type: string
+      channel:
+        description: "Release channel"
+        required: false
+        default: "preview"
+        type: choice
+        options:
+          - preview
+          - stable
+      bump:
+        description: "Version increment"
+        required: false
+        default: "patch"
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+      version:
+        description: "Exact expected version; blank selects it from the increment"
         required: false
         type: string
       release_notes:
         description: "Release notes used for every platform"
         required: false
-        default: "CaveViewer preview release"
+        default: "CaveViewer release"
         type: string
 
 permissions:
@@ -18,34 +39,34 @@ permissions:
   contents: read
 
 concurrency:
-  group: caveviewer-preview-release-promotion
+  group: caveviewer-release-promotion
   cancel-in-progress: false
 
 jobs:
   promote-and-release:
-    name: Prepare and publish Preview
+    name: Prepare and publish release
     runs-on: ubuntu-latest
     timeout-minutes: 360
     environment: production-release
 
     steps:
-      - name: Resolve source branch
+      - name: Resolve main source revision
         id: source
         shell: bash
         env:
-          REQUESTED_SOURCE_BRANCH: ${{ inputs.source_branch }}
-          SELECTED_WORKFLOW_BRANCH: ${{ github.ref_name }}
+          REQUESTED_MAIN_SHA: ${{ inputs.main_sha }}
+          SELECTED_WORKFLOW_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          source_branch="$REQUESTED_SOURCE_BRANCH"
-          if [ -z "$source_branch" ]; then
-            source_branch="$SELECTED_WORKFLOW_BRANCH"
+          main_sha="$REQUESTED_MAIN_SHA"
+          if [ -z "$main_sha" ]; then
+            main_sha="$SELECTED_WORKFLOW_SHA"
           fi
-          if [ -z "$source_branch" ]; then
-            echo "Error: could not resolve the source branch." >&2
+          if [[ ! "$main_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Error: could not resolve a full main commit SHA." >&2
             exit 1
           fi
-          echo "source_branch=$source_branch" >> "$GITHUB_OUTPUT"
+          echo "main_sha=$main_sha" >> "$GITHUB_OUTPUT"
 
       - name: Create release publisher token
         id: release-app-token
@@ -55,6 +76,8 @@ jobs:
           private-key: ${{ secrets.CAVEVIEWER_RELEASE_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-pull-requests: write
 
       - name: Check out automation source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -68,12 +91,16 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      - name: Verify source and publish Preview
+      - name: Verify main revision and publish release
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_PUSH_TOKEN: ${{ steps.release-app-token.outputs.token }}
+          RELEASE_PR_TOKEN: ${{ steps.release-app-token.outputs.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-          SOURCE_BRANCH: ${{ steps.source.outputs.source_branch }}
+          MAIN_SHA: ${{ steps.source.outputs.main_sha }}
+          CHANNEL: ${{ inputs.channel }}
+          BUMP: ${{ inputs.bump }}
+          VERSION: ${{ inputs.version }}
           RELEASE_NOTES: ${{ inputs.release_notes }}
         run: |
           git_auth="$(printf 'x-access-token:%s' "$RELEASE_PUSH_TOKEN" | base64 -w0)"
@@ -81,5 +108,8 @@ jobs:
           export GIT_CONFIG_KEY_0=http.https://github.com/.extraheader
           export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $git_auth"
           ./scripts/common/preview_release_automation.sh \
-            --source-branch="$SOURCE_BRANCH" \
+            --main-sha="$MAIN_SHA" \
+            --channel="$CHANNEL" \
+            --bump="$BUMP" \
+            --version="$VERSION" \
             --release-notes="$RELEASE_NOTES"

@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Safely dispatch and watch a Preview release from the current branch."""
+"""Safely dispatch and watch a release promotion from protected main."""
 
 from __future__ import annotations
 
 import argparse
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -12,10 +13,17 @@ import time
 from pathlib import Path
 from typing import Any, Sequence
 
+COMMON_SCRIPTS_ROOT = Path(__file__).resolve().parent
+if str(COMMON_SCRIPTS_ROOT) not in sys.path:
+    sys.path.insert(0, str(COMMON_SCRIPTS_ROOT))
+
+from next_release_version import BumpMode, next_release_version
+
 
 WORKFLOW = "preview-release-promotion.yml"
 WORKFLOW_REF = "main"
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+VERSION_FILE = REPOSITORY_ROOT / "src" / "caveviewer" / "version.py"
 
 
 def _run(
@@ -37,14 +45,51 @@ def _output(command: Sequence[str]) -> str:
     return _run(command).stdout.strip()
 
 
-def validate_source_branch_name(branch: str) -> None:
-    """Reject branches that cannot be promoted as a Preview source."""
+def validate_checked_out_branch(branch: str) -> None:
+    """Require the protected branch used as the release source."""
     if not branch or branch == "HEAD":
-        raise ValueError("Cannot create a Preview release from a detached HEAD.")
-    if branch in {"main", "release/next"}:
+        raise ValueError("Cannot create a release from a detached HEAD.")
+    if branch != WORKFLOW_REF:
         raise ValueError(
-            f"Cannot use {branch!r} as the Preview source; select a feature branch."
+            f"Check out {WORKFLOW_REF!r} before creating a release."
         )
+
+
+def select_release_version(bump: BumpMode) -> str:
+    """Select the exact version that promotion will verify and publish."""
+    repository = _output(
+        ["gh", "repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"]
+    )
+    release_tags = _output(
+        [
+            "gh",
+            "api",
+            "--paginate",
+            f"repos/{repository}/releases?per_page=100",
+            "--jq",
+            ".[].tag_name",
+        ]
+    ).splitlines()
+    repository_tags = _output(
+        [
+            "gh",
+            "api",
+            "--paginate",
+            f"repos/{repository}/tags?per_page=100",
+            "--jq",
+            ".[].name",
+        ]
+    ).splitlines()
+    version_match = re.search(
+        r'^APP_VERSION = "([^"]+)"$',
+        VERSION_FILE.read_text(encoding="utf-8"),
+        re.MULTILINE,
+    )
+    if version_match is None:
+        raise RuntimeError("APP_VERSION is missing.")
+    return next_release_version(
+        [version_match.group(1), *release_tags, *repository_tags], bump
+    )
 
 
 def select_new_workflow_run(
@@ -56,7 +101,7 @@ def select_new_workflow_run(
         return None
     if len(new_runs) > 1:
         ids = ", ".join(str(run["databaseId"]) for run in new_runs)
-        raise RuntimeError(f"Multiple new Preview workflow runs appeared: {ids}")
+        raise RuntimeError(f"Multiple new release workflow runs appeared: {ids}")
     return new_runs[0]
 
 
@@ -86,7 +131,7 @@ def _preflight() -> str:
 
     _run(["gh", "auth", "status"])
     branch = _output(["git", "branch", "--show-current"])
-    validate_source_branch_name(branch)
+    validate_checked_out_branch(branch)
 
     if _output(["git", "status", "--porcelain"]):
         raise RuntimeError("Commit or stash local changes before creating a release.")
@@ -107,22 +152,29 @@ def _preflight() -> str:
             f"({local_sha[:8]} != "
             f"{remote_sha[:8]})."
         )
-    return branch
+    return local_sha
 
 
-def _confirm(branch: str, notes: str, assume_yes: bool) -> None:
-    print(f"Source branch: {branch}")
+def _confirm(
+    main_sha: str,
+    channel: str,
+    version: str,
+    notes: str,
+    assume_yes: bool,
+) -> None:
+    print(f"Source revision: origin/{WORKFLOW_REF} at {main_sha}")
+    print(f"Release: {channel.title()} v{version}")
     print(f"Release notes: {notes or '(none)'}")
-    print("The workflow may merge pull requests and publish a Preview release.")
+    print("The workflow will publish the release and open a metadata pull request.")
     if assume_yes:
         return
     if not sys.stdin.isatty():
         raise RuntimeError(
             "Interactive confirmation is unavailable; pass --yes explicitly."
         )
-    answer = input("Type 'preview' to continue: ").strip().lower()
-    if answer != "preview":
-        raise RuntimeError("Preview release cancelled.")
+    answer = input("Publish this release? [y/N]: ").strip().lower()
+    if answer not in {"y", "yes"}:
+        raise RuntimeError("Release cancelled.")
 
 
 def _wait_for_new_run(previous_ids: set[int], timeout_seconds: int) -> dict[str, Any]:
@@ -132,14 +184,20 @@ def _wait_for_new_run(previous_ids: set[int], timeout_seconds: int) -> dict[str,
         if run is not None:
             return run
         time.sleep(2)
-    raise RuntimeError("Timed out while locating the newly dispatched workflow run.")
+    raise RuntimeError("Timed out while locating the dispatched release workflow.")
 
 
 def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Create and watch a Preview release from the current branch."
+        description="Create and watch a release from protected main."
     )
-    parser.add_argument("--notes", default="", help="Optional Preview release notes")
+    parser.add_argument(
+        "--channel", choices=("preview", "stable"), default="preview"
+    )
+    parser.add_argument(
+        "--bump", choices=("patch", "minor", "major"), default="patch"
+    )
+    parser.add_argument("--notes", default="", help="Optional release notes")
     parser.add_argument(
         "--yes", action="store_true", help="Skip the interactive confirmation"
     )
@@ -152,11 +210,14 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parse_args(argv)
     try:
-        branch = _preflight()
+        main_sha = _preflight()
+        version = select_release_version(args.bump)
         notes = args.notes
         if not notes and sys.stdin.isatty():
-            notes = input("Preview release notes (optional): ").strip()
-        _confirm(branch, notes, args.yes)
+            notes = input("Release notes (Enter for default): ").strip()
+        if not notes:
+            notes = f"CaveViewer {args.channel} release"
+        _confirm(main_sha, args.channel, version, notes, args.yes)
 
         previous_ids = {int(run["databaseId"]) for run in _list_runs()}
         command = [
@@ -167,15 +228,20 @@ def main(argv: Sequence[str] | None = None) -> int:
             "--ref",
             WORKFLOW_REF,
             "-f",
-            f"source_branch={branch}",
+            f"main_sha={main_sha}",
+            "-f",
+            f"channel={args.channel}",
+            "-f",
+            f"bump={args.bump}",
+            "-f",
+            f"version={version}",
         ]
-        if notes:
-            command.extend(("-f", f"release_notes={notes}"))
+        command.extend(("-f", f"release_notes={notes}"))
         _run(command)
 
         run = _wait_for_new_run(previous_ids, args.lookup_timeout)
         run_id = str(run["databaseId"])
-        print(f"Preview workflow: {run['url']}")
+        print(f"Release workflow: {run['url']}")
         _run(["gh", "run", "watch", run_id, "--exit-status"], capture_output=False)
         return 0
     except (RuntimeError, ValueError, subprocess.CalledProcessError) as error:

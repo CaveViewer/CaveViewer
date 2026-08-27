@@ -1,5 +1,5 @@
 <component name="ProjectRunConfigurationManager">
-  <configuration default="false" name="Preview Release" type="PythonConfigurationType" factoryName="Python" folderName="Release Actions">
+  <configuration default="false" name="Create Preview Release" type="PythonConfigurationType" factoryName="Python" folderName="Release Actions">
     <module name="CaveViewer" />
     <option name="ENV_FILES" value="" />
     <option name="INTERPRETER_OPTIONS" value="" />
@@ -11,7 +11,7 @@
     <option name="ADD_CONTENT_ROOTS" value="true" />
     <option name="ADD_SOURCE_ROOTS" value="true" />
     <option name="SCRIPT_NAME" value="$PROJECT_DIR$/scripts/common/launch_preview_release.py" />
-    <option name="PARAMETERS" value="" />
+    <option name="PARAMETERS" value="--channel preview --bump patch" />
     <option name="SHOW_COMMAND_LINE" value="false" />
     <option name="EMULATE_TERMINAL" value="true" />
     <option name="MODULE_MODE" value="false" />
