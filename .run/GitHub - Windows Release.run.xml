@@ -1,5 +1,5 @@
 <component name="ProjectRunConfigurationManager">
-  <configuration default="false" name="Windows Release" type="PythonConfigurationType" factoryName="Python" folderName="Release Actions">
+  <configuration default="false" name="Windows Release" type="PythonConfigurationType" factoryName="Python" folderName="Release Actions - Advanced Recovery">
     <module name="CaveViewer" />
     <option name="ENV_FILES" value="" />
     <option name="INTERPRETER_OPTIONS" value="" />

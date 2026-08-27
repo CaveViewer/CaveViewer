@@ -6,11 +6,10 @@ For script CLI conventions and naming rules, see `standards.md`.
 For the canonical release sequence, channel behavior, resume procedure, and
 post-release checklist, see `../docs/development/releases.md`.
 
-The one-action Preview path is `.github/workflows/preview-release-promotion.yml`.
-It verifies an exact protected `main` revision, synchronizes `release/next`, and
-dispatches the all-platform Preview publish with the next patch version.
-Generated metadata remains on `release/next` for a maintainer-managed pull
-request.
+The one-action Preview and Stable path is
+`.github/workflows/preview-release-promotion.yml`. It verifies an exact
+protected `main` revision and version, synchronizes `release/next`, dispatches
+the all-platform publish, and creates the metadata pull request for human review.
 The workflow calls `scripts/common/preview_release_automation.sh`; that helper
 is CI-internal and is not a replacement for `release.sh` during local builds.
 
@@ -99,13 +98,13 @@ release.sh --target=all --version=1.2.45 --notes "Release 1.2.45" --action=packa
 ## GitHub Actions
 
 `scripts/common/launch_preview_release.py` is the cross-platform local launcher
-used by the shared PyCharm **Preview Release** configuration.
-It performs local branch/authentication checks, dispatches Preview promotion,
-and watches the exact new run. It never reads or stores a GitHub token itself;
-contributors authenticate independently with `gh auth login`.
+used by **Create Preview Release** and **Create Stable Release**. It validates
+clean synchronized `main`, calculates and displays the exact next version,
+confirms the selected channel, dispatches promotion, and watches the exact run.
+It never reads or stores a GitHub token; contributors authenticate with `gh`.
 
-`scripts/common/launch_github_workflow.py` backs the other shared release and
-Essential Tests items in PyCharm's **Release Actions** menu. Package-smoke,
+`scripts/common/launch_github_workflow.py` backs the Advanced Recovery release
+actions and Essential Tests item in PyCharm. Package-smoke,
 benchmark, Pages, and maintenance workflows are intentionally not exposed in
 that focused menu. The launcher dispatches the selected workflow on the
 checked-out remote branch, resolves the exact new run, and watches it to

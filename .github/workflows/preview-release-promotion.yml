@@ -1,4 +1,4 @@
-name: Preview Release Promotion
+name: Release Promotion
 
 on:
   workflow_dispatch:
@@ -7,10 +7,31 @@ on:
         description: "Exact origin/main revision to release; blank uses the selected main workflow revision"
         required: false
         type: string
+      channel:
+        description: "Release channel"
+        required: false
+        default: "preview"
+        type: choice
+        options:
+          - preview
+          - stable
+      bump:
+        description: "Version increment"
+        required: false
+        default: "patch"
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+      version:
+        description: "Exact expected version; blank selects it from the increment"
+        required: false
+        type: string
       release_notes:
         description: "Release notes used for every platform"
         required: false
-        default: "CaveViewer preview release"
+        default: "CaveViewer release"
         type: string
 
 permissions:
@@ -18,12 +39,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: caveviewer-preview-release-promotion
+  group: caveviewer-release-promotion
   cancel-in-progress: false
 
 jobs:
   promote-and-release:
-    name: Prepare and publish Preview
+    name: Prepare and publish release
     runs-on: ubuntu-latest
     timeout-minutes: 360
     environment: production-release
@@ -55,6 +76,8 @@ jobs:
           private-key: ${{ secrets.CAVEVIEWER_RELEASE_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-pull-requests: write
 
       - name: Check out automation source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -68,12 +91,16 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      - name: Verify main revision and publish Preview
+      - name: Verify main revision and publish release
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_PUSH_TOKEN: ${{ steps.release-app-token.outputs.token }}
+          RELEASE_PR_TOKEN: ${{ steps.release-app-token.outputs.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           MAIN_SHA: ${{ steps.source.outputs.main_sha }}
+          CHANNEL: ${{ inputs.channel }}
+          BUMP: ${{ inputs.bump }}
+          VERSION: ${{ inputs.version }}
           RELEASE_NOTES: ${{ inputs.release_notes }}
         run: |
           git_auth="$(printf 'x-access-token:%s' "$RELEASE_PUSH_TOKEN" | base64 -w0)"
@@ -82,4 +109,7 @@ jobs:
           export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $git_auth"
           ./scripts/common/preview_release_automation.sh \
             --main-sha="$MAIN_SHA" \
+            --channel="$CHANNEL" \
+            --bump="$BUMP" \
+            --version="$VERSION" \
             --release-notes="$RELEASE_NOTES"
