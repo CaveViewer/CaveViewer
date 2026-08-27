@@ -77,7 +77,6 @@ jobs:
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
           permission-contents: write
-          permission-pull-requests: write
 
       - name: Check out automation source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -95,7 +94,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_PUSH_TOKEN: ${{ steps.release-app-token.outputs.token }}
-          RELEASE_PR_TOKEN: ${{ steps.release-app-token.outputs.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           MAIN_SHA: ${{ steps.source.outputs.main_sha }}
           CHANNEL: ${{ inputs.channel }}

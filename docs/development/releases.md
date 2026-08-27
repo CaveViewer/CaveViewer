@@ -18,9 +18,9 @@ developer feature branch or directly from `main`:
    to that exact protected `main` tip. Every `publish: true` build still runs
    from `release/next`; contributors do not manipulate that branch directly.
 3. After the finalizer commits version, AppStream, and signed update metadata to
-   `release/next`, review the automatically opened pull request back into
-   protected `main`. The workflow never merges it; the metadata PR must pass
-   its required release-metadata validation and human review before merge.
+   `release/next`, the PyCharm launcher creates or reuses a pull request back
+   into protected `main`. Review and merge it after its required
+   release-metadata validation succeeds.
 
 The repository ruleset requires pull requests and strict required status
 checks for `main`; nobody has a bypass. A branch that passed against an older
@@ -268,8 +268,10 @@ The promotion performs one strictly ordered sequence for either channel:
    application version and every numeric GitHub release or tag.
 5. Dispatch **All Platform Release** on `release/next` with the selected channel
    and publication enabled, then wait for Essential Tests and every package.
-6. Create or reuse the `release/next` metadata PR and report its review link. A
-   maintainer reviews and merges it only after required checks pass.
+6. Return success to the PyCharm launcher, which creates or reuses the
+   `release/next` metadata PR with the developer's existing GitHub CLI login and
+   reports its review link. A maintainer merges it only after required checks
+   pass.
 
 Every mutation follows a successful preflight or workflow. If `main` advances
 after dispatch, the workflow stops before changing `release/next`. A failed
@@ -284,16 +286,15 @@ workflow fast-forwards `release/next` to the selected revision. This prevents
 two release versions from accumulating on the long-lived release branch.
 
 The workflow token needs `actions: write` to dispatch the immutable release run.
-The release App token is limited to `contents: write` for `release/next` and
-`pull-requests: write` for the metadata PR. No personal access token is required,
-and no workflow approves or merges a pull request.
+The release App token is limited to `contents: write` for `release/next`. The
+local launcher uses the developer's existing `gh` authentication to create the
+metadata PR only after publication succeeds. No workflow creates, approves, or
+merges a pull request.
 
 The installed release GitHub App must grant repository **Contents: Read and
-write** and **Pull requests: Read and write**. The workflow requests only those
-permissions when minting its short-lived promotion token. Update the App
-installation before merging this workflow if Pull requests permission is not
-already enabled; otherwise promotion will stop before publication during token
-creation.
+write**. The workflow requests only that permission when minting its short-lived
+promotion token. Each developer running a release must authenticate the GitHub
+CLI with permission to create a pull request in the repository.
 
 ### Normal Preview and Stable procedure
 
@@ -308,10 +309,11 @@ Both normal channels use the same developer-facing procedure:
 
 ### Metadata reconciliation
 
-Promotion creates or reuses the final metadata pull request. It never approves
-or merges it. Review the diff and confirm it contains only the expected version,
-AppStream, changelog, and signed update-manifest metadata. Merge through the
-normal protected-branch control only after every required check succeeds.
+After successful promotion, the local launcher creates or reuses the final
+metadata pull request. It never approves or merges it. Review the diff and
+confirm it contains only the expected version, AppStream, changelog, and signed
+update-manifest metadata. Merge through the normal protected-branch control
+only after every required check succeeds.
 
 If automatic PR creation fails after publication, use this recovery command:
 
@@ -653,8 +655,9 @@ same required-check PR. Never publish locally from `main` or a feature branch.
 - Confirm macOS legacy aliases still match the ARM64 manifests and signatures.
 - Confirm the selected branch contains the single release metadata commit and
   has no unexpected generated files.
-- Confirm promotion created or reused the metadata PR and that it remains
-  unmerged until its required checks and human review complete.
+- Confirm the local launcher created or reused the metadata PR after promotion
+  and that it remains unmerged until its required checks and human review
+  complete.
 - Confirm either the full Essential Tests gate passed or the pull request was
   classified as release-only metadata and its lightweight metadata validation
   passed. Inspect any separate push-triggered CI runs.

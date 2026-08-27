@@ -105,6 +105,58 @@ def select_new_workflow_run(
     return new_runs[0]
 
 
+def ensure_metadata_pr(version: str, channel: str) -> str:
+    """Reuse or create the metadata PR with the developer's GitHub identity."""
+    repository = _output(
+        ["gh", "repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"]
+    )
+    payload = _output(
+        [
+            "gh",
+            "pr",
+            "list",
+            "--repo",
+            repository,
+            "--base",
+            "main",
+            "--head",
+            "release/next",
+            "--state",
+            "open",
+            "--json",
+            "url",
+        ]
+    )
+    open_prs = json.loads(payload)
+    if len(open_prs) > 1:
+        raise RuntimeError("Multiple open release metadata pull requests exist.")
+    if open_prs:
+        return str(open_prs[0]["url"])
+    pr_url = _output(
+        [
+            "gh",
+            "pr",
+            "create",
+            "--repo",
+            repository,
+            "--base",
+            "main",
+            "--head",
+            "release/next",
+            "--title",
+            f"Merge release metadata for v{version}",
+            "--body",
+            (
+                f"Merge the published {channel} release metadata for "
+                f"v{version} from release/next."
+            ),
+        ]
+    )
+    if not pr_url:
+        raise RuntimeError("GitHub did not return the release metadata PR URL.")
+    return pr_url
+
+
 def _list_runs() -> list[dict[str, Any]]:
     payload = _output(
         [
@@ -165,7 +217,7 @@ def _confirm(
     print(f"Source revision: origin/{WORKFLOW_REF} at {main_sha}")
     print(f"Release: {channel.title()} v{version}")
     print(f"Release notes: {notes or '(none)'}")
-    print("The workflow will publish the release and open a metadata pull request.")
+    print("The workflow will publish the release; PyCharm will open its metadata PR.")
     if assume_yes:
         return
     if not sys.stdin.isatty():
@@ -243,6 +295,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         run_id = str(run["databaseId"])
         print(f"Release workflow: {run['url']}")
         _run(["gh", "run", "watch", run_id, "--exit-status"], capture_output=False)
+        metadata_pr_url = ensure_metadata_pr(version, args.channel)
+        print(f"Release metadata PR: {metadata_pr_url}")
+        print("Review and merge that PR after its required checks pass.")
         return 0
     except (RuntimeError, ValueError, subprocess.CalledProcessError) as error:
         print(f"Error: {error}", file=sys.stderr)

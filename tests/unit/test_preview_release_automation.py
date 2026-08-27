@@ -128,6 +128,7 @@ def test_shared_release_launcher_dispatches_exact_main_and_version(
     launcher = _load_launcher_module()
     main_sha = "a" * 40
     commands = []
+    metadata_prs = []
     monkeypatch.setattr(launcher, "_preflight", lambda: main_sha)
     monkeypatch.setattr(launcher, "select_release_version", lambda _bump: "1.2.0")
     monkeypatch.setattr(launcher, "_list_runs", lambda: [])
@@ -140,6 +141,14 @@ def test_shared_release_launcher_dispatches_exact_main_and_version(
         launcher,
         "_run",
         lambda command, **_kwargs: commands.append(list(command)),
+    )
+    monkeypatch.setattr(
+        launcher,
+        "ensure_metadata_pr",
+        lambda version, selected_channel: metadata_prs.append(
+            (version, selected_channel)
+        )
+        or "https://example.test/pr/7",
     )
 
     assert launcher.main(
@@ -163,6 +172,88 @@ def test_shared_release_launcher_dispatches_exact_main_and_version(
         "-f",
         f"release_notes={expected_notes}",
     ] in commands
+    assert metadata_prs == [("1.2.0", channel)]
+
+
+def test_shared_release_launcher_reuses_open_metadata_pr(monkeypatch):
+    launcher = _load_launcher_module()
+    outputs = iter(
+        (
+            "CaveViewer/CaveViewer",
+            '[{"url": "https://example.test/pr/7"}]',
+        )
+    )
+    commands = []
+    monkeypatch.setattr(
+        launcher,
+        "_output",
+        lambda command: commands.append(list(command)) or next(outputs),
+    )
+
+    assert (
+        launcher.ensure_metadata_pr("1.2.3", "preview")
+        == "https://example.test/pr/7"
+    )
+    assert not any(command[:3] == ["gh", "pr", "create"] for command in commands)
+
+
+def test_shared_release_launcher_creates_metadata_pr_without_merging(monkeypatch):
+    launcher = _load_launcher_module()
+    outputs = iter(
+        (
+            "CaveViewer/CaveViewer",
+            "[]",
+            "https://example.test/pr/8",
+        )
+    )
+    commands = []
+    monkeypatch.setattr(
+        launcher,
+        "_output",
+        lambda command: commands.append(list(command)) or next(outputs),
+    )
+
+    assert (
+        launcher.ensure_metadata_pr("1.2.3", "stable")
+        == "https://example.test/pr/8"
+    )
+    create = next(
+        command for command in commands if command[:3] == ["gh", "pr", "create"]
+    )
+    assert "--base" in create and "main" in create
+    assert "--head" in create and "release/next" in create
+    assert not any(command[:3] == ["gh", "pr", "merge"] for command in commands)
+
+
+def test_shared_release_launcher_does_not_open_pr_after_failed_workflow(
+    monkeypatch,
+):
+    launcher = _load_launcher_module()
+    monkeypatch.setattr(launcher, "_preflight", lambda: "a" * 40)
+    monkeypatch.setattr(launcher, "select_release_version", lambda _bump: "1.2.3")
+    monkeypatch.setattr(launcher, "_list_runs", lambda: [])
+    monkeypatch.setattr(
+        launcher,
+        "_wait_for_new_run",
+        lambda _previous_ids, _timeout: {
+            "databaseId": 17,
+            "url": "https://example.test/run/17",
+        },
+    )
+
+    def run(command, **_kwargs):
+        if command[:3] == ["gh", "run", "watch"]:
+            raise subprocess.CalledProcessError(1, command)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(launcher, "_run", run)
+    monkeypatch.setattr(
+        launcher,
+        "ensure_metadata_pr",
+        lambda *_args: pytest.fail("metadata PR created after workflow failure"),
+    )
+
+    assert launcher.main(["--yes", "--notes", "Release notes"]) == 1
 
 
 def test_shared_preview_launcher_resolves_only_one_new_workflow_run():
@@ -575,8 +666,8 @@ def test_release_documentation_preserves_branch_and_pycharm_policy():
     assert "All published releases use pull-request and branch gates" in releases
     assert "Every `publish: true` build" in releases
     assert "still occurs exclusively from `release/next`" in releases
-    assert "automatically opened pull request" in releases
-    assert "no workflow approves or merges" in releases
+    assert "local launcher creates or reuses" in releases
+    assert "No workflow creates, approves, or" in releases
     assert "do not select or publish a newer version" in releases
     assert "Advanced Recovery" in source_setup
     assert "metadata pull request" in source_setup
@@ -610,7 +701,7 @@ def test_release_promotion_workflow_is_manual_serial_and_app_scoped():
     assert "actions: write" in workflow
     assert "contents: read" in workflow
     assert "permissions:\n  actions: write\n  contents: read" in workflow
-    assert "permission-pull-requests: write" in workflow
+    assert "permission-pull-requests: write" not in workflow
     assert "permission-contents: write" in workflow
     assert "environment: production-release" in workflow
     assert (
@@ -642,15 +733,15 @@ def test_release_automation_has_one_fixed_gated_promotion_sequence():
     assert "reuse_pr_validation" not in source
     assert 'repos/$repo/releases?per_page=100' in source
     assert 'repos/$repo/tags?per_page=100' in source
-    assert "gh pr create" in source
-    assert "gh pr list" in source
+    assert "gh pr create" not in source
+    assert "gh pr list" not in source
     assert "gh pr merge" not in source
     assert "reconcile_release_metadata" not in source
     assert source.count("merge-base --is-ancestor") == 1
     assert 'remote_main_sha" != "$main_sha' in source
     assert "origin/$main_branch advanced before promotion" in source
     assert "Main remains unchanged" in source
-    assert "Review the release metadata pull request" in source
+    assert "local launcher will create the metadata PR" in source
 
     source_gate = source.index('remote_main_sha" != "$main_sha')
     version_gate = source.index("requested v$requested_version")
@@ -658,8 +749,8 @@ def test_release_automation_has_one_fixed_gated_promotion_sequence():
         'git -C "$repo_root" merge --ff-only "origin/$main_branch"'
     )
     release_dispatch = source.index("--workflow=all-platform-release.yml")
-    pr_handoff = source.index("gh pr create")
-    assert source_gate < version_gate < release_sync < release_dispatch < pr_handoff
+    compare_handoff = source.index("local launcher will create the metadata PR")
+    assert source_gate < version_gate < release_sync < release_dispatch < compare_handoff
 
 
 def test_explicit_pr_validation_preserves_required_checks_and_legacy_aliases():

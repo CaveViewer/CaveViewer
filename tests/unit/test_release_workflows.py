@@ -789,7 +789,7 @@ def test_release_finalizer_help_and_shell_syntax():
 
 
 @requires_executable_shell_scripts
-def test_release_automation_only_promotion_creates_and_never_merges_pull_requests():
+def test_release_workflows_never_create_or_merge_pull_requests():
     assert not (
         REPOSITORY_ROOT / "scripts" / "common" / "reconcile_release_metadata.sh"
     ).exists()
@@ -806,14 +806,10 @@ def test_release_automation_only_promotion_creates_and_never_merges_pull_request
         REPOSITORY_ROOT / "scripts" / "common" / "preview_release_automation.sh",
     ]
     combined = "\n".join(path.read_text(encoding="utf-8") for path in release_sources)
-    promotion = (
-        REPOSITORY_ROOT / "scripts" / "common" / "preview_release_automation.sh"
-    ).read_text(encoding="utf-8")
-    assert combined.count("gh pr create") == 1
-    assert "gh pr create" in promotion
-    assert "gh pr list" in promotion
+    assert "gh pr create" not in combined
+    assert "gh pr list" not in combined
     assert "gh pr merge" not in combined
-    assert "permission-pull-requests: write" in combined
+    assert "permission-pull-requests: write" not in combined
     assert "HEAD:refs/heads/main" not in combined
 
 

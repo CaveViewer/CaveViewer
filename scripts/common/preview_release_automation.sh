@@ -10,8 +10,8 @@ Usage:
     --release-notes=<notes>
 
 Verify the exact protected main revision, publish the selected all-platform
-release from release/next, and create the generated-metadata pull request into
-main. This helper is intended for the Release Promotion GitHub workflow.
+release from release/next, and report the generated-metadata comparison for the
+local launcher. This helper is intended for the Release Promotion workflow.
 EOF
 }
 
@@ -52,11 +52,6 @@ if [ "$bump" != "patch" ] && [ "$bump" != "minor" ] && [ "$bump" != "major" ]; t
   echo "Error: --bump must be patch, minor, or major." >&2
   exit 2
 fi
-if [ -z "${RELEASE_PR_TOKEN:-}" ]; then
-  echo "Error: RELEASE_PR_TOKEN is required to create the metadata pull request." >&2
-  exit 2
-fi
-
 for command in gh git jq python3; do
   if ! command -v "$command" >/dev/null 2>&1; then
     echo "Error: required command is unavailable: $command" >&2
@@ -158,33 +153,15 @@ git -C "$repo_root" fetch --no-tags origin \
   "refs/heads/$release_branch:refs/remotes/origin/$release_branch"
 metadata_sha="$(git -C "$repo_root" rev-parse "origin/$release_branch")"
 release_url="https://github.com/$repo/releases/tag/v$next_version"
-metadata_pr_url="$(
-  GH_TOKEN="$RELEASE_PR_TOKEN" gh pr list \
-    --repo "$repo" \
-    --base "$main_branch" \
-    --head "$release_branch" \
-    --state open \
-    --json url \
-    --jq '.[0].url // empty'
-)"
-if [ -z "$metadata_pr_url" ]; then
-  metadata_pr_url="$(
-    GH_TOKEN="$RELEASE_PR_TOKEN" gh pr create \
-      --repo "$repo" \
-      --base "$main_branch" \
-      --head "$release_branch" \
-      --title "Merge release metadata for v$next_version" \
-      --body "Merge the published $channel release metadata for v$next_version from release/next."
-  )"
-fi
+compare_url="https://github.com/$repo/compare/$main_branch...$release_branch?expand=1"
 
 summary="$(cat <<EOF
 $channel_label v$next_version is published.
 Release: $release_url
 Source SHA: $release_source_sha
 Metadata commit: $metadata_sha
-Main remains unchanged. Review the release metadata pull request:
-$metadata_pr_url
+Main remains unchanged. The local launcher will create the metadata PR from:
+$compare_url
 EOF
 )"
 printf '%s\n' "$summary"
@@ -196,8 +173,8 @@ if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
     echo "- Source SHA: \`$release_source_sha\`"
     echo "- Metadata commit: \`$metadata_sha\`"
     echo
-    echo "Main was not changed. [Review the release metadata PR]($metadata_pr_url)."
+    echo "Main was not changed. [Compare the release metadata]($compare_url)."
   } >> "$GITHUB_STEP_SUMMARY"
 fi
 
-echo "Release automation created or reused the metadata PR and did not merge it."
+echo "Release automation completed without creating or merging a pull request."
