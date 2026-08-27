@@ -150,8 +150,10 @@ metadata only to `release/next`, and that metadata returns to `main` through a
 second required-check PR. No `publish: true` workflow should run on `main` or a
 feature branch. Release Promotion accepts an exact protected `main` revision as
 its source, but publishes only after synchronizing that revision to
-`release/next`. It creates or reuses the metadata PR after publication but never
-approves or merges it; normal required checks and human review remain mandatory.
+`release/next`. After publication succeeds, the local PyCharm launcher creates
+or reuses the metadata PR with the developer's GitHub CLI identity. It never
+approves or merges that PR; normal required checks and human review remain
+mandatory.
 
 An individually dispatched platform release workflow calls the Essential Tests
 workflow before its package job. `All Platform Release` calls Essential Tests

@@ -74,13 +74,15 @@ configurations under `.run/`. The normal choices are **Create Preview Release**
 and **Create Stable Release**. Each requires a clean checked-out `main` whose
 HEAD exactly matches `origin/main`, displays the exact next version, asks for
 confirmation, publishes every platform, and reports the metadata pull request
-that still requires human review.
+that it creates or reuses with the developer's existing `gh` authentication.
+That pull request still requires human review and a manual merge.
 
 **Prepare Release Next**, **All Platform Release**, and individual-platform
 actions are grouped under **Release Actions - Advanced Recovery**. They are for
 controlled recovery, not the normal release process. Internally all publication
 and metadata still use `release/next`; the promotion workflow handles that
-branch and creates, but never merges, the metadata PR.
+branch. After the workflow succeeds, the local launcher creates, but never
+merges, the metadata PR.
 
 The tracked configurations contain no credentials or machine-specific paths.
 Keep personal settings, interpreter choices, window layout, and local

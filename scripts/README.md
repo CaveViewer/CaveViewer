@@ -9,9 +9,11 @@ post-release checklist, see `../docs/development/releases.md`.
 The one-action Preview and Stable path is
 `.github/workflows/preview-release-promotion.yml`. It verifies an exact
 protected `main` revision and version, synchronizes `release/next`, dispatches
-the all-platform publish, and creates the metadata pull request for human review.
-The workflow calls `scripts/common/preview_release_automation.sh`; that helper
-is CI-internal and is not a replacement for `release.sh` during local builds.
+the all-platform publish, and returns success to the local launcher. The
+launcher then creates or reuses the metadata pull request for human review with
+the developer's existing `gh` authentication. The workflow calls
+`scripts/common/preview_release_automation.sh`; that helper is CI-internal and
+is not a replacement for `release.sh` during local builds.
 
 ## Main Entry Point
 
