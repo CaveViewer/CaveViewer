@@ -1,13 +1,13 @@
 {
   "architecture": "x86_64",
-  "download_size_bytes": 67230644,
-  "download_size_bytes_macosx_dmg": 67230644,
-  "download_url": "https://github.com/CaveViewer/CaveViewer/releases/download/v1.0.92/CaveViewer-1.0.92-macos-x86_64.dmg",
-  "download_url_macosx_dmg": "https://github.com/CaveViewer/CaveViewer/releases/download/v1.0.92/CaveViewer-1.0.92-macos-x86_64.dmg",
-  "latest_version": "1.0.92",
+  "download_size_bytes": 67367943,
+  "download_size_bytes_macosx_dmg": 67367943,
+  "download_url": "https://github.com/CaveViewer/CaveViewer/releases/download/v1.0.93/CaveViewer-1.0.93-macos-x86_64.dmg",
+  "download_url_macosx_dmg": "https://github.com/CaveViewer/CaveViewer/releases/download/v1.0.93/CaveViewer-1.0.93-macos-x86_64.dmg",
+  "latest_version": "1.0.93",
   "platform": "macos",
   "release_channel": "preview",
-  "release_notes": "CaveViewer 1.0.92 preview recovery-signing bootstrap release",
-  "sha256": "53000c0cc6364fc27b1d4cadc40ed7f58412a7aaac4d6c62f8375721fadcad17",
-  "sha256_macosx_dmg": "53000c0cc6364fc27b1d4cadc40ed7f58412a7aaac4d6c62f8375721fadcad17"
+  "release_notes": "CaveViewer preview release",
+  "sha256": "83fe6c3cc5966abc92d88e1497745e14bd65e33db5b20e309ecc9b70fec3aaa9",
+  "sha256_macosx_dmg": "83fe6c3cc5966abc92d88e1497745e14bd65e33db5b20e309ecc9b70fec3aaa9"
 }
