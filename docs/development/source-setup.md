@@ -369,9 +369,9 @@ On Windows (PowerShell):
 - Broken `.venv-dev`: remove it and rerun `./scripts/dev/install.sh`.
 - Windows PowerShell policy blocks setup script: run with `-ExecutionPolicy Bypass` as shown above.
 
-### Rendering and Virtual Machine Runs
+### Rendering Troubleshooting
 
-Rendering/import strategy, low-memory tuning, VM launch settings, and
+Rendering/import strategy, low-memory tuning, GPU-driver troubleshooting, and
 `caveviewer-chunker` cache-compilation options are documented in
 [`rendering.md`](rendering.md).
 
@@ -706,9 +706,9 @@ compact layout.
 | `CAVEVIEWER_NO_DESKTOP_INTEGRATION` | `0` | Linux AppImage launcher opt-out. Set to `1` to skip the best-effort per-user desktop integration step. |
 | `CAVEVIEWER_UI_FONT` | _(platform default)_ | Absolute path to a `.ttf`/`.otf`/`.ttc` font file for the in-app FreeType renderer. Overrides the platform font search order. |
 | `CAVEVIEWER_TEXT_AA_MODE` | `light` (macOS/Linux), `normal` (others) | FreeType anti-aliasing mode for in-app text. `normal` = standard hinting; `light` = smooth light anti-aliasing; `lcd` = LCD sub-pixel rendering. |
-| `CAVEVIEWER_VSYNC` | `1` | Set to `0` to disable vertical sync. Recommended for virtual machines where the virtual display driver can block `swap_buffers()` long enough to freeze the render thread during heavy imports, making the window appear hung. |
+| `CAVEVIEWER_VSYNC` | `1` | Set to `0` to disable vertical sync when diagnosing display-driver stalls. |
 | `CAVEVIEWER_WINDOW_SYSTEM` | `auto` | Linux viewer backend: `auto` prefers X11/XWayland when `DISPLAY` is available so source and AppImage launches get the same GNOME titlebar and resize behavior, then retries Wayland on recognized initialization failures. `wayland` and `x11` require that protocol without fallback. |
-| `LIBGL_ALWAYS_SOFTWARE` | _(unset)_ | Linux OpenGL/Mesa setting. Set to `1` to force software rendering when a VM or GPU driver crashes, freezes, or leaves the app stuck in the graphics driver. |
+| `LIBGL_ALWAYS_SOFTWARE` | _(unset)_ | Linux OpenGL/Mesa setting. Set to `1` to force software rendering when a GPU driver crashes, freezes, or leaves the app stuck in the graphics driver. |
 | `CAVEVIEWER_FFMPEG` | _(auto)_ | Path to an `ffmpeg` executable for MP4 recording. If unset, CaveViewer tries system `ffmpeg`, then the bundled `imageio-ffmpeg` executable. |
 | `CAVEVIEWER_RECORDING_DIR` | `~/Movies/CaveViewer` | Folder where saved recordings are stored. The Preferences panel saves this value. |
 | `CAVEVIEWER_MAP_LIBRARY_DIR` | User Downloads folder | Folder where CaveViewer stores downloaded Map Library maps. The Preferences panel saves this value. |

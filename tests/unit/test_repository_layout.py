@@ -148,6 +148,20 @@ def test_development_launchers_use_the_installed_package():
     assert '"-m caveviewer"' in windows_setup
 
 
+def test_development_launcher_has_no_virtual_machine_special_cases():
+    install_script = (REPOSITORY_ROOT / "scripts" / "dev" / "install.sh").read_text(
+        encoding="utf-8"
+    )
+
+    forbidden_markers = (
+        "is_virtual_machine",
+        "systemd-detect-virt",
+        "/sys/class/dmi",
+        "Detected virtual machine",
+    )
+    assert not [marker for marker in forbidden_markers if marker in install_script]
+
+
 def test_packaging_consumers_reference_migrated_paths():
     source_packager = (
         REPOSITORY_ROOT / "scripts" / "common" / "package_source.sh"
