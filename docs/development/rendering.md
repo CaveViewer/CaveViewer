@@ -147,11 +147,10 @@ extracted CaveViewer folder. PowerShell environment variables apply to the
 current shell session; close the window or run `Remove-Item Env:\NAME` to clear
 one.
 
-### Virtual machines or GPU driver instability
+### GPU driver instability
 
-If CaveViewer crashes, freezes, or leaves a stuck process inside a virtual
-machine such as Parallels, or when using an unreliable Mesa/OpenGL driver, first
-disable vsync:
+If CaveViewer crashes, freezes, or leaves a stuck process when using an
+unreliable Mesa/OpenGL driver, first disable vsync:
 
 ```bash
 CAVEVIEWER_VSYNC=0 ./run_caveviewer.sh
@@ -190,7 +189,7 @@ CAVEVIEWER_UPLOAD_TIME_BUDGET_MS=1 \
 
 `LIBGL_ALWAYS_SOFTWARE=1` tells the Linux OpenGL stack to use software rendering
 instead of the GPU driver. This is slower, but it can avoid crashes or
-kernel-level hangs caused by virtual GPU drivers or unstable graphics drivers.
+kernel-level hangs caused by unstable graphics drivers.
 
 Windows does not use `LIBGL_ALWAYS_SOFTWARE`. For a stronger Windows stability
 profile, keep vsync disabled and lower render-thread upload work:
@@ -257,8 +256,8 @@ $env:CAVEVIEWER_UPLOAD_TIME_BUDGET_MS = "2"
 | `CAVEVIEWER_UPLOAD_GROUPS_PER_FRAME` | `1` | 1-64 operations | Base maximum render-thread upload slices advanced from one ready chunk per frame. Startup and catch-up modes can temporarily raise this. |
 | `CAVEVIEWER_UPLOAD_TIME_BUDGET_MS` | `3.0` | 0.5-50 ms | Base soft per-frame target for render-thread upload work. Startup and catch-up modes can temporarily raise this. |
 | `CAVEVIEWER_GPU_DRAW_TIMER` | `0` | 0 or 1 | Enable same-frame OpenGL GPU draw timer queries in frame diagnostics. This can block on some drivers, so leave it disabled during normal viewing. |
-| `CAVEVIEWER_VSYNC` | `1` | 0 or 1 | Disable with `0` when virtual display drivers block swap buffers. |
-| `LIBGL_ALWAYS_SOFTWARE` | unset | `1` on Linux/Mesa | Force software OpenGL rendering when GPU/VM drivers are unstable. |
+| `CAVEVIEWER_VSYNC` | `1` | 0 or 1 | Disable with `0` when diagnosing display-driver stalls. |
+| `LIBGL_ALWAYS_SOFTWARE` | unset | `1` on Linux/Mesa | Force software OpenGL rendering when GPU drivers are unstable. |
 
 GPU memory detection currently uses Linux DRM sysfs for AMD GPUs and
 `nvidia-smi` for NVIDIA GPUs. Low-VRAM AMD integrated GPUs include a conservative

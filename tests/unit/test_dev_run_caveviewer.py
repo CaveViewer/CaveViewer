@@ -44,29 +44,97 @@ def test_ensure_runtime_dependencies_uses_selected_interpreter(monkeypatch):
     )
 
 
-def test_require_supported_python_rejects_wrong_series(monkeypatch):
+def test_ensure_uv_installs_pinned_version_when_missing(monkeypatch):
     script = _load_script()
-    monkeypatch.setattr(script.sys, "version_info", (3, 14, 7))
-    monkeypatch.setattr(script.sys, "executable", "/example/python")
+    installed_uv = Path("/tools/uv")
+    discoveries = iter((None, installed_uv))
+    run = Mock()
+    monkeypatch.setattr(script, "find_uv", lambda: next(discoveries))
+    monkeypatch.setattr(script.subprocess, "run", run)
+
+    assert script.ensure_uv() == installed_uv
+    run.assert_called_once_with(
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "--disable-pip-version-check",
+            "uv==0.12.5",
+        ],
+        check=True,
+    )
+
+
+def test_ensure_managed_runtime_reuses_supported_environment(
+    monkeypatch, tmp_path
+):
+    script = _load_script()
+    interpreter = tmp_path / ".venv-dev" / "bin" / "python"
+    monkeypatch.setattr(script, "runtime_python", lambda project_root: interpreter)
+    monkeypatch.setattr(script, "interpreter_is_supported", lambda candidate: True)
+    ensure_uv = Mock()
+    monkeypatch.setattr(script, "ensure_uv", ensure_uv)
+
+    assert script.ensure_managed_runtime(tmp_path) == interpreter
+    ensure_uv.assert_not_called()
+
+
+def test_ensure_managed_runtime_creates_python_312_environment(
+    monkeypatch, tmp_path
+):
+    script = _load_script()
+    interpreter = tmp_path / ".venv-dev" / "bin" / "python"
+    uv = Path("/tools/uv")
+    support_checks = iter((False, True))
+    run = Mock()
+    monkeypatch.setattr(script, "runtime_python", lambda project_root: interpreter)
+    monkeypatch.setattr(
+        script, "interpreter_is_supported", lambda candidate: next(support_checks)
+    )
+    monkeypatch.setattr(script, "ensure_uv", lambda: uv)
+    monkeypatch.setattr(script.subprocess, "run", run)
+
+    assert script.ensure_managed_runtime(tmp_path) == interpreter
+    run.assert_called_once_with(
+        [
+            str(uv),
+            "venv",
+            "--python",
+            "3.12",
+            "--managed-python",
+            "--seed",
+            "--clear",
+            str(tmp_path / ".venv-dev"),
+        ],
+        check=True,
+    )
+
+
+def test_ensure_managed_runtime_rejects_failed_provisioning(monkeypatch, tmp_path):
+    script = _load_script()
+    interpreter = tmp_path / ".venv-dev" / "bin" / "python"
+    monkeypatch.setattr(script, "runtime_python", lambda project_root: interpreter)
+    monkeypatch.setattr(script, "interpreter_is_supported", lambda candidate: False)
+    monkeypatch.setattr(script, "ensure_uv", lambda: Path("/tools/uv"))
+    monkeypatch.setattr(script.subprocess, "run", Mock())
 
     with pytest.raises(
-        RuntimeError,
-        match=(
-            r"CaveViewer requires Python 3\.12, but the selected interpreter "
-            r"is Python 3\.14\.7: /example/python"
-        ),
+        RuntimeError, match="uv did not create a usable Python 3.12 environment"
     ):
-        script.require_supported_python()
+        script.ensure_managed_runtime(tmp_path)
 
 
 def test_main_installs_before_launching_caveviewer(monkeypatch):
     script = _load_script()
     events = []
+    interpreter = PROJECT_ROOT / ".venv-dev" / "bin" / "python"
     monkeypatch.setattr(
         script,
-        "require_supported_python",
-        lambda: events.append(("validate",)),
+        "ensure_managed_runtime",
+        lambda project_root: interpreter,
     )
+    monkeypatch.setattr(script, "running_in", lambda candidate: True)
     monkeypatch.setattr(
         script,
         "ensure_runtime_dependencies",
@@ -81,7 +149,28 @@ def test_main_installs_before_launching_caveviewer(monkeypatch):
     script.main()
 
     assert events == [
-        ("validate",),
         ("install", PROJECT_ROOT),
         ("run", ("caveviewer",), {"run_name": "__main__", "alter_sys": True}),
     ]
+
+
+def test_main_relaunches_with_managed_runtime_before_installing(monkeypatch):
+    script = _load_script()
+    interpreter = PROJECT_ROOT / ".venv-dev" / "bin" / "python"
+    execv = Mock(side_effect=SystemExit)
+    install = Mock()
+    monkeypatch.setattr(
+        script, "ensure_managed_runtime", lambda project_root: interpreter
+    )
+    monkeypatch.setattr(script, "running_in", lambda candidate: False)
+    monkeypatch.setattr(script, "ensure_runtime_dependencies", install)
+    monkeypatch.setattr(script.os, "execv", execv)
+
+    with pytest.raises(SystemExit):
+        script.main()
+
+    execv.assert_called_once_with(
+        str(interpreter),
+        [str(interpreter), str(SCRIPT_PATH), *sys.argv[1:]],
+    )
+    install.assert_not_called()

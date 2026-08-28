@@ -69,12 +69,19 @@ git checkout "$latest"
 
 ## Shared PyCharm workflows
 
-The shared **CaveViewer** run configuration selects the `Python 3.12
-(CaveViewer)` project interpreter and verifies that it resolves to Python 3.12.
-It then checks and installs `requirements.txt` before starting the application.
-This makes the first run on a fresh checkout self-bootstrapping; subsequent
-runs leave already-satisfied packages unchanged. Interpreter validation and
-dependency setup must succeed before the application is launched.
+The shared **CaveViewer** run configuration uses PyCharm's available project
+interpreter only to bootstrap the repository. It installs pinned `uv` 0.12.5
+when needed; `uv` downloads a managed Python 3.12 runtime, creates
+`.venv-dev`, and seeds pip on Linux, macOS, or Windows. The launcher then
+restarts itself with that repository-local interpreter and installs
+`requirements.txt` before starting the application.
+
+This makes the first run on a fresh checkout self-bootstrapping when the
+machine has network access and PyCharm can start the bootstrap interpreter.
+Subsequent runs reuse `.venv-dev` and leave already-satisfied packages
+unchanged. The tracked `.python-version` also pins compatible tools to Python
+3.12. Runtime provisioning and dependency setup must succeed before the
+application is launched.
 
 PyCharm contributors should use the versioned **Release Actions** run
 configurations under `.run/`. The normal choices are **Create Preview Release**
@@ -362,9 +369,9 @@ On Windows (PowerShell):
 - Broken `.venv-dev`: remove it and rerun `./scripts/dev/install.sh`.
 - Windows PowerShell policy blocks setup script: run with `-ExecutionPolicy Bypass` as shown above.
 
-### Rendering and Virtual Machine Runs
+### Rendering Troubleshooting
 
-Rendering/import strategy, low-memory tuning, VM launch settings, and
+Rendering/import strategy, low-memory tuning, GPU-driver troubleshooting, and
 `caveviewer-chunker` cache-compilation options are documented in
 [`rendering.md`](rendering.md).
 
@@ -699,9 +706,9 @@ compact layout.
 | `CAVEVIEWER_NO_DESKTOP_INTEGRATION` | `0` | Linux AppImage launcher opt-out. Set to `1` to skip the best-effort per-user desktop integration step. |
 | `CAVEVIEWER_UI_FONT` | _(platform default)_ | Absolute path to a `.ttf`/`.otf`/`.ttc` font file for the in-app FreeType renderer. Overrides the platform font search order. |
 | `CAVEVIEWER_TEXT_AA_MODE` | `light` (macOS/Linux), `normal` (others) | FreeType anti-aliasing mode for in-app text. `normal` = standard hinting; `light` = smooth light anti-aliasing; `lcd` = LCD sub-pixel rendering. |
-| `CAVEVIEWER_VSYNC` | `1` | Set to `0` to disable vertical sync. Recommended for virtual machines where the virtual display driver can block `swap_buffers()` long enough to freeze the render thread during heavy imports, making the window appear hung. |
+| `CAVEVIEWER_VSYNC` | `1` | Set to `0` to disable vertical sync when diagnosing display-driver stalls. |
 | `CAVEVIEWER_WINDOW_SYSTEM` | `auto` | Linux viewer backend: `auto` prefers X11/XWayland when `DISPLAY` is available so source and AppImage launches get the same GNOME titlebar and resize behavior, then retries Wayland on recognized initialization failures. `wayland` and `x11` require that protocol without fallback. |
-| `LIBGL_ALWAYS_SOFTWARE` | _(unset)_ | Linux OpenGL/Mesa setting. Set to `1` to force software rendering when a VM or GPU driver crashes, freezes, or leaves the app stuck in the graphics driver. |
+| `LIBGL_ALWAYS_SOFTWARE` | _(unset)_ | Linux OpenGL/Mesa setting. Set to `1` to force software rendering when a GPU driver crashes, freezes, or leaves the app stuck in the graphics driver. |
 | `CAVEVIEWER_FFMPEG` | _(auto)_ | Path to an `ffmpeg` executable for MP4 recording. If unset, CaveViewer tries system `ffmpeg`, then the bundled `imageio-ffmpeg` executable. |
 | `CAVEVIEWER_RECORDING_DIR` | `~/Movies/CaveViewer` | Folder where saved recordings are stored. The Preferences panel saves this value. |
 | `CAVEVIEWER_MAP_LIBRARY_DIR` | User Downloads folder | Folder where CaveViewer stores downloaded Map Library maps. The Preferences panel saves this value. |
