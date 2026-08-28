@@ -34,6 +34,7 @@ run_caveviewer.sh
 .idea/
 .run/*
 !.run/GitHub - *.run.xml
+!.run/CaveViewer.run.xml
 .aiassistant/*
 !.aiassistant/rules/
 !.aiassistant/rules/*.md
