@@ -66,6 +66,26 @@ def test_ensure_uv_installs_pinned_version_when_missing(monkeypatch):
     )
 
 
+def test_find_uv_uses_user_scripts_directory_when_not_on_path(
+    monkeypatch, tmp_path
+):
+    script = _load_script()
+    executable = "uv.exe" if script.sys.platform == "win32" else "uv"
+    user_scripts = tmp_path / "user-scripts"
+    user_scripts.mkdir()
+    installed_uv = user_scripts / executable
+    installed_uv.touch()
+    monkeypatch.setattr(script.shutil, "which", lambda candidate: None)
+    monkeypatch.setattr(script.sys, "executable", str(tmp_path / "python"))
+    monkeypatch.setattr(
+        script.sysconfig,
+        "get_path",
+        lambda name, scheme: str(user_scripts),
+    )
+
+    assert script.find_uv() == installed_uv
+
+
 def test_ensure_managed_runtime_reuses_supported_environment(
     monkeypatch, tmp_path
 ):
