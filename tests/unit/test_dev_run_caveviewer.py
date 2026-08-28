@@ -85,19 +85,20 @@ def test_ensure_managed_runtime_creates_python_312_environment(
 ):
     script = _load_script()
     interpreter = tmp_path / ".venv-dev" / "bin" / "python"
+    uv = Path("/tools/uv")
     support_checks = iter((False, True))
     run = Mock()
     monkeypatch.setattr(script, "runtime_python", lambda project_root: interpreter)
     monkeypatch.setattr(
         script, "interpreter_is_supported", lambda candidate: next(support_checks)
     )
-    monkeypatch.setattr(script, "ensure_uv", lambda: Path("/tools/uv"))
+    monkeypatch.setattr(script, "ensure_uv", lambda: uv)
     monkeypatch.setattr(script.subprocess, "run", run)
 
     assert script.ensure_managed_runtime(tmp_path) == interpreter
     run.assert_called_once_with(
         [
-            "/tools/uv",
+            str(uv),
             "venv",
             "--python",
             "3.12",
