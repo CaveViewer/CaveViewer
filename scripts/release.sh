@@ -122,8 +122,8 @@ resolve_release_test_python() {
   fi
 
   for candidate in \
-    "$repo_root/.venv-dev/bin/python" \
-    "$repo_root/.venv-dev/Scripts/python.exe"; do
+    "$repo_root/.venv/bin/python" \
+    "$repo_root/.venv/Scripts/python.exe"; do
     if [ -x "$candidate" ] && cv_python_is_supported "$candidate"; then
       echo "$candidate"
       return 0

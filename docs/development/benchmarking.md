@@ -309,7 +309,7 @@ ln -sf ../../scripts/benchmark/hooks/pre-push-map-benchmark .git/hooks/pre-push
 ```
 
 The hook only runs when the destination ref is `refs/heads/main`. It uses
-`$PYTHON` when set, otherwise `.venv-dev/bin/python` when present, then falls
+`$PYTHON` when set, otherwise `.venv/bin/python` when present, then falls
 back to `python3`. Set `CAVEVIEWER_BENCHMARK_CONFIG` to the local JSON config
 path before pushing.
 

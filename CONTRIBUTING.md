@@ -25,7 +25,7 @@ than system memory.
 - Run focused tests while iterating, then run the complete suite:
 
   ```bash
-  .venv-dev/bin/python -m pytest -p no:cacheprovider -q
+  .venv/bin/python -m pytest -p no:cacheprovider -q
   ```
 
 - Run `git diff --check` and review the complete diff before submitting.

@@ -280,8 +280,8 @@ signing_python="${CAVEVIEWER_RELEASE_SIGNING_PYTHON:-}"
 if [ -z "$signing_python" ]; then
   if [ -x "$linux_build_venv/bin/python" ]; then
     signing_python="$linux_build_venv/bin/python"
-  elif [ -x "$repo_root/.venv-dev/bin/python" ]; then
-    signing_python="$repo_root/.venv-dev/bin/python"
+  elif [ -x "$repo_root/.venv/bin/python" ]; then
+    signing_python="$repo_root/.venv/bin/python"
   else
     signing_python="python3"
   fi

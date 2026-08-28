@@ -7,7 +7,7 @@ Validation:
 
 ```bash
 PYTHONPYCACHEPREFIX=/tmp/caveviewer-pycache \
-  .venv-dev/bin/python -m compileall -q src/caveviewer
+  .venv/bin/python -m compileall -q src/caveviewer
 ```
 
 These rules supplement the repository-level instructions for source files.

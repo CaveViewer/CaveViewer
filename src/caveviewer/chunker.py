@@ -54,7 +54,7 @@ Examples:
   {PROGRAM_NAME} --source=/maps/cave --cache-root=/data/caveviewer/maps --json
 
 Source checkout:
-  .venv-dev/bin/python -m caveviewer.chunker --source=/maps/cave.obj --chunk-size=64
+  .venv/bin/python -m caveviewer.chunker --source=/maps/cave.obj --chunk-size=64
 
 Defaults:
   Import options use built-in defaults unless overridden by CLI flags or an

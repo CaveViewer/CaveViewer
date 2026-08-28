@@ -5,7 +5,7 @@ from __future__ import annotations
 import importlib.util
 import sys
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, call
 
 import pytest
 
@@ -70,7 +70,7 @@ def test_ensure_managed_runtime_reuses_supported_environment(
     monkeypatch, tmp_path
 ):
     script = _load_script()
-    interpreter = tmp_path / ".venv-dev" / "bin" / "python"
+    interpreter = tmp_path / ".venv" / "bin" / "python"
     monkeypatch.setattr(script, "runtime_python", lambda project_root: interpreter)
     monkeypatch.setattr(script, "interpreter_is_supported", lambda candidate: True)
     ensure_uv = Mock()
@@ -84,7 +84,7 @@ def test_ensure_managed_runtime_creates_python_312_environment(
     monkeypatch, tmp_path
 ):
     script = _load_script()
-    interpreter = tmp_path / ".venv-dev" / "bin" / "python"
+    interpreter = tmp_path / ".venv" / "bin" / "python"
     uv = Path("/tools/uv")
     support_checks = iter((False, True))
     run = Mock()
@@ -105,7 +105,7 @@ def test_ensure_managed_runtime_creates_python_312_environment(
             "--managed-python",
             "--seed",
             "--clear",
-            str(tmp_path / ".venv-dev"),
+            str(tmp_path / ".venv"),
         ],
         check=True,
     )
@@ -113,7 +113,7 @@ def test_ensure_managed_runtime_creates_python_312_environment(
 
 def test_ensure_managed_runtime_rejects_failed_provisioning(monkeypatch, tmp_path):
     script = _load_script()
-    interpreter = tmp_path / ".venv-dev" / "bin" / "python"
+    interpreter = tmp_path / ".venv" / "bin" / "python"
     monkeypatch.setattr(script, "runtime_python", lambda project_root: interpreter)
     monkeypatch.setattr(script, "interpreter_is_supported", lambda candidate: False)
     monkeypatch.setattr(script, "ensure_uv", lambda: Path("/tools/uv"))
@@ -125,15 +125,42 @@ def test_ensure_managed_runtime_rejects_failed_provisioning(monkeypatch, tmp_pat
         script.ensure_managed_runtime(tmp_path)
 
 
+def test_ensure_managed_python_installs_and_finds_python_312(monkeypatch):
+    script = _load_script()
+    uv = Path("/tools/uv")
+    interpreter = Path("/managed/python")
+    run = Mock(
+        side_effect=(
+            Mock(returncode=0),
+            Mock(stdout=str(interpreter)),
+        )
+    )
+    monkeypatch.setattr(script.subprocess, "run", run)
+    monkeypatch.setattr(script, "interpreter_is_supported", lambda candidate: True)
+
+    assert script.ensure_managed_python(uv) == interpreter
+    assert run.call_args_list == [
+        call([str(uv), "python", "install", "3.12"], check=True),
+        call(
+            [str(uv), "python", "find", "--managed-python", "3.12"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ),
+    ]
+
+
 def test_main_installs_before_launching_caveviewer(monkeypatch):
     script = _load_script()
     events = []
-    interpreter = PROJECT_ROOT / ".venv-dev" / "bin" / "python"
+    interpreter = PROJECT_ROOT / ".venv" / "bin" / "python"
     monkeypatch.setattr(
         script,
         "ensure_managed_runtime",
         lambda project_root: interpreter,
     )
+    monkeypatch.setattr(script, "runtime_python", lambda project_root: interpreter)
+    monkeypatch.setattr(script, "interpreter_is_supported", lambda candidate: True)
     monkeypatch.setattr(script, "running_in", lambda candidate: True)
     monkeypatch.setattr(
         script,
@@ -156,21 +183,58 @@ def test_main_installs_before_launching_caveviewer(monkeypatch):
 
 def test_main_relaunches_with_managed_runtime_before_installing(monkeypatch):
     script = _load_script()
-    interpreter = PROJECT_ROOT / ".venv-dev" / "bin" / "python"
-    execv = Mock(side_effect=SystemExit)
+    interpreter = PROJECT_ROOT / ".venv" / "bin" / "python"
+    relaunch = Mock(side_effect=SystemExit)
     install = Mock()
     monkeypatch.setattr(
         script, "ensure_managed_runtime", lambda project_root: interpreter
     )
+    monkeypatch.setattr(script, "runtime_python", lambda project_root: interpreter)
+    monkeypatch.setattr(script, "interpreter_is_supported", lambda candidate: True)
     monkeypatch.setattr(script, "running_in", lambda candidate: False)
     monkeypatch.setattr(script, "ensure_runtime_dependencies", install)
-    monkeypatch.setattr(script.os, "execv", execv)
+    monkeypatch.setattr(script, "relaunch", relaunch)
 
     with pytest.raises(SystemExit):
         script.main()
 
-    execv.assert_called_once_with(
-        str(interpreter),
-        [str(interpreter), str(SCRIPT_PATH), *sys.argv[1:]],
-    )
+    relaunch.assert_called_once_with(interpreter)
     install.assert_not_called()
+
+
+def test_relaunch_removes_previous_virtual_environment_marker(monkeypatch):
+    script = _load_script()
+    interpreter = Path("/managed/python")
+    execve = Mock(side_effect=SystemExit)
+    monkeypatch.setenv("VIRTUAL_ENV", "/old/environment")
+    monkeypatch.setattr(script.os, "execve", execve)
+
+    with pytest.raises(SystemExit):
+        script.relaunch(interpreter)
+
+    executable, arguments, environment = execve.call_args.args
+    assert executable == str(interpreter)
+    assert arguments == [str(interpreter), str(SCRIPT_PATH), *sys.argv[1:]]
+    assert "VIRTUAL_ENV" not in environment
+
+
+def test_main_escapes_unsupported_active_project_environment(monkeypatch):
+    script = _load_script()
+    project_interpreter = PROJECT_ROOT / ".venv" / "bin" / "python"
+    managed_interpreter = Path("/managed/python")
+    relaunch = Mock(side_effect=SystemExit)
+    monkeypatch.setattr(
+        script, "runtime_python", lambda project_root: project_interpreter
+    )
+    monkeypatch.setattr(script, "running_in", lambda candidate: True)
+    monkeypatch.setattr(script, "interpreter_is_supported", lambda candidate: False)
+    monkeypatch.setattr(script, "ensure_uv", lambda: Path("/tools/uv"))
+    monkeypatch.setattr(
+        script, "ensure_managed_python", lambda uv: managed_interpreter
+    )
+    monkeypatch.setattr(script, "relaunch", relaunch)
+
+    with pytest.raises(SystemExit):
+        script.main()
+
+    relaunch.assert_called_once_with(managed_interpreter)

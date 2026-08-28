@@ -136,7 +136,7 @@ $env:CAVEVIEWER_GPU_MEMORY_UTILIZATION_TARGET = "50"
 $env:CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME = "1"
 $env:CAVEVIEWER_UPLOAD_GROUPS_PER_FRAME = "1"
 $env:CAVEVIEWER_UPLOAD_TIME_BUDGET_MS = "2"
-.\.venv-dev\Scripts\python -m caveviewer
+.\.venv\Scripts\python -m caveviewer
 ```
 
 If you are using the Windows setup package instead of a development venv, its
@@ -162,7 +162,7 @@ Windows PowerShell equivalent from a source checkout:
 
 ```powershell
 $env:CAVEVIEWER_VSYNC = "0"
-.\.venv-dev\Scripts\python -m caveviewer
+.\.venv\Scripts\python -m caveviewer
 ```
 
 If you are using the Windows setup package instead of a development venv, use
@@ -199,7 +199,7 @@ $env:CAVEVIEWER_VSYNC = "0"
 $env:CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME = "1"
 $env:CAVEVIEWER_UPLOAD_GROUPS_PER_FRAME = "1"
 $env:CAVEVIEWER_UPLOAD_TIME_BUDGET_MS = "1"
-.\.venv-dev\Scripts\python -m caveviewer
+.\.venv\Scripts\python -m caveviewer
 ```
 
 For the Windows setup package, use the same `$env:` values with the verified
@@ -238,7 +238,7 @@ variables first, then launch CaveViewer:
 ```powershell
 $env:CAVEVIEWER_UPLOAD_GROUPS_PER_FRAME = "1"
 $env:CAVEVIEWER_UPLOAD_TIME_BUDGET_MS = "2"
-.\.venv-dev\Scripts\python -m caveviewer
+.\.venv\Scripts\python -m caveviewer
 ```
 
 | Variable | Default | Range | Purpose |
@@ -277,7 +277,7 @@ caveviewer-chunker --source=/path/to/map-or-folder --chunk-size=64
 From a source checkout, the module entry point is equivalent:
 
 ```bash
-.venv-dev/bin/python -m caveviewer.chunker --source=/path/to/map-or-folder --chunk-size=64
+.venv/bin/python -m caveviewer.chunker --source=/path/to/map-or-folder --chunk-size=64
 ```
 
 Windows PowerShell examples:
@@ -287,7 +287,7 @@ caveviewer-chunker --source="C:\Maps\DevilsEye.obj" --chunk-size=64
 ```
 
 ```powershell
-.\.venv-dev\Scripts\python -m caveviewer.chunker `
+.\.venv\Scripts\python -m caveviewer.chunker `
   --source="C:\Maps\DevilsEye" `
   --cache-root="D:\CaveViewer\maps" `
   --chunk-size=64 `

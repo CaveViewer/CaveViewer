@@ -24,13 +24,13 @@ not a substitute for isolating avoidable external dependencies.
 Run the complete suite:
 
 ```bash
-.venv-dev/bin/python -m pytest -p no:cacheprovider -q
+.venv/bin/python -m pytest -p no:cacheprovider -q
 ```
 
 Run a focused area:
 
 ```bash
-.venv-dev/bin/python -m pytest -p no:cacheprovider -q tests/unit/core
+.venv/bin/python -m pytest -p no:cacheprovider -q tests/unit/core
 ```
 
 Measure branch coverage without writing the data file into a restricted or
@@ -38,7 +38,7 @@ dirty source tree:
 
 ```bash
 COVERAGE_FILE=/tmp/caveviewer.coverage \
-  .venv-dev/bin/python -m pytest -p no:cacheprovider \
+  .venv/bin/python -m pytest -p no:cacheprovider \
   --cov=caveviewer.app \
   --cov=caveviewer.core.chunking.builder \
   --cov=caveviewer.core.preferences.schema \

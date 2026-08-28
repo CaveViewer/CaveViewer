@@ -58,18 +58,8 @@ echo "Setting up CaveViewer (project root: $project_root)"
 python_bin="$(cv_resolve_project_python)"
 
 # Create development virtual environment
-legacy_venv_dir="$project_root/.venv"
-venv_dir="${CAVEVIEWER_DEV_VENV:-$project_root/.venv-dev}"
+venv_dir="${CAVEVIEWER_DEV_VENV:-$project_root/.venv}"
 venv_python="$venv_dir/bin/python"
-
-if [ "$venv_dir" = "$project_root/.venv-dev" ] \
-  && [ ! -e "$venv_dir" ] \
-  && [ -d "$legacy_venv_dir" ] \
-  && [ -x "$legacy_venv_dir/bin/python" ] \
-  && cv_python_is_supported "$legacy_venv_dir/bin/python"; then
-  echo "Migrating existing development virtual environment: $legacy_venv_dir -> $venv_dir"
-  mv "$legacy_venv_dir" "$venv_dir"
-fi
 
 if [ ! -x "$venv_python" ] || ! cv_python_is_supported "$venv_python"; then
   if [ -d "$venv_dir" ]; then
@@ -95,7 +85,7 @@ cat > "$launcher_path" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-venv_dir="${CAVEVIEWER_DEV_VENV:-$repo_root/.venv-dev}"
+venv_dir="${CAVEVIEWER_DEV_VENV:-$repo_root/.venv}"
 
 if [ ! -x "$venv_dir/bin/python" ]; then
   echo "Error: python not found at $venv_dir/bin/python"
