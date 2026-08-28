@@ -69,12 +69,19 @@ git checkout "$latest"
 
 ## Shared PyCharm workflows
 
-The shared **CaveViewer** run configuration selects the `Python 3.12
-(CaveViewer)` project interpreter and verifies that it resolves to Python 3.12.
-It then checks and installs `requirements.txt` before starting the application.
-This makes the first run on a fresh checkout self-bootstrapping; subsequent
-runs leave already-satisfied packages unchanged. Interpreter validation and
-dependency setup must succeed before the application is launched.
+The shared **CaveViewer** run configuration uses PyCharm's available project
+interpreter only to bootstrap the repository. It installs pinned `uv` 0.12.5
+when needed; `uv` downloads a managed Python 3.12 runtime, creates
+`.venv-dev`, and seeds pip on Linux, macOS, or Windows. The launcher then
+restarts itself with that repository-local interpreter and installs
+`requirements.txt` before starting the application.
+
+This makes the first run on a fresh checkout self-bootstrapping when the
+machine has network access and PyCharm can start the bootstrap interpreter.
+Subsequent runs reuse `.venv-dev` and leave already-satisfied packages
+unchanged. The tracked `.python-version` also pins compatible tools to Python
+3.12. Runtime provisioning and dependency setup must succeed before the
+application is launched.
 
 PyCharm contributors should use the versioned **Release Actions** run
 configurations under `.run/`. The normal choices are **Create Preview Release**
