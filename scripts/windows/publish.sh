@@ -247,10 +247,10 @@ echo "Windows installer asset URL: $installer_asset_url"
 
 signing_python="${CAVEVIEWER_RELEASE_SIGNING_PYTHON:-}"
 if [ -z "$signing_python" ]; then
-  if [ -x "$repo_root/.venv-dev/Scripts/python.exe" ]; then
-    signing_python="$repo_root/.venv-dev/Scripts/python.exe"
-  elif [ -x "$repo_root/.venv-dev/bin/python" ]; then
-    signing_python="$repo_root/.venv-dev/bin/python"
+  if [ -x "$repo_root/.venv/Scripts/python.exe" ]; then
+    signing_python="$repo_root/.venv/Scripts/python.exe"
+  elif [ -x "$repo_root/.venv/bin/python" ]; then
+    signing_python="$repo_root/.venv/bin/python"
   elif command -v python3 >/dev/null 2>&1; then
     signing_python="python3"
   else

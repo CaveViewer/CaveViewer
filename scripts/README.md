@@ -53,7 +53,7 @@ matches CI and release artifacts.
 Before any action changes the version or invokes a builder, `release.sh` runs
 the complete pytest suite with `-p no:cacheprovider -q`. A failing or missing
 test environment stops the release. The Python 3.12 interpreter is selected in
-this order: `CAVEVIEWER_TEST_PYTHON`, `.venv-dev`, `python3.12`, `python3`, then
+this order: `CAVEVIEWER_TEST_PYTHON`, `.venv`, `python3.12`, `python3`, then
 `python`.
 
 `--skip-tests` bypasses this local gate. It is intended for orchestrators such
@@ -205,7 +205,7 @@ Packaging scripts use platform-isolated virtual environments by default.
 
 Developer setup remains independent:
 
-- `./scripts/dev/install.sh` uses `.venv-dev` for local app development/runtime.
+- `./scripts/dev/install.sh` uses `.venv` for local app development/runtime.
 - Override with `CAVEVIEWER_DEV_VENV=/path/to/venv`.
 
 For Linux-specific packaging details, see `scripts/linux/README.md`.

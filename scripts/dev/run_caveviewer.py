@@ -17,8 +17,8 @@ UV_VERSION = "0.12.5"
 def runtime_python(project_root: Path) -> Path:
     """Return the platform-specific interpreter in the managed environment."""
     if sys.platform == "win32":
-        return project_root / ".venv-dev" / "Scripts" / "python.exe"
-    return project_root / ".venv-dev" / "bin" / "python"
+        return project_root / ".venv" / "Scripts" / "python.exe"
+    return project_root / ".venv" / "bin" / "python"
 
 
 def interpreter_is_supported(interpreter: Path) -> bool:
@@ -83,7 +83,7 @@ def ensure_managed_runtime(project_root: Path) -> Path:
             "--managed-python",
             "--seed",
             "--clear",
-            str(project_root / ".venv-dev"),
+            str(project_root / ".venv"),
         ],
         check=True,
     )
@@ -92,9 +92,35 @@ def ensure_managed_runtime(project_root: Path) -> Path:
     return interpreter
 
 
+def ensure_managed_python(uv: Path) -> Path:
+    """Install and locate Python 3.12 outside the active project environment."""
+    subprocess.run([str(uv), "python", "install", PYTHON_SERIES], check=True)
+    completed = subprocess.run(
+        [str(uv), "python", "find", "--managed-python", PYTHON_SERIES],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    interpreter = Path(completed.stdout.strip())
+    if not interpreter_is_supported(interpreter):
+        raise RuntimeError("uv did not install a usable managed Python 3.12")
+    return interpreter
+
+
 def running_in(interpreter: Path) -> bool:
     """Report whether this process already uses the managed interpreter."""
     return Path(sys.executable).resolve() == interpreter.resolve()
+
+
+def relaunch(interpreter: Path) -> None:
+    """Restart the bootstrap without leaking the previous environment marker."""
+    executable = str(interpreter)
+    script = str(Path(__file__).resolve())
+    environment = os.environ.copy()
+    environment.pop("VIRTUAL_ENV", None)
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os.execve(executable, [executable, script, *sys.argv[1:]], environment)
 
 
 def ensure_runtime_dependencies(project_root: Path) -> None:
@@ -117,13 +143,14 @@ def ensure_runtime_dependencies(project_root: Path) -> None:
 def main() -> None:
     """Prepare the selected interpreter, then run CaveViewer as a module."""
     project_root = Path(__file__).resolve().parents[2]
+    project_interpreter = runtime_python(project_root)
+    if running_in(project_interpreter) and not interpreter_is_supported(
+        project_interpreter
+    ):
+        relaunch(ensure_managed_python(ensure_uv()))
     interpreter = ensure_managed_runtime(project_root)
     if not running_in(interpreter):
-        executable = str(interpreter)
-        script = str(Path(__file__).resolve())
-        sys.stdout.flush()
-        sys.stderr.flush()
-        os.execv(executable, [executable, script, *sys.argv[1:]])
+        relaunch(interpreter)
     ensure_runtime_dependencies(project_root)
     runpy.run_module("caveviewer", run_name="__main__", alter_sys=True)
 

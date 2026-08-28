@@ -6,7 +6,7 @@ Overrides: none
 Validation:
 
 ```bash
-.venv-dev/bin/python -m pytest -p no:cacheprovider -q tests/unit/core
+.venv/bin/python -m pytest -p no:cacheprovider -q tests/unit/core
 ```
 
 These rules supplement the repository and source instructions for core code.

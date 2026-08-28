@@ -6,7 +6,7 @@ Overrides: none
 Validation:
 
 ```bash
-.venv-dev/bin/python -m pytest -p no:cacheprovider -q tests/unit/gui
+.venv/bin/python -m pytest -p no:cacheprovider -q tests/unit/gui
 ```
 
 These rules supplement repository and source instructions for Tk/OpenGL GUI

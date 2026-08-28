@@ -91,20 +91,20 @@ Set up the development environment:
 Run the complete suite:
 
 ```bash
-.venv-dev/bin/python -m pytest -p no:cacheprovider -q
+.venv/bin/python -m pytest -p no:cacheprovider -q
 ```
 
 Run a focused test file while iterating:
 
 ```bash
-.venv-dev/bin/python -m pytest -p no:cacheprovider -q tests/path/to/test_file.py
+.venv/bin/python -m pytest -p no:cacheprovider -q tests/path/to/test_file.py
 ```
 
 Check syntax without writing bytecode into the repository:
 
 ```bash
 PYTHONPYCACHEPREFIX=/tmp/caveviewer-pycache \
-  .venv-dev/bin/python -m compileall -q src/caveviewer
+  .venv/bin/python -m compileall -q src/caveviewer
 ```
 
 ## Definition of done

@@ -72,13 +72,13 @@ git checkout "$latest"
 The shared **CaveViewer** run configuration uses PyCharm's available project
 interpreter only to bootstrap the repository. It installs pinned `uv` 0.12.5
 when needed; `uv` downloads a managed Python 3.12 runtime, creates
-`.venv-dev`, and seeds pip on Linux, macOS, or Windows. The launcher then
+`.venv`, and seeds pip on Linux, macOS, or Windows. The launcher then
 restarts itself with that repository-local interpreter and installs
 `requirements.txt` before starting the application.
 
 This makes the first run on a fresh checkout self-bootstrapping when the
 machine has network access and PyCharm can start the bootstrap interpreter.
-Subsequent runs reuse `.venv-dev` and leave already-satisfied packages
+Subsequent runs reuse `.venv` and leave already-satisfied packages
 unchanged. The tracked `.python-version` also pins compatible tools to Python
 3.12. Runtime provisioning and dependency setup must succeed before the
 application is launched.
@@ -144,7 +144,7 @@ Use the project bootstrap script:
 
 What it does:
 
-- Creates a development virtual environment at `.venv-dev` (or `CAVEVIEWER_DEV_VENV` if set)
+- Creates a development virtual environment at `.venv` (or `CAVEVIEWER_DEV_VENV` if set)
 - Uses Python 3.12 from `CAVEVIEWER_PYTHON`, `python3.12`, or `python3`
 - Installs dependencies from `requirements.txt`
 - Installs CaveViewer in editable mode from `src/`
@@ -160,8 +160,8 @@ Alternatively:
 
 ```bash
 # If you activated the virtual environment, run the 'source' line below
-source .venv-dev/bin/activate
-.venv-dev/bin/python -m caveviewer
+source .venv/bin/activate
+.venv/bin/python -m caveviewer
 ```
 
 ## Windows: Run From Source
@@ -169,11 +169,11 @@ source .venv-dev/bin/activate
 Option A (recommended for technical users): manual venv flow.
 
 ```powershell
-py -3.12 -m venv .venv-dev
-.\.venv-dev\Scripts\python -m pip install --upgrade pip
-.\.venv-dev\Scripts\python -m pip install -r requirements.txt
-.\.venv-dev\Scripts\python -m pip install --no-deps -e .
-.\.venv-dev\Scripts\python -m caveviewer
+py -3.12 -m venv .venv
+.\.venv\Scripts\python -m pip install --upgrade pip
+.\.venv\Scripts\python -m pip install -r requirements.txt
+.\.venv\Scripts\python -m pip install --no-deps -e .
+.\.venv\Scripts\python -m caveviewer
 ```
 
 Option B (guided setup script in this repo):
@@ -195,11 +195,11 @@ Notes:
 Install the development-only test tools after the runtime dependencies:
 
 ```bash
-.venv-dev/bin/python -m pip install -r requirements-dev.txt
-.venv-dev/bin/python -m pytest
+.venv/bin/python -m pip install -r requirements-dev.txt
+.venv/bin/python -m pytest
 ```
 
-On Windows, use `.venv-dev\Scripts\python` in place of `.venv-dev/bin/python`.
+On Windows, use `.venv\Scripts\python` in place of `.venv/bin/python`.
 
 The suite isolates the home/preferences directory, blocks uncontrolled network
 connections, and uses temporary directories for all generated files. GitHub runs
@@ -210,7 +210,7 @@ builds. `All Platform Release` runs it once for the whole parallel package
 fan-out; a directly dispatched platform workflow runs its own gate. Direct
 `scripts/release.sh` runs also execute the complete pytest suite before changing
 the application version or creating artifacts. It uses
-`.venv-dev` when available, then falls back to
+`.venv` when available, then falls back to
 `python3.12`/`python3`/`python`; set `CAVEVIEWER_TEST_PYTHON=/path/to/python` to
 select another prepared Python 3.12 interpreter. The interpreter must have
 `requirements.txt` and `requirements-dev.txt` installed.
@@ -325,7 +325,7 @@ Windows PowerShell example:
 ```powershell
 $env:CAVEVIEWER_MAP_LIBRARY_REPO = "MyOrg/MyMaps"
 $env:CAVEVIEWER_MAP_LIBRARY_RELEASE_TAG = "public-maps"
-.\.venv-dev\Scripts\python -m caveviewer
+.\.venv\Scripts\python -m caveviewer
 ```
 
 Advanced direct API override:
@@ -353,20 +353,20 @@ git pull --ff-only
 Then refresh dependencies in your active dev venv:
 
 ```bash
-.venv-dev/bin/python -m pip install -r requirements.txt
+.venv/bin/python -m pip install -r requirements.txt
 ```
 
 On Windows (PowerShell):
 
 ```powershell
-.\.venv-dev\Scripts\python -m pip install -r requirements.txt
+.\.venv\Scripts\python -m pip install -r requirements.txt
 ```
 
 ## Troubleshooting
 
 - Python 3.12 not found (macOS/Linux): install Python 3.12 or set
   `CAVEVIEWER_PYTHON=/path/to/python3.12`, then rerun setup.
-- Broken `.venv-dev`: remove it and rerun `./scripts/dev/install.sh`.
+- Broken `.venv`: remove it and rerun `./scripts/dev/install.sh`.
 - Windows PowerShell policy blocks setup script: run with `-ExecutionPolicy Bypass` as shown above.
 
 ### Rendering Troubleshooting
@@ -454,7 +454,7 @@ runtime snapshot.
 
 | Variable | Default | Description |
 |---|---|---|
-| `CAVEVIEWER_DEV_VENV` | `.venv-dev` | Path to the development virtual environment used by `run_caveviewer.sh` and `scripts/dev/install.sh`. |
+| `CAVEVIEWER_DEV_VENV` | `.venv` | Path to the development virtual environment used by `run_caveviewer.sh` and `scripts/dev/install.sh`. |
 | `CAVEVIEWER_MACOS_BUILD_VENV` | _(none)_ | Path to the venv used by the macOS build scripts. |
 | `CAVEVIEWER_LINUX_BUILD_VENV` | _(none)_ | Path to the venv used by the Linux build scripts. |
 | `CAVEVIEWER_PROJECT_ROOT` | _(set by `scripts/dev/env_setup.sh`)_ | Source checkout root used only by development shell helpers; it is not a user-storage location. |

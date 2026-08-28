@@ -6,7 +6,7 @@ Overrides: none
 Validation:
 
 ```bash
-.venv-dev/bin/python -m pytest -p no:cacheprovider -q
+.venv/bin/python -m pytest -p no:cacheprovider -q
 ```
 
 These rules supplement the repository-level `AGENTS.md` for files under
