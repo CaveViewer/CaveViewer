@@ -7,6 +7,7 @@ import runpy
 import shutil
 import subprocess
 import sys
+import sysconfig
 from pathlib import Path
 
 
@@ -37,13 +38,21 @@ def interpreter_is_supported(interpreter: Path) -> bool:
 
 
 def find_uv() -> Path | None:
-    """Find uv on PATH or beside the PyCharm-selected bootstrap interpreter."""
+    """Find uv in standard locations for the bootstrap interpreter."""
     executable = "uv.exe" if sys.platform == "win32" else "uv"
     on_path = shutil.which(executable)
     if on_path:
         return Path(on_path)
     beside_interpreter = Path(sys.executable).resolve().parent / executable
-    return beside_interpreter if beside_interpreter.is_file() else None
+    if beside_interpreter.is_file():
+        return beside_interpreter
+
+    # A non-admin pip install can place console scripts in the user scheme
+    # without adding that directory to PATH, especially on Windows.
+    user_scripts = Path(
+        sysconfig.get_path("scripts", scheme=f"{os.name}_user")
+    ) / executable
+    return user_scripts if user_scripts.is_file() else None
 
 
 def ensure_uv() -> Path:
