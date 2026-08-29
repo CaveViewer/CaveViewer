@@ -269,6 +269,7 @@ class PreferencesPanel:
 
         self.field_vars: dict[str, tk.StringVar] = {}
         self.field_entries: dict[str, tk.Entry] = {}
+        self.field_title_labels: dict[str, tk.Label] = {}
         self.field_display_vars: dict[str, tk.StringVar] = {}
         self.field_entry_states: dict[str, str] = {}
         self.field_browse_buttons: dict[str, tk.Widget] = {}
@@ -278,6 +279,7 @@ class PreferencesPanel:
         self.rendering_state = False
         self.rendered_invalid_key: str | None = None
         self.apply_button = None
+        self.discard_button = None
         self.tab_strip = None
         self.page_scroll_shell = None
         self.page_canvas = None
@@ -572,14 +574,16 @@ class PreferencesPanel:
             column=0,
             sticky="ew",
         )
-        tk.Label(
+        title_label = tk.Label(
             text_column,
             text=field.label,
             font=self.body_font,
             fg=_SUBTITLE_COLOR,
             bg=_BG_COLOR,
             anchor="w",
-        ).pack(anchor="w")
+        )
+        title_label.pack(anchor="w")
+        self.field_title_labels[key] = title_label
 
         var = tk.StringVar(master=self.dialog, value=self.form.state.values[key])
         self.field_vars[key] = var
@@ -847,6 +851,15 @@ class PreferencesPanel:
             or getattr(self, "rendered_state", None) is None
         ):
             return
+        if (
+            not self.rendered_state.message
+            and self.rendered_state.has_unsaved_changes
+        ):
+            self.error_label.config(
+                text="You have unsaved changes.",
+                fg=_INSTRUCTION_COLOR,
+            )
+            return
         if not self.rendered_state.message and self._feedback_override is not None:
             message, color = self._feedback_override
             self.error_label.config(text=message, fg=color)
@@ -1087,16 +1100,16 @@ class PreferencesPanel:
             pady=(self._layout_policy.button_row_top_pad_y, 0),
         )
 
-        cancel_button = self._new_dialog_button(
+        self.discard_button = self._new_dialog_button(
             self.button_row,
-            "Cancel",
-            self.cancel,
+            "Discard changes",
+            self.discard_changes,
             padx=12,
             pady=6,
         )
         self.apply_button = self._new_dialog_button(
             self.button_row,
-            "Apply",
+            "Save changes",
             self.apply,
             kind="primary",
             padx=16,
@@ -1105,7 +1118,7 @@ class PreferencesPanel:
         )
 
         self.apply_button.pack(side="right")
-        cancel_button.pack(side="right", padx=(0, 8))
+        self.discard_button.pack(side="right", padx=(0, 8))
 
         self.feedback_frame = tk.Frame(self.button_row, bg=_BG_COLOR)
         self.feedback_frame.pack(side="left", fill="x", expand=True)
@@ -1181,6 +1194,21 @@ class PreferencesPanel:
     def _set_apply_enabled(self, enabled: bool) -> None:
         set_dialog_action_button(self.apply_button, enabled=enabled)
 
+    def _render_dirty_state(self, state: PreferencesFormState) -> None:
+        """Keep pending changes visible across tab navigation."""
+        has_changes = state.has_unsaved_changes
+        set_dialog_action_button(
+            self.apply_button,
+            enabled=has_changes and state.apply_enabled,
+        )
+        set_dialog_action_button(self.discard_button, enabled=has_changes)
+        if self.tab_strip is not None:
+            self.tab_strip.set_indicated(state.dirty_sections)
+        fields_by_key = {field.key: field for field in PREFERENCE_FIELDS}
+        for key, label in self.field_title_labels.items():
+            suffix = " •" if key in state.dirty_keys else ""
+            label.configure(text=f"{fields_by_key[key].label}{suffix}")
+
     def _set_field_lock(self, invalid_key: str | None) -> None:
         for key, entry in self.field_entries.items():
             enabled = invalid_key is None or key == invalid_key
@@ -1236,7 +1264,7 @@ class PreferencesPanel:
         self.rendered_invalid_key = state.invalid_key
         locked_key = state.invalid_key if state.form_locked else None
         self._set_field_lock(locked_key)
-        self._set_apply_enabled(state.apply_enabled)
+        self._render_dirty_state(state)
         self._sync_feedback_to_current_state()
 
         if state.invalid_key is not None and (
@@ -1376,25 +1404,25 @@ class PreferencesPanel:
                 MessageKind.ERROR,
             )
             return
-        message = "Preferences loaded. Review the values, then select Apply."
+        message = "Preferences loaded. Review the values, then save changes."
         if result.defaulted_keys:
             count = len(result.defaulted_keys)
             message = (
                 f"Preferences loaded; {count} invalid or missing "
                 f"{'value was' if count == 1 else 'values were'} replaced "
                 f"with {'its' if count == 1 else 'their'} default. "
-                "Review the values, then select Apply."
+                "Review the values, then save changes."
             )
         self._stage_preferences(result.preferences, message)
 
     def restore_defaults(self) -> None:
-        """Confirm and stage defaults while preserving Apply/Cancel semantics."""
+        """Confirm and stage defaults for review before they are saved."""
 
         if not self._confirm_restore_defaults():
             return
         self._stage_preferences(
             Preferences(preference_defaults()),
-            "Default preferences restored. Review the values, then select Apply.",
+            "Default preferences restored. Review the values, then save changes.",
         )
 
     def _confirm_restore_defaults(self) -> bool:
@@ -1406,7 +1434,7 @@ class PreferencesPanel:
             messagebox.askyesno(
                 "Restore default preferences?",
                 "Replace the current form values with CaveViewer defaults? "
-                "The change is not saved until you select Apply.",
+                "The change is not saved until you select Save changes.",
                 parent=self.dialog,
             )
         )

@@ -76,6 +76,7 @@ class TopTabStrip:
         self._px = px
         self._style = style
         self._tab_labels: dict[str, tk.Label] = {}
+        self._tab_text = {tab.key: tab.label for tab in self._tabs}
 
         self.widget = tk.Frame(parent, bg=style.background_color)
         tab_row = tk.Frame(self.widget, bg=style.background_color)
@@ -137,6 +138,13 @@ class TopTabStrip:
             )
         if notify and self._on_selected is not None:
             self._on_selected(key)
+
+    def set_indicated(self, keys: Iterable[str]) -> None:
+        """Mark tabs with pending content using a visible text indicator."""
+        indicated = frozenset(keys)
+        for key, label in self._tab_labels.items():
+            suffix = " •" if key in indicated else ""
+            label.configure(text=f"{self._tab_text[key]}{suffix}")
 
     def _validate_tabs(self, active_key: str) -> None:
         if not self._tabs:

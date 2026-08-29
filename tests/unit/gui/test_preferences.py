@@ -733,6 +733,25 @@ def test_preferences_panel_exposes_backup_and_restore_as_a_separate_tab():
     )
 
 
+def test_preferences_panel_exposes_persistent_unsaved_change_actions():
+    from caveviewer.gui import preferences_dialog
+
+    build_source = inspect.getsource(preferences_dialog.PreferencesPanel._build)
+    dirty_source = inspect.getsource(
+        preferences_dialog.PreferencesPanel._render_dirty_state
+    )
+    feedback_source = inspect.getsource(
+        preferences_dialog.PreferencesPanel._sync_feedback_to_current_state
+    )
+
+    assert '"Save changes"' in build_source
+    assert '"Discard changes"' in build_source
+    assert "state.dirty_sections" in dirty_source
+    assert "state.dirty_keys" in dirty_source
+    assert 'suffix = " •"' in dirty_source
+    assert 'text="You have unsaved changes."' in feedback_source
+
+
 def test_preferences_panel_exports_validated_form_to_selected_file(
     valid_preferences,
     tmp_path,

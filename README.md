@@ -196,8 +196,8 @@ preference filenames are not discovered.
   map-library entries.
 - Backup saves a complete `preferences.json`, loads a shared
   file for review, or stages the built-in defaults. Imported and restored
-  values are not saved until you select **Apply**; **Cancel** keeps the
-  previously saved preferences.
+  values are not saved until you select **Save changes**; **Discard changes**
+  restores the previously saved preferences.
 
 Exports open a native Save dialog in a user-visible location. Imports use the
 native Open dialog and accept UTF-8 JSON objects up to 256 KiB. Missing or

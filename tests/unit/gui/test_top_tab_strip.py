@@ -65,6 +65,28 @@ def test_tab_strip_selects_the_active_label_and_notifies_its_owner():
     assert strip._tab_labels["streaming"].configurations[-1] == {"fg": "#a9abb8"}
 
 
+def test_tab_strip_marks_pending_tabs_without_replacing_their_labels():
+    class _FakeWidget:
+        def __init__(self) -> None:
+            self.configurations = []
+
+        def configure(self, **options) -> None:
+            self.configurations.append(options)
+
+    strip = object.__new__(TopTabStrip)
+    strip._tab_text = {tab.key: tab.label for tab in _TABS}
+    strip._tab_labels = {tab.key: _FakeWidget() for tab in _TABS}
+
+    strip.set_indicated({"parsing"})
+
+    assert strip._tab_labels["streaming"].configurations[-1] == {
+        "text": "Streaming"
+    }
+    assert strip._tab_labels["parsing"].configurations[-1] == {
+        "text": "Import •"
+    }
+
+
 def test_tabbed_content_surface_defines_one_standard_content_gap():
     style = TopTabbedContentSurfaceStyle(
         background_color="#101018",
