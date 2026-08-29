@@ -208,8 +208,14 @@ def _draw_rounded_path(
     color: Color,
     width: int,
     closed: bool = False,
+    round_vertices: bool = True,
 ) -> None:
-    """Draw a high-resolution path with Canvas-like round caps and joins."""
+    """Draw a high-resolution path with Canvas-like caps and joins.
+
+    Straight icon paths use circles at every vertex to emulate rounded joins.
+    Curves represented by a dense sampled polyline disable that behavior so
+    only their start and end receive round caps.
+    """
     if not points:
         return
     paint = _rgba(color)
@@ -217,7 +223,13 @@ def _draw_rounded_path(
     path = (*points, points[0]) if closed and len(points) > 1 else points
     if len(path) > 1:
         drawer.line(path, fill=paint, width=width, joint="curve")
-    for point_x, point_y in points:
+    if round_vertices or len(path) == 1:
+        cap_points = points
+    elif closed:
+        cap_points = ()
+    else:
+        cap_points = (path[0], path[-1])
+    for point_x, point_y in cap_points:
         drawer.ellipse(
             (
                 int(round(point_x - cap_radius)),
@@ -315,6 +327,7 @@ def render_vector_icon(
             ),
             color=arc.color,
             width=scale_width(arc.width),
+            round_vertices=False,
         )
 
     if supersample == 1:

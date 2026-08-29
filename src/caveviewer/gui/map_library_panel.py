@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import tkinter as tk
 from dataclasses import dataclass
 from typing import Callable, Iterable
@@ -1214,9 +1215,28 @@ class MapLibraryPanel:
 
     def _draw_retry(self, button, width: int, height: int, color: str) -> None:
         stroke_width = max(1, self._px(self._style.action_icon_stroke_width))
-        radius = max(2, self._px(7))
-        center_x = width / 2
-        center_y = height / 2
+        icon_size = max(1.0, float(min(width, height)))
+        icon_scale = icon_size / 24.0
+        icon_left = (width - 24.0 * icon_scale) / 2.0
+        icon_top = (height - 24.0 * icon_scale) / 2.0
+        center_x = icon_left + 12.0 * icon_scale
+        center_y = icon_top + 11.0 * icon_scale
+        arc_radius = 8.0 * icon_scale
+        arc_end_angle = math.radians(45.0)
+        arc_end = (
+            center_x + arc_radius * math.cos(arc_end_angle),
+            center_y - arc_radius * math.sin(arc_end_angle),
+        )
+        # Match the bundled retry.svg: its diagonal connects the long arc to
+        # a short vertical head, avoiding the isolated L-shaped hook.
+        head_corner = (
+            icon_left + 20.0 * icon_scale,
+            icon_top + 7.7 * icon_scale,
+        )
+        head_tip = (
+            icon_left + 20.0 * icon_scale,
+            icon_top + 3.5 * icon_scale,
+        )
         self._draw_vector_photo(
             button,
             image_size=(width, height),
@@ -1226,20 +1246,16 @@ class MapLibraryPanel:
             arcs=(
                 VectorArc(
                     center=(center_x, center_y),
-                    radius=radius - stroke_width / 2,
-                    start_degrees=38,
-                    extent_degrees=282,
+                    radius=arc_radius,
+                    start_degrees=0.0,
+                    extent_degrees=-315.0,
                     color=color,
                     width=stroke_width,
                 ),
             ),
             paths=(
                 VectorPath(
-                    points=(
-                        (center_x + self._px(4), center_y - self._px(7)),
-                        (center_x + self._px(8), center_y - self._px(7)),
-                        (center_x + self._px(8), center_y - self._px(3)),
-                    ),
+                    points=(arc_end, head_corner, head_tip),
                     color=color,
                     width=stroke_width,
                 ),

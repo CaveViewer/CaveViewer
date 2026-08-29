@@ -1715,3 +1715,42 @@ def test_map_library_row_actions_use_state_aware_icons(
 
     assert visual.icon == icon
     assert visual.tooltip == tooltip
+
+
+def test_map_library_retry_uses_the_complete_retry_svg_arrowhead(monkeypatch):
+    class _FakeButton:
+        def __init__(self) -> None:
+            self.image_calls = []
+
+        def create_image(self, *coordinates, **options) -> None:
+            self.image_calls.append((coordinates, options))
+
+    panel = object.__new__(map_library_panel.MapLibraryPanel)
+    panel._px = lambda value: value
+    panel._style = SimpleNamespace(action_icon_stroke_width=2)
+    button = _FakeButton()
+    vector_calls = []
+
+    def capture_vector_icon(_widget, **options):
+        vector_calls.append(options)
+        return object()
+
+    monkeypatch.setattr(map_library_panel, "vector_icon_photo", capture_vector_icon)
+
+    panel._draw_retry(button, 28, 28, "#e5a11f")
+
+    assert len(button.image_calls) == 1
+    assert len(vector_calls) == 1
+    options = vector_calls[0]
+    arc = options["arcs"][0]
+    assert arc.start_degrees == 0.0
+    assert arc.extent_degrees == -315.0
+    assert options["polygons"] == ()
+    arrowhead = options["paths"][0]
+    assert arrowhead.color == "#e5a11f"
+    assert len(arrowhead.points) == 3
+    arc_end, head_corner, head_tip = arrowhead.points
+    assert arc_end[0] < head_corner[0]
+    assert arc_end[1] < head_corner[1]
+    assert head_corner[0] == head_tip[0]
+    assert head_tip[1] < head_corner[1]

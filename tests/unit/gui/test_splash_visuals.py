@@ -111,6 +111,31 @@ def test_vector_icon_downsampling_keeps_curves_and_diagonals_smooth():
     assert any(0 < alpha < 255 for alpha in alpha_values)
 
 
+def test_sampled_vector_arc_uses_only_endpoint_caps():
+    class _RecordingDrawer:
+        def __init__(self) -> None:
+            self.line_calls = []
+            self.ellipse_calls = []
+
+        def line(self, points, **options) -> None:
+            self.line_calls.append((points, options))
+
+        def ellipse(self, bounds, **options) -> None:
+            self.ellipse_calls.append((bounds, options))
+
+    drawer = _RecordingDrawer()
+    splash_visuals._draw_rounded_path(
+        drawer,
+        ((2.0, 2.0), (8.0, 4.0), (12.0, 10.0)),
+        color="#e5a11f",
+        width=4,
+        round_vertices=False,
+    )
+
+    assert len(drawer.line_calls) == 1
+    assert len(drawer.ellipse_calls) == 2
+
+
 def test_progress_ring_keeps_determinate_and_indeterminate_arc_lengths():
     options = {
         "image_size": 80,
