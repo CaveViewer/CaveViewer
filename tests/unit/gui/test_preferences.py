@@ -705,6 +705,148 @@ def test_preferences_panel_uses_extracted_settings_logic():
     assert "_show_preferences_dialog(" not in splash_source
 
 
+def test_preferences_panel_exposes_backup_and_restore_as_a_separate_tab():
+    from caveviewer.gui import preferences_dialog
+
+    assert ("backup", "Backup & restore") in preferences_dialog._PREFERENCE_PAGES
+    ensure_source = inspect.getsource(
+        preferences_dialog.PreferencesPanel._ensure_page
+    )
+    backup_source = inspect.getsource(
+        preferences_dialog.PreferencesPanel._render_backup_restore
+    )
+    assert 'page_key == "backup"' in ensure_source
+    assert 'button_text="Export preferences…"' in backup_source
+    assert 'button_text="Import preferences…"' in backup_source
+    assert 'button_text="Restore defaults"' in backup_source
+
+
+def test_preferences_panel_exports_validated_form_to_selected_file(
+    valid_preferences,
+    tmp_path,
+):
+    from caveviewer.gui import preferences_dialog
+    from caveviewer.gui.preferences_workflow import PreferencesExportWorkflowResult
+
+    snapshot = settings.require_validated_preferences(valid_preferences)
+    destination = tmp_path / "preferences.json"
+    chooser_calls = []
+    export_calls = []
+    panel = preferences_dialog.PreferencesPanel.__new__(
+        preferences_dialog.PreferencesPanel
+    )
+    panel.form = SimpleNamespace(
+        attempt_apply=lambda: (SimpleNamespace(), snapshot)
+    )
+    panel._render_form_state = lambda *_args, **_kwargs: None
+    panel.desktop_services = SimpleNamespace(
+        save_file=lambda **options: chooser_calls.append(options)
+        or SimpleNamespace(path=str(destination))
+    )
+    panel.workflow = SimpleNamespace(
+        export_file=lambda path, preferences: export_calls.append(
+            (path, preferences)
+        )
+        or PreferencesExportWorkflowResult(path=Path(path))
+    )
+    panel.dialog = object()
+    panel.rendered_state = None
+    panel.error_label = None
+
+    panel.export_preferences()
+
+    assert chooser_calls[0]["initial_name"] == "preferences.json"
+    assert export_calls == [(str(destination), snapshot)]
+    assert "Preferences exported to" in panel._feedback_override[0]
+
+
+def test_preferences_panel_import_stages_values_without_saving(
+    valid_preferences,
+    tmp_path,
+):
+    from caveviewer.gui import preferences_dialog
+    from caveviewer.gui.preferences_workflow import PreferencesImportWorkflowResult
+
+    snapshot = settings.require_validated_preferences(valid_preferences)
+    source = tmp_path / "preferences.json"
+    staged = []
+    panel = preferences_dialog.PreferencesPanel.__new__(
+        preferences_dialog.PreferencesPanel
+    )
+    panel.desktop_services = SimpleNamespace(
+        choose_file=lambda **_options: SimpleNamespace(path=str(source))
+    )
+    panel.workflow = SimpleNamespace(
+        import_file=lambda path: PreferencesImportWorkflowResult(
+            preferences=snapshot,
+            defaulted_keys=("io_workers",),
+        )
+    )
+    panel.dialog = object()
+    panel._stage_preferences = lambda preferences, message: staged.append(
+        (preferences, message)
+    )
+
+    panel.import_preferences()
+
+    assert staged[0][0] is snapshot
+    assert "1 invalid or missing value was replaced with its default" in staged[0][1]
+
+
+def test_preferences_panel_malformed_import_leaves_form_unchanged(tmp_path):
+    from caveviewer.gui import preferences_dialog
+    from caveviewer.gui.preferences_form import MessageKind
+    from caveviewer.gui.preferences_workflow import PreferencesImportWorkflowResult
+
+    original_form = object()
+    feedback = []
+    panel = preferences_dialog.PreferencesPanel.__new__(
+        preferences_dialog.PreferencesPanel
+    )
+    panel.form = original_form
+    panel.desktop_services = SimpleNamespace(
+        choose_file=lambda **_options: SimpleNamespace(
+            path=str(tmp_path / "broken.json")
+        )
+    )
+    panel.workflow = SimpleNamespace(
+        import_file=lambda _path: PreferencesImportWorkflowResult(
+            preferences=None,
+            error="Preferences file is not valid UTF-8 JSON.",
+        )
+    )
+    panel.dialog = object()
+    panel._set_feedback = lambda message, kind: feedback.append((message, kind))
+
+    panel.import_preferences()
+
+    assert panel.form is original_form
+    assert feedback == [
+        ("Preferences file is not valid UTF-8 JSON.", MessageKind.ERROR)
+    ]
+
+
+def test_preferences_panel_restore_defaults_requires_confirmation():
+    from caveviewer.gui import preferences_dialog
+
+    staged = []
+    panel = preferences_dialog.PreferencesPanel.__new__(
+        preferences_dialog.PreferencesPanel
+    )
+    panel.confirm_restore = lambda: False
+    panel._stage_preferences = lambda preferences, message: staged.append(
+        (preferences, message)
+    )
+
+    panel.restore_defaults()
+    assert staged == []
+
+    panel.confirm_restore = lambda: True
+    panel.restore_defaults()
+    assert staged[0][0] == settings.preference_defaults()
+    assert "not saved until" not in staged[0][1]
+
+
 def _directory_picker_panel(
     preferences_dialog,
     *,
@@ -950,10 +1092,10 @@ def test_preferences_panel_uses_compact_tabbed_pages():
     fields_by_key = {
         field.key: field for field in preferences_dialog.PREFERENCE_FIELDS
     }
-    assert page_keys == ["streaming", "parsing", "storage"]
-    assert page_labels == ["Streaming", "Import", "Storage"]
+    assert page_keys == ["streaming", "parsing", "storage", "backup"]
+    assert page_labels == ["Streaming", "Import", "Storage", "Backup & restore"]
     assert all(len(page) == 2 for page in preferences_dialog._PREFERENCE_PAGES)
-    assert set(page_keys) == field_sections
+    assert set(page_keys) - {"backup"} == field_sections
     assert fields_by_key["io_workers"].label == "Loading worker limit"
     assert fields_by_key["chunk_build_workers"].label == "Cache-building worker limit"
     assert fields_by_key["recording_dir"].label == "Recordings folder"
@@ -966,6 +1108,7 @@ def test_preferences_panel_uses_compact_tabbed_pages():
     assert "candidate_page.tkraise()" not in show_page_source
     assert "self._ensure_page(page_key)" in show_page_source
     assert "self._render_section(page, page_key)" in ensure_page_source
+    assert "self._render_backup_restore(page)" in ensure_page_source
     assert "self.page_canvas.yview_moveto(0)" in show_page_source
     assert "self.button_row.pack(" in source
     assert "self.page_scroll_shell.pack(side=\"top\", fill=\"both\", expand=True)" in source

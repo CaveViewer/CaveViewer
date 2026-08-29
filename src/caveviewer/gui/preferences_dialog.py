@@ -6,12 +6,15 @@ import os
 import tkinter as tk
 from typing import TYPE_CHECKING, Callable
 
+from caveviewer.core.preferences.transfer import PREFERENCES_EXPORT_FILENAME
+from caveviewer.storage_paths import default_downloads_dir
 from caveviewer.gui.preferences import (
     PREFERENCE_FIELDS,
     Preferences,
     PreferenceSpec,
     PreferenceValueType,
     preference_placeholder_text,
+    preference_defaults,
     load_preferences,
     save_preferences,
 )
@@ -77,6 +80,7 @@ _PREFERENCE_PAGES = (
     ("streaming", "Streaming"),
     ("parsing", "Import"),
     ("storage", "Storage"),
+    ("backup", "Backup & restore"),
 )
 _PREFERENCE_PAGE_KEYS = frozenset(key for key, _label in _PREFERENCE_PAGES)
 _PREFERENCE_FIELD_GROUPS = {
@@ -199,6 +203,7 @@ class PreferencesPanel:
         typography: TkTypography | None = None,
         on_applied: Callable[[Preferences], None] | None = None,
         on_cancel: Callable[[], None] | None = None,
+        confirm_restore: Callable[[], bool] | None = None,
     ) -> None:
         if (
             platform_runtime is not None
@@ -242,6 +247,7 @@ class PreferencesPanel:
         )
         self.on_applied = on_applied
         self.on_cancel = on_cancel
+        self.confirm_restore = confirm_restore
         self.workflow = PreferencesDialogWorkflow(
             load_preferences_fn=load_preferences,
             save_preferences_fn=save_preferences,
@@ -444,6 +450,88 @@ class PreferencesPanel:
                         else 0
                     ),
                 )
+
+    def _render_backup_restore(self, parent) -> None:
+        """Render whole-snapshot actions separately from preference fields."""
+
+        transfer_group = PreferenceSectionContainer(
+            parent,
+            title="Transfer",
+            font=self.section_font,
+            px=self._surface_px,
+        )
+        transfer_group.pack(first=True)
+        self._render_backup_action(
+            transfer_group.content,
+            title="Export preferences",
+            description="Save a preferences.json file that you can share or keep.",
+            button_text="Export preferences…",
+            command=self.export_preferences,
+        )
+        self._render_backup_action(
+            transfer_group.content,
+            title="Import preferences",
+            description="Load a preferences.json file, review it, then select Apply.",
+            button_text="Import preferences…",
+            command=self.import_preferences,
+            top_pad=self._form_row_gap(),
+        )
+
+        restore_group = PreferenceSectionContainer(
+            parent,
+            title="Recovery",
+            font=self.section_font,
+            px=self._surface_px,
+        )
+        restore_group.pack(first=False)
+        self._render_backup_action(
+            restore_group.content,
+            title="Restore defaults",
+            description="Stage the recommended defaults for review before applying.",
+            button_text="Restore defaults",
+            command=self.restore_defaults,
+        )
+
+    def _render_backup_action(
+        self,
+        parent,
+        *,
+        title: str,
+        description: str,
+        button_text: str,
+        command: Callable[[], None],
+        top_pad: int = 0,
+    ) -> None:
+        row = tk.Frame(parent, bg=_BG_COLOR)
+        row.pack(fill="x", pady=(top_pad, 0))
+        row.grid_columnconfigure(0, weight=1)
+        text = tk.Frame(row, bg=_BG_COLOR)
+        text.grid(row=0, column=0, sticky="ew")
+        tk.Label(
+            text,
+            text=title,
+            font=self.body_font,
+            fg=_SUBTITLE_COLOR,
+            bg=_BG_COLOR,
+            anchor="w",
+        ).pack(anchor="w")
+        tk.Label(
+            text,
+            text=description,
+            font=self.small_font,
+            fg=_INSTRUCTION_COLOR,
+            bg=_BG_COLOR,
+            anchor="w",
+            justify="left",
+            wraplength=self._layout_policy.notice_wrap_length,
+        ).pack(anchor="w", pady=(self._surface_px(4), 0))
+        button = self._new_dialog_button(row, button_text, command)
+        button.grid(
+            row=0,
+            column=1,
+            sticky="e",
+            padx=(self._surface_px(_CONTROL_GAP_X), 0),
+        )
 
     def _render_field(
         self,
@@ -909,7 +997,10 @@ class PreferencesPanel:
             add="+",
         )
         self.pages[page_key] = page
-        self._render_section(page, page_key)
+        if page_key == "backup":
+            self._render_backup_restore(page)
+        else:
+            self._render_section(page, page_key)
         if self.page_scrollbar is not None:
             self.page_scrollbar.bind_mousewheel(page)
         return page
@@ -1223,6 +1314,106 @@ class PreferencesPanel:
         if on_applied is not None and result.preferences is not None:
             on_applied(result.preferences)
         return True
+
+    def export_preferences(self) -> None:
+        """Choose a visible destination and export the validated form snapshot."""
+
+        state, preferences = self.form.attempt_apply()
+        self._render_form_state(state, focus_invalid=True)
+        if preferences is None:
+            return
+        try:
+            selection = self.desktop_services.save_file(
+                title="Export CaveViewer preferences",
+                initial_dir=str(default_downloads_dir()),
+                initial_name=PREFERENCES_EXPORT_FILENAME,
+                parent=self.dialog,
+            )
+        except DesktopServiceError as exc:
+            self._set_feedback(str(exc), MessageKind.ERROR)
+            return
+        if selection is None:
+            return
+        result = self.workflow.export_file(selection.path, preferences)
+        if not result.succeeded:
+            self._set_feedback(
+                result.error or "Could not export preferences.",
+                MessageKind.ERROR,
+            )
+            return
+        self._feedback_override = (
+            f"Preferences exported to {selection.path}.",
+            DARK_THEME.primary_button,
+        )
+        self._sync_feedback_to_current_state()
+
+    def import_preferences(self) -> None:
+        """Choose and stage a portable snapshot without saving it yet."""
+
+        try:
+            selection = self.desktop_services.choose_file(
+                title="Import CaveViewer preferences",
+                initial_dir=str(default_downloads_dir()),
+                parent=self.dialog,
+            )
+        except DesktopServiceError as exc:
+            self._set_feedback(str(exc), MessageKind.ERROR)
+            return
+        if selection is None:
+            return
+        result = self.workflow.import_file(selection.path)
+        if not result.succeeded or result.preferences is None:
+            self._set_feedback(
+                result.error or "Could not import preferences.",
+                MessageKind.ERROR,
+            )
+            return
+        message = "Preferences imported. Review the values, then select Apply."
+        if result.defaulted_keys:
+            count = len(result.defaulted_keys)
+            message = (
+                f"Preferences imported; {count} invalid or missing "
+                f"{'value was' if count == 1 else 'values were'} replaced "
+                f"with {'its' if count == 1 else 'their'} default. "
+                "Review the values, then select Apply."
+            )
+        self._stage_preferences(result.preferences, message)
+
+    def restore_defaults(self) -> None:
+        """Confirm and stage defaults while preserving Apply/Cancel semantics."""
+
+        if not self._confirm_restore_defaults():
+            return
+        self._stage_preferences(
+            Preferences(preference_defaults()),
+            "Default preferences restored. Review the values, then select Apply.",
+        )
+
+    def _confirm_restore_defaults(self) -> bool:
+        if self.confirm_restore is not None:
+            return bool(self.confirm_restore())
+        from tkinter import messagebox
+
+        return bool(
+            messagebox.askyesno(
+                "Restore default preferences?",
+                "Replace the current form values with CaveViewer defaults? "
+                "The change is not saved until you select Apply.",
+                parent=self.dialog,
+            )
+        )
+
+    def _stage_preferences(self, preferences: Preferences, message: str) -> None:
+        self.form = PreferencesFormController(preferences)
+        self.rendering_state = True
+        try:
+            for key, value in preferences.items():
+                self._sync_field_value(key, value)
+        finally:
+            self.rendering_state = False
+        self.rendered_invalid_key = None
+        self._feedback_override = (message, DARK_THEME.primary_button)
+        self._render_form_state(self.form.state)
 
     def cancel(self) -> None:
         self.discard_changes()
