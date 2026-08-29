@@ -1275,8 +1275,16 @@ section { position: relative; }
           <div>
             <p style="margin-top:0;">Press REC to start a short 3-2-1 countdown. The minimap, controls,
             and control column disappear so nothing clutters the shot, then
-            recording begins. Press Ctrl+R (Cmd+R on macOS) to cancel the
-            countdown or to stop a recording in progress.</p>
+            recording begins. Only one video, dive trace, or cave slice capture
+            can run at a time. The countdown shows how to stop and save, plus
+            <b>Press Esc to cancel</b>; once recording begins, the banner clears
+            so the cave view stays uncluttered. Shortcuts for other capture
+            types are ignored without a message while a capture is active.
+            Press Ctrl+R (Cmd+R on macOS) to stop and save a recording, or
+            Escape to discard it and remove the partial MP4. After cleanup, a
+            three-second confirmation states that no video was saved, then the
+            viewer closes. Closing from the title bar instead preserves the
+            recording and shows the separate Finishing status while it saves.</p>
             <p>Files are saved as MP4 to <span class="mono" style="color: var(--amber);">~/Movies/CaveViewer/</span>
             (you can change this folder under Preferences → Storage), scaled to
             720p by default to reduce recording load. Set
@@ -1339,7 +1347,7 @@ section { position: relative; }
           <li class="step">
             <div>
               <h4>Replay a shared route</h4>
-              <p>In a map's ••• menu, choose Open dive plan… and select a completed <code>.jsonl</code> trace from that map's <code>_guided_dives</code> folder. CaveViewer checks the matching map cache, loads the route ahead, and reproduces the recorded camera path. Press Ctrl/Cmd+T to start a 3-2-1 countdown before recording a reference route, then press it again to stop and save. After its atomic save completes, CaveViewer confirms the saved trace for three seconds and then reveals it in Finder, Explorer, or the containing folder. Space pauses the route for look-around inspection at its frozen position; Space resumes the recorded route. During normal playback, movement takes manual control.</p>
+              <p>In a map's ••• menu, choose Open dive plan… and select a completed <code>.jsonl</code> trace from that map's <code>_guided_dives</code> folder. CaveViewer checks the matching map cache, loads the route ahead, and reproduces the recorded camera path. Press Ctrl/Cmd+T to start a 3-2-1 countdown before recording a reference route, then press it again to stop and save. The countdown also shows <b>Press Esc to cancel</b>, then the active trace leaves the cave view clear. Escape discards the trace and removes its partial JSONL file. After an atomic save completes, CaveViewer confirms the saved trace for three seconds and then reveals it in Finder, Explorer, or the containing folder. Space pauses the route for look-around inspection at its frozen position; Space resumes the recorded route. During normal playback, movement takes manual control.</p>
             </div>
           </li>
         </ol>

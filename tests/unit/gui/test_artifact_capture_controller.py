@@ -46,6 +46,39 @@ def test_failure_or_non_revealed_save_never_queues_native_reveal():
     assert controller.take_due_reveals(now=40.0) == ()
 
 
+def test_cancelable_save_and_cleanup_feedback_keep_escape_visible():
+    controller = ArtifactCapturePresentationController()
+
+    saving = controller.saving_status("Slice", cancelable=True)
+    canceling = controller.canceling_status("Video")
+    canceled_video = controller.canceled_status("Video", after_escape=True)
+    canceled_trace = controller.canceled_status("Dive trace", after_escape=True)
+    canceled_slice = controller.canceled_status("Slice", after_escape=True)
+    shortcut_canceled = controller.canceled_status("Video")
+    failed = controller.cancellation_failed_status("Dive trace", "permission denied")
+
+    assert saving.message == "Saving slice…"
+    assert saving.detail == (
+        "Finishing the file. Press Esc to cancel. Keep CaveViewer open."
+    )
+    assert saving.duration is None
+    assert canceling.message == "Canceling video…"
+    assert canceling.detail == (
+        "Stopping capture and removing partial files. "
+        "CaveViewer will close automatically."
+    )
+    assert canceling.duration is None
+    assert canceled_video.message == "Video canceled"
+    assert canceled_video.detail == "No video was saved."
+    assert canceled_trace.detail == "No dive trace was saved."
+    assert canceled_slice.detail == "No slice was saved."
+    assert canceled_video.duration == controller.escape_confirmation_seconds == 3.0
+    assert shortcut_canceled.duration == controller.confirmation_seconds == 3.0
+    assert failed.message == "Could not cancel dive trace"
+    assert failed.detail == "permission denied"
+    assert failed.duration == controller.escape_confirmation_seconds
+
+
 def test_exit_save_feedback_names_the_artifact_and_suppresses_file_reveals():
     controller = ArtifactCapturePresentationController()
     controller.saved_status("Video", "/recordings/cave.mp4", now=10.0)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from caveviewer.gui.controls_catalog import (
+    is_help_shortcut_visible,
     keyboard_control_sections,
     shortcut_keycap_parts,
 )
@@ -52,12 +53,13 @@ def test_keyboard_catalog_covers_each_direct_viewer_binding_once():
         "recording-toggle",
         "manual-trace-toggle",
         "slice-toggle",
-        "slice-cancel",
+        "capture-cancel",
     }
     assert sections_by_id["map-import"].title == "Map Import"
     assert [
         shortcut.id for shortcut in sections_by_id["map-import"].shortcuts
     ] == ["import-pause"]
+    assert is_help_shortcut_visible(rows["import-pause"]) is False
 
 
 def test_keyboard_catalog_uses_direct_control_bindings_and_capture_standard():
@@ -74,8 +76,8 @@ def test_keyboard_catalog_uses_direct_control_bindings_and_capture_standard():
     assert rows["manual-trace-toggle"].action == "Start/stop manual trace"
     assert rows["slice-toggle"].shortcut == "Ctrl + C"
     assert rows["slice-toggle"].action == "Start/stop slice"
-    assert rows["slice-cancel"].shortcut == "Escape"
-    assert rows["slice-cancel"].action == "Cancel active slice"
+    assert rows["capture-cancel"].shortcut == "Escape"
+    assert rows["capture-cancel"].action == "Cancel active capture"
     assert rows["import-pause"].shortcut == "Ctrl + Shift + P"
     assert rows["look-arrows"].shortcut == "Arrow keys"
 

@@ -116,6 +116,39 @@ Non-user map-change and shutdown stops remain silent; failure feedback and
 native reveal are reserved for the user-visible workflow. Reveal is best-effort
 and cannot change the completed artifact result.
 
+Video recording, manual tracing, and cave slicing share one mutually exclusive
+capture-ownership boundary, including countdown and asynchronous finalization.
+Once a capture owns that boundary, recognized shortcuts for other capture types
+are consumed before their toggle or presentation paths run, so they neither
+change state nor display status. The owner's shortcut remains available to
+finish and publish an active capture.
+Every countdown presents its normal stop-and-save shortcut alongside **Press
+Esc to cancel**. Video recording, manual tracing, and cave slicing all stay
+banner-free after the countdown so the cave view remains unobstructed. The
+normal shortcut publishes the artifact; Escape follows a distinct discard
+path. Recording cancellation
+immediately releases render-thread readback buffers, drops queued raw frames,
+asks the encoder finalizer to stop, and removes its MP4. Trace cancellation
+drains the bounded pose queue, stops the writer, and removes both its private
+`.part` file and any not-yet-presented JSONL publication. Slice cancellation
+clears selection state or signals the export child, whose atomic staging path
+is removed before the controller returns to idle. These worker/process cleanups
+remain polled and non-blocking on the render thread. Successful cleanup ends
+with an artifact-specific cancellation confirmation that explicitly states no
+artifact was saved and remains visible for three seconds. Save confirmations
+retain their three-second period.
+
+The viewer claims Escape from `moderngl-window` instead of leaving it as the
+backend's default exit key. Backends such as GLFW invoke their close callback
+before forwarding that key event, which would otherwise enter normal
+save-on-close finalization and display **Finishing…** before CaveViewer could
+cancel. CaveViewer routes Escape first: an active capture enters a distinct
+discard-before-close state, suppresses further input and native close requests,
+shows **Canceling…** while cleanup is pending, holds the final no-save status
+for three seconds, and only then releases the window. Escape without a capture
+still closes immediately. Native title-bar close requests retain the existing
+save-on-close path and its **Finishing…** status.
+
 `Ctrl+C` (`Cmd+C` on macOS) owns the separate cave-slice workflow. It first
 uses the same render-thread 3-2-1 countdown presentation as recording and
 manual tracing, then records the current camera position as a slice start

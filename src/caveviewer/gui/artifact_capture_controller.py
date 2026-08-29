@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 
 
 SAVED_ARTIFACT_CONFIRMATION_SECONDS = 3.0
+ESCAPE_CANCELLATION_CONFIRMATION_SECONDS = 3.0
 
 
 @dataclass(frozen=True)
@@ -37,6 +38,7 @@ class ArtifactCapturePresentationController:
     """Create consistent post-capture feedback without owning file writers."""
 
     confirmation_seconds: float = SAVED_ARTIFACT_CONFIRMATION_SECONDS
+    escape_confirmation_seconds: float = ESCAPE_CANCELLATION_CONFIRMATION_SECONDS
     _pending_reveals: list[tuple[float, SavedArtifactRevealRequest]] = field(
         default_factory=list
     )
@@ -46,11 +48,20 @@ class ArtifactCapturePresentationController:
         """Return whether checking the clock can result in a native reveal."""
         return bool(self._pending_reveals)
 
-    def saving_status(self, artifact_name: str) -> ArtifactCaptureStatus:
+    def saving_status(
+        self,
+        artifact_name: str,
+        *,
+        cancelable: bool = False,
+    ) -> ArtifactCaptureStatus:
         """Return a persistent status while a writer finalizes an artifact."""
         return ArtifactCaptureStatus(
             message=f"Saving {artifact_name.lower()}…",
-            detail="Finishing the file. Keep CaveViewer open.",
+            detail=(
+                "Finishing the file. Press Esc to cancel. Keep CaveViewer open."
+                if cancelable
+                else "Finishing the file. Keep CaveViewer open."
+            ),
             kind="info",
             duration=None,
         )
@@ -83,13 +94,47 @@ class ArtifactCapturePresentationController:
             duration=None,
         )
 
-    def canceled_status(self, artifact_name: str) -> ArtifactCaptureStatus:
-        """Return the shared countdown-cancellation confirmation."""
+    def canceled_status(
+        self,
+        artifact_name: str,
+        *,
+        after_escape: bool = False,
+    ) -> ArtifactCaptureStatus:
+        """Confirm cleanup, keeping Escape acknowledgements visible longer."""
         return ArtifactCaptureStatus(
             message=f"{artifact_name} canceled",
-            detail=None,
+            detail=f"No {artifact_name.lower()} was saved.",
             kind="cancel",
-            duration=self.confirmation_seconds,
+            duration=(
+                self.escape_confirmation_seconds
+                if after_escape
+                else self.confirmation_seconds
+            ),
+        )
+
+    def canceling_status(self, artifact_name: str) -> ArtifactCaptureStatus:
+        """Return persistent feedback while capture resources are discarded."""
+        return ArtifactCaptureStatus(
+            message=f"Canceling {artifact_name.lower()}…",
+            detail=(
+                "Stopping capture and removing partial files. "
+                "CaveViewer will close automatically."
+            ),
+            kind="info",
+            duration=None,
+        )
+
+    def cancellation_failed_status(
+        self,
+        artifact_name: str,
+        detail: str | None,
+    ) -> ArtifactCaptureStatus:
+        """Report that cancellation could not remove every owned artifact."""
+        return ArtifactCaptureStatus(
+            message=f"Could not cancel {artifact_name.lower()}",
+            detail=detail,
+            kind="error",
+            duration=self.escape_confirmation_seconds,
         )
 
     def saved_status(

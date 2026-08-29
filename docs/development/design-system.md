@@ -83,7 +83,11 @@ execute it.
 
 The viewer exposes one documented keyboard command for closing its window:
 **Esc**. Do not present a platform-specific `Ctrl/Cmd + W` close shortcut in
-the controls overlay.
+the controls overlay. If a capture is active, Escape first discards it: show
+**Canceling…** during cleanup, then keep the artifact-specific no-save result
+visible for three seconds before closing the viewer. A native window-close
+request is intentionally different: it preserves the active artifact and uses
+the **Finishing…** save-on-close treatment below.
 
 ## Viewer loading and capture feedback
 

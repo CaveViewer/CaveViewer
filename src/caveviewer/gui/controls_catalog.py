@@ -29,9 +29,12 @@ class KeyboardShortcutSection:
     shortcuts: tuple[KeyboardShortcut, ...]
 
 
-# This chord remains available in the viewer, but is intentionally omitted
-# from both Help presentations while its long-term interaction is decided.
-_HELP_HIDDEN_SHORTCUT_IDS = frozenset({"bookmark-delete-control-shift"})
+# These chords remain available in the viewer but are intentionally omitted
+# from both Help presentations. The import-pause chord is an undocumented
+# Easter egg, while the bookmark chord is a compact alternate binding.
+_HELP_HIDDEN_SHORTCUT_IDS = frozenset(
+    {"bookmark-delete-control-shift", "import-pause"}
+)
 _SPACED_KEY_GROUPS = frozenset({"W A S D", "J L I K", "Z X", "- ="})
 
 
@@ -224,9 +227,9 @@ def keyboard_control_sections(
                     "Start/stop slice",
                 ),
                 KeyboardShortcut(
-                    "slice-cancel",
+                    "capture-cancel",
                     "Escape",
-                    "Cancel active slice",
+                    "Cancel active capture",
                 ),
             ),
         ),

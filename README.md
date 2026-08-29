@@ -112,6 +112,24 @@ opening the map. The old cache remains available until its replacement is
 ready. OBJ rebuilds can be paused, and CaveViewer may show a desktop
 notification for completion or failure while the splash screen is not focused.
 
+## Capture controls
+
+Video recording (`Ctrl/Cmd+R`), manual dive tracing (`Ctrl/Cmd+T`), and cave
+slicing (`Ctrl/Cmd+C`) are mutually exclusive: finish or cancel the current
+capture before starting another. While one capture owns the viewer, shortcuts
+for the other capture types are silently ignored; the owner's shortcut remains
+the active finish-and-save control. Each countdown shows that shortcut together
+with **Press Esc to cancel**. Video recording, dive tracing, and cave slicing
+all leave the cave view clear after their countdown.
+The normal shortcut preserves the completed MP4, JSONL trace, or cave slice;
+Escape discards the capture, releases its queued buffers and background work,
+and removes partial output. After cleanup, a three-second confirmation names
+the canceled capture and states that it was not saved; the viewer closes after
+that confirmation has remained readable for the full pause. A slice remains
+cancelable with Escape while its background export is cleaning up. Closing the
+viewer with its native window control instead preserves an active artifact and
+uses the separate **Finishing…** save-on-close status.
+
 ## Recording a Flight
 
 CaveViewer can record a clean flight through the cave. Recordings are currently
@@ -120,7 +138,8 @@ encoded as MP4 files with `ffmpeg`.
 Use `Ctrl+R` (`Cmd+R` on macOS) to arm recording. The
 minimap, controls, and control panel disappear immediately, a 3-to-0 countdown
 appears in the amber loading ring, and then recording begins. Press the same
-shortcut again to cancel the countdown or stop recording.
+shortcut again to stop and save, or press `Escape` to cancel and remove the
+partial recording before the viewer closes.
 
 Videos are saved to:
 
@@ -139,6 +158,7 @@ height by default to keep render readback and encoding costs lower. Set
 While viewing a precompiled cave map, press `Ctrl+C` (`Cmd+C` on macOS) to
 start a 3-2-1 slice countdown. Once it completes, fly through the passage you
 want to keep and press the shortcut again to finish and save the slice.
+Press `Escape` to cancel the countdown, active selection, or background export.
 CaveViewer selects the render chunks intersecting that region and copies each
 complete chunk into a new standalone map without rewriting its triangles. This
 preserves the original walls, materials, texture mapping, normals, and detailed

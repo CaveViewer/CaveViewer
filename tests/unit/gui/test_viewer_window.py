@@ -418,6 +418,7 @@ class FakeManualDiveTrace:
         self.output_path = "/maps/cave/_guided_dives/trace.jsonl"
         self.observed = []
         self.stopped = []
+        self.cancel_calls = 0
         self.discontinuities = []
         self.result = None
 
@@ -427,6 +428,10 @@ class FakeManualDiveTrace:
     def stop(self, pose, *, reason):
         self.stopped.append((pose, reason))
         return self.output_path
+
+    def cancel(self):
+        self.cancel_calls += 1
+        return True
 
     def mark_discontinuity(self, before, after, *, reason):
         self.discontinuities.append((before, after, reason))
@@ -478,6 +483,154 @@ def test_manual_trace_hotkey_uses_platform_primary_modifier(
     )
 
 
+def _capture_hotkey_window(active_owner):
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window._presentation_profile = select_presentation_profile(
+        platform_name="unsupported"
+    )
+    window._has_map_loaded = True
+    window.wnd = SimpleNamespace(keys=SimpleNamespace(R=82, T=84, C=67))
+    window._keys_down = set()
+    window._key_resolve_cache = {}
+    window._raw_command_modifier_down = lambda: False
+    window._capture_owner = lambda: active_owner
+    toggle_calls = []
+    status_calls = []
+    window._toggle_recording = lambda: toggle_calls.append(
+        viewer_window.CaptureOwner.VIDEO
+    )
+    window._toggle_manual_dive_trace = lambda: toggle_calls.append(
+        viewer_window.CaptureOwner.DIVE_TRACE
+    ) or True
+    window._toggle_slice = lambda: toggle_calls.append(
+        viewer_window.CaptureOwner.SLICE
+    ) or True
+    window._show_capture_status = (
+        lambda *args, **kwargs: status_calls.append((args, kwargs))
+    )
+    return window, toggle_calls, status_calls
+
+
+@pytest.mark.parametrize(
+    ("active_owner", "handler_name", "key"),
+    (
+        (
+            viewer_window.CaptureOwner.VIDEO,
+            "_handle_manual_dive_trace_hotkey",
+            84,
+        ),
+        (viewer_window.CaptureOwner.VIDEO, "_handle_slice_hotkey", 67),
+        (
+            viewer_window.CaptureOwner.DIVE_TRACE,
+            "_handle_recording_hotkey",
+            82,
+        ),
+        (viewer_window.CaptureOwner.DIVE_TRACE, "_handle_slice_hotkey", 67),
+        (viewer_window.CaptureOwner.SLICE, "_handle_recording_hotkey", 82),
+        (
+            viewer_window.CaptureOwner.SLICE,
+            "_handle_manual_dive_trace_hotkey",
+            84,
+        ),
+    ),
+)
+def test_capture_hotkeys_silently_ignore_a_different_active_owner(
+    active_owner,
+    handler_name,
+    key,
+):
+    window, toggle_calls, status_calls = _capture_hotkey_window(active_owner)
+
+    assert getattr(window, handler_name)(key, SimpleNamespace(ctrl=True)) is True
+
+    assert toggle_calls == []
+    assert status_calls == []
+
+
+@pytest.mark.parametrize(
+    ("active_owner", "handler_name", "key"),
+    (
+        (viewer_window.CaptureOwner.VIDEO, "_handle_recording_hotkey", 82),
+        (
+            viewer_window.CaptureOwner.DIVE_TRACE,
+            "_handle_manual_dive_trace_hotkey",
+            84,
+        ),
+        (viewer_window.CaptureOwner.SLICE, "_handle_slice_hotkey", 67),
+    ),
+)
+def test_active_capture_owner_shortcut_still_reaches_finish_and_save(
+    active_owner,
+    handler_name,
+    key,
+):
+    window, toggle_calls, status_calls = _capture_hotkey_window(active_owner)
+
+    assert getattr(window, handler_name)(key, SimpleNamespace(ctrl=True)) is True
+
+    assert toggle_calls == [active_owner]
+    assert status_calls == []
+
+
+def test_viewer_claims_escape_before_the_backend_can_preempt_key_dispatch():
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window.wnd = SimpleNamespace(exit_key=256)
+
+    window._claim_backend_escape_key()
+
+    assert window.wnd.exit_key is None
+
+
+def test_escape_hotkey_uses_cancel_then_delayed_close_for_active_capture():
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window.wnd = SimpleNamespace(keys=SimpleNamespace(ESCAPE=256))
+    window._key_resolve_cache = {}
+    calls = []
+    window._capture_owner = lambda: viewer_window.CaptureOwner.VIDEO
+    window._begin_escape_capture_cancellation = (
+        lambda: calls.append("cancel_then_close") or True
+    )
+    window.on_close = lambda: calls.append("close_now")
+
+    assert window._handle_capture_escape_hotkey(256) is True
+    assert calls == ["cancel_then_close"]
+    assert window._handle_capture_escape_hotkey(257) is False
+
+
+def test_escape_hotkey_closes_immediately_without_an_active_capture():
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window.wnd = SimpleNamespace(keys=SimpleNamespace(ESCAPE=256))
+    window._key_resolve_cache = {}
+    window._capture_owner = lambda: None
+    calls = []
+    window.on_close = lambda: calls.append("close_now")
+
+    assert window._handle_capture_escape_hotkey(256) is True
+
+    assert calls == ["close_now"]
+
+
+@pytest.mark.parametrize(
+    ("owner", "expected"),
+    (
+        (viewer_window.CaptureOwner.VIDEO, "video"),
+        (viewer_window.CaptureOwner.DIVE_TRACE, "trace"),
+        (viewer_window.CaptureOwner.SLICE, "slice"),
+    ),
+)
+def test_unified_escape_routes_to_the_single_capture_owner(owner, expected):
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window._exit_capture_finalization_active = lambda: False
+    window._capture_owner = lambda: owner
+    calls = []
+    window._cancel_recording_capture = lambda: calls.append("video") or True
+    window._cancel_manual_dive_trace_capture = lambda: calls.append("trace") or True
+    window._cancel_slice_interaction = lambda: calls.append("slice") or True
+
+    assert window._cancel_active_capture() is True
+    assert calls == [expected]
+
+
 def test_manual_trace_countdown_hides_picker_and_manual_help(monkeypatch):
     calls = []
     monkeypatch.setattr(viewer_window.time, "perf_counter", lambda: 40.0)
@@ -499,6 +652,99 @@ def test_manual_trace_countdown_hides_picker_and_manual_help(monkeypatch):
     assert controller.countdown_until == 44.0
 
 
+def test_recording_cannot_start_while_a_dive_trace_owns_capture():
+    window = _recording_window()
+    window._has_map_loaded = True
+    window._manual_dive_trace = FakeManualDiveTrace()
+
+    window._start_recording_countdown()
+
+    assert window._recording_countdown_until is None
+    assert window._recording_status_message == "Capture in progress"
+    assert window._recording_status_detail == (
+        "Finish or cancel the current dive trace before starting a new video recording."
+    )
+
+
+def test_dive_trace_cannot_start_while_video_owns_capture():
+    window = _recording_window()
+    window._has_map_loaded = True
+    window._manual_dive_trace = None
+    window._recording_session = _active_recording_session()
+
+    assert window._start_manual_dive_trace_countdown() is False
+
+    assert not window._ensure_manual_dive_trace_controller().countdown_active
+    assert window._recording_status_message == "Capture in progress"
+    assert window._recording_status_detail == (
+        "Finish or cancel the current video recording before starting a new dive trace."
+    )
+
+
+def test_dive_trace_cannot_start_while_video_is_finalizing():
+    window = _recording_window()
+    window._has_map_loaded = True
+    window._manual_dive_trace = None
+    window._recording_stop_thread = object()
+
+    assert window._start_manual_dive_trace_countdown() is False
+
+    assert not window._ensure_manual_dive_trace_controller().countdown_active
+    assert window._recording_status_message == "Capture in progress"
+    assert window._recording_status_detail == (
+        "Finish or cancel the current video recording before starting a new dive trace."
+    )
+
+
+def test_recording_cannot_start_while_a_dive_trace_is_finalizing():
+    window = _recording_window()
+    window._has_map_loaded = True
+    window._manual_dive_trace_writers = [
+        _pending_manual_trace_writer(FakeManualDiveTrace())
+    ]
+
+    window._start_recording_countdown()
+
+    assert window._recording_countdown_until is None
+    assert window._recording_status_message == "Capture in progress"
+    assert window._recording_status_detail == (
+        "Finish or cancel the current dive trace before starting a new video recording."
+    )
+
+
+def test_recording_cannot_start_while_slice_selection_owns_capture():
+    window = _recording_window()
+    window._has_map_loaded = True
+    selection = window._ensure_slice_selection_controller()
+    selection.start_countdown(now=0.0, start_number=0)
+    assert selection.begin_selection((1.0, 2.0, 3.0))
+
+    window._start_recording_countdown()
+
+    assert window._recording_countdown_until is None
+    assert window._recording_status_message == "Capture in progress"
+    assert window._recording_status_detail == (
+        "Finish or cancel the current cave slice before starting a new video recording."
+    )
+
+
+def test_dive_trace_cannot_start_while_slice_selection_owns_capture():
+    window = _recording_window()
+    window._has_map_loaded = True
+    window._manual_dive_trace = None
+    selection = window._ensure_slice_selection_controller()
+    selection.start_countdown(now=0.0, start_number=0)
+    assert selection.begin_selection((1.0, 2.0, 3.0))
+
+    assert window._start_manual_dive_trace_countdown() is False
+
+    assert not window._ensure_manual_dive_trace_controller().countdown_active
+    assert window._recording_status_message == "Capture in progress"
+    assert window._recording_status_detail == (
+        "Finish or cancel the current cave slice before starting a new dive trace."
+    )
+
+
 def test_manual_trace_toggle_cancels_existing_countdown(monkeypatch):
     monkeypatch.setattr(viewer_window.time, "perf_counter", lambda: 10.0)
     window = _recording_window()
@@ -512,6 +758,78 @@ def test_manual_trace_toggle_cancels_existing_countdown(monkeypatch):
     assert window._recording_status_message == "Dive trace canceled"
     assert window._recording_status_kind == "cancel"
     assert window._recording_status_until == pytest.approx(13.0)
+
+
+def test_escape_cancels_recording_countdown_without_starting_a_writer(monkeypatch):
+    monkeypatch.setattr(viewer_window.time, "perf_counter", lambda: 10.0)
+    window = _recording_window()
+    window._ensure_recording_controller().start_countdown(
+        now=7.0,
+        start_number=3,
+    )
+
+    assert window._cancel_recording_capture() is True
+
+    assert window._recording_countdown_until is None
+    assert window._recording_session is None
+    assert window._recording_stop_thread is None
+    assert window._recording_status_message == "Video canceled"
+    assert window._recording_status_detail == "No video was saved."
+    assert window._recording_status_until == pytest.approx(13.0)
+
+
+def test_escape_turns_pending_video_publication_into_cleanup():
+    class FakeCancelEvent:
+        def __init__(self):
+            self.was_set = False
+
+        def set(self):
+            self.was_set = True
+
+    window = _recording_window()
+    cancel_event = FakeCancelEvent()
+    window._recording_stop_thread = object()
+    window._recording_stop_cancel_event = cancel_event
+
+    assert window._cancel_recording_capture() is True
+
+    assert cancel_event.was_set is True
+    assert window._recording_status_message == "Canceling video…"
+    assert window._recording_status_until is None
+
+
+def test_escape_cancels_active_trace_and_waits_for_disk_cleanup(monkeypatch, tmp_path):
+    monkeypatch.setattr(viewer_window.time, "perf_counter", lambda: 10.0)
+    window = _recording_window()
+    recorder = FakeManualDiveTrace()
+    window._manual_dive_trace = recorder
+    window._manual_dive_trace_writers = []
+
+    assert window._cancel_manual_dive_trace_capture() is True
+
+    assert recorder.cancel_calls == 1
+    assert window._manual_dive_trace is None
+    assert len(window._manual_dive_trace_writers) == 1
+    pending = window._manual_dive_trace_writers[0]
+    assert pending.show_completion is True
+    assert pending.reveal_on_success is False
+    assert window._recording_status_message == "Canceling dive trace…"
+    assert window._recording_status_until is None
+
+    recorder.result = ManualDiveTraceResult(
+        output_path=str(tmp_path / "trace.jsonl"),
+        partial_path=str(tmp_path / ".trace.jsonl.part"),
+        completed=False,
+        error=None,
+        canceled=True,
+    )
+    window._update_manual_dive_trace(now=11.0)
+
+    assert window._manual_dive_trace_writers == []
+    assert window._recording_status_message == "Dive trace canceled"
+    assert window._recording_status_detail == "No dive trace was saved."
+    assert window._recording_status_kind == "cancel"
+    assert window._recording_status_until == pytest.approx(14.0)
 
 
 def test_manual_trace_starts_only_after_its_countdown_expires():
@@ -551,7 +869,7 @@ def test_manual_trace_countdown_uses_the_shared_countdown_overlay():
         controller=controller,
         start_number=3,
         title="Prepare to plan a dive",
-        note="Press Ctrl+T again to cancel.",
+        note="Press Ctrl+T again to stop. Press Esc to cancel.",
     )
 
     assert calls[0] == ("scrim", (800, 600))
@@ -565,8 +883,17 @@ def test_manual_trace_countdown_uses_the_shared_countdown_overlay():
             "progress": pytest.approx(0.025),
             "fixed_text_scale": 1.28,
             "stage": "Prepare to plan a dive",
-            "note": "Press Ctrl+T again to cancel.",
+            "note": "Press Ctrl+T again to stop. Press Esc to cancel.",
         },
+    )
+
+
+def test_capture_countdown_pairs_stop_with_escape_cancellation():
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window._primary_shortcut_label = lambda: "Ctrl"
+
+    assert window._countdown_cancel_note("R") == (
+        "Press Ctrl+R again to stop. Press Esc to cancel."
     )
 
 
@@ -1064,6 +1391,9 @@ def test_user_stopped_manual_trace_shows_persistent_shared_saving_status():
     assert window._stop_manual_dive_trace(reason="user_stopped") is True
 
     assert window._recording_status_message == "Saving dive trace…"
+    assert window._recording_status_detail == (
+        "Finishing the file. Press Esc to cancel. Keep CaveViewer open."
+    )
     assert window._recording_status_until is None
     pending_writer = window._manual_dive_trace_writers[0]
     assert pending_writer.show_completion is True
@@ -1272,15 +1602,24 @@ def test_manual_trace_marks_bookmark_recall_as_discontinuity():
     assert reason == "bookmark_recall"
 
 
-def test_manual_trace_active_does_not_render_a_top_screen_prompt():
+@pytest.mark.parametrize(
+    "owner",
+    (
+        viewer_window.CaptureOwner.VIDEO,
+        viewer_window.CaptureOwner.DIVE_TRACE,
+        viewer_window.CaptureOwner.SLICE,
+    ),
+)
+def test_active_capture_does_not_render_top_screen_prompt(owner):
     window = object.__new__(viewer_window.CaveViewerWindow)
-    window._manual_dive_trace = FakeManualDiveTrace()
+    window._active_capture_owner = lambda: owner
+    window._primary_shortcut_label = lambda: "Ctrl"
     calls = []
     window._render_dive_status_prompt = (
         lambda window_size, **kwargs: calls.append((window_size, kwargs))
     )
 
-    window._render_dive_status((800, 600))
+    assert window._render_active_capture_instruction((800, 600)) is False
 
     assert calls == []
 
@@ -2320,6 +2659,77 @@ def test_recording_reveal_failure_keeps_saved_status(monkeypatch):
     ]
 
 
+def test_escape_canceled_recording_releases_buffers_and_removes_mp4(tmp_path):
+    output_path = tmp_path / "partial.mp4"
+    output_path.write_bytes(b"partial recording")
+
+    class FakeProcess:
+        stdin = None
+        returncode = 0
+
+        @staticmethod
+        def wait(timeout=None):
+            return 0
+
+    class FakeFramebuffer:
+        def __init__(self):
+            self.released = False
+
+        def release(self):
+            self.released = True
+
+    class FakeBuffer:
+        def __init__(self):
+            self.released = False
+
+        def release(self):
+            self.released = True
+
+    framebuffer = FakeFramebuffer()
+    buffer = FakeBuffer()
+    slot = viewer_window._RecordingReadbackSlot(buffer, in_flight=True)
+    window = _recording_window()
+    session = _active_recording_session(
+        process=FakeProcess(),
+        output_path=str(output_path),
+    )
+    window._recording_session = session
+    window._recording_output_path = str(output_path)
+    window._recording_size = (2, 2)
+    window._recording_viewport = (0, 0, 2, 2)
+    window._recording_readback_framebuffer = framebuffer
+    window._recording_readback_slots = [slot]
+    window._recording_readback_pending = [slot]
+    window._recording_readback_byte_count = 12
+    window._recording_frame_queue = session.frame_queue
+    window.wnd = SimpleNamespace(is_closing=True)
+    reset_reasons = []
+    window._reset_transient_input_state = reset_reasons.append
+
+    assert window._begin_escape_capture_cancellation() is True
+
+    assert framebuffer.released is True
+    assert buffer.released is True
+    assert window._recording_readback_slots == []
+    assert window._recording_frame_queue is None
+    assert window.wnd.is_closing is False
+    assert reset_reasons == ["canceling capture before close"]
+    assert window._escape_capture_cancellation_active()
+    assert not window._exit_capture_finalization_active()
+    assert window._recording_status_message == "Canceling video…"
+    assert "Finishing" not in window._recording_status_message
+    window._recording_stop_thread.join(timeout=2.0)
+    assert not window._recording_stop_thread.is_alive()
+    window._drain_recording_stop_results()
+
+    assert not output_path.exists()
+    assert window._recording_status_message == "Video canceled"
+    assert window._recording_status_detail == "No video was saved."
+    assert window._recording_status_kind == "cancel"
+    assert window._recording_status_until is not None
+    assert window._recording_stop_thread is None
+
+
 def test_stop_recording_kills_encoder_after_timeout_and_reports_failure(monkeypatch):
     logger = FakeLogger()
     monkeypatch.setattr(viewer_window, "_LOG", logger)
@@ -2377,7 +2787,9 @@ def test_stop_recording_kills_encoder_after_timeout_and_reports_failure(monkeypa
     window._stop_recording(show_message=True, reveal_on_success=True)
 
     assert window._recording_status_message == "Saving video…"
-    assert window._recording_status_detail == "Finishing the file. Keep CaveViewer open."
+    assert window._recording_status_detail == (
+        "Finishing the file. Press Esc to cancel. Keep CaveViewer open."
+    )
     assert window._recording_stop_thread is not None
     window._recording_stop_thread.join(timeout=1.0)
     assert not window._recording_stop_thread.is_alive()
@@ -2437,6 +2849,26 @@ def test_window_shortcut_opens_map_only_when_loaded():
     window._import_active = False
     assert window._handle_window_shortcut(79, SimpleNamespace(ctrl=True)) is True
     assert calls == ["open"]
+
+
+def test_window_shortcut_keeps_import_pause_available_as_an_undocumented_chord():
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window._presentation_profile = select_presentation_profile(
+        platform_name="unsupported"
+    )
+    window.wnd = SimpleNamespace(keys=SimpleNamespace(P=80, O=79))
+    window._keys_down = set()
+    window._key_resolve_cache = {}
+    window._import_active = True
+    calls = []
+    window._request_import_pause = lambda: calls.append("pause")
+
+    assert window._handle_window_shortcut(
+        80,
+        SimpleNamespace(ctrl=True, shift=True),
+    ) is True
+
+    assert calls == ["pause"]
 
 
 def test_open_action_uses_runtime_and_handles_unavailable_directory_selection(
@@ -5053,6 +5485,67 @@ def test_on_close_keeps_viewer_open_while_active_video_is_saved():
         ("reset_input", "saving capture before close"),
         "stop_recording",
     ]
+
+
+def test_on_close_does_not_replace_escape_cancellation_with_save_finalization():
+    window = _recording_window()
+    window._closing_requested = False
+    window._recording_session = object()
+    window._show_capture_status(
+        "Canceling video…",
+        "Stopping capture and removing partial files. "
+        "CaveViewer will close automatically.",
+        duration=None,
+    )
+    window._ensure_capture_workflow().begin_escape_cancellation()
+    window.wnd = SimpleNamespace(is_closing=True)
+
+    window.on_close()
+
+    assert window.wnd.is_closing is False
+    assert window._escape_capture_cancellation_active()
+    assert not window._exit_capture_finalization_active()
+    assert window._recording_status_message == "Canceling video…"
+
+
+def test_escape_cancellation_closes_only_after_cleanup_and_confirmation(monkeypatch):
+    current_time = [14.999]
+    monkeypatch.setattr(
+        viewer_window.time,
+        "perf_counter",
+        lambda: current_time[0],
+    )
+    calls = []
+    window = _recording_window()
+    workflow = window._ensure_capture_workflow()
+    workflow.begin_escape_cancellation()
+    window._manual_dive_trace = None
+    window._manual_dive_trace_writers = []
+    window._recording_status_until = 15.0
+    window._complete_window_close = lambda: calls.append("close")
+
+    assert window._complete_escape_capture_cancellation_if_ready() is False
+
+    window._recording_stop_thread = object()
+    current_time[0] = 20.0
+    assert window._complete_escape_capture_cancellation_if_ready() is False
+
+    window._recording_stop_thread = None
+    assert window._complete_escape_capture_cancellation_if_ready() is True
+    assert calls == ["close"]
+    assert not workflow.escape_cancellation_active
+
+
+def test_escape_cancellation_uses_the_finalizing_capture_frame_phase():
+    window = _recording_window()
+    window._window_setup_complete = True
+    window._closing_requested = False
+    window._is_iconified = False
+    window._import_active = False
+    window._has_map_loaded = True
+    window._ensure_capture_workflow().begin_escape_cancellation()
+
+    assert window._frame_phase() is viewer_window.ViewerFramePhase.FINALIZING_CAPTURE
 
 
 def test_exit_capture_finalization_waits_until_status_is_visible(monkeypatch):
