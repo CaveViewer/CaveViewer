@@ -21,7 +21,6 @@ import numpy as np
 
 from caveviewer.core.chunking.io import (
     CHUNKS_DIRNAME,
-    ChunkFileWriter,
     iter_chunk_file_groups,
 )
 from caveviewer.core.chunking.metadata import (
@@ -49,17 +48,19 @@ from caveviewer.core.textures.decoding import resolve_texture_path
 
 SLICE_MANIFEST_KEY = "slice"
 SLICE_SCHEMA_VERSION = 1
+SLICE_EXPORTER_VERSION = 2
+SLICE_GEOMETRY_MODE = "whole_source_chunks"
 SLICE_MARKER_SUFFIX = ".cvslice"
 DEFAULT_SLICE_PADDING = 5.0
 _SLICE_SEGMENT_SEPARATOR = " - Segment "
-# Clipping expands triangle edges into small polygons.  Keep this deliberately
-# below the ordinary upload group limit so the temporary Python-side polygon
-# lists remain bounded even for highly fragmented source geometry.
+# Chunk groups remain bounded while the exporter validates source geometry and
+# derives the slice's detailed minimap footprint before copying each chunk.
 _SLICE_BLOCK_VERTICES = 4_095
 _SLICE_NAME_MAX_LENGTH = 80
-_CLIP_EPSILON = 1.0e-6
-_DEGENERATE_AREA_SQUARED = 1.0e-16
-_MAX_CLIPPED_GEOMETRY_MULTIPLIER = 8
+_BOUNDS_EPSILON = 1.0e-6
+_FOOTPRINT_TARGET_CELLS = 200
+_MIN_FOOTPRINT_CELL_SIZE = 2.0
+_SLICE_MANIFEST_RESERVE_BYTES = 1024 * 1024
 
 ProgressCallback = Callable[[str, float], None]
 CancelCallback = Callable[[], bool]
@@ -268,7 +269,7 @@ def export_slice(
     progress_cb: ProgressCallback | None = None,
     cancel_requested: CancelCallback | None = None,
 ) -> SliceExportResult:
-    """Clip and atomically publish a standalone precompiled-map directory.
+    """Copy complete selected chunks into a standalone precompiled-map directory.
 
     Both the source and output targets use the cache-operation lock.  The
     source lock prevents a cooperative rebuild from replacing chunks while the
@@ -342,51 +343,77 @@ def _export_in_staging_directory(
     cancel_requested: CancelCallback | None,
 ) -> SliceExportResult:
     chunks_dir = os.path.join(staging_dir, CHUNKS_DIRNAME)
+    os.makedirs(chunks_dir, exist_ok=True)
     output_chunks: dict[str, dict[str, object]] = {}
     used_materials: set[str] = set()
     triangle_count = 0
-    source_max_upload_group_mb = manifest_max_upload_group_mb(source_manifest)
-    max_group_bytes = (
-        max(1, int(source_max_upload_group_mb * 1024 ** 2))
-        if source_max_upload_group_mb is not None
-        else None
-    )
+    footprint_cell_size = _slice_footprint_cell_size(candidates)
+    footprint_cells: set[tuple[int, int]] = set()
 
     for index, (cell, _chunk_info) in enumerate(candidates):
         _raise_if_cancelled(cancel_requested)
-        writer = ChunkFileWriter(chunks_dir, cell, max_group_bytes=max_group_bytes)
-        try:
-            for group in iter_chunk_file_groups(
-                request.source_cache_dir,
-                cell,
-                block_vertices=_SLICE_BLOCK_VERTICES,
-            ):
-                _raise_if_cancelled(cancel_requested)
-                positions, uvs, normals = _clip_group_to_bounds(group, request.bounds)
-                if len(positions):
-                    writer.write_group(group.material_name, positions, uvs, normals)
-                    used_materials.add(group.material_name)
-            written = writer.finish()
-        except BaseException:
-            writer.abort()
-            raise
+        source_chunk_path = _slice_source_chunk_path(request.source_cache_dir, cell)
+        chunk_minimum: np.ndarray | None = None
+        chunk_maximum: np.ndarray | None = None
+        chunk_materials: list[str] = []
+        chunk_triangle_count = 0
+        for group in iter_chunk_file_groups(
+            request.source_cache_dir,
+            cell,
+            block_vertices=_SLICE_BLOCK_VERTICES,
+        ):
+            _raise_if_cancelled(cancel_requested)
+            positions = np.asarray(group.positions, dtype=np.float32)
+            if not len(positions):
+                continue
+            if len(positions) % 3:
+                raise ValueError(
+                    f"Slice source chunk {cell!r} is not triangle-aligned"
+                )
+            if not np.isfinite(positions).all():
+                raise ValueError(
+                    f"Slice source chunk {cell!r} contains non-finite geometry"
+                )
+            group_minimum = positions.min(axis=0)
+            group_maximum = positions.max(axis=0)
+            if chunk_minimum is None:
+                chunk_minimum = group_minimum.copy()
+                chunk_maximum = group_maximum.copy()
+            else:
+                np.minimum(chunk_minimum, group_minimum, out=chunk_minimum)
+                np.maximum(chunk_maximum, group_maximum, out=chunk_maximum)
+            if group.material_name not in chunk_materials:
+                chunk_materials.append(group.material_name)
+            used_materials.add(group.material_name)
+            chunk_triangle_count += len(positions) // 3
+            _add_slice_footprint_cells(
+                footprint_cells,
+                positions,
+                cell_size=footprint_cell_size,
+            )
 
-        if written is not None:
-            cell_key = f"{cell[0]}_{cell[1]}_{cell[2]}"
-            output_chunks[cell_key] = {
-                "materials": list(written.materials),
-                "bounds_min": written.bounds_min.tolist(),
-                "bounds_max": written.bounds_max.tolist(),
-            }
-            triangle_count += written.triangle_count
+        if chunk_minimum is None or chunk_maximum is None or not chunk_triangle_count:
+            raise ValueError(f"Slice source chunk {cell!r} contains no triangles")
+
+        # Preserve the source binary exactly. Rewriting or clipping triangles
+        # changes wall surfaces, UVs, normals, and group boundaries even when
+        # the resulting map remains technically loadable.
+        cell_key = f"{cell[0]}_{cell[1]}_{cell[2]}"
+        shutil.copy2(source_chunk_path, os.path.join(chunks_dir, f"{cell_key}.bin"))
+        output_chunks[cell_key] = {
+            "materials": chunk_materials,
+            "bounds_min": chunk_minimum.tolist(),
+            "bounds_max": chunk_maximum.tolist(),
+        }
+        triangle_count += chunk_triangle_count
         _emit_progress(
             progress_cb,
-            "slicing geometry",
+            "copying slice chunks",
             0.05 + 0.80 * ((index + 1) / max(len(candidates), 1)),
         )
 
     if not output_chunks:
-        raise ValueError("The selected slice contains no triangles")
+        raise ValueError("The selected slice contains no renderable chunks")
 
     _raise_if_cancelled(cancel_requested)
     material_manifest, texture_assets = _slice_texture_assets(
@@ -400,6 +427,9 @@ def _export_in_staging_directory(
             "format": "caveviewer.slice",
             "schema_version": SLICE_SCHEMA_VERSION,
             "display_name": _slice_display_name(request),
+            "root_cave_name": _slice_root_cave_name(request),
+            "exporter_version": SLICE_EXPORTER_VERSION,
+            "geometry_mode": SLICE_GEOMETRY_MODE,
         },
         allow_nan=False,
         sort_keys=True,
@@ -419,7 +449,8 @@ def _export_in_staging_directory(
         "root_cave_name": _slice_root_cave_name(request),
         **request.bounds.payload(),
         "entry_position": list(request.entry_position),
-        "exporter_version": 1,
+        "exporter_version": SLICE_EXPORTER_VERSION,
+        "geometry_mode": SLICE_GEOMETRY_MODE,
     }
     parent_identity = _parent_identity(source_manifest, source_manifest_digest)
     slice_metadata["parent_identity"] = parent_identity.payload()
@@ -429,6 +460,8 @@ def _export_in_staging_directory(
         "source_obj": marker_name,
         "mtl_materials": material_manifest,
         "chunks": output_chunks,
+        "footprint_cell_size": footprint_cell_size,
+        "footprint_cells": _flatten_slice_footprint_cells(footprint_cells),
         "triangle_count": triangle_count,
         SLICE_MANIFEST_KEY: slice_metadata,
     }
@@ -441,6 +474,8 @@ def _export_in_staging_directory(
             {
                 "kind": "caveviewer.slice",
                 "schema_version": SLICE_SCHEMA_VERSION,
+                "exporter_version": SLICE_EXPORTER_VERSION,
+                "geometry_mode": SLICE_GEOMETRY_MODE,
                 **request.bounds.payload(),
                 "entry_position": list(request.entry_position),
             },
@@ -494,6 +529,69 @@ def _overlapping_source_chunks(
     return sorted(selected, key=lambda item: item[0])
 
 
+def _slice_source_chunk_path(
+    source_cache_dir: str,
+    cell: tuple[int, int, int],
+) -> str:
+    """Return one validated source-chunk path contained by the parent cache."""
+    cache_root = os.path.realpath(source_cache_dir)
+    source_path = os.path.realpath(
+        os.path.join(
+            cache_root,
+            CHUNKS_DIRNAME,
+            f"{cell[0]}_{cell[1]}_{cell[2]}.bin",
+        )
+    )
+    try:
+        contained = os.path.commonpath((cache_root, source_path)) == cache_root
+    except ValueError:
+        contained = False
+    if not contained or not os.path.isfile(source_path):
+        raise ValueError(f"Slice source chunk is unavailable: {source_path}")
+    return source_path
+
+
+def _slice_footprint_cell_size(
+    candidates: list[tuple[tuple[int, int, int], Mapping[str, Any]]],
+) -> float:
+    """Choose the same bounded minimap resolution used by normal imports."""
+    minimum_x = minimum_z = math.inf
+    maximum_x = maximum_z = -math.inf
+    for cell, info in candidates:
+        minimum = _finite_vector(info.get("bounds_min"), f"chunk {cell} minimum")
+        maximum = _finite_vector(info.get("bounds_max"), f"chunk {cell} maximum")
+        minimum_x = min(minimum_x, minimum[0])
+        minimum_z = min(minimum_z, minimum[2])
+        maximum_x = max(maximum_x, maximum[0])
+        maximum_z = max(maximum_z, maximum[2])
+    extent = max(maximum_x - minimum_x, maximum_z - minimum_z, 1.0)
+    return max(_MIN_FOOTPRINT_CELL_SIZE, extent / _FOOTPRINT_TARGET_CELLS)
+
+
+def _add_slice_footprint_cells(
+    footprint_cells: set[tuple[int, int]],
+    positions: np.ndarray,
+    *,
+    cell_size: float,
+) -> None:
+    """Accumulate detailed top-down occupancy from one bounded vertex block."""
+    coordinates = np.floor(positions[:, [0, 2]] / cell_size).astype(np.int64)
+    footprint_cells.update(
+        (int(cell_x), int(cell_z))
+        for cell_x, cell_z in np.unique(coordinates, axis=0).tolist()
+    )
+
+
+def _flatten_slice_footprint_cells(
+    footprint_cells: set[tuple[int, int]],
+) -> list[int]:
+    """Return deterministic flat X/Z pairs accepted by the normal minimap."""
+    flattened: list[int] = []
+    for cell_x, cell_z in sorted(footprint_cells):
+        flattened.extend((cell_x, cell_z))
+    return flattened
+
+
 def _ensure_export_capacity(
     request: SliceExportRequest,
     source_manifest: Mapping[str, Any],
@@ -503,11 +601,7 @@ def _ensure_export_capacity(
     candidate_bytes = 0
     candidate_materials: set[str] = set()
     for cell, _info in candidates:
-        path = os.path.join(
-            request.source_cache_dir,
-            CHUNKS_DIRNAME,
-            f"{cell[0]}_{cell[1]}_{cell[2]}.bin",
-        )
+        path = _slice_source_chunk_path(request.source_cache_dir, cell)
         try:
             candidate_bytes += os.path.getsize(path)
         except OSError as exc:
@@ -545,9 +639,7 @@ def _ensure_export_capacity(
                 f"{relative_path}"
             ) from exc
     available_bytes = shutil.disk_usage(_nearest_existing_directory(os.path.dirname(request.output_dir))).free
-    required_bytes = (
-        candidate_bytes * _MAX_CLIPPED_GEOMETRY_MULTIPLIER + texture_bytes
-    )
+    required_bytes = candidate_bytes + texture_bytes + _SLICE_MANIFEST_RESERVE_BYTES
     if available_bytes < required_bytes:
         raise OSError(
             "Insufficient free space for a slice staging export; "
@@ -640,137 +732,6 @@ def _parent_identity(
     )
 
 
-def _clip_group_to_bounds(
-    group,
-    bounds: SliceBounds,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    clipped_positions: list[np.ndarray] = []
-    clipped_uvs: list[np.ndarray] = []
-    clipped_normals: list[np.ndarray] = []
-    for index in range(0, len(group.positions), 3):
-        vertices = [
-            (
-                np.asarray(group.positions[index + offset], dtype=np.float64),
-                np.asarray(group.uvs[index + offset], dtype=np.float64),
-                np.asarray(group.normals[index + offset], dtype=np.float64),
-            )
-            for offset in range(3)
-        ]
-        polygon = _clip_triangle(vertices, bounds)
-        if len(polygon) < 3:
-            continue
-        for polygon_index in range(1, len(polygon) - 1):
-            triangle = (polygon[0], polygon[polygon_index], polygon[polygon_index + 1])
-            if _triangle_area_squared(triangle) <= _DEGENERATE_AREA_SQUARED:
-                continue
-            for position, uv, normal in triangle:
-                clipped_positions.append(position)
-                clipped_uvs.append(uv)
-                clipped_normals.append(normal)
-    if not clipped_positions:
-        return (
-            np.empty((0, 3), dtype=np.float32),
-            np.empty((0, 2), dtype=np.float32),
-            np.empty((0, 3), dtype=np.float32),
-        )
-    positions = np.asarray(clipped_positions, dtype=np.float32)
-    np.maximum(positions, np.asarray(bounds.minimum, dtype=np.float32), out=positions)
-    np.minimum(positions, np.asarray(bounds.maximum, dtype=np.float32), out=positions)
-    uvs = np.asarray(clipped_uvs, dtype=np.float32)
-    normals = _normalized_normals(np.asarray(clipped_normals, dtype=np.float32))
-    return positions, uvs, normals
-
-
-def _clip_triangle(
-    vertices: list[tuple[np.ndarray, np.ndarray, np.ndarray]],
-    bounds: SliceBounds,
-) -> list[tuple[np.ndarray, np.ndarray, np.ndarray]]:
-    polygon = vertices
-    for axis in range(3):
-        polygon = _clip_polygon_plane(
-            polygon,
-            axis=axis,
-            boundary=bounds.minimum[axis],
-            keep_greater=True,
-        )
-        if not polygon:
-            return []
-        polygon = _clip_polygon_plane(
-            polygon,
-            axis=axis,
-            boundary=bounds.maximum[axis],
-            keep_greater=False,
-        )
-        if not polygon:
-            return []
-    return polygon
-
-
-def _clip_polygon_plane(
-    polygon: list[tuple[np.ndarray, np.ndarray, np.ndarray]],
-    *,
-    axis: int,
-    boundary: float,
-    keep_greater: bool,
-) -> list[tuple[np.ndarray, np.ndarray, np.ndarray]]:
-    if not polygon:
-        return []
-    clipped: list[tuple[np.ndarray, np.ndarray, np.ndarray]] = []
-    previous = polygon[-1]
-    previous_distance = _plane_distance(previous[0][axis], boundary, keep_greater)
-    previous_inside = previous_distance >= -_CLIP_EPSILON
-    for current in polygon:
-        current_distance = _plane_distance(current[0][axis], boundary, keep_greater)
-        current_inside = current_distance >= -_CLIP_EPSILON
-        if current_inside != previous_inside:
-            denominator = previous_distance - current_distance
-            if abs(denominator) > _CLIP_EPSILON:
-                fraction = max(0.0, min(1.0, previous_distance / denominator))
-                clipped.append(_interpolate_vertex(previous, current, fraction))
-        if current_inside:
-            clipped.append(current)
-        previous = current
-        previous_distance = current_distance
-        previous_inside = current_inside
-    return clipped
-
-
-def _plane_distance(value: float, boundary: float, keep_greater: bool) -> float:
-    return value - boundary if keep_greater else boundary - value
-
-
-def _interpolate_vertex(
-    previous: tuple[np.ndarray, np.ndarray, np.ndarray],
-    current: tuple[np.ndarray, np.ndarray, np.ndarray],
-    fraction: float,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    return tuple(
-        previous[index] + (current[index] - previous[index]) * fraction
-        for index in range(3)
-    )  # type: ignore[return-value]
-
-
-def _normalized_normals(normals: np.ndarray) -> np.ndarray:
-    lengths = np.linalg.norm(normals, axis=1)
-    nonzero = lengths > _CLIP_EPSILON
-    normalized = normals.copy()
-    normalized[nonzero] /= lengths[nonzero, np.newaxis]
-    return normalized
-
-
-def _triangle_area_squared(
-    triangle: tuple[
-        tuple[np.ndarray, np.ndarray, np.ndarray],
-        tuple[np.ndarray, np.ndarray, np.ndarray],
-        tuple[np.ndarray, np.ndarray, np.ndarray],
-    ],
-) -> float:
-    first = triangle[1][0] - triangle[0][0]
-    second = triangle[2][0] - triangle[0][0]
-    cross = np.cross(first, second)
-    return float(np.dot(cross, cross))
-
-
 def _parse_cell(raw_cell: object) -> tuple[int, int, int]:
     parts = str(raw_cell).replace(",", "_").split("_")
     if len(parts) != 3:
@@ -795,9 +756,9 @@ def _finite_vector(value: object, label: str) -> tuple[float, float, float]:
 
 def _point_inside_bounds(point: tuple[float, float, float], bounds: SliceBounds) -> bool:
     return all(
-        bounds.minimum[index] - _CLIP_EPSILON
+        bounds.minimum[index] - _BOUNDS_EPSILON
         <= point[index]
-        <= bounds.maximum[index] + _CLIP_EPSILON
+        <= bounds.maximum[index] + _BOUNDS_EPSILON
         for index in range(3)
     )
 

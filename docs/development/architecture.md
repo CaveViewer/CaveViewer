@@ -121,13 +121,17 @@ uses the same render-thread 3-2-1 countdown presentation as recording and
 manual tracing, then records the current camera position as a slice start
 anchor. A second shortcut press records the end anchor and starts a bounded
 child-process export; the normal viewer remains interactive while geometry and
-assets are written. The exporter clips render-cache triangles to a padded
-axis-aligned volume, stages a standalone precompiled-map directory, and
+assets are written. The exporter selects source render chunks intersecting the
+padded axis-aligned volume and copies those complete chunk files without
+rewriting their geometry. It regenerates the detailed minimap footprint from
+the included vertices, stages a standalone precompiled-map directory, and
 atomically publishes it below the Preferences **Downloaded maps folder**
-location. The saved slice contains its own manifest, render chunks, referenced
-cache-local texture assets, and a small `.cvslice` source marker, so it can be
-copied to a machine that lacks the parent OBJ/GLB and still open through the
-normal precompiled-map path.
+location. Complete chunks may extend beyond the two camera endpoints; this is
+the deliberate tradeoff that preserves the original walls, UVs, normals, and
+material groups. The saved slice contains its own manifest, render chunks,
+referenced cache-local texture assets, and a small `.cvslice` source marker, so
+it can be copied to a machine that lacks the parent OBJ/GLB and still open
+through the normal precompiled-map path.
 It records additive parent/selection metadata and derives a distinct Guided
 Dive identity, but does not copy parent bookmarks or prior traces. On normal
 completion it uses the shared saving/success/reveal presentation; slice success

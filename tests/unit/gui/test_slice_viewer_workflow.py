@@ -81,6 +81,25 @@ def test_slice_countdown_uses_the_next_segment_for_the_current_cave(monkeypatch,
     assert window._slice_root_cave_name == "Ginnie Springs"
 
 
+def test_slice_prefers_visible_parent_map_name_over_opaque_source_model(
+    monkeypatch,
+    tmp_path,
+):
+    window = _slice_window(tmp_path)
+    parent_map = tmp_path / "Devil s Eye at Ginnie Springs"
+    parent_map.mkdir()
+    window.map_root = str(parent_map)
+    window.manifest = {"source_obj": "D5.obj"}
+    monkeypatch.setattr(map_slicing, "validate_slice_source", lambda _path: {})
+
+    assert window._start_slice_countdown()
+
+    assert window._slice_root_cave_name == "Devil s Eye at Ginnie Springs"
+    assert window._slice_display_base == (
+        "Devil s Eye at Ginnie Springs - Segment 1"
+    )
+
+
 def test_slice_start_anchor_is_captured_only_after_countdown(tmp_path):
     window = _slice_window(tmp_path)
     controller = window._ensure_slice_selection_controller()

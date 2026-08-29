@@ -126,7 +126,6 @@ class DialogActionLabel(tk.Label):
             "fg": colors.foreground,
             "padx": padx,
             "pady": pady,
-            "cursor": "hand2" if enabled else "arrow",
             "takefocus": enabled,
             "highlightthickness": 1,
             "highlightbackground": colors.border,
@@ -176,7 +175,6 @@ class DialogActionLabel(tk.Label):
         options = {
             "bg": colors.background,
             "fg": colors.foreground,
-            "cursor": "hand2" if self._cv_enabled else "arrow",
             "takefocus": self._cv_enabled,
             "highlightbackground": colors.border,
             "highlightcolor": colors.border,
@@ -238,7 +236,6 @@ def create_dialog_action_button(
         "padx": padx,
         "pady": pady,
         "state": "normal" if enabled else "disabled",
-        "cursor": "hand2" if enabled else "arrow",
         "takefocus": enabled,
     }
     if width is not None:
@@ -286,7 +283,6 @@ def set_dialog_action_button(
         "highlightbackground": colors.border,
         "highlightcolor": colors.border,
         "state": "normal" if is_enabled else "disabled",
-        "cursor": "hand2" if is_enabled else "arrow",
         "takefocus": is_enabled,
     }
     if text is not _UNSET:

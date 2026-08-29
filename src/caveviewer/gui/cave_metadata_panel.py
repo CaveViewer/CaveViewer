@@ -71,7 +71,6 @@ class CaveMetadataPanel:
             fg=style.subtitle_color,
             bg=style.background_color,
             anchor="w",
-            cursor="hand2",
             takefocus=True,
             highlightthickness=0,
         )
@@ -173,7 +172,6 @@ class CaveMetadataPanel:
                     fg=style.link_color,
                     bg=style.background_color,
                     anchor="w",
-                    cursor="hand2",
                     takefocus=True,
                     highlightthickness=1,
                     highlightbackground=style.background_color,

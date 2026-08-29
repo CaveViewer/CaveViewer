@@ -38,7 +38,8 @@ def test_standard_library_row_uses_compact_action_and_size_text():
 
     assert row.key == (GITHUB_RELEASE_MAP_SOURCE_ID, "Boh Yai Mine I")
     assert row.title == "Boh Yai Mine I"
-    assert row.detail == "57 MB"
+    assert row.detail == ""
+    assert row.size_text == "57 MB"
     assert row.action_text == "Get"
     assert not row.downloaded
 
@@ -63,6 +64,7 @@ def test_downloaded_standard_library_row_remembers_open_path():
     )
 
     assert row.detail == "Downloaded"
+    assert row.size_text == "57 MB"
     assert row.action_text == "Open"
     assert controller.downloaded_path(
         library_map,
@@ -82,6 +84,7 @@ def test_cave_metadata_detail_replaces_ordinary_download_state_text():
     )
 
     assert row.detail == "Florida, United States · Underwater cave"
+    assert row.size_text == "57 MB"
 
 
 def test_former_map_warning_still_takes_priority_over_cave_metadata():
@@ -151,7 +154,8 @@ def test_catalog_refresh_updates_standard_library_size_metadata():
 
     assert completion.refreshes[0].maps == (catalog_entry,)
     assert completion.error is None
-    assert row.detail == "52 MB"
+    assert row.detail == ""
+    assert row.size_text == "52 MB"
 
 
 def test_catalog_fetch_requires_typed_refreshes():

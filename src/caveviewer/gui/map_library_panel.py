@@ -35,7 +35,6 @@ class MapLibraryActionVisual:
 
     icon: str
     tooltip: str
-    row_activates: bool = False
 
 
 def map_library_action_visual(
@@ -50,7 +49,7 @@ def map_library_action_visual(
     if show_pause_progress:
         return MapLibraryActionVisual("pause-progress", "Pause rebuild")
     if action_text == "Open":
-        return MapLibraryActionVisual("chevron-right", "Open map", True)
+        return MapLibraryActionVisual("chevron-right", "Open map")
     if action_text == "Get":
         return MapLibraryActionVisual("download", "Download map")
     if action_text == "Retry":
@@ -112,6 +111,7 @@ class MapLibraryRowWidgets:
     action_button: object
     title_label: object
     metadata_label: object | None
+    size_label: object | None
 
 
 @dataclass
@@ -339,13 +339,14 @@ class MapLibraryPanel:
             self._standard_container,
             title=row.title,
             detail=row.detail,
-            size_text="",
+            size_text=row.size_text,
             action_text=row.action_text,
             action=action,
             title_color=(
                 self._style.former_map_title_color if former else self._style.title_color
             ),
             reserve_metadata=True,
+            reserve_size=True,
             menu_actions_factory=menu_actions_factory,
         )
         self.standard_rows[row.key] = widgets
@@ -396,6 +397,14 @@ class MapLibraryPanel:
         """Set the stable metadata text for one standard-library row."""
         widgets = self.standard_rows.get(key)
         self.set_row_metadata(widgets, text, error=error)
+
+    def set_standard_row_size(self, key: object, text: str) -> bool:
+        """Set the persistent download-size label for one standard row."""
+        widgets = self.standard_rows.get(key)
+        if widgets is None or not self._widget_exists(widgets.size_label):
+            return False
+        widgets.size_label.config(text=text)
+        return True
 
     def set_row_metadata(
         self,
@@ -628,7 +637,6 @@ class MapLibraryPanel:
             height=self._px(58),
             bg=style.featured_action_bg,
             borderwidth=0,
-            cursor="hand2",
             takefocus=True,
             highlightthickness=1,
             highlightbackground=style.panel_border_color,
@@ -763,7 +771,6 @@ class MapLibraryPanel:
             highlightbackground=self._style.panel_color,
             highlightcolor=self._style.button_border_color,
             height=max(1, self._px(24)),
-            cursor="hand2",
             takefocus=True,
         )
         header.pack(fill="x", pady=(self._px(top_pad), self._px(6)))
@@ -885,6 +892,7 @@ class MapLibraryPanel:
         action: Callable[[], None],
         title_color: str | None = None,
         reserve_metadata: bool = False,
+        reserve_size: bool = False,
         menu_actions_factory: MenuActionsFactory | None = None,
     ) -> MapLibraryRowWidgets:
         style = self._style
@@ -966,11 +974,22 @@ class MapLibraryPanel:
         self._configure_action_button_hover(action_button)
         action_button.pack(side="right", padx=(0, self._px(4)), pady=self._px(5))
 
-        row_action_widgets = [row_content, text_column, name_label]
-        if metadata_label is not None:
-            row_action_widgets.append(metadata_label)
-        action_button._cv_row_action_widgets = tuple(row_action_widgets)
-        self._set_row_open_activation(action_button)
+        size_label = None
+        if size_text or reserve_size:
+            size_label = tk.Label(
+                row_content,
+                text=size_text,
+                font=style.supporting_font,
+                fg=style.metadata_color,
+                bg=style.panel_color,
+                anchor="e",
+                justify="right",
+            )
+            size_label.pack(
+                side="right",
+                padx=(self._px(8), self._px(12)),
+                pady=self._px(5),
+            )
 
         row_widgets = MapLibraryRowWidgets(
             row_shell=row_shell,
@@ -978,6 +997,7 @@ class MapLibraryPanel:
             action_button=action_button,
             title_label=name_label,
             metadata_label=metadata_label,
+            size_label=size_label,
         )
         row_holder[0] = row_widgets
         self.refresh_row_overflow(row_widgets)
@@ -1045,7 +1065,6 @@ class MapLibraryPanel:
             highlightthickness=1,
             highlightbackground=style.panel_color,
             highlightcolor=style.button_border_color,
-            cursor="hand2",
             takefocus=True,
         )
         button._cv_enabled = True
@@ -1054,7 +1073,6 @@ class MapLibraryPanel:
         button._cv_show_pause_progress = False
         button._cv_progress_fraction = 0.0
         button._cv_action_visual = map_library_action_visual(text)
-        button._cv_row_action_widgets = ()
         button._cv_tooltip_after_id = None
         button._cv_tooltip = None
         self._set_action_button(button, text, action)
@@ -1083,7 +1101,6 @@ class MapLibraryPanel:
         border = style.button_border_color if enabled else style.disabled_button_border
         button.config(
             bg=bg,
-            cursor="hand2" if enabled else "arrow",
             takefocus=enabled,
             highlightbackground=style.panel_color,
             highlightcolor=border,
@@ -1353,32 +1370,6 @@ class MapLibraryPanel:
         self._bind_activation(button, invoke_if_enabled)
         self._set_action_button_style(button)
         self._draw_action_button(button)
-        self._set_row_open_activation(button)
-
-    def _set_row_open_activation(self, button) -> None:
-        """Make only ready map rows mouse-openable; downloads stay explicit."""
-        visual = getattr(button, "_cv_action_visual", None)
-        row_activates = bool(
-            getattr(visual, "row_activates", False)
-            and getattr(button, "_cv_enabled", True)
-        )
-
-        def invoke_row(_event=None):
-            callback = getattr(button, "_cv_invoke", None)
-            if callback is not None:
-                callback()
-            return "break"
-
-        for widget in getattr(button, "_cv_row_action_widgets", ()):
-            if not self._widget_exists(widget):
-                continue
-            try:
-                widget.unbind("<Button-1>")
-                widget.config(cursor="hand2" if row_activates else "arrow")
-                if row_activates:
-                    widget.bind("<Button-1>", invoke_row)
-            except tk.TclError:
-                continue
 
     def _configure_action_button_hover(self, button) -> None:
         def show_hover(_event) -> None:
@@ -1499,7 +1490,6 @@ class MapLibraryPanel:
             self._hide_action_tooltip(button)
         button.config(
             bg=style.panel_color,
-            cursor="hand2" if has_actions else "arrow",
             takefocus=has_actions,
             highlightbackground=style.panel_color,
             highlightcolor=(
@@ -1706,7 +1696,6 @@ class MapLibraryPanel:
                 fg=style.menu_text if enabled else style.disabled_button_fg,
                 padx=self._px(12),
                 pady=self._px(7),
-                cursor="hand2" if enabled else "arrow",
                 takefocus=enabled,
                 anchor="w",
                 justify="left",
@@ -1767,7 +1756,6 @@ class MapLibraryPanel:
             height=size,
             bg=style.panel_color,
             borderwidth=0,
-            cursor="arrow",
             takefocus=False,
             highlightthickness=1,
             highlightbackground=style.panel_color,

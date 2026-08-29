@@ -101,7 +101,6 @@ class TopTabStrip:
                 bg=style.background_color,
                 padx=self._px(style.tab_pad_x),
                 pady=self._px(style.tab_pad_y),
-                cursor="hand2",
                 takefocus=True,
                 highlightthickness=self._px(style.focus_highlight_thickness),
                 highlightbackground=style.background_color,

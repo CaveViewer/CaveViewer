@@ -12,16 +12,59 @@ import pytest
 
 from caveviewer.gui import (
     cave_metadata_panel,
+    dialog_style,
+    help_panel,
     map_history,
     map_library_controller,
     map_library_panel,
     map_library_transfers,
     map_library_workflow,
+    preferences_dialog,
+    scrollable_content,
     splash_screen,
+    top_tab_strip,
 )
 from caveviewer.gui.platform.presentation import select_presentation_profile
 from caveviewer.gui.features import FeatureDecision, FeatureId, FeatureState
 from caveviewer.gui.update_manager import UpdateSnapshot, UpdateState
+
+
+@pytest.mark.parametrize(
+    "module",
+    (
+        splash_screen,
+        map_library_panel,
+        cave_metadata_panel,
+        preferences_dialog,
+        help_panel,
+        dialog_style,
+        top_tab_strip,
+        scrollable_content,
+    ),
+    ids=lambda module: module.__name__.rsplit(".", 1)[-1],
+)
+def test_splash_components_do_not_override_the_system_cursor(module):
+    """Keep the OS cursor unchanged across every splash-owned surface."""
+    tree = ast.parse(inspect.getsource(module))
+    overrides = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.keyword) and node.arg == "cursor":
+            overrides.append(node.lineno)
+        elif isinstance(node, ast.Dict):
+            overrides.extend(
+                node.lineno
+                for key in node.keys
+                if isinstance(key, ast.Constant) and key.value == "cursor"
+            )
+        elif (
+            isinstance(node, ast.Subscript)
+            and isinstance(node.ctx, ast.Store)
+            and isinstance(node.slice, ast.Constant)
+            and node.slice.value == "cursor"
+        ):
+            overrides.append(node.lineno)
+
+    assert overrides == []
 
 
 def test_map_library_cave_details_stay_in_the_splash_content_area():
@@ -199,7 +242,7 @@ def test_cancel_update_action_accepts_pointer_and_keyboard_activation(sequence):
         splash_screen._UpdateAction.CANCEL,
     )
 
-    assert label.options == {"cursor": "hand2", "takefocus": True}
+    assert label.options == {"takefocus": True}
     assert label.unbound == ["<Button-1>", "<Return>", "<space>"]
     assert set(label.bindings) == {"<Button-1>", "<Return>", "<space>"}
     assert label.bindings[sequence]() == "break"
@@ -1082,7 +1125,8 @@ def test_splash_map_library_uses_navigation_and_an_overflow_cue():
     download_source = inspect.getsource(map_library_panel.MapLibraryPanel._draw_download)
     assert "create_rectangle" not in download_source
     assert "_draw_retry" in panel_source
-    assert "_set_row_open_activation" in panel_source
+    assert "_set_row_open_activation" not in panel_source
+    assert "_cv_row_action_widgets" not in panel_source
     assert "stop_fill_color = style.button_fg" in panel_source
     assert "action_progress_ring_diameter=" in style_source
     assert "action_stop_size=" in style_source
@@ -1278,6 +1322,25 @@ def test_map_title_wrap_tracks_the_live_text_column_width():
     assert refreshes == [True, True]
 
 
+def test_map_library_size_updates_are_independent_from_row_metadata():
+    class _FakeSizeLabel:
+        def __init__(self) -> None:
+            self.config_calls = []
+
+        def config(self, **options) -> None:
+            self.config_calls.append(options)
+
+    size_label = _FakeSizeLabel()
+    panel = object.__new__(map_library_panel.MapLibraryPanel)
+    panel.standard_rows = {
+        "sample-map": SimpleNamespace(size_label=size_label),
+    }
+    panel._widget_exists = lambda widget: widget is size_label
+
+    assert panel.set_standard_row_size("sample-map", "70 MB")
+    assert size_label.config_calls == [{"text": "70 MB"}]
+
+
 def test_map_library_rows_use_subtle_overflow_menu_for_management():
     splash_source = inspect.getsource(splash_screen.show_splash_screen)
     style_source = inspect.getsource(splash_screen._map_library_panel_style)
@@ -1304,6 +1367,9 @@ def test_map_library_rows_use_subtle_overflow_menu_for_management():
     assert "remove_standard_download" in workflow_source
     assert "remove_standard_download" not in splash_source
     assert "show_row_status" in source
+    assert "size_text=row.size_text" in panel_source
+    assert "def set_standard_row_size" in panel_source
+    assert "row_action_widgets.append(size_label)" not in panel_source
     assert "Cache removed" in source
     assert "Couldn’t remove cache" in source
     assert "Couldn’t remove files" in source
@@ -1578,12 +1644,12 @@ def test_map_library_open_map_action_uses_the_existing_folder_callback(monkeypat
 
 
 @pytest.mark.parametrize(
-    ("action_text", "show_stop_progress", "icon", "tooltip", "row_activates"),
+    ("action_text", "show_stop_progress", "icon", "tooltip"),
     [
-        ("Open", False, "chevron-right", "Open map", True),
-        ("Get", False, "download", "Download map", False),
-        ("Retry", False, "retry", "Retry download", False),
-        ("", True, "stop-progress", "Stop download", False),
+        ("Open", False, "chevron-right", "Open map"),
+        ("Get", False, "download", "Download map"),
+        ("Retry", False, "retry", "Retry download"),
+        ("", True, "stop-progress", "Stop download"),
     ],
 )
 def test_map_library_row_actions_use_state_aware_icons(
@@ -1591,7 +1657,6 @@ def test_map_library_row_actions_use_state_aware_icons(
     show_stop_progress,
     icon,
     tooltip,
-    row_activates,
 ):
     visual = map_library_panel.map_library_action_visual(
         action_text,
@@ -1600,4 +1665,3 @@ def test_map_library_row_actions_use_state_aware_icons(
 
     assert visual.icon == icon
     assert visual.tooltip == tooltip
-    assert visual.row_activates is row_activates

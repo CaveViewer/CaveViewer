@@ -76,11 +76,22 @@ fallback for older and user-local maps.
 
 A confident match supplies the row's location and cave type. Operational
 messages temporarily replace that line, while unavailable/former-source
-warnings keep priority. The overflow menu exposes **About Cave**, which opens
-inside the existing splash content area and retains the Map Library's scroll
-position when the user goes back. It shows the canonical cave name, location,
-facts, supplied statistics, user-selected source links, and the disclaimer
-that the cave system may not be the exact 3D map.
+warnings keep priority. The map archive's download size remains visible as
+persistent metadata immediately before the row action; it does not replace the
+cave detail or operational-status line. The overflow menu exposes **About
+Cave**, which opens inside the existing splash content area and retains the Map
+Library's scroll position when the user goes back. It shows the canonical cave
+name, location, facts, supplied statistics, user-selected source links, and the
+disclaimer that the cave system may not be the exact 3D map.
+
+Recent-map slices keep their segment-specific display title but use the root
+cave identity stored in their bounded `.cvslice` descriptor for metadata
+matching. A confident parent match supplies the same location/type subtitle and
+**About Cave** action as the original cave. Missing or malformed slice identity
+does not trigger filename-based guessing. The first slice takes that root
+identity from the visible original map-folder name, falling back to its source
+model name only when no map root is available; slices of slices preserve the
+root identity already stored by their parent.
 
 `cave_metadata.py` owns catalog validation, formatting, and pure matching.
 `cave_metadata_panel.py` only renders a match. `map_library_workflow.py`
