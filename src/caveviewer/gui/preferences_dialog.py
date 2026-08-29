@@ -74,13 +74,14 @@ _SCROLLBAR_GUTTER_X = 18
 _PLACEHOLDER_COLOR = DARK_THEME.placeholder_text
 _INLINE_FEEDBACK_PAD_X = 10
 _CONTROL_GAP_X = 10
+_BACKUP_ACTION_BUTTON_WIDTH = 10
 _MIN_HINT_WRAP_LENGTH = 200
 _HINT_WRAP_INSET = 4
 _PREFERENCE_PAGES = (
     ("streaming", "Streaming"),
     ("parsing", "Import"),
     ("storage", "Storage"),
-    ("backup", "Backup and Restore"),
+    ("backup", "Backup"),
 )
 _PREFERENCE_PAGE_KEYS = frozenset(key for key, _label in _PREFERENCE_PAGES)
 _PREFERENCE_FIELD_GROUPS = {
@@ -463,16 +464,16 @@ class PreferencesPanel:
         transfer_group.pack(first=True)
         self._render_backup_action(
             transfer_group.content,
-            title="Export preferences",
-            description="Save a preferences.json file that you can share or keep.",
-            button_text="Export preferences…",
+            title="Save preferences",
+            description="Save preferences to a file.",
+            button_text="Save",
             command=self.export_preferences,
         )
         self._render_backup_action(
             transfer_group.content,
-            title="Import preferences",
-            description="Import saved preferences",
-            button_text="Import preferences…",
+            title="Load preferences",
+            description="Load preferences from a file.",
+            button_text="Load",
             command=self.import_preferences,
             top_pad=self._form_row_gap(),
         )
@@ -487,8 +488,8 @@ class PreferencesPanel:
         self._render_backup_action(
             restore_group.content,
             title="Restore defaults",
-            description="Stage the recommended defaults for review before applying.",
-            button_text="Restore defaults",
+            description="Restore default import and streaming settings.",
+            button_text="Restore",
             command=self.restore_defaults,
         )
 
@@ -525,7 +526,12 @@ class PreferencesPanel:
             justify="left",
             wraplength=self._layout_policy.notice_wrap_length,
         ).pack(anchor="w", pady=(self._surface_px(4), 0))
-        button = self._new_dialog_button(row, button_text, command)
+        button = self._new_dialog_button(
+            row,
+            button_text,
+            command,
+            width=_BACKUP_ACTION_BUTTON_WIDTH,
+        )
         button.grid(
             row=0,
             column=1,
@@ -1324,7 +1330,7 @@ class PreferencesPanel:
             return
         try:
             selection = self.desktop_services.save_file(
-                title="Export CaveViewer preferences",
+                title="Save CaveViewer preferences",
                 initial_dir=str(default_downloads_dir()),
                 initial_name=PREFERENCES_EXPORT_FILENAME,
                 parent=self.dialog,
@@ -1342,7 +1348,7 @@ class PreferencesPanel:
             )
             return
         self._feedback_override = (
-            f"Preferences exported to {selection.path}.",
+            f"Preferences saved to {selection.path}.",
             DARK_THEME.primary_button,
         )
         self._sync_feedback_to_current_state()
@@ -1352,7 +1358,7 @@ class PreferencesPanel:
 
         try:
             selection = self.desktop_services.choose_file(
-                title="Import CaveViewer preferences",
+                title="Load CaveViewer preferences",
                 initial_dir=str(default_downloads_dir()),
                 parent=self.dialog,
             )
@@ -1368,11 +1374,11 @@ class PreferencesPanel:
                 MessageKind.ERROR,
             )
             return
-        message = "Preferences imported. Review the values, then select Apply."
+        message = "Preferences loaded. Review the values, then select Apply."
         if result.defaulted_keys:
             count = len(result.defaulted_keys)
             message = (
-                f"Preferences imported; {count} invalid or missing "
+                f"Preferences loaded; {count} invalid or missing "
                 f"{'value was' if count == 1 else 'values were'} replaced "
                 f"with {'its' if count == 1 else 'their'} default. "
                 "Review the values, then select Apply."

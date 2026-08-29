@@ -194,7 +194,7 @@ preference filenames are not discovered.
 - Import section controls cache-build/import behavior.
 - Storage section controls folders used when saving recordings and downloaded
   map-library entries.
-- Backup and Restore exports a complete `preferences.json`, imports a shared
+- Backup saves a complete `preferences.json`, loads a shared
   file for review, or stages the built-in defaults. Imported and restored
   values are not saved until you select **Apply**; **Cancel** keeps the
   previously saved preferences.

@@ -28,6 +28,15 @@ Follow-up presentation adjustment: the supporting label beneath **Import
 preferences** is **Import saved preferences** and does not expose the underlying
 filename.
 
+Latest layout terminology supersedes the earlier labels: the tab is **Backup**.
+Its sentence-case actions are **Save preferences** with the description **Save
+preferences to a file.** and button **Save**, plus **Load preferences** with the
+description **Load preferences from a file.** and button **Load**.
+
+The **Restore defaults** action uses the description **Restore default import
+and streaming settings.** and button **Restore**. The Save, Load, and Restore
+buttons use one shared width so the action column is visually consistent.
+
 ## Compatibility decision
 
 The rename to `preferences.json` includes one compatibility bridge for existing

@@ -708,7 +708,7 @@ def test_preferences_panel_uses_extracted_settings_logic():
 def test_preferences_panel_exposes_backup_and_restore_as_a_separate_tab():
     from caveviewer.gui import preferences_dialog
 
-    assert ("backup", "Backup and Restore") in preferences_dialog._PREFERENCE_PAGES
+    assert ("backup", "Backup") in preferences_dialog._PREFERENCE_PAGES
     ensure_source = inspect.getsource(
         preferences_dialog.PreferencesPanel._ensure_page
     )
@@ -716,11 +716,21 @@ def test_preferences_panel_exposes_backup_and_restore_as_a_separate_tab():
         preferences_dialog.PreferencesPanel._render_backup_restore
     )
     assert 'page_key == "backup"' in ensure_source
-    assert 'button_text="Export preferences…"' in backup_source
-    assert 'button_text="Import preferences…"' in backup_source
-    assert 'description="Import saved preferences"' in backup_source
-    assert "Load a preferences.json file" not in backup_source
-    assert 'button_text="Restore defaults"' in backup_source
+    assert 'title="Save preferences"' in backup_source
+    assert 'description="Save preferences to a file."' in backup_source
+    assert 'button_text="Save"' in backup_source
+    assert 'title="Load preferences"' in backup_source
+    assert 'description="Load preferences from a file."' in backup_source
+    assert 'button_text="Load"' in backup_source
+    assert 'title="Restore defaults"' in backup_source
+    assert (
+        'description="Restore default import and streaming settings."'
+        in backup_source
+    )
+    assert 'button_text="Restore"' in backup_source
+    assert "width=_BACKUP_ACTION_BUTTON_WIDTH" in inspect.getsource(
+        preferences_dialog.PreferencesPanel._render_backup_action
+    )
 
 
 def test_preferences_panel_exports_validated_form_to_selected_file(
@@ -759,7 +769,7 @@ def test_preferences_panel_exports_validated_form_to_selected_file(
 
     assert chooser_calls[0]["initial_name"] == "preferences.json"
     assert export_calls == [(str(destination), snapshot)]
-    assert "Preferences exported to" in panel._feedback_override[0]
+    assert "Preferences saved to" in panel._feedback_override[0]
 
 
 def test_preferences_panel_import_stages_values_without_saving(
@@ -1095,7 +1105,7 @@ def test_preferences_panel_uses_compact_tabbed_pages():
         field.key: field for field in preferences_dialog.PREFERENCE_FIELDS
     }
     assert page_keys == ["streaming", "parsing", "storage", "backup"]
-    assert page_labels == ["Streaming", "Import", "Storage", "Backup and Restore"]
+    assert page_labels == ["Streaming", "Import", "Storage", "Backup"]
     assert all(len(page) == 2 for page in preferences_dialog._PREFERENCE_PAGES)
     assert set(page_keys) - {"backup"} == field_sections
     assert fields_by_key["io_workers"].label == "Loading worker limit"
