@@ -15,8 +15,16 @@ def test_bundled_launch_background_is_a_dark_cave_image():
     with Image.open(background_path) as image:
         assert image.size == (2048, 1369)
         # A one-pixel LANCZOS reduction is a stable brightness summary that
-        # keeps the background dark enough for amber and white launch content.
-        assert sum(image.convert("RGB").resize((1, 1)).getpixel((0, 0))) / 3 < 75
+        # keeps the cave detail decisively behind amber and white launch content.
+        brightness = (
+            sum(
+                image.convert("RGB")
+                .resize((1, 1), Image.Resampling.LANCZOS)
+                .getpixel((0, 0))
+            )
+            / 3
+        )
+        assert brightness < 18
 
 
 def test_launch_background_loader_keeps_the_flat_fallback_when_missing(monkeypatch):
