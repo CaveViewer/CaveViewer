@@ -1,4 +1,4 @@
-"""Exercise portable, bounded precompiled-map slice exports."""
+"""Exercise portable, lossless precompiled-map slice exports."""
 
 from __future__ import annotations
 
@@ -10,7 +10,6 @@ import pytest
 
 from caveviewer.core.chunking.io import (
     ChunkFileWriter,
-    ChunkMaterialGroup,
     load_chunk_file,
 )
 from caveviewer.core.chunking.metadata import load_manifest
@@ -23,7 +22,6 @@ from caveviewer.core.map.slicing import (
     SliceBounds,
     SliceExportCancelled,
     SliceExportRequest,
-    _clip_group_to_bounds,
     export_slice,
     next_slice_display_name,
     unique_slice_output_dir,
@@ -88,32 +86,48 @@ def _request(source, output):
     )
 
 
-def test_export_slice_clips_geometry_and_is_portable_without_parent(tmp_path):
+def test_export_slice_preserves_complete_chunk_and_is_portable_without_parent(
+    tmp_path,
+):
     source, parent_identity = _source_cache(tmp_path)
     output = tmp_path / "maps" / "Interesting passage"
+    source_chunk_bytes = (source / "chunks" / "0_0_0.bin").read_bytes()
 
     result = export_slice(_request(source, output))
 
     assert result.output_dir == str(output)
     assert result.chunk_count == 1
-    assert result.triangle_count == 2
+    assert result.triangle_count == 1
     manifest = load_manifest(str(output))
     assert manifest is not None
     assert manifest["source_obj"].endswith(".cvslice")
     assert (output / manifest["source_obj"]).is_file()
+    marker = json.loads((output / manifest["source_obj"]).read_text(encoding="utf-8"))
+    assert marker["root_cave_name"] == "Parent Cave"
+    assert marker["exporter_version"] == 2
+    assert marker["geometry_mode"] == "whole_source_chunks"
     assert (output / "textures" / "rock.png").read_bytes() == b"small texture fixture"
     assert manifest["slice"]["entry_position"] == [0.25, 0.0, 0.0]
     assert manifest["slice"]["root_cave_name"] == "Parent Cave"
+    assert manifest["slice"]["exporter_version"] == 2
+    assert manifest["slice"]["geometry_mode"] == "whole_source_chunks"
+    assert manifest["footprint_cell_size"] == 2.0
+    assert manifest["footprint_cells"] == [-1, 0, 0, 0]
+    assert (output / "chunks" / "0_0_0.bin").read_bytes() == source_chunk_bytes
     identity = guided_dive_cache_identity_from_manifest(manifest)
     assert identity is not None
     assert identity != parent_identity
 
     shutil.rmtree(source)
-    clipped = load_chunk_file(str(output), (0, 0, 0))
-    positions = next(iter(clipped.groups.values())).positions
-    assert np.all(positions[:, 0] >= -1.0e-6)
-    assert np.all(positions[:, 0] <= 0.75 + 1.0e-6)
-    assert np.allclose(np.linalg.norm(next(iter(clipped.groups.values())).normals, axis=1), 1.0)
+    copied = load_chunk_file(str(output), (0, 0, 0))
+    positions = next(iter(copied.groups.values())).positions
+    assert np.array_equal(
+        positions,
+        np.array(
+            [[-1.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            dtype=np.float32,
+        ),
+    )
     opened = resolve_selected_map_folder(str(output))
     assert opened.is_prebuilt_cache
     assert opened.cache_dir == str(output)
@@ -126,7 +140,7 @@ def test_export_slice_cleans_private_staging_when_canceled(tmp_path):
     cancellation = {"requested": False}
 
     def progress(stage, _fraction):
-        if stage == "slicing geometry":
+        if stage == "copying slice chunks":
             cancellation["requested"] = True
 
     with pytest.raises(SliceExportCancelled):
@@ -164,9 +178,9 @@ def test_export_slice_rejects_unsafe_texture_path_without_output(tmp_path):
     assert not output.exists()
 
 
-def test_export_slice_removes_staging_when_selected_box_has_no_triangles(tmp_path):
+def test_export_slice_keeps_whole_chunk_when_box_crosses_no_triangle(tmp_path):
     source, _identity = _source_cache(tmp_path)
-    output = tmp_path / "maps" / "Empty"
+    output = tmp_path / "maps" / "Whole chunk"
     request = SliceExportRequest(
         source_cache_dir=str(source),
         output_dir=str(output),
@@ -174,7 +188,25 @@ def test_export_slice_removes_staging_when_selected_box_has_no_triangles(tmp_pat
         entry_position=(0.9, 0.9, 0.0),
     )
 
-    with pytest.raises(ValueError, match="contains no triangles"):
+    result = export_slice(request)
+
+    assert result.triangle_count == 1
+    chunk = load_chunk_file(str(output), (0, 0, 0))
+    positions = next(iter(chunk.groups.values())).positions
+    assert np.any(positions[:, 0] < request.bounds.minimum[0])
+
+
+def test_export_slice_removes_staging_when_no_chunk_overlaps(tmp_path):
+    source, _identity = _source_cache(tmp_path)
+    output = tmp_path / "maps" / "Empty"
+    request = SliceExportRequest(
+        source_cache_dir=str(source),
+        output_dir=str(output),
+        bounds=SliceBounds((10.0, 10.0, 10.0), (11.0, 11.0, 11.0)),
+        entry_position=(10.5, 10.5, 10.5),
+    )
+
+    with pytest.raises(ValueError, match="does not overlap any map chunk"):
         export_slice(request)
 
     assert not output.exists()
@@ -189,7 +221,7 @@ def test_export_slice_rejects_a_parent_manifest_change_before_publication(tmp_pa
 
     def progress(stage, _fraction):
         nonlocal changed
-        if stage != "slicing geometry" or changed:
+        if stage != "copying slice chunks" or changed:
             return
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         manifest["triangle_count"] = 2
@@ -202,37 +234,6 @@ def test_export_slice_rejects_a_parent_manifest_change_before_publication(tmp_pa
     assert changed
     assert not output.exists()
     assert not list((tmp_path / "maps").glob(".Changed parent.tmp-*"))
-
-
-def test_box_clipping_interpolates_uvs_and_normalizes_interpolated_normals():
-    group = ChunkMaterialGroup(
-        material_name="rock",
-        positions=np.array(
-            [[-1.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
-            dtype=np.float32,
-        ),
-        uvs=np.array([[0.0, 0.0], [1.0, 0.0], [0.5, 1.0]], dtype=np.float32),
-        normals=np.array(
-            [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
-            dtype=np.float32,
-        ),
-    )
-
-    positions, uvs, normals = _clip_group_to_bounds(
-        group,
-        SliceBounds((0.0, -1.0, -1.0), (2.0, 2.0, 1.0)),
-    )
-
-    boundary_index = next(
-        index
-        for index, position in enumerate(positions)
-        if np.allclose(position, (0.0, 0.0, 0.0))
-    )
-    assert np.allclose(uvs[boundary_index], (0.5, 0.0))
-    assert np.allclose(
-        normals[boundary_index],
-        (2.0 ** -0.5, 2.0 ** -0.5, 0.0),
-    )
 
 
 def test_slice_bounds_add_configured_padding_to_camera_anchors():

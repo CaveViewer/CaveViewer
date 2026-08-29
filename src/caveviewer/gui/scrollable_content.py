@@ -91,7 +91,6 @@ class CanvasVerticalScrollbar:
             borderwidth=0,
             highlightthickness=0,
             width=self._rail_width,
-            cursor="arrow",
         )
         self._thumb = None
         self._fractions = (0.0, 1.0)
@@ -146,7 +145,6 @@ class CanvasVerticalScrollbar:
                 self._widget.grid()
             else:
                 self._widget.grid_remove()
-        self._widget.configure(cursor="sb_v_double_arrow" if visible else "arrow")
         self._draw_thumb()
 
     def set(self, first: str | float, last: str | float) -> None:

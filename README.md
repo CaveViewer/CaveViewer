@@ -139,17 +139,22 @@ height by default to keep render readback and encoding costs lower. Set
 While viewing a precompiled cave map, press `Ctrl+C` (`Cmd+C` on macOS) to
 start a 3-2-1 slice countdown. Once it completes, fly through the passage you
 want to keep and press the shortcut again to finish and save the slice.
-CaveViewer clips that region into a new standalone map, shows save progress,
-then opens its folder in the system file explorer. There is no slice toolbar
-button.
+CaveViewer selects the render chunks intersecting that region and copies each
+complete chunk into a new standalone map without rewriting its triangles. This
+preserves the original walls, materials, texture mapping, normals, and detailed
+minimap footprint. Because chunks are kept intact, the saved geometry can
+extend to a source chunk boundary beyond the two camera endpoints. CaveViewer
+shows save progress, then opens the slice folder in the system file explorer.
+There is no slice toolbar button.
 
 The new map is stored under the Preferences **Downloaded maps folder** location
 using the cave's name and a segment number, such as `Ginnie Springs - Segment
 1`. Later slices from that cave receive the next segment number. It includes
-its own chunks, manifest, and needed textures, so copying that whole folder to
-another computer is enough to view it there without the original map. Closing
-the viewer after slicing has started saves using the camera's final position as
-the slice endpoint and closes only after the export finishes.
+its own lossless chunks, manifest, minimap footprint, and needed textures, so
+copying that whole folder to another computer is enough to view it there
+without the original map. Closing the viewer after slicing has started saves
+using the camera's final position as the slice endpoint and closes only after
+the export finishes.
 
 
 ## Importing and Streaming Preferences

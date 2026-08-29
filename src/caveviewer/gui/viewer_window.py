@@ -6017,8 +6017,16 @@ class CaveViewerWindow(mglw.WindowConfig):
                 # particular, preserve a legitimate cave-name suffix such as
                 # ".2" instead of treating it as a file extension.
                 return root_label
+        map_root = getattr(self, "map_root", None)
+        if map_root:
+            # The selected folder is the name the Map Library presented to the
+            # user. Prefer it over opaque source-model names such as ``D5.obj``
+            # so a new slice can inherit the original cave's metadata.
+            map_label = os.path.basename(os.path.normpath(str(map_root).strip()))
+            if map_label:
+                return map_label
         source_obj = manifest.get("source_obj") if isinstance(manifest, Mapping) else None
-        raw_name = str(source_obj or getattr(self, "map_root", "") or "Cave").strip()
+        raw_name = str(source_obj or "Cave").strip()
         return os.path.splitext(os.path.basename(raw_name))[0] or "Cave"
 
     def _clear_slice_context(self) -> None:

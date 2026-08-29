@@ -33,12 +33,12 @@ def test_slice_export_controller_reports_progress_and_success():
     controller = SliceExportController(start_process=lambda *_args, **_kwargs: handle)
 
     assert controller.start(_request()) is None
-    events.put(("progress", "slicing geometry", 0.5))
+    events.put(("progress", "copying slice chunks", 0.5))
     events.put(("done", "/maps/output", 9, 2, 1))
 
     updates = controller.poll()
 
-    assert updates[0].stage == "slicing geometry"
+    assert updates[0].stage == "copying slice chunks"
     assert isinstance(updates[-1], SliceExportSucceeded)
     assert updates[-1].triangle_count == 9
     assert controller.state is SliceExportState.SUCCEEDED

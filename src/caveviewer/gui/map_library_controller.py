@@ -30,6 +30,7 @@ class StandardLibraryMapRow:
     key: MapLibraryMapKey
     title: str
     detail: str
+    size_text: str
     action_text: str
     downloaded: bool
     availability: StandardLibraryMapAvailability
@@ -164,7 +165,7 @@ class MapLibraryController:
             return cave_metadata_detail
         if downloaded:
             return "Downloaded"
-        return self.size_text(self.resolve_catalog_entry(library_map))
+        return ""
 
     def availability_for(
         self,
@@ -196,6 +197,7 @@ class MapLibraryController:
         """Build a row presentation model for a standard-library map."""
         key = self.map_key(library_map)
         availability = self.availability_for(library_map)
+        catalog_entry = self.resolve_catalog_entry(library_map)
         if downloaded and result_path:
             self.downloaded_paths[key] = result_path
         return StandardLibraryMapRow(
@@ -206,6 +208,7 @@ class MapLibraryController:
                 downloaded=downloaded,
                 cave_metadata_detail=cave_metadata_detail,
             ),
+            size_text=self.size_text(catalog_entry),
             action_text=action_text
             or self.action_text(downloaded=downloaded, availability=availability),
             downloaded=downloaded,

@@ -705,7 +705,6 @@ def _build_themed_about_content(
             font=_TYPOGRAPHY.body,
             fg=_BUTTON_BG if on_open_website is not None else _SUBTITLE_COLOR,
             bg=_BG_COLOR,
-            cursor="hand2" if on_open_website is not None else "arrow",
             takefocus=on_open_website is not None,
             highlightthickness=1,
             highlightbackground=_BG_COLOR,
@@ -728,7 +727,6 @@ def _build_themed_about_content(
             font=_TYPOGRAPHY.body_strong,
             fg=DARK_THEME.primary_button_text,
             bg=_BUTTON_BG,
-            cursor="hand2",
             takefocus=True,
             padx=px(24),
             pady=px(8),
@@ -929,7 +927,6 @@ def _show_discard_preferences_dialog(
             font=_TYPOGRAPHY.body_strong,
             fg=DARK_THEME.primary_button_text if primary else _TITLE_COLOR,
             bg=normal_bg,
-            cursor="hand2",
             takefocus=True,
             padx=px(14),
             pady=px(7),
@@ -1030,7 +1027,7 @@ def _bind_update_label_action(
     for sequence in ("<Button-1>", "<Return>", "<space>"):
         label.unbind(sequence)
     enabled = action is not None
-    label.config(cursor="hand2" if enabled else "arrow", takefocus=enabled)
+    label.config(takefocus=enabled)
     if not enabled:
         return
 
@@ -1421,7 +1418,6 @@ def show_splash_screen(
         font=_TYPOGRAPHY.supporting,
         fg=_INSTRUCTION_COLOR,
         bg=_BG_COLOR,
-        cursor="arrow",
         takefocus=False,
         highlightthickness=1,
         highlightbackground=_BG_COLOR,
@@ -1440,7 +1436,6 @@ def show_splash_screen(
         font=_TYPOGRAPHY.supporting,
         fg=_BUTTON_BG,
         bg=_BG_COLOR,
-        cursor="arrow",
         takefocus=False,
         highlightthickness=1,
         highlightbackground=_BG_COLOR,
@@ -1460,7 +1455,6 @@ def show_splash_screen(
         highlightthickness=1,
         highlightbackground=_BG_COLOR,
         highlightcolor=_BUTTON_BG,
-        cursor="hand2",
         takefocus=True,
     )
 
@@ -1880,7 +1874,6 @@ def show_splash_screen(
             bg=_BG_COLOR,
             borderwidth=0,
             highlightthickness=0,
-            cursor="hand2",
             takefocus=False,
         )
 
@@ -2011,7 +2004,6 @@ def show_splash_screen(
             anchor="w",
             padx=0,
             pady=px(9),
-            cursor="hand2",
             takefocus=True,
             highlightthickness=1,
             highlightbackground=_BG_COLOR,

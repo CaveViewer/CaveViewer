@@ -497,7 +497,9 @@ class MapLibraryWorkflow:
     def add_recent_row(self, path: str) -> None:
         """Append one recent-map row and wire its management actions."""
         entry = recent_map_entry(path)
-        metadata_match = self.cave_metadata_match(entry.title)
+        metadata_match = self.cave_metadata_match(
+            entry.cave_lookup_title or entry.title
+        )
         if metadata_match is not None:
             entry = replace(entry, detail=metadata_match.cave.library_detail)
         title = entry.title
@@ -1259,6 +1261,7 @@ class MapLibraryWorkflow:
             row.availability is StandardLibraryMapAvailability.FORMER_STANDARD_LOCAL,
         )
         self.set_row_metadata(library_map, row.detail)
+        self.panel.set_standard_row_size(row.key, row.size_text)
         self.set_standard_action(library_map, row)
 
     def cave_metadata_match(self, title: str) -> CaveMetadataMatch | None:

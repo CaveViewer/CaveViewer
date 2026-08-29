@@ -87,6 +87,7 @@ class _FakePanel:
         self.standard_actions = {}
         self.standard_menu_factories = {}
         self.standard_former = {}
+        self.standard_sizes = {}
         self.recent_rows = {}
         self.metadata = {}
         self.progress = []
@@ -123,6 +124,7 @@ class _FakePanel:
         self.standard_actions[row.key] = (row.action_text, action, row.enabled)
         self.standard_menu_factories[row.key] = menu_actions_factory
         self.standard_former[row.key] = former
+        self.standard_sizes[row.key] = row.size_text
         return SimpleNamespace(row_shell=object())
 
     def has_standard_row(self, key: str) -> bool:
@@ -134,6 +136,7 @@ class _FakePanel:
         self.standard_actions.pop(key, None)
         self.standard_menu_factories.pop(key, None)
         self.standard_former.pop(key, None)
+        self.standard_sizes.pop(key, None)
 
     def is_standard_row_former(self, key) -> bool:
         return self.standard_former.get(key, False)
@@ -166,6 +169,12 @@ class _FakePanel:
         error: bool = False,
     ) -> None:
         self.metadata[key] = (text, error)
+
+    def set_standard_row_size(self, key: str, text: str) -> bool:
+        if key not in self.standard_rows:
+            return False
+        self.standard_sizes[key] = text
+        return True
 
     def set_row_action(
         self,
@@ -666,6 +675,42 @@ def test_recent_map_metadata_uses_the_same_safe_match_and_about_action():
     ]
     actions[-1][1]()
     assert [cave.id for cave in shown_caves] == ["us-fl-peacock-springs"]
+
+
+def test_recent_slice_inherits_root_cave_metadata_and_about_action(tmp_path):
+    map_root = tmp_path / "Devil s Eye at Ginnie Springs - Segment 1"
+    map_root.mkdir()
+    marker = map_root / "Devil s Eye at Ginnie Springs - Segment 1.cvslice"
+    marker.write_text(
+        '{"format":"caveviewer.slice","schema_version":1,'
+        '"display_name":"Devil s Eye at Ginnie Springs - Segment 1",'
+        '"root_cave_name":"Devil s Eye at Ginnie Springs"}',
+        encoding="utf-8",
+    )
+    (map_root / "manifest.json").write_text(
+        '{"source_obj":"Devil s Eye at Ginnie Springs - Segment 1.cvslice",'
+        '"chunks":{}}',
+        encoding="utf-8",
+    )
+    shown_caves = []
+    state = _workflow(
+        [],
+        cave_metadata_catalog=load_bundled_cave_metadata_catalog(),
+        show_cave_metadata=shown_caves.append,
+    )
+
+    state.workflow.add_recent_row(str(map_root))
+    entry, _open_map, menu_factory = state.panel.recent_row
+    actions = menu_factory(SimpleNamespace(row_shell=object()))
+
+    assert entry.title == "Devil s Eye at Ginnie Springs - Segment 1"
+    assert entry.detail == "Florida, United States · Underwater cave"
+    assert [label for label, _command in actions] == [
+        "Remove from this list",
+        "About cave",
+    ]
+    actions[-1][1]()
+    assert [cave.id for cave in shown_caves] == ["us-fl-devils-spring-system"]
 
 
 def test_download_completion_restores_cave_metadata_after_progress_status():
@@ -1284,7 +1329,10 @@ def test_catalog_refresh_adds_new_remote_standard_library_rows():
         _standard_key("new-remote-cave"),
     }
     assert state.panel.standard_rows[_standard_key("new-remote-cave")].title == "New Remote Cave"
-    assert state.panel.standard_rows[_standard_key("new-remote-cave")].detail == "25 MB"
+    new_row = state.panel.standard_rows[_standard_key("new-remote-cave")]
+    assert new_row.detail == ""
+    assert new_row.size_text == "25 MB"
+    assert state.panel.standard_sizes[new_row.key] == "25 MB"
 
 
 def test_catalog_refresh_removes_stale_not_downloaded_rows():
