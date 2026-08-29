@@ -105,6 +105,7 @@ def test_package_resource_service_resolves_runtime_files():
         "pause.svg",
         "play.svg",
         "retry.svg",
+        "retry.png",
         "stop.svg",
     ):
         assert ui_icon_path(icon_name).is_file()
@@ -113,6 +114,8 @@ def test_package_resource_service_resolves_runtime_files():
     assert release_public_key_path("legacy").is_file()
     assert map_library_catalog_path().is_file()
     assert cave_metadata_catalog_path().is_file()
+    pyproject = (REPOSITORY_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    assert '"images/ui/*.png"' in pyproject
 
 
 def test_legacy_runtime_paths_are_removed():

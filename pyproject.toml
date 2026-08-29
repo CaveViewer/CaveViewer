@@ -41,6 +41,7 @@ where = ["src"]
     "images/*.png",
     "images/*.jpg",
     "images/ui/*.svg",
+    "images/ui/*.png",
     "shaders/*.frag",
     "shaders/*.vert",
     "*.pem",

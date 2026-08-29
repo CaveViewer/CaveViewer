@@ -29,6 +29,19 @@ distributed under the MIT License and its bundled native GLFW libraries use
 the zlib/libpng license. Release notices must retain the licenses shipped by
 those packages.
 
+## Bundled Font Awesome Free Retry Icon
+
+CaveViewer bundles the Font Awesome Free 7.3.1 Classic Solid
+`arrow-rotate-right` icon as
+`src/caveviewer/resources/images/ui/retry.svg` and a 1024-pixel alpha raster
+derived directly from that SVG as `retry.png`. The source is the pinned
+[Font Awesome 7.3.1 asset](https://github.com/FortAwesome/Font-Awesome/blob/7.3.1/svgs/solid/arrow-rotate-right.svg).
+
+Copyright 2026 Fonticons, Inc. Font Awesome Free 7.3.1 by @fontawesome is
+licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+The SVG retains Font Awesome's embedded attribution and license comment; this
+notice applies to the derived PNG as well.
+
 ## Bundled Linux AppImage Font
 
 Linux AppImage packages may bundle Noto Sans Regular from the system

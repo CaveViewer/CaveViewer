@@ -10,9 +10,12 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import TypeAlias
+from functools import cache
+from typing import Literal, TypeAlias
 
 from PIL import Image, ImageColor, ImageDraw, ImageOps
+
+from caveviewer.resources import ui_icon_path
 
 
 _PROGRESS_RING_MAX_SUPERSAMPLE = 4
@@ -20,6 +23,7 @@ _PROGRESS_RING_MAX_RASTER_SIZE = 2048
 
 Color: TypeAlias = str | tuple[int, int, int] | tuple[int, int, int, int]
 Point: TypeAlias = tuple[float, float]
+ProgressCenterGlyph: TypeAlias = Literal["pause", "stop"]
 
 
 @dataclass(frozen=True)
@@ -108,26 +112,27 @@ def _rgba(color: Color) -> tuple[int, int, int, int]:
 
 def _arc_points(
     *,
-    center: float,
+    center: Point,
     radius: float,
     start_degrees: float,
     extent_degrees: float,
 ) -> list[tuple[float, float]]:
-    """Return Canvas-compatible clockwise/counter-clockwise arc points."""
+    """Return Canvas-compatible arc points around the supplied x/y center."""
+    center_x, center_y = center
     steps = max(2, int(math.ceil(abs(extent_degrees) * max(1.0, radius) / 12)))
     points: list[tuple[float, float]] = []
     for index in range(steps + 1):
         angle = math.radians(start_degrees + extent_degrees * index / steps)
         points.append(
             (
-                center + radius * math.cos(angle),
-                center - radius * math.sin(angle),
+                center_x + radius * math.cos(angle),
+                center_y - radius * math.sin(angle),
             )
         )
     return points
 
 
-def render_progress_ring(
+def _render_progress_ring_raster(
     *,
     image_size: int | float,
     ring_diameter: int | float,
@@ -136,13 +141,8 @@ def render_progress_ring(
     fill_color: str | tuple[int, int, int] | tuple[int, int, int, int],
     start_degrees: float,
     extent_degrees: float,
-) -> Image.Image:
-    """Render one transparent, anti-aliased circular progress indicator.
-
-    ``image_size`` is already the target Tk pixel size after display scaling.
-    The ring is drawn at a bounded larger resolution and then LANCZOS
-    downsampled so Canvas's non-antialiased oval/arc primitives are avoided.
-    """
+) -> tuple[Image.Image, int, int]:
+    """Draw a progress ring in its supersampled raster coordinate system."""
     target_size = max(1, int(round(float(image_size))))
     supersample = progress_ring_supersample_factor(target_size)
     raster_size = target_size * supersample
@@ -168,7 +168,7 @@ def render_progress_ring(
         drawer.ellipse(bounds, outline=_rgba(fill_color), width=stroke)
     elif abs(extent) > 0.0:
         points = _arc_points(
-            center=center,
+            center=(center, center),
             radius=radius,
             start_degrees=float(start_degrees),
             extent_degrees=extent,
@@ -186,9 +186,142 @@ def render_progress_ring(
                 fill=_rgba(fill_color),
             )
 
+    return image, target_size, supersample
+
+
+def _downsample_progress_raster(
+    image: Image.Image,
+    *,
+    target_size: int,
+    supersample: int,
+) -> Image.Image:
+    """Return a progress-control raster at its target Tk-pixel dimensions."""
     if supersample == 1:
         return image
     return image.resize((target_size, target_size), Image.Resampling.LANCZOS)
+
+
+def render_progress_ring(
+    *,
+    image_size: int | float,
+    ring_diameter: int | float,
+    stroke_width: int | float,
+    track_color: str | tuple[int, int, int] | tuple[int, int, int, int],
+    fill_color: str | tuple[int, int, int] | tuple[int, int, int, int],
+    start_degrees: float,
+    extent_degrees: float,
+) -> Image.Image:
+    """Render one transparent, anti-aliased circular progress indicator.
+
+    ``image_size`` is already the target Tk pixel size after display scaling.
+    The ring is drawn at a bounded larger resolution and then LANCZOS
+    downsampled so Canvas's non-antialiased oval/arc primitives are avoided.
+    """
+    image, target_size, supersample = _render_progress_ring_raster(
+        image_size=image_size,
+        ring_diameter=ring_diameter,
+        stroke_width=stroke_width,
+        track_color=track_color,
+        fill_color=fill_color,
+        start_degrees=start_degrees,
+        extent_degrees=extent_degrees,
+    )
+    return _downsample_progress_raster(
+        image,
+        target_size=target_size,
+        supersample=supersample,
+    )
+
+
+def _draw_progress_center_glyph(
+    drawer: ImageDraw.ImageDraw,
+    *,
+    raster_size: int,
+    supersample: int,
+    glyph: ProgressCenterGlyph,
+    glyph_size: int | float,
+    color: Color,
+) -> None:
+    """Draw a stop square or pause bars with bounds centered in one raster."""
+    glyph_pixels = min(
+        raster_size,
+        max(supersample, int(round(float(glyph_size) * supersample))),
+    )
+    top = (raster_size - glyph_pixels) // 2
+    color_rgba = _rgba(color)
+
+    if glyph == "stop":
+        left = (raster_size - glyph_pixels) // 2
+        drawer.rectangle(
+            (left, top, left + glyph_pixels - 1, top + glyph_pixels - 1),
+            fill=color_rgba,
+        )
+        return
+
+    if glyph != "pause":
+        raise ValueError(f"Unsupported progress center glyph: {glyph!r}")
+
+    # Keep the two pause bars symmetric about the same raster center as the
+    # ring. Drawing both before one shared downsample avoids Canvas half-pixel
+    # placement differences on fractional display scales.
+    bar_width = max(1, int(round(glyph_pixels / 3)))
+    gap_width = max(1, int(round(glyph_pixels / 5)))
+    total_width = bar_width * 2 + gap_width
+    left = (raster_size - total_width) // 2
+    right = left + bar_width + gap_width
+    for bar_left in (left, right):
+        drawer.rectangle(
+            (
+                bar_left,
+                top,
+                bar_left + bar_width - 1,
+                top + glyph_pixels - 1,
+            ),
+            fill=color_rgba,
+        )
+
+
+def render_progress_control(
+    *,
+    image_size: int | float,
+    ring_diameter: int | float,
+    stroke_width: int | float,
+    track_color: Color,
+    fill_color: Color,
+    start_degrees: float,
+    extent_degrees: float,
+    center_glyph: ProgressCenterGlyph,
+    center_glyph_size: int | float,
+    center_glyph_color: Color,
+) -> Image.Image:
+    """Render an anti-aliased progress ring and centered stop/pause affordance.
+
+    The central glyph is drawn in the ring's supersampled raster, then both
+    are downsampled together. This keeps their visual centers aligned when Tk
+    display scaling turns logical dimensions into different physical pixels.
+    """
+    image, target_size, supersample = _render_progress_ring_raster(
+        image_size=image_size,
+        ring_diameter=ring_diameter,
+        stroke_width=stroke_width,
+        track_color=track_color,
+        fill_color=fill_color,
+        start_degrees=start_degrees,
+        extent_degrees=extent_degrees,
+    )
+    _draw_progress_center_glyph(
+        ImageDraw.Draw(image),
+        raster_size=image.width,
+        supersample=supersample,
+        glyph=center_glyph,
+        glyph_size=center_glyph_size,
+        color=center_glyph_color,
+    )
+    return _downsample_progress_raster(
+        image,
+        target_size=target_size,
+        supersample=supersample,
+    )
 
 
 def _target_icon_size(
@@ -199,6 +332,59 @@ def _target_icon_size(
         max(1, int(round(float(image_size[0])))),
         max(1, int(round(float(image_size[1])))),
     )
+
+
+@cache
+def _retry_icon_alpha() -> Image.Image:
+    """Load the alpha channel of the bundled Font Awesome retry asset once."""
+    with Image.open(ui_icon_path("retry.png")) as icon:
+        return icon.getchannel("A").copy()
+
+
+def render_retry_icon(
+    *,
+    image_size: tuple[int | float, int | float],
+    glyph_diameter: int | float,
+    color: Color,
+) -> Image.Image:
+    """Render the licensed Font Awesome retry glyph at its optical size.
+
+    The source artwork's circular arc fills its 512-pixel view box. Scaling it
+    to ``glyph_diameter`` keeps the denser circular arrow optically balanced
+    with neighboring action icons instead of filling the larger button target.
+    """
+    target_width, target_height = _target_icon_size(image_size)
+    content_diameter = min(
+        max(1, int(round(float(glyph_diameter)))),
+        target_width,
+        target_height,
+    )
+    supersample = progress_ring_supersample_factor(
+        max(target_width, target_height)
+    )
+    raster_width = target_width * supersample
+    raster_height = target_height * supersample
+    raster_diameter = content_diameter * supersample
+    alpha = Image.new("L", (raster_width, raster_height))
+    source_alpha = _retry_icon_alpha().resize(
+        (raster_diameter, raster_diameter),
+        Image.Resampling.LANCZOS,
+    )
+    alpha.paste(
+        source_alpha,
+        (
+            (raster_width - raster_diameter) // 2,
+            (raster_height - raster_diameter) // 2,
+        ),
+    )
+    if supersample > 1:
+        alpha = alpha.resize(
+            (target_width, target_height),
+            Image.Resampling.LANCZOS,
+        )
+    image = Image.new("RGBA", (target_width, target_height), _rgba(color))
+    image.putalpha(alpha)
+    return image
 
 
 def _draw_rounded_path(
@@ -319,7 +505,7 @@ def render_vector_icon(
             drawer,
             tuple(
                 _arc_points(
-                    center=center_x,
+                    center=(center_x, center_y),
                     radius=max(0.5, arc.radius * supersample),
                     start_degrees=arc.start_degrees,
                     extent_degrees=arc.extent_degrees,
@@ -363,6 +549,40 @@ def progress_ring_photo(
     )
 
 
+def progress_control_photo(
+    widget: object,
+    *,
+    image_size: int | float,
+    ring_diameter: int | float,
+    stroke_width: int | float,
+    track_color: Color,
+    fill_color: Color,
+    start_degrees: float,
+    extent_degrees: float,
+    center_glyph: ProgressCenterGlyph,
+    center_glyph_size: int | float,
+    center_glyph_color: Color,
+) -> object:
+    """Create one Tk photo for a shared progress ring and center affordance."""
+    from PIL import ImageTk
+
+    return ImageTk.PhotoImage(
+        render_progress_control(
+            image_size=image_size,
+            ring_diameter=ring_diameter,
+            stroke_width=stroke_width,
+            track_color=track_color,
+            fill_color=fill_color,
+            start_degrees=start_degrees,
+            extent_degrees=extent_degrees,
+            center_glyph=center_glyph,
+            center_glyph_size=center_glyph_size,
+            center_glyph_color=center_glyph_color,
+        ),
+        master=widget.winfo_toplevel(),
+    )
+
+
 def vector_icon_photo(
     widget: object,
     *,
@@ -384,6 +604,26 @@ def vector_icon_photo(
             polygons=polygons,
             ellipses=ellipses,
             rectangles=rectangles,
+        ),
+        master=widget.winfo_toplevel(),
+    )
+
+
+def retry_icon_photo(
+    widget: object,
+    *,
+    image_size: tuple[int | float, int | float],
+    glyph_diameter: int | float,
+    color: Color,
+) -> object:
+    """Create one root-owned photo for the bundled Font Awesome retry glyph."""
+    from PIL import ImageTk
+
+    return ImageTk.PhotoImage(
+        render_retry_icon(
+            image_size=image_size,
+            glyph_diameter=glyph_diameter,
+            color=color,
         ),
         master=widget.winfo_toplevel(),
     )

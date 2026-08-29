@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import math
 import tkinter as tk
 from dataclasses import dataclass
 from typing import Callable, Iterable
@@ -12,11 +11,11 @@ from caveviewer.gui.scrollable_content import (
     CanvasVerticalScrollbar,
 )
 from caveviewer.gui.splash_visuals import (
-    VectorArc,
     VectorEllipse,
     VectorPath,
     VectorPolygon,
-    progress_ring_photo,
+    progress_control_photo,
+    retry_icon_photo,
     vector_icon_photo,
 )
 
@@ -98,6 +97,7 @@ class MapLibraryPanelStyle:
     progress_fill_color: str
     action_progress_ring_diameter: int
     action_progress_ring_stroke_width: int
+    action_retry_icon_diameter: int
     action_stop_size: int
     action_button_size: int
     action_icon_stroke_width: int
@@ -1214,52 +1214,20 @@ class MapLibraryPanel:
         )
 
     def _draw_retry(self, button, width: int, height: int, color: str) -> None:
-        stroke_width = max(1, self._px(self._style.action_icon_stroke_width))
-        icon_size = max(1.0, float(min(width, height)))
-        icon_scale = icon_size / 24.0
-        icon_left = (width - 24.0 * icon_scale) / 2.0
-        icon_top = (height - 24.0 * icon_scale) / 2.0
-        center_x = icon_left + 12.0 * icon_scale
-        center_y = icon_top + 11.0 * icon_scale
-        arc_radius = 8.0 * icon_scale
-        arc_end_angle = math.radians(45.0)
-        arc_end = (
-            center_x + arc_radius * math.cos(arc_end_angle),
-            center_y - arc_radius * math.sin(arc_end_angle),
-        )
-        # Match the bundled retry.svg: its diagonal connects the long arc to
-        # a short vertical head, avoiding the isolated L-shaped hook.
-        head_corner = (
-            icon_left + 20.0 * icon_scale,
-            icon_top + 7.7 * icon_scale,
-        )
-        head_tip = (
-            icon_left + 20.0 * icon_scale,
-            icon_top + 3.5 * icon_scale,
-        )
-        self._draw_vector_photo(
+        """Draw an intentionally inset Font Awesome retry glyph."""
+        glyph_diameter = self._px(self._style.action_retry_icon_diameter)
+        photo = retry_icon_photo(
             button,
             image_size=(width, height),
-            center_x=center_x,
-            center_y=center_y,
+            glyph_diameter=glyph_diameter,
+            color=color,
+        )
+        button._cv_retry_photo = photo
+        button.create_image(
+            width / 2,
+            height / 2,
+            image=photo,
             tags="cv_action_content",
-            arcs=(
-                VectorArc(
-                    center=(center_x, center_y),
-                    radius=arc_radius,
-                    start_degrees=0.0,
-                    extent_degrees=-315.0,
-                    color=color,
-                    width=stroke_width,
-                ),
-            ),
-            paths=(
-                VectorPath(
-                    points=(arc_end, head_corner, head_tip),
-                    color=color,
-                    width=stroke_width,
-                ),
-            ),
         )
 
     def _draw_action_stop_progress(
@@ -1307,7 +1275,7 @@ class MapLibraryPanel:
             extent = -100
         else:
             extent = -max(2, int(round(359 * max(0.0, min(1.0, fraction)))))
-        ring_photo = progress_ring_photo(
+        progress_photo = progress_control_photo(
             button,
             image_size=max(1, int(round(diameter + stroke_width))),
             ring_diameter=diameter,
@@ -1316,47 +1284,17 @@ class MapLibraryPanel:
             fill_color=progress_fill_color,
             start_degrees=90,
             extent_degrees=extent,
+            center_glyph="pause" if pause else "stop",
+            center_glyph_size=stop_size,
+            center_glyph_color=stop_fill_color,
         )
-        button._cv_progress_ring_photo = ring_photo
+        # Retain the single composite photo so Tk cannot collect the shared
+        # high-DPI ring and pause/stop artwork between redraws.
+        button._cv_progress_control_photo = progress_photo
         button.create_image(
             center_x,
             center_y,
-            image=ring_photo,
-            tags="cv_action_content",
-        )
-
-        if pause:
-            pause_width = max(1, stop_size / 3)
-            pause_gap = max(1, stop_size / 5)
-            half_height = stop_size / 2
-            button.create_rectangle(
-                center_x - pause_gap / 2 - pause_width,
-                center_y - half_height,
-                center_x - pause_gap / 2,
-                center_y + half_height,
-                fill=stop_fill_color,
-                outline="",
-                tags="cv_action_content",
-            )
-            button.create_rectangle(
-                center_x + pause_gap / 2,
-                center_y - half_height,
-                center_x + pause_gap / 2 + pause_width,
-                center_y + half_height,
-                fill=stop_fill_color,
-                outline="",
-                tags="cv_action_content",
-            )
-            return
-
-        half_stop = stop_size / 2
-        button.create_rectangle(
-            center_x - half_stop,
-            center_y - half_stop,
-            center_x + half_stop,
-            center_y + half_stop,
-            fill=stop_fill_color,
-            outline="",
+            image=progress_photo,
             tags="cv_action_content",
         )
 

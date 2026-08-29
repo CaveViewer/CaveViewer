@@ -980,7 +980,13 @@ def test_splash_navigation_uses_a_quiet_rail_and_lower_app_status():
     assert 'update_cancel_button.pack(side="right", padx=(px(6), 0))' in source
     assert "def _draw_update_cancel_button(progress_fraction: float)" in source
     assert "extent_degrees=-360 * clamped" in source
-    assert "progress_ring_photo(" in source
+    update_cancel_source = source[
+        source.index("def _draw_update_cancel_button(") : source.index(
+            "def _set_update_cluster_visible("
+        )
+    ]
+    assert "progress_control_photo(" in update_cancel_source
+    assert "create_rectangle(" not in update_cancel_source
     assert "update_progress_canvas" not in source
     footer_action_source = source[
         source.index("update_action_label = tk.Label(") : source.index(
@@ -1141,8 +1147,11 @@ def test_splash_map_library_uses_navigation_and_an_overflow_cue():
     assert "reserve_progress=True" not in panel_source
     assert "_create_action_button" in panel_source
     assert "_draw_action_stop_progress" in panel_source
-    assert "progress_ring_photo(" in panel_source
-    assert "button.create_rectangle(" in panel_source
+    assert "progress_control_photo(" in panel_source
+    action_progress_source = inspect.getsource(
+        map_library_panel.MapLibraryPanel._draw_action_progress
+    )
+    assert "button.create_rectangle(" not in action_progress_source
     assert "_draw_download" in panel_source
     download_source = inspect.getsource(map_library_panel.MapLibraryPanel._draw_download)
     assert "create_rectangle" not in download_source
@@ -1151,6 +1160,7 @@ def test_splash_map_library_uses_navigation_and_an_overflow_cue():
     assert "_cv_row_action_widgets" not in panel_source
     assert "stop_fill_color = style.button_fg" in panel_source
     assert "action_progress_ring_diameter=" in style_source
+    assert "action_retry_icon_diameter=" in style_source
     assert "action_stop_size=" in style_source
     assert "show_stop_progress=True" in workflow_source
     assert '"Cancel"' not in workflow_source
@@ -1168,7 +1178,7 @@ def test_splash_map_library_uses_navigation_and_an_overflow_cue():
     assert "No longer a part of the standard library" in source
     assert "self._draw_vector_photo(" in section_source
     assert "create_polygon(" not in section_source
-    assert "progress_ring_photo(" in panel_source
+    assert "progress_control_photo(" in panel_source
     assert 'text="Hide"' not in section_source
     assert 'text="Show"' not in section_source
 
@@ -1717,7 +1727,7 @@ def test_map_library_row_actions_use_state_aware_icons(
     assert visual.tooltip == tooltip
 
 
-def test_map_library_retry_uses_the_complete_retry_svg_arrowhead(monkeypatch):
+def test_map_library_retry_uses_font_awesome_at_its_inset_optical_size(monkeypatch):
     class _FakeButton:
         def __init__(self) -> None:
             self.image_calls = []
@@ -1727,30 +1737,91 @@ def test_map_library_retry_uses_the_complete_retry_svg_arrowhead(monkeypatch):
 
     panel = object.__new__(map_library_panel.MapLibraryPanel)
     panel._px = lambda value: value
-    panel._style = SimpleNamespace(action_icon_stroke_width=2)
+    panel._style = SimpleNamespace(action_retry_icon_diameter=18)
     button = _FakeButton()
-    vector_calls = []
+    retry_calls = []
+    photo = object()
 
-    def capture_vector_icon(_widget, **options):
-        vector_calls.append(options)
-        return object()
+    def capture_retry_icon(_widget, **options):
+        retry_calls.append(options)
+        return photo
 
-    monkeypatch.setattr(map_library_panel, "vector_icon_photo", capture_vector_icon)
+    monkeypatch.setattr(map_library_panel, "retry_icon_photo", capture_retry_icon)
 
-    panel._draw_retry(button, 28, 28, "#e5a11f")
+    panel._draw_retry(button, 32, 32, "#e5a11f")
 
     assert len(button.image_calls) == 1
-    assert len(vector_calls) == 1
-    options = vector_calls[0]
-    arc = options["arcs"][0]
-    assert arc.start_degrees == 0.0
-    assert arc.extent_degrees == -315.0
-    assert options["polygons"] == ()
-    arrowhead = options["paths"][0]
-    assert arrowhead.color == "#e5a11f"
-    assert len(arrowhead.points) == 3
-    arc_end, head_corner, head_tip = arrowhead.points
-    assert arc_end[0] < head_corner[0]
-    assert arc_end[1] < head_corner[1]
-    assert head_corner[0] == head_tip[0]
-    assert head_tip[1] < head_corner[1]
+    assert retry_calls == [
+        {
+            "image_size": (32, 32),
+            "glyph_diameter": 18,
+            "color": "#e5a11f",
+        }
+    ]
+    assert button._cv_retry_photo is photo
+    assert button.image_calls == [
+        ((16.0, 16.0), {"image": photo, "tags": "cv_action_content"})
+    ]
+
+
+@pytest.mark.parametrize(
+    ("pause", "center_glyph"),
+    ((False, "stop"), (True, "pause")),
+)
+def test_map_library_progress_control_uses_one_centered_high_dpi_photo(
+    monkeypatch,
+    pause,
+    center_glyph,
+):
+    class _FakeButton:
+        def __init__(self) -> None:
+            self.image_calls = []
+
+        def create_image(self, *coordinates, **options) -> None:
+            self.image_calls.append((coordinates, options))
+
+    panel = object.__new__(map_library_panel.MapLibraryPanel)
+    panel._px = lambda value: int(round(value * 2.5))
+    panel._style = SimpleNamespace(
+        action_progress_ring_diameter=22,
+        action_progress_ring_stroke_width=2,
+        action_stop_size=7,
+        progress_track_color="#50535c",
+        progress_fill_color="#e5a11f",
+        button_fg="#e5a11f",
+        disabled_button_fg="#6f717f",
+    )
+    button = _FakeButton()
+    progress_calls = []
+    photo = object()
+
+    def capture_progress_control(_widget, **options):
+        progress_calls.append(options)
+        return photo
+
+    monkeypatch.setattr(
+        map_library_panel,
+        "progress_control_photo",
+        capture_progress_control,
+    )
+
+    panel._draw_action_progress(button, 80, 80, pause=pause)
+
+    assert progress_calls == [
+        {
+            "image_size": 60,
+            "ring_diameter": 55,
+            "stroke_width": 5,
+            "track_color": "#50535c",
+            "fill_color": "#e5a11f",
+            "start_degrees": 90,
+            "extent_degrees": -2,
+            "center_glyph": center_glyph,
+            "center_glyph_size": 18,
+            "center_glyph_color": "#e5a11f",
+        }
+    ]
+    assert button._cv_progress_control_photo is photo
+    assert button.image_calls == [
+        ((40.0, 40.0), {"image": photo, "tags": "cv_action_content"})
+    ]
