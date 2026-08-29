@@ -1311,6 +1311,8 @@ class PreferencesPanel:
             self._set_feedback(result.error or "", MessageKind.ERROR)
             return False
         self.preferences = result.preferences
+        if result.preferences is not None:
+            self.form.mark_saved(result.preferences)
         self._feedback_override = (
             "Preferences saved.",
             DARK_THEME.primary_button,
@@ -1410,7 +1412,7 @@ class PreferencesPanel:
         )
 
     def _stage_preferences(self, preferences: Preferences, message: str) -> None:
-        self.form = PreferencesFormController(preferences)
+        state = self.form.stage(preferences.as_dict())
         self.rendering_state = True
         try:
             for key, value in preferences.items():
@@ -1419,7 +1421,7 @@ class PreferencesPanel:
             self.rendering_state = False
         self.rendered_invalid_key = None
         self._feedback_override = (message, DARK_THEME.primary_button)
-        self._render_form_state(self.form.state)
+        self._render_form_state(state)
 
     def cancel(self) -> None:
         self.discard_changes()
@@ -1434,14 +1436,14 @@ class PreferencesPanel:
         form = getattr(self, "form", None)
         if preferences is None or form is None:
             return False
-        return dict(form.state.values) != preferences.as_dict()
+        return form.state.has_unsaved_changes
 
     def discard_changes(self) -> None:
         """Restore the last saved values without destroying this panel."""
         preferences = getattr(self, "preferences", None)
         if preferences is None:
             return
-        self.form = PreferencesFormController(preferences)
+        state = self.form.discard()
         self.rendering_state = True
         try:
             for key, value in preferences.items():
@@ -1450,7 +1452,7 @@ class PreferencesPanel:
             self.rendering_state = False
         self.rendered_invalid_key = None
         self._feedback_override = None
-        self._render_form_state(self.form.state)
+        self._render_form_state(state)
 
     def focus_content(self) -> None:
         """Move keyboard focus into the active embedded Preferences view."""

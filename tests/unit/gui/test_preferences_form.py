@@ -156,3 +156,48 @@ def test_unknown_field_is_rejected(valid_preferences):
         assert "Unknown Preferences field" in str(exc)
     else:
         raise AssertionError("Unknown field should have raised KeyError")
+
+
+def test_dirty_state_tracks_fields_and_tabs_until_value_is_reverted(
+    valid_preferences,
+):
+    controller = PreferencesFormController(valid_preferences)
+
+    state = controller.change("io_workers", "3")
+
+    assert state.has_unsaved_changes
+    assert state.dirty_keys == frozenset({"io_workers"})
+    assert state.dirty_sections == frozenset({"streaming"})
+
+    state = controller.change("io_workers", valid_preferences["io_workers"])
+
+    assert not state.has_unsaved_changes
+    assert not state.dirty_keys
+    assert not state.dirty_sections
+
+
+def test_stage_discard_and_mark_saved_share_one_persisted_baseline(
+    valid_preferences,
+):
+    controller = PreferencesFormController(valid_preferences)
+    staged = dict(valid_preferences)
+    staged["io_workers"] = "3"
+    staged["chunk_size_meters"] = "32"
+
+    state = controller.stage(staged)
+
+    assert state.dirty_keys == frozenset({"io_workers", "chunk_size_meters"})
+    assert state.dirty_sections == frozenset({"streaming", "parsing"})
+
+    state = controller.discard()
+
+    assert state.values == valid_preferences
+    assert not state.has_unsaved_changes
+
+    controller.stage(staged)
+    _state, preferences = controller.attempt_apply()
+    assert preferences is not None
+    state = controller.mark_saved(preferences)
+
+    assert state.values == staged
+    assert not state.has_unsaved_changes
