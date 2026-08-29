@@ -42,7 +42,14 @@ The application About text should identify CaveViewer as licensed under the GNU 
 ## Requirements
 
 - Git
-- Python 3.12
+- Python 3.12 (exactly; Python 3.14 is not currently supported)
+
+CaveViewer pins Python 3.12 because its rendering stack includes native OpenGL
+dependencies, including ModernGL, whose pinned release does not provide the
+Python 3.14 wheels required by every supported CaveViewer platform. A Python
+minor-version change also changes the native extension ABI. Do not let an IDE
+create the project environment with a system-default Python 3.14 interpreter;
+use Python 3.12 for `.venv`, tests, and application or release builds.
 
 You also need to run a typical workstation setup with C++ and other compilers if you desired to compile from source.
 
@@ -67,7 +74,38 @@ latest=$(git tag -l "v*" --sort=-version:refname | head -n 1)
 git checkout "$latest"
 ```
 
-## Shared PyCharm workflows
+## Recommended: start with PyCharm
+
+PyCharm is one of the easiest ways to start developing CaveViewer. The
+repository includes portable, pre-built run configurations under `.run/` for
+launching CaveViewer, running essential tests, and performing the normal
+preview and stable release actions. Personal interpreter selections remain in
+the ignored `.idea/` directory, so each checkout or workstation must associate
+the project with its local `.venv` once.
+
+When PyCharm opens the checkout and offers **Create a virtual environment using
+requirements.txt**, accept the prompt and configure a custom environment:
+
+1. Set the environment location to the repository's `.venv` directory.
+2. Select a **Python 3.12** base interpreter. Do not accept Python 3.14 even if
+   PyCharm presents it as the system default.
+3. On Windows, an interpreter installed by `uv` is normally available below
+   `%APPDATA%\uv\python\cpython-3.12...\python.exe`. Select that executable when
+   it appears in PyCharm's custom-interpreter chooser.
+4. Leave inheritance of global site packages disabled and allow PyCharm to
+   install `requirements.txt`.
+5. Confirm that the resulting project interpreter is
+   `.venv\Scripts\python.exe` on Windows or `.venv/bin/python` on Linux and
+   macOS, then run the shared **CaveViewer** action.
+
+If no Python 3.12 interpreter is available in the chooser, provision one with
+`uv python install 3.12`, or use the platform-specific command-line setup below,
+then return to PyCharm and select the resulting `.venv` interpreter. Removing
+`.idea/` also removes PyCharm's project-interpreter association; it does not
+create or remove `.venv`, so repeat the selection step after resetting IDE
+settings.
+
+### Shared PyCharm workflows
 
 The shared **CaveViewer** run configuration uses PyCharm's available project
 interpreter only to bootstrap the repository. It installs pinned `uv` 0.12.5
@@ -80,8 +118,10 @@ This makes the first run on a fresh checkout self-bootstrapping when the
 machine has network access and PyCharm can start the bootstrap interpreter.
 Subsequent runs reuse `.venv` and leave already-satisfied packages
 unchanged. The tracked `.python-version` also pins compatible tools to Python
-3.12. Runtime provisioning and dependency setup must succeed before the
-application is launched.
+3.12. A valid PyCharm project interpreter is still required before a Python
+run configuration can start; creating `.venv` from PyCharm's requirements
+prompt avoids that first-run limitation. Runtime provisioning and dependency
+setup must succeed before the application is launched.
 
 PyCharm contributors should use the versioned **Release Actions** run
 configurations under `.run/`. The normal choices are **Create Preview Release**
