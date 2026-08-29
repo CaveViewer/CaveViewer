@@ -39,6 +39,7 @@ where = ["src"]
 [tool.setuptools.package-data]
 "caveviewer.resources" = [
     "images/*.png",
+    "images/*.jpg",
     "images/ui/*.svg",
     "shaders/*.frag",
     "shaders/*.vert",

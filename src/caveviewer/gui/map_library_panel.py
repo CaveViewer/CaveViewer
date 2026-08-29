@@ -10,6 +10,7 @@ from caveviewer.gui.scrollable_content import (
     CanvasScrollbarStyle,
     CanvasVerticalScrollbar,
 )
+from caveviewer.gui.splash_visuals import progress_ring_photo
 
 
 @dataclass(frozen=True)
@@ -1258,43 +1259,32 @@ class MapLibraryPanel:
         stop_size = self._px(style.action_stop_size)
         center_x = width / 2
         center_y = height / 2
-        radius = diameter / 2
-        inset = stroke_width / 2
-        x0 = center_x - radius + inset
-        y0 = center_y - radius + inset
-        x1 = center_x + radius - inset
-        y1 = center_y + radius - inset
 
         track_color = style.progress_track_color
         progress_fill_color = (
             style.progress_fill_color if enabled else style.disabled_button_fg
         )
         stop_fill_color = style.button_fg if enabled else style.disabled_button_fg
-        button.create_oval(
-            x0,
-            y0,
-            x1,
-            y1,
-            outline=track_color,
-            width=stroke_width,
-            tags="cv_action_content",
-        )
-
         fraction = getattr(button, "_cv_progress_fraction", 0.0)
         if fraction is None:
             extent = -100
         else:
             extent = -max(2, int(round(359 * max(0.0, min(1.0, fraction)))))
-        button.create_arc(
-            x0,
-            y0,
-            x1,
-            y1,
-            start=90,
-            extent=extent,
-            style="arc",
-            outline=progress_fill_color,
-            width=stroke_width,
+        ring_photo = progress_ring_photo(
+            button,
+            image_size=max(1, int(round(diameter + stroke_width))),
+            ring_diameter=diameter,
+            stroke_width=stroke_width,
+            track_color=track_color,
+            fill_color=progress_fill_color,
+            start_degrees=90,
+            extent_degrees=extent,
+        )
+        button._cv_progress_ring_photo = ring_photo
+        button.create_image(
+            center_x,
+            center_y,
+            image=ring_photo,
             tags="cv_action_content",
         )
 

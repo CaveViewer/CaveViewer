@@ -706,28 +706,34 @@ def test_launch_splash_waits_only_for_the_remaining_minimum_duration():
 
 
 def test_launch_splash_uses_the_loading_exploration_tagline():
-    source = inspect.getsource(splash_screen._build_launch_surface)
+    source = inspect.getsource(splash_screen._render_launch_content)
 
     assert 'text="Preparing to explore what lies beneath…"' in source
     assert 'text="Starting…"' not in source
 
 
-def test_launch_indicator_draws_an_indeterminate_amber_arc():
+def test_launch_indicator_uses_the_anti_aliased_progress_ring_renderer(monkeypatch):
+    source = inspect.getsource(splash_screen._draw_launch_indicator_frame)
     calls = []
 
     class _Canvas:
-        def cget(self, option):
-            assert option == "width"
+        def winfo_width(self):
+            return 132
+
+        def winfo_height(self):
             return 132
 
         def delete(self, tag):
             calls.append(("delete", tag))
 
-        def create_oval(self, *coordinates, **options):
-            calls.append(("oval", coordinates, options))
+        def create_image(self, *coordinates, **options):
+            calls.append(("image", coordinates, options))
 
-        def create_arc(self, *coordinates, **options):
-            calls.append(("arc", coordinates, options))
+    def _progress_ring_photo(canvas, **options):
+        calls.append(("ring", canvas, options))
+        return "ring-photo"
+
+    monkeypatch.setattr(splash_screen, "progress_ring_photo", _progress_ring_photo)
 
     splash_screen._draw_launch_indicator_frame(
         _Canvas(),
@@ -735,12 +741,25 @@ def test_launch_indicator_draws_an_indeterminate_amber_arc():
         px=lambda value: int(value),
     )
 
+    assert "progress_ring_photo(" in source
+    assert "create_oval(" not in source
+    assert "create_arc(" not in source
     assert calls[0] == ("delete", "launch_indicator")
-    assert calls[1][0] == "oval"
-    assert calls[2][0] == "arc"
-    assert calls[2][2]["start"] == 66
-    assert calls[2][2]["extent"] == -splash_screen._LAUNCH_INDICATOR_ARC_DEGREES
-    assert calls[2][2]["outline"] == splash_screen._BUTTON_BG
+    assert calls[1][0] == "ring"
+    assert calls[1][2] == {
+        "image_size": 95,
+        "ring_diameter": 91,
+        "stroke_width": 2,
+        "track_color": splash_screen.DARK_THEME.entry_border,
+        "fill_color": splash_screen._BUTTON_BG,
+        "start_degrees": 66.0,
+        "extent_degrees": -splash_screen._LAUNCH_INDICATOR_ARC_DEGREES,
+    }
+    assert calls[2] == (
+        "image",
+        (66.0, 66.0),
+        {"image": "ring-photo", "tags": "launch_indicator"},
+    )
 
 
 def test_launch_logo_suppresses_only_amber_pixels_like_the_map_loader():
@@ -766,9 +785,11 @@ def test_launch_logo_suppresses_only_amber_pixels_like_the_map_loader():
 
 def test_launch_surface_replaces_the_logo_amber_with_one_indicator_ring():
     source = inspect.getsource(splash_screen._build_launch_surface)
+    content_source = inspect.getsource(splash_screen._render_launch_content)
 
     assert "suppress_amber=True" in source
-    assert "_draw_launch_indicator_frame(" in source
+    assert "_draw_launch_indicator_frame(" in content_source
+    assert "_render_launch_background(" in source
 
 
 def test_splash_navigation_actions_are_keyboard_accessible_without_fallthrough():
@@ -958,7 +979,8 @@ def test_splash_navigation_uses_a_quiet_rail_and_lower_app_status():
     assert 'update_label.pack(side="left", anchor="w", fill="x", expand=True)' in source
     assert 'update_cancel_button.pack(side="right", padx=(px(6), 0))' in source
     assert "def _draw_update_cancel_button(progress_fraction: float)" in source
-    assert "extent=-360 * clamped" in source
+    assert "extent_degrees=-360 * clamped" in source
+    assert "progress_ring_photo(" in source
     assert "update_progress_canvas" not in source
     footer_action_source = source[
         source.index("update_action_label = tk.Label(") : source.index(
@@ -1119,7 +1141,7 @@ def test_splash_map_library_uses_navigation_and_an_overflow_cue():
     assert "reserve_progress=True" not in panel_source
     assert "_create_action_button" in panel_source
     assert "_draw_action_stop_progress" in panel_source
-    assert "button.create_arc(" in panel_source
+    assert "progress_ring_photo(" in panel_source
     assert "button.create_rectangle(" in panel_source
     assert "_draw_download" in panel_source
     download_source = inspect.getsource(map_library_panel.MapLibraryPanel._draw_download)
@@ -1145,7 +1167,7 @@ def test_splash_map_library_uses_navigation_and_an_overflow_cue():
     assert "Local-only former library maps" not in source
     assert "No longer a part of the standard library" in source
     assert "create_polygon(" in section_source
-    assert "button.create_arc(" in panel_source
+    assert "progress_ring_photo(" in panel_source
     assert 'text="Hide"' not in section_source
     assert 'text="Show"' not in section_source
 

@@ -606,6 +606,15 @@ Tk-thread workflow transitions, `map_library_panel.py` owns Tk rows, scroll,
 status, and overflow-menu presentation, and `splash_screen.py` wires those
 pieces to session actions such as opening maps and preferences.
 
+The short launch surface is separate from the persistent Map Library: it uses
+the bundled dark cave background only while the splash prepares its composed
+main surface, then releases that surface before Map Library, Preferences, Help,
+or About are shown. `gui.splash_visuals` owns the pure Pillow cover fit and
+bounded supersampled ring rasterization. Tk callers alone turn those images
+into `PhotoImage` values on the UI thread, so launch, update-download, and
+Map Library progress circles share smooth high-DPI edges without placing image
+work in import or update workers.
+
 Each `MapLibrarySource` returns a `MapCatalogRefresh` with a stable source id,
 ordered entries, and an explicit authority result. The initial production
 adapter is `GitHubReleaseMapLibrarySource`; it preserves the configured GitHub
