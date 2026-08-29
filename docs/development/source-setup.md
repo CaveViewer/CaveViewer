@@ -863,7 +863,7 @@ Unless overridden, CaveViewer stores files in these locations:
 | Preferences | `$XDG_CONFIG_HOME/caveviewer/advanced_settings.json` (`~/.config/...` fallback; legacy-compatible filename) | `~/.caveviewer/advanced_settings.json` |
 | Remembered chooser locations | `$XDG_STATE_HOME/caveviewer/` (`~/.local/state/...` fallback) | `~/.caveviewer/` |
 | Windows pre-splash diagnostics | — | `~/.caveviewer/diagnostics/startup.log` |
-| Windows viewer-session diagnostics | — | `~/.caveviewer/diagnostics/viewer-session-<id>.log` and `.jsonl` |
+| Application session diagnostics | `$XDG_STATE_HOME/caveviewer/diagnostics/viewer-session-<id>.log` and `.jsonl` (`~/.local/state/...` fallback) | `~/.caveviewer/diagnostics/viewer-session-<id>.log` and `.jsonl` |
 | Map caches | Source map folder `/_cache` | Source map folder `/_cache` |
 | Downloaded map library | `$XDG_DOWNLOAD_DIR/` (`~/Downloads/` fallback) | `~/Downloads/` |
 
@@ -885,14 +885,20 @@ flushed startup checkpoint and, after 20 seconds without a visible splash, one
 all-thread Python traceback. A normal visible splash closes the diagnostic file
 immediately.
 
-If selecting a map closes the Windows app before a viewer appears, collect the
-newest `%USERPROFILE%\.caveviewer\diagnostics\viewer-session-*.log` and its
-matching `.jsonl` file. The text log records map selection, viewer launch,
-native-window/context construction, and the first render callback. It also
-receives Python fatal-fault tracebacks when available; the JSONL file contains
-the same session's structured application events and caught exception
-tracebacks. Each app run uses a new id, so a later retry does not overwrite the
-previous failure's logs.
+For ordinary troubleshooting on any supported desktop, open **Help >
+Troubleshooting**. **Show latest log** opens the application diagnostics folder
+and selects the newest human-readable session log. **Last error** shows the
+newest complete `ERROR` record with up to three preceding physical log lines;
+its **Copy** action places exactly that displayed excerpt on the clipboard.
+
+The text log records map selection, viewer launch, native-window/context
+construction, and the first render callback. It also receives Python
+fatal-fault tracebacks when available; the matching JSONL file contains the
+same session's structured application events and caught exception tracebacks.
+Each app run uses a new id. At startup, CaveViewer removes session `.log` and
+`.jsonl` files older than 24 hours, including orphan JSONL files, and retains no
+more than the newest ten sessions as a secondary bound. JSONL files remain
+developer diagnostics and are not shown by the Help action.
 
 Disk-space checks therefore target the filesystem that will hold the cache,
 which is normally the map's filesystem unless an explicit cache root is set.
