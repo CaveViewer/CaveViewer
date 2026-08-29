@@ -61,6 +61,9 @@ class Minimap:
     ARROW_LENGTH = 9       # tip-to-tail-center distance, in panel pixels
     ARROW_HALF_WIDTH = 5   # half the width across the back of the arrowhead
     CELL_PIXEL_SIZE = 3.0  # how big each occupied chunk-cell renders as, in panel pixels
+    # A 12-sided marker is visibly faceted when the logical HUD is scaled up
+    # on a high-density framebuffer; this stays negligible in dynamic geometry.
+    DYNAMIC_CIRCLE_SEGMENTS = 32
     _MAX_STATIC_OCCUPANCY_PIXELS = PANEL_SIZE * PANEL_SIZE
 
     def __init__(self, ctx: moderngl.Context, manifest: dict):
@@ -497,10 +500,10 @@ class Minimap:
                        (left, bottom), (right, top),  (left, top)):
                 arrow_verts.append((*xy, *rgba))
 
-        def add_circle_px(cx, cy, radius, rgba, segments=12):
-            for i in range(segments):
-                a0 = (i / segments) * 2 * np.pi
-                a1 = ((i + 1) / segments) * 2 * np.pi
+        def add_circle_px(cx, cy, radius, rgba):
+            for i in range(self.DYNAMIC_CIRCLE_SEGMENTS):
+                a0 = (i / self.DYNAMIC_CIRCLE_SEGMENTS) * 2 * np.pi
+                a1 = ((i + 1) / self.DYNAMIC_CIRCLE_SEGMENTS) * 2 * np.pi
                 for (px, py) in [(cx, cy),
                                   (cx + radius * np.cos(a0), cy + radius * np.sin(a0)),
                                   (cx + radius * np.cos(a1), cy + radius * np.sin(a1))]:

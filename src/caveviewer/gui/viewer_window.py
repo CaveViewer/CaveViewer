@@ -579,6 +579,9 @@ class CaveViewerWindow(mglw.WindowConfig):
     # The launch helpers set this from the immutable runtime snapshot. Direct
     # legacy callers retain an environment-backed fallback at launch time.
     vsync = True
+    # Apply hardware anti-aliasing before compositing the cave scene and every
+    # OpenGL HUD overlay into the default presentation framebuffer.
+    samples = 4
     aspect_ratio = None  # don't letterbox; we recompute from actual window size
 
     # Set on the class itself (not passed through __init__ kwargs) before

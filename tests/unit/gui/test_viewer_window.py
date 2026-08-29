@@ -35,6 +35,10 @@ from caveviewer.gui.platform.runtime import VideoRecordingPreflight, ViewerLaunc
 from caveviewer.gui.platform.viewer_launch import ViewerLaunchError
 
 
+def test_viewer_default_framebuffer_uses_multisampling_for_graphics_edges():
+    assert viewer_window.CaveViewerWindow.samples == 4
+
+
 class FakeImportInhibitor:
     def __init__(self, calls):
         self._calls = calls

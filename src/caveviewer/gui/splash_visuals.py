@@ -1,20 +1,75 @@
-"""Raster visual primitives owned by the Tk splash presentation.
+"""Raster visual primitives owned by the Tk splash and library presentation.
 
-The splash screen stays responsible for Tk widget creation and mutation. This
-module prepares background and progress-ring images with Pillow so Canvas
-presentations can remain crisp on high-density displays without each caller
-implementing its own pixel geometry.
+The Tk presentation modules stay responsible for widget creation and mutation.
+This module prepares background, progress-ring, and vector-icon images with
+Pillow so Canvas presentations can remain crisp on high-density displays
+without each caller implementing its own pixel geometry.
 """
 
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
+from typing import TypeAlias
 
 from PIL import Image, ImageColor, ImageDraw, ImageOps
 
 
 _PROGRESS_RING_MAX_SUPERSAMPLE = 4
 _PROGRESS_RING_MAX_RASTER_SIZE = 2048
+
+Color: TypeAlias = str | tuple[int, int, int] | tuple[int, int, int, int]
+Point: TypeAlias = tuple[float, float]
+
+
+@dataclass(frozen=True)
+class VectorPath:
+    """One rounded vector path expressed in target Canvas pixels."""
+
+    points: tuple[Point, ...]
+    color: Color
+    width: float
+    closed: bool = False
+
+
+@dataclass(frozen=True)
+class VectorArc:
+    """One rounded partial circular path expressed in target Canvas pixels."""
+
+    center: Point
+    radius: float
+    start_degrees: float
+    extent_degrees: float
+    color: Color
+    width: float
+
+
+@dataclass(frozen=True)
+class VectorPolygon:
+    """One filled and/or outlined polygon expressed in target Canvas pixels."""
+
+    points: tuple[Point, ...]
+    fill_color: Color | None = None
+    outline_color: Color | None = None
+    outline_width: float = 1.0
+
+
+@dataclass(frozen=True)
+class VectorEllipse:
+    """One filled and/or outlined ellipse expressed in target Canvas pixels."""
+
+    bounds: tuple[float, float, float, float]
+    fill_color: Color | None = None
+    outline_color: Color | None = None
+    outline_width: float = 1.0
+
+
+@dataclass(frozen=True)
+class VectorRectangle:
+    """One filled rectangle expressed in target Canvas pixels."""
+
+    bounds: tuple[float, float, float, float]
+    fill_color: Color
 
 
 def fit_splash_background(
@@ -40,9 +95,7 @@ def progress_ring_supersample_factor(image_size: int | float) -> int:
     return min(_PROGRESS_RING_MAX_SUPERSAMPLE, max_safe_factor)
 
 
-def _rgba(
-    color: str | tuple[int, int, int] | tuple[int, int, int, int],
-) -> tuple[int, int, int, int]:
+def _rgba(color: Color) -> tuple[int, int, int, int]:
     """Normalize a Tk/Pillow color into a Pillow RGBA tuple."""
     if isinstance(color, tuple):
         if len(color) == 4:
@@ -138,6 +191,137 @@ def render_progress_ring(
     return image.resize((target_size, target_size), Image.Resampling.LANCZOS)
 
 
+def _target_icon_size(
+    image_size: tuple[int | float, int | float],
+) -> tuple[int, int]:
+    """Normalize a target Canvas image size without allowing zero dimensions."""
+    return (
+        max(1, int(round(float(image_size[0])))),
+        max(1, int(round(float(image_size[1])))),
+    )
+
+
+def _draw_rounded_path(
+    drawer: ImageDraw.ImageDraw,
+    points: tuple[Point, ...],
+    *,
+    color: Color,
+    width: int,
+    closed: bool = False,
+) -> None:
+    """Draw a high-resolution path with Canvas-like round caps and joins."""
+    if not points:
+        return
+    paint = _rgba(color)
+    cap_radius = width / 2.0
+    path = (*points, points[0]) if closed and len(points) > 1 else points
+    if len(path) > 1:
+        drawer.line(path, fill=paint, width=width, joint="curve")
+    for point_x, point_y in points:
+        drawer.ellipse(
+            (
+                int(round(point_x - cap_radius)),
+                int(round(point_y - cap_radius)),
+                int(round(point_x + cap_radius)),
+                int(round(point_y + cap_radius)),
+            ),
+            fill=paint,
+        )
+
+
+def render_vector_icon(
+    *,
+    image_size: tuple[int | float, int | float],
+    paths: tuple[VectorPath, ...] = (),
+    arcs: tuple[VectorArc, ...] = (),
+    polygons: tuple[VectorPolygon, ...] = (),
+    ellipses: tuple[VectorEllipse, ...] = (),
+    rectangles: tuple[VectorRectangle, ...] = (),
+) -> Image.Image:
+    """Rasterize target-pixel Canvas vector art with bounded supersampling.
+
+    Inputs preserve their Canvas coordinates and colors. The icon is drawn at a
+    bounded larger raster size, then LANCZOS downsampled, which gives diagonal,
+    curved, and rounded icon edges consistent anti-aliasing on dense displays.
+    """
+    target_width, target_height = _target_icon_size(image_size)
+    supersample = progress_ring_supersample_factor(
+        max(target_width, target_height)
+    )
+    raster_size = (target_width * supersample, target_height * supersample)
+    image = Image.new("RGBA", raster_size)
+    drawer = ImageDraw.Draw(image)
+
+    def scale_point(point: Point) -> Point:
+        return point[0] * supersample, point[1] * supersample
+
+    def scale_bounds(bounds: tuple[float, float, float, float]) -> tuple[int, int, int, int]:
+        return tuple(int(round(value * supersample)) for value in bounds)
+
+    def scale_width(width: float) -> int:
+        return max(1, int(round(width * supersample)))
+
+    for rectangle in rectangles:
+        drawer.rectangle(
+            scale_bounds(rectangle.bounds),
+            fill=_rgba(rectangle.fill_color),
+        )
+    for polygon in polygons:
+        points = tuple(scale_point(point) for point in polygon.points)
+        if polygon.fill_color is not None and points:
+            drawer.polygon(points, fill=_rgba(polygon.fill_color))
+        if polygon.outline_color is not None:
+            _draw_rounded_path(
+                drawer,
+                points,
+                color=polygon.outline_color,
+                width=scale_width(polygon.outline_width),
+                closed=True,
+            )
+    for ellipse in ellipses:
+        drawer.ellipse(
+            scale_bounds(ellipse.bounds),
+            fill=(
+                _rgba(ellipse.fill_color)
+                if ellipse.fill_color is not None
+                else None
+            ),
+            outline=(
+                _rgba(ellipse.outline_color)
+                if ellipse.outline_color is not None
+                else None
+            ),
+            width=scale_width(ellipse.outline_width),
+        )
+    for path in paths:
+        _draw_rounded_path(
+            drawer,
+            tuple(scale_point(point) for point in path.points),
+            color=path.color,
+            width=scale_width(path.width),
+            closed=path.closed,
+        )
+    for arc in arcs:
+        center_x, center_y = scale_point(arc.center)
+        _draw_rounded_path(
+            drawer,
+            tuple(
+                _arc_points(
+                    center=center_x,
+                    radius=max(0.5, arc.radius * supersample),
+                    start_degrees=arc.start_degrees,
+                    extent_degrees=arc.extent_degrees,
+                )
+            ),
+            color=arc.color,
+            width=scale_width(arc.width),
+        )
+
+    if supersample == 1:
+        return image
+    return image.resize((target_width, target_height), Image.Resampling.LANCZOS)
+
+
 def progress_ring_photo(
     widget: object,
     *,
@@ -161,6 +345,32 @@ def progress_ring_photo(
             fill_color=fill_color,
             start_degrees=start_degrees,
             extent_degrees=extent_degrees,
+        ),
+        master=widget.winfo_toplevel(),
+    )
+
+
+def vector_icon_photo(
+    widget: object,
+    *,
+    image_size: tuple[int | float, int | float],
+    paths: tuple[VectorPath, ...] = (),
+    arcs: tuple[VectorArc, ...] = (),
+    polygons: tuple[VectorPolygon, ...] = (),
+    ellipses: tuple[VectorEllipse, ...] = (),
+    rectangles: tuple[VectorRectangle, ...] = (),
+) -> object:
+    """Create one root-owned Tk photo for anti-aliased Canvas vector art."""
+    from PIL import ImageTk
+
+    return ImageTk.PhotoImage(
+        render_vector_icon(
+            image_size=image_size,
+            paths=paths,
+            arcs=arcs,
+            polygons=polygons,
+            ellipses=ellipses,
+            rectangles=rectangles,
         ),
         master=widget.winfo_toplevel(),
     )

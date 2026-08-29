@@ -609,11 +609,16 @@ pieces to session actions such as opening maps and preferences.
 The short launch surface is separate from the persistent Map Library: it uses
 the bundled dark cave background only while the splash prepares its composed
 main surface, then releases that surface before Map Library, Preferences, Help,
-or About are shown. `gui.splash_visuals` owns the pure Pillow cover fit and
-bounded supersampled ring rasterization. Tk callers alone turn those images
-into `PhotoImage` values on the UI thread, so launch, update-download, and
-Map Library progress circles share smooth high-DPI edges without placing image
-work in import or update workers.
+or About are shown. `gui.splash_visuals` owns the pure Pillow cover fit plus
+bounded supersampled ring and vector-icon rasterization. Tk callers alone turn
+those images into `PhotoImage` values on the UI thread, so launch,
+update-download, Map Library progress circles, chevrons, and other curved
+Canvas affordances share smooth high-DPI edges without placing image work in
+import or update workers. The OpenGL viewer requests 4x multisampling for its
+default presentation framebuffer; the shared import/map-opening/cache/capture
+ring shader uses framebuffer derivatives for its edges, and the minimap uses a
+higher-density round-marker tessellation. FreeType text and axis-aligned panels
+remain on their existing resolution-aware rendering paths.
 
 Each `MapLibrarySource` returns a `MapCatalogRefresh` with a stable source id,
 ordered entries, and an explicit authority result. The initial production

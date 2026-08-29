@@ -97,8 +97,12 @@ from caveviewer.gui.platform.presentation_actions import (
 from caveviewer.gui.preference_paths import migrate_state_file, write_text_atomic
 from caveviewer.gui.splash_controller import SplashController, SplashScheduler
 from caveviewer.gui.splash_visuals import (
+    VectorEllipse,
+    VectorPath,
+    VectorPolygon,
     fit_splash_background,
     progress_ring_photo,
+    vector_icon_photo,
 )
 from caveviewer.gui.tk_feedback import show_feedback
 from caveviewer.gui.tk_shortcuts import bind_primary_shortcut
@@ -1975,78 +1979,99 @@ def show_splash_screen(
             icon.delete("navigation-icon")
             stroke = max(1, px(1.6))
             center = size / 2
-
-            def line(*points) -> None:
-                icon.create_line(
-                    *points,
-                    fill=foreground,
-                    width=stroke,
-                    capstyle="round",
-                    joinstyle="round",
-                    tags="navigation-icon",
-                )
+            paths: tuple[VectorPath, ...] = ()
+            polygons: tuple[VectorPolygon, ...] = ()
+            ellipses: tuple[VectorEllipse, ...] = ()
 
             if icon_name == "map":
-                line(
-                    px(3),
-                    px(6),
-                    px(10),
-                    px(3),
-                    px(18),
-                    px(6),
-                    px(25),
-                    px(3),
-                    px(25),
-                    px(22),
-                    px(18),
-                    px(25),
-                    px(10),
-                    px(22),
-                    px(3),
-                    px(25),
-                    px(3),
-                    px(6),
+                paths = (
+                    VectorPath(
+                        points=(
+                            (px(3), px(6)),
+                            (px(10), px(3)),
+                            (px(18), px(6)),
+                            (px(25), px(3)),
+                            (px(25), px(22)),
+                            (px(18), px(25)),
+                            (px(10), px(22)),
+                            (px(3), px(25)),
+                        ),
+                        color=foreground,
+                        width=stroke,
+                        closed=True,
+                    ),
+                    VectorPath(
+                        points=((px(10), px(3)), (px(10), px(22))),
+                        color=foreground,
+                        width=stroke,
+                    ),
+                    VectorPath(
+                        points=((px(18), px(6)), (px(18), px(25))),
+                        color=foreground,
+                        width=stroke,
+                    ),
                 )
-                line(px(10), px(3), px(10), px(22))
-                line(px(18), px(6), px(18), px(25))
             elif icon_name == "preferences":
-                points = []
-                for index in range(16):
-                    angle = math.radians(index * 22.5 - 90)
-                    radius = px(11 if index % 2 == 0 else 8)
-                    points.extend(
-                        (
-                            center + math.cos(angle) * radius,
-                            center + math.sin(angle) * radius,
-                        )
-                    )
-                icon.create_polygon(
-                    *points,
-                    outline=foreground,
-                    fill="",
-                    width=stroke,
-                    joinstyle="round",
-                    tags="navigation-icon",
+                polygons = (
+                    VectorPolygon(
+                        points=tuple(
+                            (
+                                center
+                                + math.cos(math.radians(index * 22.5 - 90))
+                                * px(11 if index % 2 == 0 else 8),
+                                center
+                                + math.sin(math.radians(index * 22.5 - 90))
+                                * px(11 if index % 2 == 0 else 8),
+                            )
+                            for index in range(16)
+                        ),
+                        outline_color=foreground,
+                        outline_width=stroke,
+                    ),
                 )
-                icon.create_oval(
-                    center - px(3),
-                    center - px(3),
-                    center + px(3),
-                    center + px(3),
-                    outline=foreground,
-                    width=stroke,
-                    tags="navigation-icon",
+                ellipses = (
+                    VectorEllipse(
+                        bounds=(
+                            center - px(3),
+                            center - px(3),
+                            center + px(3),
+                            center + px(3),
+                        ),
+                        outline_color=foreground,
+                        outline_width=stroke,
+                    ),
                 )
             elif icon_name == "help":
-                icon.create_oval(
-                    px(3),
-                    px(3),
-                    px(25),
-                    px(25),
-                    outline=foreground,
-                    width=stroke,
-                    tags="navigation-icon",
+                ellipses = (
+                    VectorEllipse(
+                        bounds=(px(3), px(3), px(25), px(25)),
+                        outline_color=foreground,
+                        outline_width=stroke,
+                    ),
                 )
+            else:
+                ellipses = (
+                    VectorEllipse(
+                        bounds=(px(3), px(3), px(25), px(25)),
+                        outline_color=foreground,
+                        outline_width=stroke,
+                    ),
+                )
+            icon_photo = vector_icon_photo(
+                icon,
+                image_size=(size, size),
+                paths=paths,
+                polygons=polygons,
+                ellipses=ellipses,
+            )
+            icon._cv_navigation_icon_photo = icon_photo
+            icon.create_image(
+                center,
+                center,
+                image=icon_photo,
+                tags="navigation-icon",
+            )
+            if icon_name == "help":
                 icon.create_text(
                     center,
                     center,
@@ -2055,16 +2080,7 @@ def show_splash_screen(
                     fill=foreground,
                     tags="navigation-icon",
                 )
-            else:
-                icon.create_oval(
-                    px(3),
-                    px(3),
-                    px(25),
-                    px(25),
-                    outline=foreground,
-                    width=stroke,
-                    tags="navigation-icon",
-                )
+            elif icon_name != "map" and icon_name != "preferences":
                 icon.create_text(
                     center,
                     center,

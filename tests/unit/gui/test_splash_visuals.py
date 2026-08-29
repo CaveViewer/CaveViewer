@@ -80,6 +80,37 @@ def test_progress_ring_downsampling_keeps_smooth_edge_alpha():
     assert any(0 < alpha < 255 for alpha in alpha_values)
 
 
+def test_vector_icon_downsampling_keeps_curves_and_diagonals_smooth():
+    icon = splash_visuals.render_vector_icon(
+        image_size=(48, 48),
+        paths=(
+            splash_visuals.VectorPath(
+                points=((7, 36), (24, 12), (41, 36)),
+                color="#e5a11f",
+                width=2,
+            ),
+        ),
+        arcs=(
+            splash_visuals.VectorArc(
+                center=(24, 24),
+                radius=15,
+                start_degrees=35,
+                extent_degrees=270,
+                color="#ffffff",
+                width=2,
+            ),
+        ),
+    )
+
+    alpha_values = set(icon.getchannel("A").get_flattened_data())
+
+    assert icon.mode == "RGBA"
+    assert icon.size == (48, 48)
+    assert 0 in alpha_values
+    assert 255 in alpha_values
+    assert any(0 < alpha < 255 for alpha in alpha_values)
+
+
 def test_progress_ring_keeps_determinate_and_indeterminate_arc_lengths():
     options = {
         "image_size": 80,

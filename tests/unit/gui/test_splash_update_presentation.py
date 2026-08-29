@@ -1166,7 +1166,8 @@ def test_splash_map_library_uses_navigation_and_an_overflow_cue():
     assert "Downloading… %" not in panel_source
     assert "Local-only former library maps" not in source
     assert "No longer a part of the standard library" in source
-    assert "create_polygon(" in section_source
+    assert "self._draw_vector_photo(" in section_source
+    assert "create_polygon(" not in section_source
     assert "progress_ring_photo(" in panel_source
     assert 'text="Hide"' not in section_source
     assert 'text="Show"' not in section_source
@@ -1226,11 +1227,11 @@ def test_map_library_sections_start_expanded_and_toggle_in_place():
     assert len(sync_calls) == 2
 
 
-def test_map_library_section_headers_use_adjacent_disclosure_triangles():
+def test_map_library_section_headers_use_adjacent_disclosure_triangles(monkeypatch):
     class _FakeHeader:
         def __init__(self) -> None:
             self.text_calls = []
-            self.polygon_calls = []
+            self.image_calls = []
 
         def delete(self, _tag) -> None:
             pass
@@ -1241,6 +1242,9 @@ def test_map_library_section_headers_use_adjacent_disclosure_triangles():
         def winfo_height(self) -> int:
             return 24
 
+        def cget(self, option) -> int:
+            return 320 if option == "width" else 24
+
         def create_text(self, *coordinates, **options):
             self.text_calls.append((coordinates, options))
             return f"text-{len(self.text_calls)}"
@@ -1248,8 +1252,8 @@ def test_map_library_section_headers_use_adjacent_disclosure_triangles():
         def bbox(self, _item):
             return (2, 0, 118, 24)
 
-        def create_polygon(self, *coordinates, **options) -> None:
-            self.polygon_calls.append((coordinates, options))
+        def create_image(self, *coordinates, **options) -> None:
+            self.image_calls.append((coordinates, options))
 
     panel = object.__new__(map_library_panel.MapLibraryPanel)
     panel._widget_exists = lambda _widget: True
@@ -1268,6 +1272,13 @@ def test_map_library_section_headers_use_adjacent_disclosure_triangles():
         content=object(),
         title="CaveViewer Maps",
     )
+    vector_calls = []
+
+    def capture_vector_icon(_widget, **options):
+        vector_calls.append(options)
+        return object()
+
+    monkeypatch.setattr(map_library_panel, "vector_icon_photo", capture_vector_icon)
 
     panel._draw_section_header(section)
     section.expanded = False
@@ -1277,16 +1288,24 @@ def test_map_library_section_headers_use_adjacent_disclosure_triangles():
         "CaveViewer Maps",
         "CaveViewer Maps",
     ]
-    assert len(header.polygon_calls) == 2
-    expanded_points, expanded_options = header.polygon_calls[0]
-    collapsed_points, collapsed_options = header.polygon_calls[1]
-    assert expanded_points[1] == expanded_points[3] < expanded_points[5]
-    assert collapsed_points[0] == collapsed_points[2] < collapsed_points[4]
-    assert expanded_options == collapsed_options == {
-        "fill": "#ffffff",
-        "outline": "",
-        "tags": "cv_section_header",
-    }
+    assert len(header.image_calls) == 2
+    assert len(vector_calls) == 2
+    expanded = vector_calls[0]["polygons"][0]
+    collapsed = vector_calls[1]["polygons"][0]
+    assert expanded.points[0][1] == expanded.points[1][1] < expanded.points[2][1]
+    assert collapsed.points[0][0] == collapsed.points[1][0] < collapsed.points[2][0]
+    assert expanded.fill_color == collapsed.fill_color == "#ffffff"
+
+
+def test_splash_and_library_curved_canvas_art_uses_antialiased_vector_photos():
+    navigation_source = inspect.getsource(splash_screen.show_splash_screen)
+    panel_source = inspect.getsource(map_library_panel.MapLibraryPanel)
+
+    assert "vector_icon_photo(" in navigation_source
+    assert "vector_icon_photo(" in panel_source
+    for primitive in ("create_line(", "create_arc(", "create_oval(", "create_polygon("):
+        assert primitive not in navigation_source
+        assert primitive not in panel_source
 
 
 def test_former_standard_row_title_uses_a_muted_style_without_moving_the_row():
@@ -1411,7 +1430,8 @@ def test_map_library_rows_use_subtle_overflow_menu_for_management():
     assert "desktop_services.choose_file(" not in workflow_source
     assert "platform_runtime=platform_runtime" in splash_source
     assert "Open" in source
-    assert "button.create_oval(" in panel_source
+    assert "button.create_oval(" not in panel_source
+    assert "vector_icon_photo(" in panel_source
     assert 'button.pack(side="right", padx=(0, self._px(12))' in panel_source
     assert "padx=(0, self._px(8))" in panel_source
     assert "_install_menu_dismissal_bindings" in panel_source
@@ -1602,6 +1622,9 @@ def test_map_library_open_map_action_uses_the_existing_folder_callback(monkeypat
         def create_text(self, *coordinates, **options) -> None:
             self.draw_calls.append(("text", coordinates, options))
 
+        def create_image(self, *coordinates, **options) -> None:
+            self.draw_calls.append(("image", coordinates, options))
+
     canvases = []
     monkeypatch.setattr(
         map_library_panel.tk,
@@ -1609,6 +1632,11 @@ def test_map_library_open_map_action_uses_the_existing_folder_callback(monkeypat
         lambda *args, **kwargs: (
             canvases.append(_FakeCanvas(*args, **kwargs)) or canvases[-1]
         ),
+    )
+    monkeypatch.setattr(
+        map_library_panel,
+        "vector_icon_photo",
+        lambda _widget, **_options: object(),
     )
     opened = []
     closed_menus = []
