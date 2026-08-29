@@ -33,8 +33,17 @@ tracked copy is authoritative.
 ## Master plan
 
 Rows must be ordered by implementation sequence. Use one row per independently
-verifiable task. `<br>` separates independently verifiable details within a
-table cell.
+verifiable task. `<br><br>` separates independently verifiable details with a
+blank rendered line inside a table cell.
+
+In **Desired solution**, number every independently verifiable outcome and
+separate outcomes with a blank rendered line using `<br><br>`. In **Task
+details**, number every subtask in execution order and use the same separation.
+For example:
+
+```text
+1. Decide the implementation approach.<br><br>2. Define bounded behavior and failure handling.<br><br>3. Add focused verification.
+```
 
 <style>
 table th,
@@ -45,9 +54,9 @@ table td {
 
 | ID | Description | Problem | Current implementation | Desired solution | Task details | Branch | Status |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | _Short outcome-oriented task name._ | _State the observed defect, risk, waste, or unmet need and its impact._ | _Describe the relevant behavior, code path, ownership, constraints, and evidence as they exist before this task._ | _State the measurable end condition. Include tests, safety properties, user-visible behavior, and boundaries that must hold._ | _List concrete implementation and verification actions in execution order.<br>Identify migrations, tests, documentation, cleanup, and external coordination.<br>Record dependencies on earlier rows._ | `type/descriptive-branch` | Pending |
-| 2 | _Next task in implementation sequence._ | _Why this task is needed._ | _What exists now._ | _What must be true when complete._ | _Specific implementation and verification work._ | `type/descriptive-branch` | Pending |
-| 3 | Clean up a failed build or release workflow. | A build or release failure can recur when the failing workflow and step are repaired without converting the failure path into automated regression coverage. | _Identify the failed run, workflow, job, step, relevant implementation, existing tests, and evidence explaining why the current checks did not prevent or clearly diagnose the failure._ | The root cause is fixed and the most focused practical automated test fails on the former defect and passes with the fix. The affected workflow succeeds, related tests remain green, and the work record links the validating run. If reliable automation is impossible, the row records concrete evidence and the smallest repeatable manual verification instead of silently omitting coverage. | Inspect the complete failed workflow logs and the exact workflow/script/code path before changing behavior.<br>Reproduce or isolate the failure locally when practical and distinguish a product defect from runner/service instability.<br>Implement the smallest root-cause fix.<br>Add or strengthen unit, integration, workflow-contract, packaging, or platform-smoke coverage at the lowest reliable layer that prevents recurrence.<br>Run focused tests, the proportionate full suite, and the affected workflow; record commands, run links, residual platform validation, and cleanup artifacts.<br>Do not weaken security gates, skip required checks, or broaden permissions merely to make the workflow pass. | `fix/descriptive-workflow-failure` | Pending |
+| 1 | _Short outcome-oriented task name._ | _State the observed defect, risk, waste, or unmet need and its impact._ | _Describe the relevant behavior, code path, ownership, constraints, and evidence as they exist before this task._ | 1. _State the first measurable end condition._<br><br>2. _Identify required tests, safety properties, or user-visible behavior._<br><br>3. _State boundaries that must hold._ | 1. _List the first concrete implementation or verification action._<br><br>2. _Identify migrations, tests, documentation, cleanup, or external coordination._<br><br>3. _Record dependencies on earlier rows._ | `type/descriptive-branch` | Pending |
+| 2 | _Next task in implementation sequence._ | _Why this task is needed._ | _What exists now._ | 1. _State the first required outcome._<br><br>2. _State the next required outcome._ | 1. _Describe the first implementation action._<br><br>2. _Describe the next verification action._ | `type/descriptive-branch` | Pending |
+| 3 | Clean up a failed build or release workflow. | A build or release failure can recur when the failing workflow and step are repaired without converting the failure path into automated regression coverage. | _Identify the failed run, workflow, job, step, relevant implementation, existing tests, and evidence explaining why the current checks did not prevent or clearly diagnose the failure._ | 1. The root cause is fixed and the most focused practical automated test fails on the former defect and passes with the fix.<br><br>2. The affected workflow succeeds and related tests remain green.<br><br>3. The work record links the validating run.<br><br>4. If reliable automation is impossible, the row records concrete evidence and the smallest repeatable manual verification instead of silently omitting coverage. | 1. Inspect the complete failed workflow logs and the exact workflow/script/code path before changing behavior.<br><br>2. Reproduce or isolate the failure locally when practical and distinguish a product defect from runner/service instability.<br><br>3. Implement the smallest root-cause fix.<br><br>4. Add or strengthen unit, integration, workflow-contract, packaging, or platform-smoke coverage at the lowest reliable layer that prevents recurrence.<br><br>5. Run focused tests, the proportionate full suite, and the affected workflow; record commands, run links, residual platform validation, and cleanup artifacts.<br><br>6. Do not weaken security gates, skip required checks, or broaden permissions merely to make the workflow pass. | `fix/descriptive-workflow-failure` | Pending |
 
 ## Work-document maintenance
 

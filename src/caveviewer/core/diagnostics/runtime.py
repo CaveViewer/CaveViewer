@@ -1,10 +1,10 @@
-"""Durable Windows runtime diagnostics for interactive viewer sessions.
+"""Durable runtime diagnostics for interactive viewer sessions.
 
-The normal Windows package has no console. Once the Tk splash has been shown,
-the short-lived startup log intentionally closes, so a later OpenGL/window
-failure otherwise has nowhere durable to report. This module owns one
-user-profile log for the application's lifetime, plus an optional
-faulthandler target for fatal native failures such as an access violation.
+Packaged applications may have no useful console, and platform-specific state
+directories can be difficult for users to locate. This module owns one
+user-profile log for the application's lifetime on every supported desktop,
+plus an optional faulthandler target for fatal native failures such as an
+access violation.
 
 It deliberately remains GUI-free: application composition decides when to
 create it, while GUI code may record narrow viewer-window checkpoints through
@@ -22,10 +22,15 @@ import threading
 from pathlib import Path
 from typing import Any
 
-from caveviewer.storage_paths import resolve_application_paths
+from caveviewer.core.diagnostics.catalog import (
+    DEFAULT_SESSION_LOG_RETENTION,
+    SESSION_LOG_PREFIX,
+    application_log_directory,
+    prune_session_logs,
+)
 
 
-RUNTIME_DIAGNOSTICS_LOG_PREFIX = "viewer-session-"
+RUNTIME_DIAGNOSTICS_LOG_PREFIX = SESSION_LOG_PREFIX
 
 _ACTIVE_RUNTIME_DIAGNOSTICS: "RuntimeDiagnostics | None" = None
 _ACTIVE_RUNTIME_DIAGNOSTICS_LOCK = threading.RLock()
@@ -170,19 +175,16 @@ def create_runtime_diagnostics(
     platform_name: str | None = None,
     path: str | os.PathLike[str] | None = None,
     fault_handler: Any = faulthandler,
+    retained_session_logs: int = DEFAULT_SESSION_LOG_RETENTION,
 ) -> RuntimeDiagnostics | None:
-    """Create Windows-only post-splash diagnostics without blocking startup."""
+    """Create cross-platform session diagnostics without blocking startup."""
 
     active_platform = sys.platform if platform_name is None else platform_name
-    if not active_platform.startswith("win"):
-        return None
-
     try:
         resolved_path = (
             Path(path)
             if path is not None
-            else resolve_application_paths(platform_name=active_platform).state_dir
-            / "diagnostics"
+            else application_log_directory(platform_name=active_platform)
             / f"{RUNTIME_DIAGNOSTICS_LOG_PREFIX}{_safe_session_id(session_id)}.log"
         )
         resolved_path.parent.mkdir(parents=True, exist_ok=True)
@@ -197,6 +199,11 @@ def create_runtime_diagnostics(
         "runtime_diagnostics_created",
         process_id=os.getpid(),
         session_id=session_id,
+    )
+    prune_session_logs(
+        resolved_path.parent,
+        keep=retained_session_logs,
+        preserve=(resolved_path,),
     )
     return diagnostics
 
