@@ -518,7 +518,13 @@ class HelpPanel:
 
         button = self._troubleshooting_button
         if button is not None:
-            set_dialog_action_button(button, enabled=state.can_reveal)
+            # Native Tk buttons created disabled intentionally receive no
+            # command. Restore it when refreshed log state enables the action.
+            set_dialog_action_button(
+                button,
+                command=self._show_latest_log,
+                enabled=state.can_reveal,
+            )
             canvas.create_window(
                 0,
                 y,
@@ -567,6 +573,7 @@ class HelpPanel:
         if copy_button is not None:
             set_dialog_action_button(
                 copy_button,
+                command=self._copy_last_error,
                 enabled=state.error_excerpt is not None,
             )
             try:

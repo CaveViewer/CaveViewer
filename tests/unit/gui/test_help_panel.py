@@ -158,7 +158,9 @@ def test_help_panel_exposes_troubleshooting_tab_and_log_action():
 
     assert 'TopTab("troubleshooting", "Troubleshooting")' in init_source
     assert '"Show latest log"' in create_source
-    assert "set_dialog_action_button(button, enabled=state.can_reveal)" in render_source
+    assert "command=self._show_latest_log" in render_source
+    assert "enabled=state.can_reveal" in render_source
+    assert "command=self._copy_last_error" in render_source
     assert "APPLICATION LOGS" in render_source
     assert "LAST ERROR" in render_source
     assert "state.error_excerpt" in render_source
