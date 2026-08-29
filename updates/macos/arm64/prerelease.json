@@ -1,13 +1,13 @@
 {
   "architecture": "arm64",
-  "download_size_bytes": 59037251,
-  "download_size_bytes_macosx_dmg": 59037251,
-  "download_url": "https://github.com/CaveViewer/CaveViewer/releases/download/v1.0.93/CaveViewer-1.0.93-macos-arm64.dmg",
-  "download_url_macosx_dmg": "https://github.com/CaveViewer/CaveViewer/releases/download/v1.0.93/CaveViewer-1.0.93-macos-arm64.dmg",
-  "latest_version": "1.0.93",
+  "download_size_bytes": 61584814,
+  "download_size_bytes_macosx_dmg": 61584814,
+  "download_url": "https://github.com/CaveViewer/CaveViewer/releases/download/v1.0.94/CaveViewer-1.0.94-macos-arm64.dmg",
+  "download_url_macosx_dmg": "https://github.com/CaveViewer/CaveViewer/releases/download/v1.0.94/CaveViewer-1.0.94-macos-arm64.dmg",
+  "latest_version": "1.0.94",
   "platform": "macos",
   "release_channel": "preview",
-  "release_notes": "CaveViewer preview release",
-  "sha256": "dfe547b0155e71e082d60e17c469d2a7566f8369a1c8c240a43450aca6ec95b8",
-  "sha256_macosx_dmg": "dfe547b0155e71e082d60e17c469d2a7566f8369a1c8c240a43450aca6ec95b8"
+  "release_notes": "Fixed bugs in cave slicing functionality.",
+  "sha256": "8e0364b2a5e3739740bbf32cc3aa9a20c34aad4d02faa5bd6250e1af00949120",
+  "sha256_macosx_dmg": "8e0364b2a5e3739740bbf32cc3aa9a20c34aad4d02faa5bd6250e1af00949120"
 }
