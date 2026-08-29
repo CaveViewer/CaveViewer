@@ -212,6 +212,20 @@ environment variables, and `caveviewer-chunker` CLI options, see
 | Recordings folder | `CAVEVIEWER_RECORDING_DIR` | `~/Movies/CaveViewer` | writable folder, or a folder that can be created | Where saved recordings are stored. |
 | Downloaded maps folder | `CAVEVIEWER_MAP_LIBRARY_DIR` | `~/Downloads` | writable folder, or a folder that can be created | Where downloaded Map Library maps are stored. |
 
+## Troubleshooting and Logs
+
+Open **Help > Troubleshooting** from CaveViewer's startup window when you need
+diagnostic information. **Show latest log** opens the application log folder
+and selects the newest session log in Explorer, Finder, or the Linux file
+browser. The same tab shows the last recorded error with its three preceding
+log lines; use **Copy** beside **Last error** to copy that excerpt for a support
+request.
+
+If the current session has not written a log or error yet, the tab shows an
+empty-state explanation instead of opening an unrelated file. CaveViewer keeps
+the newest ten human-readable session logs and does not expose its structured
+JSONL diagnostics through this action.
+
 ## Contributing
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the change workflow and

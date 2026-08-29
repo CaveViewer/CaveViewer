@@ -873,6 +873,9 @@ def test_splash_navigation_actions_are_keyboard_accessible_without_fallthrough()
     assert "PreferencesPanel(" in source
     assert "HelpPanel(" in source
     assert "keyboard_control_sections(presentation_profile)" in source
+    assert "TroubleshootingLogController(" in source
+    assert "application_log_directory(" in source
+    assert "platform_runtime.diagnostic_log_reveal_adapter" in source
     assert "_build_themed_about_content(" in source
     assert "show_close=False" in source
     assert "def _request_leave_preferences" in source
