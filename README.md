@@ -194,6 +194,21 @@ preference filenames are not discovered.
 - Import section controls cache-build/import behavior.
 - Storage section controls folders used when saving recordings and downloaded
   map-library entries.
+- Backup & restore exports a complete `preferences.json`, imports a shared
+  file for review, or stages the built-in defaults. Imported and restored
+  values are not saved until you select **Apply**; **Cancel** keeps the
+  previously saved preferences.
+
+Exports open a native Save dialog in a user-visible location. Imports use the
+native Open dialog and accept UTF-8 JSON objects up to 256 KiB. Missing or
+invalid individual values use the current defaults without discarding other
+valid values; unknown keys are ignored. An unreadable, malformed, or non-object
+file is rejected without changing the form or saved preferences.
+
+The first launch that finds `advanced_settings.json` beside a missing
+`preferences.json` renames it automatically. If both exist, `preferences.json`
+wins and the older file is left untouched. The still older
+`.caveviewer_advanced_settings.json` filename is not supported.
 
 ### Rendering, Import, and Streaming
 

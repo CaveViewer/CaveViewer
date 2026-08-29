@@ -879,6 +879,15 @@ readable as legacy locations. On Linux, old `~/.caveviewer/` and
 map-library location when possible. A generated cache is self-contained:
 texture files are staged beside its chunks before the manifest becomes visible.
 
+Application preferences use `preferences.json`. When that file is absent, a
+sibling `advanced_settings.json` is renamed once before loading. The current
+file takes precedence when both exist; a failed rename leaves the old file
+readable for that run and is retried later. `.caveviewer_advanced_settings.json`
+and other older preference filenames are not discovered. Users can create or
+consume portable copies under **Preferences > Backup & restore**. Import and
+restore stage values until Apply, invalid individual values use defaults, and
+malformed files leave both the form and persisted preferences unchanged.
+
 When a Windows build consumes CPU without showing its Tk splash, read
 `%USERPROFILE%\.caveviewer\diagnostics\startup.log`. The file contains the last
 flushed startup checkpoint and, after 20 seconds without a visible splash, one

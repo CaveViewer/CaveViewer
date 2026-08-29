@@ -79,6 +79,14 @@ CLI override, primary variable, legacy alias, and built-in order. Packaging and
 development-shell variables are intentionally excluded from the application
 snapshot.
 
+`caveviewer.core.preferences.transfer` owns the bounded, GUI-free portable JSON
+contract. It atomically exports complete immutable snapshots, rejects malformed
+documents, ignores unknown keys, and resolves missing or invalid declared values
+independently to defaults. `caveviewer.gui.preferences_workflow` coordinates
+those file operations, while `PreferencesPanel` owns native chooser presentation
+and stages imported/default snapshots until Apply. Core preference code does not
+depend on Tk or desktop-service adapters.
+
 `caveviewer.app` owns a `RuntimeSettingsSession` for the interactive process.
 It replaces its snapshot after a successful Preferences save and passes the
 current immutable value to platform policy, splash composition, Map Library,
