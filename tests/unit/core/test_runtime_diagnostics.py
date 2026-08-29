@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import os
 
-from caveviewer.core.diagnostics import runtime
+from caveviewer.core.diagnostics import runtime, startup
 
 
 class _FaultHandler:
@@ -127,6 +127,66 @@ def test_runtime_diagnostics_expire_session_logs_older_than_one_day(tmp_path):
     assert not expired_log.exists()
     assert not expired_log.with_suffix(".jsonl").exists()
     assert current_path.exists()
+
+
+def test_runtime_diagnostics_report_removed_logs_to_startup_log(tmp_path):
+    diagnostics_directory = tmp_path / "diagnostics"
+    diagnostics_directory.mkdir()
+    expired_log = diagnostics_directory / "viewer-session-expired.log"
+    expired_jsonl = expired_log.with_suffix(".jsonl")
+    expired_log.write_text("expired", encoding="utf-8")
+    expired_jsonl.write_text("expired", encoding="utf-8")
+    os.utime(expired_log, (1, 1))
+    os.utime(expired_jsonl, (1, 1))
+    startup_path = diagnostics_directory / "startup.log"
+    startup_diagnostics = startup.StartupDiagnostics(
+        startup_path,
+        fault_handler=_FaultHandler(),
+    )
+    startup.set_active_startup_diagnostics(startup_diagnostics)
+    try:
+        diagnostics = runtime.create_runtime_diagnostics(
+            platform_name="win32",
+            path=diagnostics_directory / "viewer-session-current.log",
+            session_id="current",
+            fault_handler=_FaultHandler(),
+        )
+        assert diagnostics is not None
+        diagnostics.close()
+    finally:
+        startup.set_active_startup_diagnostics(None)
+        startup_diagnostics.close()
+
+    output = startup_path.read_text(encoding="utf-8")
+    assert "INFO: stage=stale_session_logs_removed removed_file_count=2" in output
+
+
+def test_runtime_diagnostics_do_not_report_cleanup_when_nothing_was_removed(
+    tmp_path,
+):
+    diagnostics_directory = tmp_path / "diagnostics"
+    diagnostics_directory.mkdir()
+    startup_path = diagnostics_directory / "startup.log"
+    startup_diagnostics = startup.StartupDiagnostics(
+        startup_path,
+        fault_handler=_FaultHandler(),
+    )
+    startup.set_active_startup_diagnostics(startup_diagnostics)
+    try:
+        diagnostics = runtime.create_runtime_diagnostics(
+            platform_name="win32",
+            path=diagnostics_directory / "viewer-session-current.log",
+            session_id="current",
+            fault_handler=_FaultHandler(),
+        )
+        assert diagnostics is not None
+        diagnostics.close()
+    finally:
+        startup.set_active_startup_diagnostics(None)
+        startup_diagnostics.close()
+
+    output = startup_path.read_text(encoding="utf-8")
+    assert "stale_session_logs_removed" not in output
 
 
 def test_runtime_diagnostics_preserve_an_existing_fault_handler(tmp_path):

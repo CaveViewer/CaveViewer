@@ -29,6 +29,7 @@ from caveviewer.core.diagnostics.catalog import (
     application_log_directory,
     prune_session_logs,
 )
+from caveviewer.core.diagnostics.startup import record_startup_stage
 
 
 RUNTIME_DIAGNOSTICS_LOG_PREFIX = SESSION_LOG_PREFIX
@@ -202,12 +203,18 @@ def create_runtime_diagnostics(
         process_id=os.getpid(),
         session_id=session_id,
     )
-    prune_session_logs(
+    removed_logs = prune_session_logs(
         resolved_path.parent,
         keep=retained_session_logs,
         preserve=(resolved_path,),
         max_age_seconds=session_log_max_age_seconds,
     )
+    # Make startup retention observable without writing a message on every run.
+    if removed_logs:
+        record_startup_stage(
+            "stale_session_logs_removed",
+            removed_file_count=len(removed_logs),
+        )
     return diagnostics
 
 
