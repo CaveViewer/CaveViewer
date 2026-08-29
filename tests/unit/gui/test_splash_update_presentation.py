@@ -706,28 +706,34 @@ def test_launch_splash_waits_only_for_the_remaining_minimum_duration():
 
 
 def test_launch_splash_uses_the_loading_exploration_tagline():
-    source = inspect.getsource(splash_screen._build_launch_surface)
+    source = inspect.getsource(splash_screen._render_launch_content)
 
     assert 'text="Preparing to explore what lies beneath…"' in source
     assert 'text="Starting…"' not in source
 
 
-def test_launch_indicator_draws_an_indeterminate_amber_arc():
+def test_launch_indicator_uses_the_anti_aliased_progress_ring_renderer(monkeypatch):
+    source = inspect.getsource(splash_screen._draw_launch_indicator_frame)
     calls = []
 
     class _Canvas:
-        def cget(self, option):
-            assert option == "width"
+        def winfo_width(self):
+            return 132
+
+        def winfo_height(self):
             return 132
 
         def delete(self, tag):
             calls.append(("delete", tag))
 
-        def create_oval(self, *coordinates, **options):
-            calls.append(("oval", coordinates, options))
+        def create_image(self, *coordinates, **options):
+            calls.append(("image", coordinates, options))
 
-        def create_arc(self, *coordinates, **options):
-            calls.append(("arc", coordinates, options))
+    def _progress_ring_photo(canvas, **options):
+        calls.append(("ring", canvas, options))
+        return "ring-photo"
+
+    monkeypatch.setattr(splash_screen, "progress_ring_photo", _progress_ring_photo)
 
     splash_screen._draw_launch_indicator_frame(
         _Canvas(),
@@ -735,12 +741,25 @@ def test_launch_indicator_draws_an_indeterminate_amber_arc():
         px=lambda value: int(value),
     )
 
+    assert "progress_ring_photo(" in source
+    assert "create_oval(" not in source
+    assert "create_arc(" not in source
     assert calls[0] == ("delete", "launch_indicator")
-    assert calls[1][0] == "oval"
-    assert calls[2][0] == "arc"
-    assert calls[2][2]["start"] == 66
-    assert calls[2][2]["extent"] == -splash_screen._LAUNCH_INDICATOR_ARC_DEGREES
-    assert calls[2][2]["outline"] == splash_screen._BUTTON_BG
+    assert calls[1][0] == "ring"
+    assert calls[1][2] == {
+        "image_size": 95,
+        "ring_diameter": 91,
+        "stroke_width": 2,
+        "track_color": splash_screen.DARK_THEME.entry_border,
+        "fill_color": splash_screen._BUTTON_BG,
+        "start_degrees": 66.0,
+        "extent_degrees": -splash_screen._LAUNCH_INDICATOR_ARC_DEGREES,
+    }
+    assert calls[2] == (
+        "image",
+        (66.0, 66.0),
+        {"image": "ring-photo", "tags": "launch_indicator"},
+    )
 
 
 def test_launch_logo_suppresses_only_amber_pixels_like_the_map_loader():
@@ -766,9 +785,11 @@ def test_launch_logo_suppresses_only_amber_pixels_like_the_map_loader():
 
 def test_launch_surface_replaces_the_logo_amber_with_one_indicator_ring():
     source = inspect.getsource(splash_screen._build_launch_surface)
+    content_source = inspect.getsource(splash_screen._render_launch_content)
 
     assert "suppress_amber=True" in source
-    assert "_draw_launch_indicator_frame(" in source
+    assert "_draw_launch_indicator_frame(" in content_source
+    assert "_render_launch_background(" in source
 
 
 def test_splash_navigation_actions_are_keyboard_accessible_without_fallthrough():
@@ -958,7 +979,8 @@ def test_splash_navigation_uses_a_quiet_rail_and_lower_app_status():
     assert 'update_label.pack(side="left", anchor="w", fill="x", expand=True)' in source
     assert 'update_cancel_button.pack(side="right", padx=(px(6), 0))' in source
     assert "def _draw_update_cancel_button(progress_fraction: float)" in source
-    assert "extent=-360 * clamped" in source
+    assert "extent_degrees=-360 * clamped" in source
+    assert "progress_ring_photo(" in source
     assert "update_progress_canvas" not in source
     footer_action_source = source[
         source.index("update_action_label = tk.Label(") : source.index(
@@ -1119,7 +1141,7 @@ def test_splash_map_library_uses_navigation_and_an_overflow_cue():
     assert "reserve_progress=True" not in panel_source
     assert "_create_action_button" in panel_source
     assert "_draw_action_stop_progress" in panel_source
-    assert "button.create_arc(" in panel_source
+    assert "progress_ring_photo(" in panel_source
     assert "button.create_rectangle(" in panel_source
     assert "_draw_download" in panel_source
     download_source = inspect.getsource(map_library_panel.MapLibraryPanel._draw_download)
@@ -1144,8 +1166,9 @@ def test_splash_map_library_uses_navigation_and_an_overflow_cue():
     assert "Downloading… %" not in panel_source
     assert "Local-only former library maps" not in source
     assert "No longer a part of the standard library" in source
-    assert "create_polygon(" in section_source
-    assert "button.create_arc(" in panel_source
+    assert "self._draw_vector_photo(" in section_source
+    assert "create_polygon(" not in section_source
+    assert "progress_ring_photo(" in panel_source
     assert 'text="Hide"' not in section_source
     assert 'text="Show"' not in section_source
 
@@ -1204,11 +1227,11 @@ def test_map_library_sections_start_expanded_and_toggle_in_place():
     assert len(sync_calls) == 2
 
 
-def test_map_library_section_headers_use_adjacent_disclosure_triangles():
+def test_map_library_section_headers_use_adjacent_disclosure_triangles(monkeypatch):
     class _FakeHeader:
         def __init__(self) -> None:
             self.text_calls = []
-            self.polygon_calls = []
+            self.image_calls = []
 
         def delete(self, _tag) -> None:
             pass
@@ -1219,6 +1242,9 @@ def test_map_library_section_headers_use_adjacent_disclosure_triangles():
         def winfo_height(self) -> int:
             return 24
 
+        def cget(self, option) -> int:
+            return 320 if option == "width" else 24
+
         def create_text(self, *coordinates, **options):
             self.text_calls.append((coordinates, options))
             return f"text-{len(self.text_calls)}"
@@ -1226,8 +1252,8 @@ def test_map_library_section_headers_use_adjacent_disclosure_triangles():
         def bbox(self, _item):
             return (2, 0, 118, 24)
 
-        def create_polygon(self, *coordinates, **options) -> None:
-            self.polygon_calls.append((coordinates, options))
+        def create_image(self, *coordinates, **options) -> None:
+            self.image_calls.append((coordinates, options))
 
     panel = object.__new__(map_library_panel.MapLibraryPanel)
     panel._widget_exists = lambda _widget: True
@@ -1246,6 +1272,13 @@ def test_map_library_section_headers_use_adjacent_disclosure_triangles():
         content=object(),
         title="CaveViewer Maps",
     )
+    vector_calls = []
+
+    def capture_vector_icon(_widget, **options):
+        vector_calls.append(options)
+        return object()
+
+    monkeypatch.setattr(map_library_panel, "vector_icon_photo", capture_vector_icon)
 
     panel._draw_section_header(section)
     section.expanded = False
@@ -1255,16 +1288,24 @@ def test_map_library_section_headers_use_adjacent_disclosure_triangles():
         "CaveViewer Maps",
         "CaveViewer Maps",
     ]
-    assert len(header.polygon_calls) == 2
-    expanded_points, expanded_options = header.polygon_calls[0]
-    collapsed_points, collapsed_options = header.polygon_calls[1]
-    assert expanded_points[1] == expanded_points[3] < expanded_points[5]
-    assert collapsed_points[0] == collapsed_points[2] < collapsed_points[4]
-    assert expanded_options == collapsed_options == {
-        "fill": "#ffffff",
-        "outline": "",
-        "tags": "cv_section_header",
-    }
+    assert len(header.image_calls) == 2
+    assert len(vector_calls) == 2
+    expanded = vector_calls[0]["polygons"][0]
+    collapsed = vector_calls[1]["polygons"][0]
+    assert expanded.points[0][1] == expanded.points[1][1] < expanded.points[2][1]
+    assert collapsed.points[0][0] == collapsed.points[1][0] < collapsed.points[2][0]
+    assert expanded.fill_color == collapsed.fill_color == "#ffffff"
+
+
+def test_splash_and_library_curved_canvas_art_uses_antialiased_vector_photos():
+    navigation_source = inspect.getsource(splash_screen.show_splash_screen)
+    panel_source = inspect.getsource(map_library_panel.MapLibraryPanel)
+
+    assert "vector_icon_photo(" in navigation_source
+    assert "vector_icon_photo(" in panel_source
+    for primitive in ("create_line(", "create_arc(", "create_oval(", "create_polygon("):
+        assert primitive not in navigation_source
+        assert primitive not in panel_source
 
 
 def test_former_standard_row_title_uses_a_muted_style_without_moving_the_row():
@@ -1389,7 +1430,8 @@ def test_map_library_rows_use_subtle_overflow_menu_for_management():
     assert "desktop_services.choose_file(" not in workflow_source
     assert "platform_runtime=platform_runtime" in splash_source
     assert "Open" in source
-    assert "button.create_oval(" in panel_source
+    assert "button.create_oval(" not in panel_source
+    assert "vector_icon_photo(" in panel_source
     assert 'button.pack(side="right", padx=(0, self._px(12))' in panel_source
     assert "padx=(0, self._px(8))" in panel_source
     assert "_install_menu_dismissal_bindings" in panel_source
@@ -1580,6 +1622,9 @@ def test_map_library_open_map_action_uses_the_existing_folder_callback(monkeypat
         def create_text(self, *coordinates, **options) -> None:
             self.draw_calls.append(("text", coordinates, options))
 
+        def create_image(self, *coordinates, **options) -> None:
+            self.draw_calls.append(("image", coordinates, options))
+
     canvases = []
     monkeypatch.setattr(
         map_library_panel.tk,
@@ -1587,6 +1632,11 @@ def test_map_library_open_map_action_uses_the_existing_folder_callback(monkeypat
         lambda *args, **kwargs: (
             canvases.append(_FakeCanvas(*args, **kwargs)) or canvases[-1]
         ),
+    )
+    monkeypatch.setattr(
+        map_library_panel,
+        "vector_icon_photo",
+        lambda _widget, **_options: object(),
     )
     opened = []
     closed_menus = []

@@ -10,6 +10,14 @@ from caveviewer.gui.scrollable_content import (
     CanvasScrollbarStyle,
     CanvasVerticalScrollbar,
 )
+from caveviewer.gui.splash_visuals import (
+    VectorArc,
+    VectorEllipse,
+    VectorPath,
+    VectorPolygon,
+    progress_ring_photo,
+    vector_icon_photo,
+)
 
 
 @dataclass(frozen=True)
@@ -675,6 +683,7 @@ class MapLibraryPanel:
         if not self._widget_exists(action):
             return
         action.delete("cv_open_map_action")
+        action._cv_vector_photos = []
         width = max(1, action.winfo_width())
         height = max(1, action.winfo_height())
         style = self._style
@@ -700,28 +709,37 @@ class MapLibraryPanel:
             outline="",
             tags="cv_open_map_action",
         )
-        action.create_line(
-            icon_left,
-            icon_top + self._px(5),
-            icon_left + self._px(8),
-            icon_top + self._px(5),
-            icon_left + self._px(11),
-            icon_top,
-            icon_tab_right,
-            icon_top,
-            icon_right,
-            icon_top + self._px(5),
-            icon_right,
-            icon_bottom,
-            icon_left,
-            icon_bottom,
-            icon_left,
-            icon_top + self._px(5),
-            fill=style.title_color,
-            width=stroke_width,
-            capstyle="round",
-            joinstyle="round",
+        self._draw_vector_photo(
+            action,
+            image_size=(width, height),
+            center_x=width / 2,
+            center_y=height / 2,
             tags="cv_open_map_action",
+            paths=(
+                VectorPath(
+                    points=(
+                        (icon_left, icon_top + self._px(5)),
+                        (icon_left + self._px(8), icon_top + self._px(5)),
+                        (icon_left + self._px(11), icon_top),
+                        (icon_tab_right, icon_top),
+                        (icon_right, icon_top + self._px(5)),
+                        (icon_right, icon_bottom),
+                        (icon_left, icon_bottom),
+                    ),
+                    color=style.title_color,
+                    width=stroke_width,
+                    closed=True,
+                ),
+                VectorPath(
+                    points=(
+                        (chevron_x - chevron_size, height / 2 - chevron_size),
+                        (chevron_x, height / 2),
+                        (chevron_x - chevron_size, height / 2 + chevron_size),
+                    ),
+                    color=style.progress_fill_color,
+                    width=stroke_width,
+                ),
+            ),
         )
         action.create_text(
             text_left,
@@ -739,19 +757,6 @@ class MapLibraryPanel:
             font=style.supporting_font,
             fill=style.metadata_color,
             anchor="w",
-            tags="cv_open_map_action",
-        )
-        action.create_line(
-            chevron_x - chevron_size,
-            height / 2 - chevron_size,
-            chevron_x,
-            height / 2,
-            chevron_x - chevron_size,
-            height / 2 + chevron_size,
-            fill=style.progress_fill_color,
-            width=stroke_width,
-            capstyle="round",
-            joinstyle="round",
             tags="cv_open_map_action",
         )
 
@@ -815,6 +820,8 @@ class MapLibraryPanel:
         if not self._widget_exists(header):
             return
         header.delete("cv_section_header")
+        header._cv_vector_photos = []
+        width = self._canvas_dimension(header, "width")
         height = max(1, header.winfo_height())
         title_item = header.create_text(
             self._px(2),
@@ -855,11 +862,18 @@ class MapLibraryPanel:
                 triangle_center_x + triangle_size / 2,
                 triangle_center_y,
             )
-        header.create_polygon(
-            *points,
-            fill=self._style.instruction_color,
-            outline="",
+        self._draw_vector_photo(
+            header,
+            image_size=(width, height),
+            center_x=width / 2,
+            center_y=height / 2,
             tags="cv_section_header",
+            polygons=(
+                VectorPolygon(
+                    points=tuple(zip(points[::2], points[1::2])),
+                    fill_color=self._style.instruction_color,
+                ),
+            ),
         )
 
     def _create_empty_note(
@@ -1112,6 +1126,7 @@ class MapLibraryPanel:
             return
 
         button.delete("cv_action_content")
+        button._cv_vector_photos = []
         width = self._canvas_dimension(button, "width")
         height = self._canvas_dimension(button, "height")
         visual = getattr(button, "_cv_action_visual", None)
@@ -1136,18 +1151,23 @@ class MapLibraryPanel:
 
     def _draw_chevron_right(self, button, width: int, height: int, color: str) -> None:
         inset = max(2, self._px(7))
-        button.create_line(
-            width / 2 - inset / 3,
-            height / 2 - inset / 2,
-            width / 2 + inset / 3,
-            height / 2,
-            width / 2 - inset / 3,
-            height / 2 + inset / 2,
-            fill=color,
-            width=max(1, self._px(self._style.action_icon_stroke_width)),
-            capstyle="round",
-            joinstyle="round",
+        self._draw_vector_photo(
+            button,
+            image_size=(width, height),
+            center_x=width / 2,
+            center_y=height / 2,
             tags="cv_action_content",
+            paths=(
+                VectorPath(
+                    points=(
+                        (width / 2 - inset / 3, height / 2 - inset / 2),
+                        (width / 2 + inset / 3, height / 2),
+                        (width / 2 - inset / 3, height / 2 + inset / 2),
+                    ),
+                    color=color,
+                    width=max(1, self._px(self._style.action_icon_stroke_width)),
+                ),
+            ),
         )
 
     def _draw_download(self, button, width: int, height: int, color: str) -> None:
@@ -1155,42 +1175,41 @@ class MapLibraryPanel:
         stroke_width = max(1, self._px(self._style.action_icon_stroke_width))
         center_x = width / 2
         center_y = height / 2
-        button.create_line(
-            center_x,
-            center_y - self._px(8),
-            center_x,
-            center_y + self._px(2),
-            fill=color,
-            width=stroke_width,
-            capstyle="round",
+        self._draw_vector_photo(
+            button,
+            image_size=(width, height),
+            center_x=center_x,
+            center_y=center_y,
             tags="cv_action_content",
-        )
-        button.create_line(
-            center_x - self._px(4),
-            center_y - self._px(2),
-            center_x,
-            center_y + self._px(2),
-            center_x + self._px(4),
-            center_y - self._px(2),
-            fill=color,
-            width=stroke_width,
-            capstyle="round",
-            joinstyle="round",
-            tags="cv_action_content",
-        )
-        button.create_line(
-            center_x - self._px(7),
-            center_y + self._px(6),
-            center_x - self._px(7),
-            center_y + self._px(9),
-            center_x + self._px(7),
-            center_y + self._px(9),
-            center_x + self._px(7),
-            center_y + self._px(6),
-            fill=color,
-            width=stroke_width,
-            capstyle="round",
-            tags="cv_action_content",
+            paths=(
+                VectorPath(
+                    points=(
+                        (center_x, center_y - self._px(8)),
+                        (center_x, center_y + self._px(2)),
+                    ),
+                    color=color,
+                    width=stroke_width,
+                ),
+                VectorPath(
+                    points=(
+                        (center_x - self._px(4), center_y - self._px(2)),
+                        (center_x, center_y + self._px(2)),
+                        (center_x + self._px(4), center_y - self._px(2)),
+                    ),
+                    color=color,
+                    width=stroke_width,
+                ),
+                VectorPath(
+                    points=(
+                        (center_x - self._px(7), center_y + self._px(6)),
+                        (center_x - self._px(7), center_y + self._px(9)),
+                        (center_x + self._px(7), center_y + self._px(9)),
+                        (center_x + self._px(7), center_y + self._px(6)),
+                    ),
+                    color=color,
+                    width=stroke_width,
+                ),
+            ),
         )
 
     def _draw_retry(self, button, width: int, height: int, color: str) -> None:
@@ -1198,30 +1217,33 @@ class MapLibraryPanel:
         radius = max(2, self._px(7))
         center_x = width / 2
         center_y = height / 2
-        button.create_arc(
-            center_x - radius,
-            center_y - radius,
-            center_x + radius,
-            center_y + radius,
-            start=38,
-            extent=282,
-            style="arc",
-            outline=color,
-            width=stroke_width,
+        self._draw_vector_photo(
+            button,
+            image_size=(width, height),
+            center_x=center_x,
+            center_y=center_y,
             tags="cv_action_content",
-        )
-        button.create_line(
-            center_x + self._px(4),
-            center_y - self._px(7),
-            center_x + self._px(8),
-            center_y - self._px(7),
-            center_x + self._px(8),
-            center_y - self._px(3),
-            fill=color,
-            width=stroke_width,
-            capstyle="round",
-            joinstyle="round",
-            tags="cv_action_content",
+            arcs=(
+                VectorArc(
+                    center=(center_x, center_y),
+                    radius=radius - stroke_width / 2,
+                    start_degrees=38,
+                    extent_degrees=282,
+                    color=color,
+                    width=stroke_width,
+                ),
+            ),
+            paths=(
+                VectorPath(
+                    points=(
+                        (center_x + self._px(4), center_y - self._px(7)),
+                        (center_x + self._px(8), center_y - self._px(7)),
+                        (center_x + self._px(8), center_y - self._px(3)),
+                    ),
+                    color=color,
+                    width=stroke_width,
+                ),
+            ),
         )
 
     def _draw_action_stop_progress(
@@ -1258,43 +1280,32 @@ class MapLibraryPanel:
         stop_size = self._px(style.action_stop_size)
         center_x = width / 2
         center_y = height / 2
-        radius = diameter / 2
-        inset = stroke_width / 2
-        x0 = center_x - radius + inset
-        y0 = center_y - radius + inset
-        x1 = center_x + radius - inset
-        y1 = center_y + radius - inset
 
         track_color = style.progress_track_color
         progress_fill_color = (
             style.progress_fill_color if enabled else style.disabled_button_fg
         )
         stop_fill_color = style.button_fg if enabled else style.disabled_button_fg
-        button.create_oval(
-            x0,
-            y0,
-            x1,
-            y1,
-            outline=track_color,
-            width=stroke_width,
-            tags="cv_action_content",
-        )
-
         fraction = getattr(button, "_cv_progress_fraction", 0.0)
         if fraction is None:
             extent = -100
         else:
             extent = -max(2, int(round(359 * max(0.0, min(1.0, fraction)))))
-        button.create_arc(
-            x0,
-            y0,
-            x1,
-            y1,
-            start=90,
-            extent=extent,
-            style="arc",
-            outline=progress_fill_color,
-            width=stroke_width,
+        ring_photo = progress_ring_photo(
+            button,
+            image_size=max(1, int(round(diameter + stroke_width))),
+            ring_diameter=diameter,
+            stroke_width=stroke_width,
+            track_color=track_color,
+            fill_color=progress_fill_color,
+            start_degrees=90,
+            extent_degrees=extent,
+        )
+        button._cv_progress_ring_photo = ring_photo
+        button.create_image(
+            center_x,
+            center_y,
+            image=ring_photo,
             tags="cv_action_content",
         )
 
@@ -1338,6 +1349,38 @@ class MapLibraryPanel:
             return max(1, int(float(canvas.cget(option))))
         except (tk.TclError, TypeError, ValueError):
             return 1
+
+    @staticmethod
+    def _draw_vector_photo(
+        canvas,
+        *,
+        image_size: tuple[int, int],
+        center_x: float,
+        center_y: float,
+        tags: str,
+        paths: tuple[VectorPath, ...] = (),
+        arcs: tuple[VectorArc, ...] = (),
+        polygons: tuple[VectorPolygon, ...] = (),
+        ellipses: tuple[VectorEllipse, ...] = (),
+    ) -> None:
+        """Place one retained anti-aliased vector image on a Canvas control."""
+        photo = vector_icon_photo(
+            canvas,
+            image_size=image_size,
+            paths=paths,
+            arcs=arcs,
+            polygons=polygons,
+            ellipses=ellipses,
+        )
+        photos = list(getattr(canvas, "_cv_vector_photos", ()))
+        photos.append(photo)
+        canvas._cv_vector_photos = photos
+        canvas.create_image(
+            center_x,
+            center_y,
+            image=photo,
+            tags=tags,
+        )
 
     def _set_action_button(
         self,
@@ -1503,6 +1546,7 @@ class MapLibraryPanel:
         if not self._widget_exists(button):
             return
         button.delete("cv_overflow_content")
+        button._cv_vector_photos = []
         if not getattr(button, "_cv_has_menu_actions", False):
             return
         color = (
@@ -1516,16 +1560,25 @@ class MapLibraryPanel:
         center_x = width / 2
         center_y = height / 2
         spacing = max(3, self._px(5))
-        for y in (center_y - spacing, center_y, center_y + spacing):
-            button.create_oval(
-                center_x - radius,
-                y - radius,
-                center_x + radius,
-                y + radius,
-                fill=color,
-                outline="",
-                tags="cv_overflow_content",
-            )
+        self._draw_vector_photo(
+            button,
+            image_size=(width, height),
+            center_x=center_x,
+            center_y=center_y,
+            tags="cv_overflow_content",
+            ellipses=tuple(
+                VectorEllipse(
+                    bounds=(
+                        center_x - radius,
+                        y - radius,
+                        center_x + radius,
+                        y + radius,
+                    ),
+                    fill_color=color,
+                )
+                for y in (center_y - spacing, center_y, center_y + spacing)
+            ),
+        )
 
     @staticmethod
     def _menu_popover_position(

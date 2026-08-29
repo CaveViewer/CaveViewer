@@ -61,6 +61,10 @@ def test_minimap_static_buffer_reserve_is_bounded_by_panel_resolution():
     assert minimap.occupied_xz == set()
 
 
+def test_minimap_dynamic_marker_uses_high_density_tessellation():
+    assert Minimap.DYNAMIC_CIRCLE_SEGMENTS >= 32
+
+
 def test_minimap_static_geometry_is_deduplicated_to_visible_pixels():
     flat_footprint = []
     for _ in range(1000):

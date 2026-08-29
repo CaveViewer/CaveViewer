@@ -23,6 +23,23 @@ The main goals are:
 - prefer conservative defaults that work on laptops and integrated GPUs, while
   still allowing higher-end machines to stream more aggressively.
 
+## High-density presentation
+
+The viewer requests four samples of multisample anti-aliasing for the default
+presentation framebuffer. This smooths the cave scene and all OpenGL HUD
+overlays shown while a map opens, a cache compiles, or a capture begins, ends,
+or is cancelled. The shared progress-ring shader also derives its edge width
+from framebuffer pixels, so its circular indicator stays smooth when a display
+uses a high scaling factor. The minimap uses a denser round-marker mesh for the
+same reason.
+
+Tk splash and Map Library canvases use bounded supersampled Pillow images for
+their circular indicators, chevrons, disclosure triangles, and other curved
+or diagonal icons. FreeType text, source imagery, OS-native controls, and
+axis-aligned panels and stop/pause glyphs already scale cleanly and remain on
+their normal paths. These presentation changes do not change generated map
+caches, capture workflow, or recorded artifact output.
+
 Chunking and streaming are separate decisions:
 
 - Import/chunking settings affect the cache layout and apply only to new or

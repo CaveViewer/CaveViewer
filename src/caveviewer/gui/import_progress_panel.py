@@ -90,7 +90,9 @@ void main() {
     float dist = length(centered);
     float ring_inner = 0.398;
     float ring_outer = 0.442;
-    float edge = 0.005;
+    // Derivative-sized smoothing keeps ring edges one-ish framebuffer pixel
+    // wide at every display scale instead of using one fixed UV blur width.
+    float edge = clamp(fwidth(dist), 0.00075, 0.010);
     float outer_mask = 1.0 - smoothstep(ring_outer - edge, ring_outer + edge, dist);
     float inner_mask = smoothstep(ring_inner - edge, ring_inner + edge, dist);
     float ring_alpha = outer_mask * inner_mask;
@@ -100,12 +102,28 @@ void main() {
         angle += 6.28318530718;
     }
     float pixel_progress = angle / 6.28318530718;
-    float fill_strength = step(pixel_progress, clamp(u_progress, 0.0, 1.0));
+    float progress = clamp(u_progress, 0.0, 1.0);
+    float progress_edge = clamp(fwidth(pixel_progress), 0.00075, 0.012);
+    float fill_strength = 0.0;
+    if (progress >= 0.999) {
+        fill_strength = 1.0;
+    } else if (progress > 0.0) {
+        fill_strength = 1.0 - smoothstep(
+            progress - progress_edge,
+            progress + progress_edge,
+            pixel_progress
+        );
+    }
     if (u_indeterminate > 0.5) {
         float phase = fract(u_spinner_phase);
         float arc_offset = fract(pixel_progress - phase + 1.0);
         float arc_span = 0.24 + 0.04 * sin(phase * 12.56637061436);
-        float arc_mask = 1.0 - smoothstep(arc_span - 0.012, arc_span + 0.012, arc_offset);
+        float arc_edge = clamp(fwidth(arc_offset), 0.00075, 0.012);
+        float arc_mask = 1.0 - smoothstep(
+            arc_span - arc_edge,
+            arc_span + arc_edge,
+            arc_offset
+        );
         float leading_taper = 1.0 - smoothstep(0.0, arc_span, arc_offset);
         fill_strength = arc_mask * mix(0.48, 1.0, leading_taper);
     }

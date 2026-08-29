@@ -96,6 +96,14 @@ from caveviewer.gui.platform.presentation_actions import (
 )
 from caveviewer.gui.preference_paths import migrate_state_file, write_text_atomic
 from caveviewer.gui.splash_controller import SplashController, SplashScheduler
+from caveviewer.gui.splash_visuals import (
+    VectorEllipse,
+    VectorPath,
+    VectorPolygon,
+    fit_splash_background,
+    progress_ring_photo,
+    vector_icon_photo,
+)
 from caveviewer.gui.tk_feedback import show_feedback
 from caveviewer.gui.tk_shortcuts import bind_primary_shortcut
 from caveviewer.gui.tk_theme import DARK_THEME
@@ -121,6 +129,7 @@ def _resolve_asset_path(filename: str) -> str | None:
 # in-program loading-screen logo, reused here rather than shipping a
 # second copy of the same image.
 _LOGO_PATH = _resolve_asset_path("app_mark_transparent.png")
+_SPLASH_BACKGROUND_PATH = _resolve_asset_path("splash_ginnie_dark.jpg")
 _PRESENTATION_PROFILE = get_presentation_profile()
 _SPLASH_LAYOUT_POLICY = _PRESENTATION_PROFILE.splash_layout
 _APP_ICON_PATH = _resolve_asset_path(_SPLASH_LAYOUT_POLICY.app_icon_resource_name)
@@ -553,76 +562,165 @@ def _load_brand_logo(
     return logo_photo
 
 
+def _load_launch_background_image():
+    """Load the bundled dark cave scene once for one launch-surface canvas."""
+    if not _SPLASH_BACKGROUND_PATH:
+        return None
+    try:
+        from PIL import Image
+
+        with Image.open(_SPLASH_BACKGROUND_PATH) as background:
+            return background.convert("RGB")
+    except Exception as exc:
+        _LOG.warning("Could not load launch splash background: %s", exc)
+        return None
+
+
+def _launch_canvas_dimensions(canvas) -> tuple[int, int]:
+    """Return usable canvas dimensions before and after Tk maps the launch UI."""
+    dimensions = []
+    for widget_method, option in (
+        ("winfo_width", "width"),
+        ("winfo_height", "height"),
+    ):
+        try:
+            value = int(getattr(canvas, widget_method)())
+        except Exception:
+            value = 0
+        if value <= 1:
+            try:
+                value = int(float(canvas.cget(option)))
+            except Exception:
+                value = 1
+        dimensions.append(max(1, value))
+    return tuple(dimensions)
+
+
+def _render_launch_background(canvas, *, source_image, size: tuple[int, int]) -> None:
+    """Place the dark cave image behind launch content, with a flat fallback."""
+    if source_image is None:
+        return
+    width, height = size
+    if getattr(canvas, "_cv_launch_background_size", None) == (width, height):
+        return
+    try:
+        from PIL import ImageTk
+
+        background_photo = ImageTk.PhotoImage(
+            fit_splash_background(source_image, size=(width, height)),
+            master=canvas.winfo_toplevel(),
+        )
+        canvas.delete("launch_background")
+        canvas.create_image(
+            width / 2,
+            height / 2,
+            image=background_photo,
+            tags="launch_background",
+        )
+        canvas.tag_lower("launch_background")
+        canvas._cv_launch_background_photo = background_photo
+        canvas._cv_launch_background_size = (width, height)
+    except Exception as exc:
+        _LOG.warning("Could not render launch splash background: %s", exc)
+
+
 def _draw_launch_indicator_frame(canvas, *, phase_degrees: float, px) -> None:
-    """Draw one frame of the launch ring used around the brand mark."""
+    """Draw one anti-aliased launch ring around the brand mark."""
     canvas.delete("launch_indicator")
-    size = max(1, int(float(canvas.cget("width"))))
-    ring_diameter = min(size, max(1, px(91)))
-    inset = (size - ring_diameter) / 2
+    width, height = _launch_canvas_dimensions(canvas)
+    center_x, center_y = getattr(
+        canvas,
+        "_cv_launch_indicator_center",
+        (width / 2, height / 2),
+    )
+    ring_diameter = min(max(1, px(91)), width, height)
     stroke_width = max(1, px(2))
-    bounds = (inset, inset, size - inset, size - inset)
-    canvas.create_oval(
-        *bounds,
-        outline=DARK_THEME.entry_border,
-        width=stroke_width,
+    ring_photo = progress_ring_photo(
+        canvas,
+        image_size=ring_diameter + stroke_width * 2,
+        ring_diameter=ring_diameter,
+        stroke_width=stroke_width,
+        track_color=DARK_THEME.entry_border,
+        fill_color=_BUTTON_BG,
+        start_degrees=90 - float(phase_degrees),
+        extent_degrees=-_LAUNCH_INDICATOR_ARC_DEGREES,
+    )
+    canvas._cv_launch_indicator_photo = ring_photo
+    canvas.create_image(
+        center_x,
+        center_y,
+        image=ring_photo,
         tags="launch_indicator",
     )
-    canvas.create_arc(
-        *bounds,
-        start=90 - float(phase_degrees),
-        extent=-_LAUNCH_INDICATOR_ARC_DEGREES,
-        style="arc",
-        outline=_BUTTON_BG,
-        width=stroke_width,
-        tags="launch_indicator",
+
+
+def _render_launch_content(canvas, *, program_name: str, px) -> None:
+    """Center the logo, indicator, and launch copy over the cave background."""
+    width, height = _launch_canvas_dimensions(canvas)
+    center_x = width / 2
+    indicator_center_y = height * 0.46
+    canvas.delete("launch_content")
+    logo_photo = getattr(canvas, "_cv_launch_logo_photo", None)
+    if logo_photo is not None:
+        canvas.create_image(
+            center_x,
+            indicator_center_y,
+            image=logo_photo,
+            tags="launch_content",
+        )
+    canvas.create_text(
+        center_x,
+        indicator_center_y + px(90),
+        text=program_name,
+        font=_TYPOGRAPHY.heading,
+        fill=_TITLE_COLOR,
+        tags="launch_content",
     )
+    canvas.create_text(
+        center_x,
+        indicator_center_y + px(118),
+        text="Preparing to explore what lies beneath…",
+        font=_TYPOGRAPHY.supporting,
+        fill=_SUBTITLE_COLOR,
+        tags="launch_content",
+    )
+    canvas._cv_launch_indicator_center = (center_x, indicator_center_y)
+    _draw_launch_indicator_frame(canvas, phase_degrees=0, px=px)
 
 
 def _build_launch_surface(parent, *, program_name: str, px):
-    """Build the branded launch surface and return its indicator canvas."""
+    """Build the branded, dark-cave launch surface and return its canvas."""
     import tkinter as tk
 
-    content = tk.Frame(parent, bg=_BG_COLOR)
-    content.pack(expand=True)
-    indicator_size = px(132)
-    indicator_canvas = tk.Canvas(
-        content,
-        width=indicator_size,
-        height=indicator_size,
+    launch_canvas = tk.Canvas(
+        parent,
+        width=px(_SPLASH_WINDOW_WIDTH),
+        height=px(_SPLASH_WINDOW_MIN_HEIGHT),
         bg=_BG_COLOR,
         borderwidth=0,
         highlightthickness=0,
     )
-    logo_photo = _load_brand_logo(
-        parent,
+    launch_canvas.pack(fill="both", expand=True)
+    launch_canvas._cv_launch_background_image = _load_launch_background_image()
+    launch_canvas._cv_launch_logo_photo = _load_brand_logo(
+        launch_canvas,
         px=px,
         max_dimension=108,
         suppress_amber=True,
     )
-    if logo_photo is not None:
-        indicator_canvas.create_image(
-            indicator_size / 2,
-            indicator_size / 2,
-            image=logo_photo,
+
+    def _refresh_launch_surface(_event=None) -> None:
+        size = _launch_canvas_dimensions(launch_canvas)
+        _render_launch_background(
+            launch_canvas,
+            source_image=launch_canvas._cv_launch_background_image,
+            size=size,
         )
-        indicator_canvas.image = logo_photo
-    _draw_launch_indicator_frame(indicator_canvas, phase_degrees=0, px=px)
-    indicator_canvas.pack(pady=(0, px(14)))
-    tk.Label(
-        content,
-        text=program_name,
-        font=_TYPOGRAPHY.heading,
-        fg=_TITLE_COLOR,
-        bg=_BG_COLOR,
-    ).pack()
-    tk.Label(
-        content,
-        text="Preparing to explore what lies beneath…",
-        font=_TYPOGRAPHY.supporting,
-        fg=_SUBTITLE_COLOR,
-        bg=_BG_COLOR,
-    ).pack(pady=(px(6), 0))
-    return indicator_canvas
+        _render_launch_content(launch_canvas, program_name=program_name, px=px)
+
+    launch_canvas.bind("<Configure>", _refresh_launch_surface, add="+")
+    _refresh_launch_surface()
+    return launch_canvas
 
 
 def _settle_launch_layout(root, *, passes: int = 3) -> None:
@@ -1466,30 +1564,29 @@ def show_splash_screen(
         update_cancel_button.bind(sequence, _invoke_update_cancel)
 
     def _draw_update_cancel_button(progress_fraction: float) -> None:
-        """Draw the map-download stop/progress pattern in the update row."""
+        """Draw the anti-aliased map-download stop/progress pattern."""
         update_cancel_button.delete("all")
         size = update_cancel_button_size
         inset = px(3)
         track_color = DARK_THEME.entry_background
-        update_cancel_button.create_oval(
-            inset,
-            inset,
-            size - inset,
-            size - inset,
-            outline=track_color,
-            width=max(1, px(2)),
-        )
         clamped = max(0.0, min(1.0, float(progress_fraction)))
-        update_cancel_button.create_arc(
-            inset,
-            inset,
-            size - inset,
-            size - inset,
-            start=90,
-            extent=-360 * clamped,
-            style="arc",
-            outline=_BUTTON_BG,
-            width=max(1, px(2)),
+        stroke_width = max(1, px(2))
+        ring_diameter = max(1, size - inset * 2)
+        ring_photo = progress_ring_photo(
+            update_cancel_button,
+            image_size=ring_diameter + stroke_width * 2,
+            ring_diameter=ring_diameter,
+            stroke_width=stroke_width,
+            track_color=track_color,
+            fill_color=_BUTTON_BG,
+            start_degrees=90,
+            extent_degrees=-360 * clamped,
+        )
+        update_cancel_button._cv_progress_ring_photo = ring_photo
+        update_cancel_button.create_image(
+            size / 2,
+            size / 2,
+            image=ring_photo,
         )
         stop_half_size = max(2, px(3))
         center = size / 2
@@ -1882,78 +1979,99 @@ def show_splash_screen(
             icon.delete("navigation-icon")
             stroke = max(1, px(1.6))
             center = size / 2
-
-            def line(*points) -> None:
-                icon.create_line(
-                    *points,
-                    fill=foreground,
-                    width=stroke,
-                    capstyle="round",
-                    joinstyle="round",
-                    tags="navigation-icon",
-                )
+            paths: tuple[VectorPath, ...] = ()
+            polygons: tuple[VectorPolygon, ...] = ()
+            ellipses: tuple[VectorEllipse, ...] = ()
 
             if icon_name == "map":
-                line(
-                    px(3),
-                    px(6),
-                    px(10),
-                    px(3),
-                    px(18),
-                    px(6),
-                    px(25),
-                    px(3),
-                    px(25),
-                    px(22),
-                    px(18),
-                    px(25),
-                    px(10),
-                    px(22),
-                    px(3),
-                    px(25),
-                    px(3),
-                    px(6),
+                paths = (
+                    VectorPath(
+                        points=(
+                            (px(3), px(6)),
+                            (px(10), px(3)),
+                            (px(18), px(6)),
+                            (px(25), px(3)),
+                            (px(25), px(22)),
+                            (px(18), px(25)),
+                            (px(10), px(22)),
+                            (px(3), px(25)),
+                        ),
+                        color=foreground,
+                        width=stroke,
+                        closed=True,
+                    ),
+                    VectorPath(
+                        points=((px(10), px(3)), (px(10), px(22))),
+                        color=foreground,
+                        width=stroke,
+                    ),
+                    VectorPath(
+                        points=((px(18), px(6)), (px(18), px(25))),
+                        color=foreground,
+                        width=stroke,
+                    ),
                 )
-                line(px(10), px(3), px(10), px(22))
-                line(px(18), px(6), px(18), px(25))
             elif icon_name == "preferences":
-                points = []
-                for index in range(16):
-                    angle = math.radians(index * 22.5 - 90)
-                    radius = px(11 if index % 2 == 0 else 8)
-                    points.extend(
-                        (
-                            center + math.cos(angle) * radius,
-                            center + math.sin(angle) * radius,
-                        )
-                    )
-                icon.create_polygon(
-                    *points,
-                    outline=foreground,
-                    fill="",
-                    width=stroke,
-                    joinstyle="round",
-                    tags="navigation-icon",
+                polygons = (
+                    VectorPolygon(
+                        points=tuple(
+                            (
+                                center
+                                + math.cos(math.radians(index * 22.5 - 90))
+                                * px(11 if index % 2 == 0 else 8),
+                                center
+                                + math.sin(math.radians(index * 22.5 - 90))
+                                * px(11 if index % 2 == 0 else 8),
+                            )
+                            for index in range(16)
+                        ),
+                        outline_color=foreground,
+                        outline_width=stroke,
+                    ),
                 )
-                icon.create_oval(
-                    center - px(3),
-                    center - px(3),
-                    center + px(3),
-                    center + px(3),
-                    outline=foreground,
-                    width=stroke,
-                    tags="navigation-icon",
+                ellipses = (
+                    VectorEllipse(
+                        bounds=(
+                            center - px(3),
+                            center - px(3),
+                            center + px(3),
+                            center + px(3),
+                        ),
+                        outline_color=foreground,
+                        outline_width=stroke,
+                    ),
                 )
             elif icon_name == "help":
-                icon.create_oval(
-                    px(3),
-                    px(3),
-                    px(25),
-                    px(25),
-                    outline=foreground,
-                    width=stroke,
-                    tags="navigation-icon",
+                ellipses = (
+                    VectorEllipse(
+                        bounds=(px(3), px(3), px(25), px(25)),
+                        outline_color=foreground,
+                        outline_width=stroke,
+                    ),
                 )
+            else:
+                ellipses = (
+                    VectorEllipse(
+                        bounds=(px(3), px(3), px(25), px(25)),
+                        outline_color=foreground,
+                        outline_width=stroke,
+                    ),
+                )
+            icon_photo = vector_icon_photo(
+                icon,
+                image_size=(size, size),
+                paths=paths,
+                polygons=polygons,
+                ellipses=ellipses,
+            )
+            icon._cv_navigation_icon_photo = icon_photo
+            icon.create_image(
+                center,
+                center,
+                image=icon_photo,
+                tags="navigation-icon",
+            )
+            if icon_name == "help":
                 icon.create_text(
                     center,
                     center,
@@ -1962,16 +2080,7 @@ def show_splash_screen(
                     fill=foreground,
                     tags="navigation-icon",
                 )
-            else:
-                icon.create_oval(
-                    px(3),
-                    px(3),
-                    px(25),
-                    px(25),
-                    outline=foreground,
-                    width=stroke,
-                    tags="navigation-icon",
-                )
+            elif icon_name != "map" and icon_name != "preferences":
                 icon.create_text(
                     center,
                     center,

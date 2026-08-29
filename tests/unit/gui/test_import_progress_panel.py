@@ -65,3 +65,13 @@ def test_ring_labels_share_the_import_title_stage_note_layout(monkeypatch):
             ImportProgressPanel.NOTE_TEXT_SIZE,
         ),
     ]
+
+
+def test_progress_ring_shader_uses_framebuffer_derivative_smoothing():
+    source = import_progress_panel._LOGO_FRAG_SRC
+
+    assert "fwidth(dist)" in source
+    assert "fwidth(pixel_progress)" in source
+    assert "fwidth(arc_offset)" in source
+    assert "float edge = 0.005;" not in source
+    assert "step(pixel_progress, progress)" not in source
