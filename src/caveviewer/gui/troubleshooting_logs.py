@@ -6,7 +6,11 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from caveviewer.core.diagnostics.catalog import latest_readable_application_log
+from caveviewer.core.diagnostics.catalog import (
+    ErrorLogExcerpt,
+    latest_readable_application_log,
+    read_last_error_excerpt,
+)
 from caveviewer.gui.platform.diagnostic_log_reveal import (
     DiagnosticLogRevealAdapter,
 )
@@ -19,6 +23,8 @@ class TroubleshootingLogState:
     latest_log: Path | None
     status_text: str
     is_error: bool = False
+    error_excerpt: ErrorLogExcerpt | None = None
+    error_status_text: str = ""
 
     @property
     def can_reveal(self) -> bool:
@@ -43,8 +49,28 @@ class TroubleshootingLogController:
                     "No logs yet. A log will appear after CaveViewer records "
                     "an application session."
                 ),
+                error_status_text="The latest error will appear here when available.",
             )
-        return TroubleshootingLogState(latest_log=latest, status_text="")
+        try:
+            excerpt = read_last_error_excerpt(latest)
+        except OSError:
+            return TroubleshootingLogState(
+                latest_log=latest,
+                status_text="",
+                is_error=True,
+                error_status_text="The latest log is temporarily unavailable.",
+            )
+        if excerpt is None:
+            return TroubleshootingLogState(
+                latest_log=latest,
+                status_text="",
+                error_status_text="No errors were recorded in the latest log.",
+            )
+        return TroubleshootingLogState(
+            latest_log=latest,
+            status_text="",
+            error_excerpt=excerpt,
+        )
 
     def reveal_latest(self) -> TroubleshootingLogState:
         """Resolve again at action time and reveal the newest readable log."""
@@ -64,8 +90,12 @@ class TroubleshootingLogController:
                     f"at {state.latest_log}."
                 ),
                 is_error=True,
+                error_excerpt=state.error_excerpt,
+                error_status_text=state.error_status_text,
             )
         return TroubleshootingLogState(
             latest_log=state.latest_log,
             status_text="Opened the log folder and selected the latest log.",
+            error_excerpt=state.error_excerpt,
+            error_status_text=state.error_status_text,
         )

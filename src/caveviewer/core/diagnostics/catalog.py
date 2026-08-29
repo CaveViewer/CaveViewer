@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import Iterable
+from dataclasses import dataclass
 from pathlib import Path
 
 from caveviewer.storage_paths import resolve_application_paths
@@ -13,6 +15,22 @@ DIAGNOSTICS_DIRECTORY_NAME = "diagnostics"
 SESSION_LOG_PREFIX = "viewer-session-"
 STARTUP_LOG_FILENAME = "startup.log"
 DEFAULT_SESSION_LOG_RETENTION = 10
+DEFAULT_ERROR_SEARCH_BYTES = 256 * 1024
+DEFAULT_ERROR_DISPLAY_CHARACTERS = 32 * 1024
+_LOG_RECORD_PATTERN = re.compile(
+    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:[.,]\d+)? "
+    r"\[[^\]]+\] (?P<level>DEBUG|INFO|WARNING|ERROR|CRITICAL):(?: |$)"
+)
+
+
+@dataclass(frozen=True, slots=True)
+class ErrorLogExcerpt:
+    """A complete error record and its preceding physical context lines."""
+
+    text: str
+    context_line_count: int
+    error_line_count: int
+    truncated: bool = False
 
 
 def application_log_directory(*, platform_name: str | None = None) -> Path:
@@ -59,6 +77,47 @@ def latest_readable_application_log(
         except OSError:
             continue
         return candidate
+    return None
+
+
+def read_last_error_excerpt(
+    path: str | os.PathLike[str],
+    *,
+    context_lines: int = 3,
+    max_search_bytes: int = DEFAULT_ERROR_SEARCH_BYTES,
+    max_display_characters: int = DEFAULT_ERROR_DISPLAY_CHARACTERS,
+) -> ErrorLogExcerpt | None:
+    """Read the newest complete ERROR record from a bounded file tail.
+
+    The file identity is checked after reading. If rotation replaced the path,
+    the operation retries once against the new file. A concurrently growing
+    file is treated as the stable snapshot size observed when its handle was
+    opened.
+    """
+
+    log_path = Path(path)
+    search_limit = max(1, int(max_search_bytes))
+    display_limit = max(1, int(max_display_characters))
+    for attempt in range(2):
+        with log_path.open("rb") as stream:
+            opened_stat = os.fstat(stream.fileno())
+            size = max(0, int(opened_stat.st_size))
+            start = max(0, size - search_limit)
+            stream.seek(start)
+            payload = stream.read(size - start)
+        try:
+            current_stat = log_path.stat()
+        except OSError:
+            if attempt == 0:
+                continue
+            raise
+        if _same_file_identity(opened_stat, current_stat):
+            return _error_excerpt_from_tail(
+                payload,
+                starts_at_file_beginning=start == 0,
+                context_lines=max(0, int(context_lines)),
+                max_display_characters=display_limit,
+            )
     return None
 
 
@@ -119,3 +178,69 @@ def _is_eligible_log(path: Path) -> bool:
 
 def _normalized_path(path: str | os.PathLike[str]) -> str:
     return os.path.normcase(os.path.abspath(os.fspath(path)))
+
+
+def _same_file_identity(opened_stat, current_stat) -> bool:
+    opened_identity = (
+        getattr(opened_stat, "st_dev", None),
+        getattr(opened_stat, "st_ino", None),
+    )
+    current_identity = (
+        getattr(current_stat, "st_dev", None),
+        getattr(current_stat, "st_ino", None),
+    )
+    if None not in opened_identity and None not in current_identity:
+        return opened_identity == current_identity
+    return True
+
+
+def _error_excerpt_from_tail(
+    payload: bytes,
+    *,
+    starts_at_file_beginning: bool,
+    context_lines: int,
+    max_display_characters: int,
+) -> ErrorLogExcerpt | None:
+    if not payload:
+        return None
+
+    ended_with_newline = payload.endswith((b"\n", b"\r"))
+    text = payload.decode("utf-8", errors="replace")
+    lines = text.splitlines()
+    if not starts_at_file_beginning and lines:
+        # A bounded tail normally starts in the middle of a physical line.
+        lines = lines[1:]
+    if not ended_with_newline and lines:
+        # Ignore the final physical line while another thread may be writing it.
+        lines = lines[:-1]
+    if not lines:
+        return None
+
+    record_starts: list[tuple[int, str]] = []
+    for index, line in enumerate(lines):
+        match = _LOG_RECORD_PATTERN.match(line)
+        if match is not None:
+            record_starts.append((index, match.group("level")))
+
+    for record_index in range(len(record_starts) - 1, -1, -1):
+        start, level = record_starts[record_index]
+        if level != "ERROR":
+            continue
+        end = (
+            record_starts[record_index + 1][0]
+            if record_index + 1 < len(record_starts)
+            else len(lines)
+        )
+        excerpt_lines = lines[max(0, start - context_lines) : end]
+        error_line_count = end - start
+        excerpt = "\n".join(excerpt_lines)
+        truncated = len(excerpt) > max_display_characters
+        if truncated:
+            excerpt = excerpt[:max_display_characters].rstrip() + "\n…[truncated]"
+        return ErrorLogExcerpt(
+            text=excerpt,
+            context_line_count=min(context_lines, start),
+            error_line_count=error_line_count,
+            truncated=truncated,
+        )
+    return None

@@ -28,6 +28,35 @@ def test_refresh_reports_empty_directory(tmp_path):
     assert state.latest_log is None
     assert state.can_reveal is False
     assert "No logs yet" in state.status_text
+    assert "latest error" in state.error_status_text
+
+
+def test_refresh_exposes_last_error_excerpt(tmp_path):
+    path = tmp_path / "viewer-session-current.log"
+    path.write_text(
+        "2026-08-29T10:00:00 [caveviewer] INFO: ready\n"
+        "2026-08-29T10:00:01 [caveviewer] ERROR: failed\n",
+        encoding="utf-8",
+    )
+
+    state = TroubleshootingLogController(tmp_path, _RevealAdapter()).refresh()
+
+    assert state.error_excerpt is not None
+    assert state.error_excerpt.text.endswith("ERROR: failed")
+    assert state.error_status_text == ""
+
+
+def test_refresh_reports_latest_log_without_errors(tmp_path):
+    path = tmp_path / "viewer-session-current.log"
+    path.write_text(
+        "2026-08-29T10:00:00 [caveviewer] INFO: ready\n",
+        encoding="utf-8",
+    )
+
+    state = TroubleshootingLogController(tmp_path, _RevealAdapter()).refresh()
+
+    assert state.error_excerpt is None
+    assert "No errors" in state.error_status_text
 
 
 def test_reveal_latest_resolves_again_at_action_time(tmp_path):

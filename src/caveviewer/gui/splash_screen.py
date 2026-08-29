@@ -510,6 +510,7 @@ def _help_panel_style() -> HelpPanelStyle:
         action_font=typography.body,
         overview_font=typography.body_strong,
         detail_font=typography.supporting,
+        error_font=("Courier", typography.supporting[1]),
     )
 
 
