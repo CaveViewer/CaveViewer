@@ -708,7 +708,7 @@ def test_preferences_panel_uses_extracted_settings_logic():
 def test_preferences_panel_exposes_backup_and_restore_as_a_separate_tab():
     from caveviewer.gui import preferences_dialog
 
-    assert ("backup", "Backup & restore") in preferences_dialog._PREFERENCE_PAGES
+    assert ("backup", "Backup and Restore") in preferences_dialog._PREFERENCE_PAGES
     ensure_source = inspect.getsource(
         preferences_dialog.PreferencesPanel._ensure_page
     )
@@ -1093,7 +1093,7 @@ def test_preferences_panel_uses_compact_tabbed_pages():
         field.key: field for field in preferences_dialog.PREFERENCE_FIELDS
     }
     assert page_keys == ["streaming", "parsing", "storage", "backup"]
-    assert page_labels == ["Streaming", "Import", "Storage", "Backup & restore"]
+    assert page_labels == ["Streaming", "Import", "Storage", "Backup and Restore"]
     assert all(len(page) == 2 for page in preferences_dialog._PREFERENCE_PAGES)
     assert set(page_keys) - {"backup"} == field_sections
     assert fields_by_key["io_workers"].label == "Loading worker limit"

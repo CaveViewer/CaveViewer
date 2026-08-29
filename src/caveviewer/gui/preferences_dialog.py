@@ -80,7 +80,7 @@ _PREFERENCE_PAGES = (
     ("streaming", "Streaming"),
     ("parsing", "Import"),
     ("storage", "Storage"),
-    ("backup", "Backup & restore"),
+    ("backup", "Backup and Restore"),
 )
 _PREFERENCE_PAGE_KEYS = frozenset(key for key, _label in _PREFERENCE_PAGES)
 _PREFERENCE_FIELD_GROUPS = {
