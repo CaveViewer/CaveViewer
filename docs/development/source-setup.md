@@ -860,7 +860,7 @@ Unless overridden, CaveViewer stores files in these locations:
 
 | Kind | Linux default | macOS/Windows default |
 |---|---|---|
-| Preferences | `$XDG_CONFIG_HOME/caveviewer/advanced_settings.json` (`~/.config/...` fallback; legacy-compatible filename) | `~/.caveviewer/advanced_settings.json` |
+| Preferences | `$XDG_CONFIG_HOME/caveviewer/preferences.json` (`~/.config/...` fallback) | `~/.caveviewer/preferences.json` |
 | Remembered chooser locations | `$XDG_STATE_HOME/caveviewer/` (`~/.local/state/...` fallback) | `~/.caveviewer/` |
 | Windows pre-splash diagnostics | — | `~/.caveviewer/diagnostics/startup.log` |
 | Application session diagnostics | `$XDG_STATE_HOME/caveviewer/diagnostics/viewer-session-<id>.log` and `.jsonl` (`~/.local/state/...` fallback) | `~/.caveviewer/diagnostics/viewer-session-<id>.log` and `.jsonl` |
@@ -878,6 +878,15 @@ readable as legacy locations. On Linux, old `~/.caveviewer/` and
 `map_library` or `sample_maps` directories are moved into the configured
 map-library location when possible. A generated cache is self-contained:
 texture files are staged beside its chunks before the manifest becomes visible.
+
+Application preferences use `preferences.json`. When that file is absent, a
+sibling `advanced_settings.json` is renamed once before loading. The current
+file takes precedence when both exist; a failed rename leaves the old file
+readable for that run and is retried later. `.caveviewer_advanced_settings.json`
+and other older preference filenames are not discovered. Users can create or
+consume portable copies under **Preferences > Backup**. Load and
+restore stage values until Apply, invalid individual values use defaults, and
+malformed files leave both the form and persisted preferences unchanged.
 
 When a Windows build consumes CPU without showing its Tk splash, read
 `%USERPROFILE%\.caveviewer\diagnostics\startup.log`. The file contains the last

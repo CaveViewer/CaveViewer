@@ -15,6 +15,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from caveviewer.gui import preference_paths
 from caveviewer.gui import preferences as settings
 
 
@@ -301,13 +302,13 @@ def test_load_missing_settings_returns_validated_defaults(tmp_path):
 
 @pytest.mark.parametrize("content", ["{broken", "[]", "null", '"text"'])
 def test_load_malformed_or_non_object_settings_returns_defaults(tmp_path, content):
-    path = tmp_path / "advanced_settings.json"
+    path = tmp_path / "preferences.json"
     path.write_text(content, encoding="utf-8")
     assert settings.load_preferences(path) == settings.preference_defaults()
 
 
 def test_load_falls_back_only_invalid_saved_fields(tmp_path, caplog):
-    path = tmp_path / "advanced_settings.json"
+    path = tmp_path / "preferences.json"
     path.write_text(
         json.dumps(
             {
@@ -352,7 +353,7 @@ def test_snapshot_constructor_rejects_values_outside_the_schema_boundary(
 
 
 def test_settings_save_and_load_round_trip(valid_preferences, tmp_path):
-    path = tmp_path / "advanced_settings.json"
+    path = tmp_path / "preferences.json"
     valid_preferences["io_workers"] = " 7 "
     snapshot = settings.require_validated_preferences(valid_preferences)
     settings.save_preferences(snapshot, path)
@@ -372,26 +373,107 @@ def test_default_settings_path_uses_xdg_config_not_state(
     snapshot = settings.require_validated_preferences(valid_preferences)
     settings.save_preferences(snapshot)
     path = Path(settings.preferences_file())
-    assert path == config_home / "caveviewer" / "advanced_settings.json"
-    assert not (state_home / "caveviewer" / "advanced_settings.json").exists()
+    assert path == config_home / "caveviewer" / "preferences.json"
+    assert not (state_home / "caveviewer" / "preferences.json").exists()
     assert path.is_file()
     assert settings.load_preferences()["io_workers"] == valid_preferences[
         "io_workers"
     ]
 
 
-def test_legacy_settings_file_is_migrated_into_preferences_directory():
-    legacy = Path(os.path.expanduser("~")) / ".caveviewer_advanced_settings.json"
-    legacy.write_text('{"io_workers": "6"}', encoding="utf-8")
+def test_previous_settings_file_is_renamed_before_loading(tmp_path, monkeypatch):
+    monkeypatch.setattr(sys, "platform", "linux")
+    config_home = tmp_path / "config"
+    preferences_dir = config_home / "caveviewer"
+    preferences_dir.mkdir(parents=True)
+    previous = preferences_dir / "advanced_settings.json"
+    previous.write_text('{"io_workers": "6"}', encoding="utf-8")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
 
-    migrated = Path(settings.preferences_file())
+    loaded = settings.load_preferences()
 
-    assert migrated.is_file()
-    assert settings.load_preferences(migrated)["io_workers"] == "6"
+    current = preferences_dir / "preferences.json"
+    assert loaded["io_workers"] == "6"
+    assert current.is_file()
+    assert not previous.exists()
+
+
+def test_current_settings_take_precedence_without_touching_previous_file(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(sys, "platform", "linux")
+    config_home = tmp_path / "config"
+    preferences_dir = config_home / "caveviewer"
+    preferences_dir.mkdir(parents=True)
+    current = preferences_dir / "preferences.json"
+    previous = preferences_dir / "advanced_settings.json"
+    current.write_text('{"io_workers": "7"}', encoding="utf-8")
+    previous.write_text('{"io_workers": "6"}', encoding="utf-8")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+
+    loaded = settings.load_preferences()
+
+    assert loaded["io_workers"] == "7"
+    assert previous.read_text(encoding="utf-8") == '{"io_workers": "6"}'
+
+
+def test_failed_settings_rename_loads_previous_file_and_reports_retry(
+    tmp_path,
+    monkeypatch,
+    caplog,
+):
+    monkeypatch.setattr(sys, "platform", "linux")
+    config_home = tmp_path / "config"
+    preferences_dir = config_home / "caveviewer"
+    preferences_dir.mkdir(parents=True)
+    previous = preferences_dir / "advanced_settings.json"
+    previous.write_text('{"io_workers": "6"}', encoding="utf-8")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+    monkeypatch.setattr(
+        preference_paths.os,
+        "rename",
+        lambda *_args: (_ for _ in ()).throw(PermissionError("blocked")),
+    )
+
+    with caplog.at_level(logging.WARNING, logger="caveviewer"):
+        loaded = settings.load_preferences()
+
+    assert loaded["io_workers"] == "6"
+    assert previous.is_file()
+    assert not (preferences_dir / "preferences.json").exists()
+    assert "Could not rename preferences" in caplog.text
+
+
+def test_malformed_previous_settings_are_renamed_then_resolve_to_defaults(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(sys, "platform", "linux")
+    config_home = tmp_path / "config"
+    preferences_dir = config_home / "caveviewer"
+    preferences_dir.mkdir(parents=True)
+    previous = preferences_dir / "advanced_settings.json"
+    previous.write_text("{broken", encoding="utf-8")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+
+    loaded = settings.load_preferences()
+
+    assert loaded == settings.preference_defaults()
+    assert (preferences_dir / "preferences.json").is_file()
+    assert not previous.exists()
+
+
+def test_older_dotfile_settings_are_not_discovered():
+    older = Path(os.path.expanduser("~")) / ".caveviewer_advanced_settings.json"
+    older.write_text('{"io_workers": "6"}', encoding="utf-8")
+
+    assert settings.load_preferences()["io_workers"] == "2"
+    assert not Path(settings.preferences_file()).exists()
 
 
 def test_settings_save_failure_is_reported(valid_preferences, tmp_path, caplog):
-    path = tmp_path / "missing-parent" / "advanced_settings.json"
+    path = tmp_path / "missing-parent" / "preferences.json"
     snapshot = settings.require_validated_preferences(valid_preferences)
     with caplog.at_level(logging.WARNING, logger="caveviewer"):
         with pytest.raises(settings.PreferencesSaveError):
@@ -402,7 +484,7 @@ def test_settings_save_failure_is_reported(valid_preferences, tmp_path, caplog):
 def test_atomic_save_preserves_existing_file_when_replace_fails(
     valid_preferences, tmp_path, monkeypatch
 ):
-    path = tmp_path / "advanced_settings.json"
+    path = tmp_path / "preferences.json"
     path.write_text('{"io_workers": "2"}', encoding="utf-8")
     snapshot = settings.require_validated_preferences(valid_preferences)
 
@@ -456,7 +538,7 @@ def test_runtime_consumers_reject_unvalidated_mappings(
 ):
     with pytest.raises(TypeError, match="Preferences snapshot"):
         settings.save_preferences(
-            valid_preferences, tmp_path / "advanced_settings.json"
+            valid_preferences, tmp_path / "preferences.json"
         )
     with pytest.raises(TypeError, match="Preferences snapshot"):
         settings.preference_env_updates(valid_preferences)
@@ -621,6 +703,160 @@ def test_preferences_panel_uses_extracted_settings_logic():
     assert "platform_runtime=platform_runtime" in splash_source
     assert "on_cancel=_show_map_library_surface" in splash_source
     assert "_show_preferences_dialog(" not in splash_source
+
+
+def test_preferences_panel_exposes_backup_and_restore_as_a_separate_tab():
+    from caveviewer.gui import preferences_dialog
+
+    assert ("backup", "Backup") in preferences_dialog._PREFERENCE_PAGES
+    ensure_source = inspect.getsource(
+        preferences_dialog.PreferencesPanel._ensure_page
+    )
+    backup_source = inspect.getsource(
+        preferences_dialog.PreferencesPanel._render_backup_restore
+    )
+    assert 'page_key == "backup"' in ensure_source
+    assert 'title="Save preferences"' in backup_source
+    assert 'description="Save preferences to a file."' in backup_source
+    assert 'button_text="Save"' in backup_source
+    assert 'title="Load preferences"' in backup_source
+    assert 'description="Load preferences from a file."' in backup_source
+    assert 'button_text="Load"' in backup_source
+    assert 'title="Restore defaults"' in backup_source
+    assert (
+        'description="Restore default import and streaming settings."'
+        in backup_source
+    )
+    assert 'button_text="Restore"' in backup_source
+    assert "width=_BACKUP_ACTION_BUTTON_WIDTH" in inspect.getsource(
+        preferences_dialog.PreferencesPanel._render_backup_action
+    )
+
+
+def test_preferences_panel_exports_validated_form_to_selected_file(
+    valid_preferences,
+    tmp_path,
+):
+    from caveviewer.gui import preferences_dialog
+    from caveviewer.gui.preferences_workflow import PreferencesExportWorkflowResult
+
+    snapshot = settings.require_validated_preferences(valid_preferences)
+    destination = tmp_path / "preferences.json"
+    chooser_calls = []
+    export_calls = []
+    panel = preferences_dialog.PreferencesPanel.__new__(
+        preferences_dialog.PreferencesPanel
+    )
+    panel.form = SimpleNamespace(
+        attempt_apply=lambda: (SimpleNamespace(), snapshot)
+    )
+    panel._render_form_state = lambda *_args, **_kwargs: None
+    panel.desktop_services = SimpleNamespace(
+        save_file=lambda **options: chooser_calls.append(options)
+        or SimpleNamespace(path=str(destination))
+    )
+    panel.workflow = SimpleNamespace(
+        export_file=lambda path, preferences: export_calls.append(
+            (path, preferences)
+        )
+        or PreferencesExportWorkflowResult(path=Path(path))
+    )
+    panel.dialog = object()
+    panel.rendered_state = None
+    panel.error_label = None
+
+    panel.export_preferences()
+
+    assert chooser_calls[0]["initial_name"] == "preferences.json"
+    assert export_calls == [(str(destination), snapshot)]
+    assert "Preferences saved to" in panel._feedback_override[0]
+
+
+def test_preferences_panel_import_stages_values_without_saving(
+    valid_preferences,
+    tmp_path,
+):
+    from caveviewer.gui import preferences_dialog
+    from caveviewer.gui.preferences_workflow import PreferencesImportWorkflowResult
+
+    snapshot = settings.require_validated_preferences(valid_preferences)
+    source = tmp_path / "preferences.json"
+    staged = []
+    panel = preferences_dialog.PreferencesPanel.__new__(
+        preferences_dialog.PreferencesPanel
+    )
+    panel.desktop_services = SimpleNamespace(
+        choose_file=lambda **_options: SimpleNamespace(path=str(source))
+    )
+    panel.workflow = SimpleNamespace(
+        import_file=lambda path: PreferencesImportWorkflowResult(
+            preferences=snapshot,
+            defaulted_keys=("io_workers",),
+        )
+    )
+    panel.dialog = object()
+    panel._stage_preferences = lambda preferences, message: staged.append(
+        (preferences, message)
+    )
+
+    panel.import_preferences()
+
+    assert staged[0][0] is snapshot
+    assert "1 invalid or missing value was replaced with its default" in staged[0][1]
+
+
+def test_preferences_panel_malformed_import_leaves_form_unchanged(tmp_path):
+    from caveviewer.gui import preferences_dialog
+    from caveviewer.gui.preferences_form import MessageKind
+    from caveviewer.gui.preferences_workflow import PreferencesImportWorkflowResult
+
+    original_form = object()
+    feedback = []
+    panel = preferences_dialog.PreferencesPanel.__new__(
+        preferences_dialog.PreferencesPanel
+    )
+    panel.form = original_form
+    panel.desktop_services = SimpleNamespace(
+        choose_file=lambda **_options: SimpleNamespace(
+            path=str(tmp_path / "broken.json")
+        )
+    )
+    panel.workflow = SimpleNamespace(
+        import_file=lambda _path: PreferencesImportWorkflowResult(
+            preferences=None,
+            error="Preferences file is not valid UTF-8 JSON.",
+        )
+    )
+    panel.dialog = object()
+    panel._set_feedback = lambda message, kind: feedback.append((message, kind))
+
+    panel.import_preferences()
+
+    assert panel.form is original_form
+    assert feedback == [
+        ("Preferences file is not valid UTF-8 JSON.", MessageKind.ERROR)
+    ]
+
+
+def test_preferences_panel_restore_defaults_requires_confirmation():
+    from caveviewer.gui import preferences_dialog
+
+    staged = []
+    panel = preferences_dialog.PreferencesPanel.__new__(
+        preferences_dialog.PreferencesPanel
+    )
+    panel.confirm_restore = lambda: False
+    panel._stage_preferences = lambda preferences, message: staged.append(
+        (preferences, message)
+    )
+
+    panel.restore_defaults()
+    assert staged == []
+
+    panel.confirm_restore = lambda: True
+    panel.restore_defaults()
+    assert staged[0][0] == settings.preference_defaults()
+    assert "not saved until" not in staged[0][1]
 
 
 def _directory_picker_panel(
@@ -868,10 +1104,10 @@ def test_preferences_panel_uses_compact_tabbed_pages():
     fields_by_key = {
         field.key: field for field in preferences_dialog.PREFERENCE_FIELDS
     }
-    assert page_keys == ["streaming", "parsing", "storage"]
-    assert page_labels == ["Streaming", "Import", "Storage"]
+    assert page_keys == ["streaming", "parsing", "storage", "backup"]
+    assert page_labels == ["Streaming", "Import", "Storage", "Backup"]
     assert all(len(page) == 2 for page in preferences_dialog._PREFERENCE_PAGES)
-    assert set(page_keys) == field_sections
+    assert set(page_keys) - {"backup"} == field_sections
     assert fields_by_key["io_workers"].label == "Loading worker limit"
     assert fields_by_key["chunk_build_workers"].label == "Cache-building worker limit"
     assert fields_by_key["recording_dir"].label == "Recordings folder"
@@ -884,6 +1120,7 @@ def test_preferences_panel_uses_compact_tabbed_pages():
     assert "candidate_page.tkraise()" not in show_page_source
     assert "self._ensure_page(page_key)" in show_page_source
     assert "self._render_section(page, page_key)" in ensure_page_source
+    assert "self._render_backup_restore(page)" in ensure_page_source
     assert "self.page_canvas.yview_moveto(0)" in show_page_source
     assert "self.button_row.pack(" in source
     assert "self.page_scroll_shell.pack(side=\"top\", fill=\"both\", expand=True)" in source

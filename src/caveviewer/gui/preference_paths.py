@@ -31,22 +31,24 @@ def preference_file(filename: str) -> str:
     return os.path.join(preferences_dir(), filename)
 
 
-def legacy_preference_file(filename: str) -> str:
-    """Return the old home-dotfile path for migration/fallback reads."""
-    return os.path.join(os.path.expanduser("~"), filename)
+def migrate_preference_file(filename: str, previous_filename: str) -> str:
+    """Rename one sibling preference file, returning a readable fallback."""
 
+    directory = preferences_dir()
+    target = os.path.join(directory, filename)
+    if os.path.exists(target):
+        return target
 
-def migrate_preference_file(filename: str, legacy_filename: str) -> str:
-    """
-    Return the new preference path and copy the legacy file there if needed.
-
-    Migration is best-effort: callers should still handle read/write errors
-    because the home directory or preference path can be unusual on some
-    systems.
-    """
-    return _migrate_user_file(
-        os.path.join(preferences_dir(), filename), filename, legacy_filename
-    )
+    previous = os.path.join(directory, previous_filename)
+    if not os.path.isfile(previous):
+        return target
+    try:
+        # The source remains readable if the same-directory rename fails, so
+        # startup can retain user settings and retry on the next launch.
+        os.rename(previous, target)
+    except OSError:
+        return previous
+    return target
 
 
 def migrate_state_file(filename: str, legacy_filename: str) -> str:
@@ -85,7 +87,7 @@ def _migrate_user_file(
     legacy_root = os.path.join(os.path.expanduser("~"), PREFERENCES_DIRNAME)
     candidates = (
         os.path.join(legacy_root, previous_filename),
-        legacy_preference_file(legacy_filename),
+        os.path.join(os.path.expanduser("~"), legacy_filename),
     )
     for old_path in candidates:
         if os.path.abspath(old_path) == os.path.abspath(new_path):

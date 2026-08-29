@@ -1,9 +1,18 @@
 """Unit tests for the Tk-free Preferences dialog workflow."""
 
+from pathlib import Path
+
+from caveviewer.core.preferences.transfer import (
+    PreferencesImportResult,
+    PreferencesTransferError,
+)
+
 from caveviewer.gui import preferences as settings
 from caveviewer.gui.preferences_workflow import (
     PreferencesApplyResult,
     PreferencesDialogWorkflow,
+    PreferencesExportWorkflowResult,
+    PreferencesImportWorkflowResult,
 )
 
 
@@ -58,3 +67,72 @@ def test_preferences_workflow_does_not_notify_after_save_failure():
     )
     assert not result.succeeded
     assert applied == []
+
+
+def test_preferences_workflow_import_is_transactional():
+    preferences = settings.load_preferences()
+    workflow = PreferencesDialogWorkflow(
+        import_preferences_fn=lambda path: PreferencesImportResult(
+            preferences=preferences,
+            defaulted_keys=("io_workers",),
+            ignored_keys=("future",),
+        )
+    )
+
+    result = workflow.import_file("shared.json")
+
+    assert result == PreferencesImportWorkflowResult(
+        preferences=preferences,
+        defaulted_keys=("io_workers",),
+        ignored_keys=("future",),
+    )
+    assert result.succeeded
+
+
+def test_preferences_workflow_import_failure_has_no_snapshot():
+    workflow = PreferencesDialogWorkflow(
+        import_preferences_fn=lambda _path: (_ for _ in ()).throw(
+            PreferencesTransferError("Malformed preferences file.")
+        )
+    )
+
+    result = workflow.import_file("broken.json")
+
+    assert result == PreferencesImportWorkflowResult(
+        preferences=None,
+        error="Malformed preferences file.",
+    )
+    assert not result.succeeded
+
+
+def test_preferences_workflow_exports_without_applying():
+    preferences = settings.load_preferences()
+    exported = []
+    applied = []
+    workflow = PreferencesDialogWorkflow(
+        export_preferences_fn=lambda path, value: exported.append((path, value)),
+        on_preferences_saved=applied.append,
+    )
+
+    result = workflow.export_file("shared.json", preferences)
+
+    assert result == PreferencesExportWorkflowResult(path=Path("shared.json"))
+    assert result.succeeded
+    assert exported == [("shared.json", preferences)]
+    assert applied == []
+
+
+def test_preferences_workflow_reports_export_failure():
+    workflow = PreferencesDialogWorkflow(
+        export_preferences_fn=lambda _path, _value: (_ for _ in ()).throw(
+            PreferencesTransferError("Could not export preferences.")
+        )
+    )
+
+    result = workflow.export_file("shared.json", settings.load_preferences())
+
+    assert result == PreferencesExportWorkflowResult(
+        path=None,
+        error="Could not export preferences.",
+    )
+    assert not result.succeeded
