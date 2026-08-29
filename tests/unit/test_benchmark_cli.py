@@ -43,7 +43,7 @@ def test_benchmark_cli_runs_viewer_benchmark_and_prints_summary(
     preferences_dir = caveviewer_home / "config"
     preferences_dir.mkdir(parents=True)
     monkeypatch.setenv("CAVEVIEWER_HOME", str(caveviewer_home))
-    (preferences_dir / "advanced_settings.json").write_text(
+    (preferences_dir / "preferences.json").write_text(
         json.dumps(
             {
                 "io_workers": "4",

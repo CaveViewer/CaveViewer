@@ -15,6 +15,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from caveviewer.gui import preference_paths
 from caveviewer.gui import preferences as settings
 
 
@@ -301,13 +302,13 @@ def test_load_missing_settings_returns_validated_defaults(tmp_path):
 
 @pytest.mark.parametrize("content", ["{broken", "[]", "null", '"text"'])
 def test_load_malformed_or_non_object_settings_returns_defaults(tmp_path, content):
-    path = tmp_path / "advanced_settings.json"
+    path = tmp_path / "preferences.json"
     path.write_text(content, encoding="utf-8")
     assert settings.load_preferences(path) == settings.preference_defaults()
 
 
 def test_load_falls_back_only_invalid_saved_fields(tmp_path, caplog):
-    path = tmp_path / "advanced_settings.json"
+    path = tmp_path / "preferences.json"
     path.write_text(
         json.dumps(
             {
@@ -352,7 +353,7 @@ def test_snapshot_constructor_rejects_values_outside_the_schema_boundary(
 
 
 def test_settings_save_and_load_round_trip(valid_preferences, tmp_path):
-    path = tmp_path / "advanced_settings.json"
+    path = tmp_path / "preferences.json"
     valid_preferences["io_workers"] = " 7 "
     snapshot = settings.require_validated_preferences(valid_preferences)
     settings.save_preferences(snapshot, path)
@@ -372,26 +373,107 @@ def test_default_settings_path_uses_xdg_config_not_state(
     snapshot = settings.require_validated_preferences(valid_preferences)
     settings.save_preferences(snapshot)
     path = Path(settings.preferences_file())
-    assert path == config_home / "caveviewer" / "advanced_settings.json"
-    assert not (state_home / "caveviewer" / "advanced_settings.json").exists()
+    assert path == config_home / "caveviewer" / "preferences.json"
+    assert not (state_home / "caveviewer" / "preferences.json").exists()
     assert path.is_file()
     assert settings.load_preferences()["io_workers"] == valid_preferences[
         "io_workers"
     ]
 
 
-def test_legacy_settings_file_is_migrated_into_preferences_directory():
-    legacy = Path(os.path.expanduser("~")) / ".caveviewer_advanced_settings.json"
-    legacy.write_text('{"io_workers": "6"}', encoding="utf-8")
+def test_previous_settings_file_is_renamed_before_loading(tmp_path, monkeypatch):
+    monkeypatch.setattr(sys, "platform", "linux")
+    config_home = tmp_path / "config"
+    preferences_dir = config_home / "caveviewer"
+    preferences_dir.mkdir(parents=True)
+    previous = preferences_dir / "advanced_settings.json"
+    previous.write_text('{"io_workers": "6"}', encoding="utf-8")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
 
-    migrated = Path(settings.preferences_file())
+    loaded = settings.load_preferences()
 
-    assert migrated.is_file()
-    assert settings.load_preferences(migrated)["io_workers"] == "6"
+    current = preferences_dir / "preferences.json"
+    assert loaded["io_workers"] == "6"
+    assert current.is_file()
+    assert not previous.exists()
+
+
+def test_current_settings_take_precedence_without_touching_previous_file(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(sys, "platform", "linux")
+    config_home = tmp_path / "config"
+    preferences_dir = config_home / "caveviewer"
+    preferences_dir.mkdir(parents=True)
+    current = preferences_dir / "preferences.json"
+    previous = preferences_dir / "advanced_settings.json"
+    current.write_text('{"io_workers": "7"}', encoding="utf-8")
+    previous.write_text('{"io_workers": "6"}', encoding="utf-8")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+
+    loaded = settings.load_preferences()
+
+    assert loaded["io_workers"] == "7"
+    assert previous.read_text(encoding="utf-8") == '{"io_workers": "6"}'
+
+
+def test_failed_settings_rename_loads_previous_file_and_reports_retry(
+    tmp_path,
+    monkeypatch,
+    caplog,
+):
+    monkeypatch.setattr(sys, "platform", "linux")
+    config_home = tmp_path / "config"
+    preferences_dir = config_home / "caveviewer"
+    preferences_dir.mkdir(parents=True)
+    previous = preferences_dir / "advanced_settings.json"
+    previous.write_text('{"io_workers": "6"}', encoding="utf-8")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+    monkeypatch.setattr(
+        preference_paths.os,
+        "rename",
+        lambda *_args: (_ for _ in ()).throw(PermissionError("blocked")),
+    )
+
+    with caplog.at_level(logging.WARNING, logger="caveviewer"):
+        loaded = settings.load_preferences()
+
+    assert loaded["io_workers"] == "6"
+    assert previous.is_file()
+    assert not (preferences_dir / "preferences.json").exists()
+    assert "Could not rename preferences" in caplog.text
+
+
+def test_malformed_previous_settings_are_renamed_then_resolve_to_defaults(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(sys, "platform", "linux")
+    config_home = tmp_path / "config"
+    preferences_dir = config_home / "caveviewer"
+    preferences_dir.mkdir(parents=True)
+    previous = preferences_dir / "advanced_settings.json"
+    previous.write_text("{broken", encoding="utf-8")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+
+    loaded = settings.load_preferences()
+
+    assert loaded == settings.preference_defaults()
+    assert (preferences_dir / "preferences.json").is_file()
+    assert not previous.exists()
+
+
+def test_older_dotfile_settings_are_not_discovered():
+    older = Path(os.path.expanduser("~")) / ".caveviewer_advanced_settings.json"
+    older.write_text('{"io_workers": "6"}', encoding="utf-8")
+
+    assert settings.load_preferences()["io_workers"] == "2"
+    assert not Path(settings.preferences_file()).exists()
 
 
 def test_settings_save_failure_is_reported(valid_preferences, tmp_path, caplog):
-    path = tmp_path / "missing-parent" / "advanced_settings.json"
+    path = tmp_path / "missing-parent" / "preferences.json"
     snapshot = settings.require_validated_preferences(valid_preferences)
     with caplog.at_level(logging.WARNING, logger="caveviewer"):
         with pytest.raises(settings.PreferencesSaveError):
@@ -402,7 +484,7 @@ def test_settings_save_failure_is_reported(valid_preferences, tmp_path, caplog):
 def test_atomic_save_preserves_existing_file_when_replace_fails(
     valid_preferences, tmp_path, monkeypatch
 ):
-    path = tmp_path / "advanced_settings.json"
+    path = tmp_path / "preferences.json"
     path.write_text('{"io_workers": "2"}', encoding="utf-8")
     snapshot = settings.require_validated_preferences(valid_preferences)
 
@@ -456,7 +538,7 @@ def test_runtime_consumers_reject_unvalidated_mappings(
 ):
     with pytest.raises(TypeError, match="Preferences snapshot"):
         settings.save_preferences(
-            valid_preferences, tmp_path / "advanced_settings.json"
+            valid_preferences, tmp_path / "preferences.json"
         )
     with pytest.raises(TypeError, match="Preferences snapshot"):
         settings.preference_env_updates(valid_preferences)

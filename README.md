@@ -183,11 +183,12 @@ The Preferences panel in the startup window controls import and streaming behavi
 
 These values are validated in the UI, applied to environment variables for the current launch, and saved to a local preferences file so they are reused next time.
 
-- Linux preferences file: `~/.config/caveviewer/advanced_settings.json` by default
-- macOS/Windows preferences file: `~/.caveviewer/advanced_settings.json`
+- Linux preferences file: `~/.config/caveviewer/preferences.json` by default
+- macOS/Windows preferences file: `~/.caveviewer/preferences.json`
 
-The stored preferences file keeps the legacy-compatible `advanced_settings.json`
-filename; the UI and source APIs use Preferences terminology.
+When `preferences.json` does not yet exist, CaveViewer renames a sibling
+`advanced_settings.json` once so existing preferences remain available. Older
+preference filenames are not discovered.
 
 - Streaming section controls runtime chunk loading and upload behavior.
 - Import section controls cache-build/import behavior.

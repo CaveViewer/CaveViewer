@@ -860,7 +860,7 @@ Unless overridden, CaveViewer stores files in these locations:
 
 | Kind | Linux default | macOS/Windows default |
 |---|---|---|
-| Preferences | `$XDG_CONFIG_HOME/caveviewer/advanced_settings.json` (`~/.config/...` fallback; legacy-compatible filename) | `~/.caveviewer/advanced_settings.json` |
+| Preferences | `$XDG_CONFIG_HOME/caveviewer/preferences.json` (`~/.config/...` fallback) | `~/.caveviewer/preferences.json` |
 | Remembered chooser locations | `$XDG_STATE_HOME/caveviewer/` (`~/.local/state/...` fallback) | `~/.caveviewer/` |
 | Windows pre-splash diagnostics | — | `~/.caveviewer/diagnostics/startup.log` |
 | Application session diagnostics | `$XDG_STATE_HOME/caveviewer/diagnostics/viewer-session-<id>.log` and `.jsonl` (`~/.local/state/...` fallback) | `~/.caveviewer/diagnostics/viewer-session-<id>.log` and `.jsonl` |

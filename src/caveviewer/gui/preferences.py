@@ -34,10 +34,15 @@ from caveviewer.core.preferences.schema import (
     validate_preferences,
 )
 from caveviewer.core.diagnostics.logging import get_logger
-from caveviewer.gui.preference_paths import migrate_preference_file
+from caveviewer.gui.preference_paths import (
+    migrate_preference_file,
+    preference_file,
+)
 
 
 _LOG = get_logger("Preferences")
+PREFERENCES_FILENAME = "preferences.json"
+PREVIOUS_PREFERENCES_FILENAME = "advanced_settings.json"
 
 
 class PreferencesSaveError(OSError):
@@ -45,11 +50,27 @@ class PreferencesSaveError(OSError):
 
 
 def preferences_file() -> str:
-    # Keep the existing JSON filename for compatibility; only the Python API
-    # has moved to "preferences" terminology.
-    return migrate_preference_file(
-        "advanced_settings.json", ".caveviewer_advanced_settings.json"
+    """Return the sole current application-preferences path."""
+
+    return preference_file(PREFERENCES_FILENAME)
+
+
+def preferences_load_file() -> str:
+    """Return the current path or a readable failed-migration fallback."""
+
+    target = preferences_file()
+    readable_path = migrate_preference_file(
+        PREFERENCES_FILENAME,
+        PREVIOUS_PREFERENCES_FILENAME,
     )
+    if os.path.abspath(readable_path) != os.path.abspath(target):
+        _LOG.warning(
+            "Could not rename preferences from %s to %s; using the old file "
+            "for this run.",
+            readable_path,
+            target,
+        )
+    return readable_path
 
 
 def load_preferences(
@@ -71,7 +92,7 @@ def load_saved_preference_values(
     path = (
         Path(preferences_path)
         if preferences_path is not None
-        else Path(preferences_file())
+        else Path(preferences_load_file())
     )
     try:
         with path.open("r", encoding="utf-8") as file_obj:
