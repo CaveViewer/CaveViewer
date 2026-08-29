@@ -718,6 +718,8 @@ def test_preferences_panel_exposes_backup_and_restore_as_a_separate_tab():
     assert 'page_key == "backup"' in ensure_source
     assert 'button_text="Export preferences…"' in backup_source
     assert 'button_text="Import preferences…"' in backup_source
+    assert 'description="Import saved preferences"' in backup_source
+    assert "Load a preferences.json file" not in backup_source
     assert 'button_text="Restore defaults"' in backup_source
 
 

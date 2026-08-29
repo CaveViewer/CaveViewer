@@ -24,6 +24,10 @@ Implementation commits: Task 1 `c2f782e`; Task 2 `894c89d`; Task 3
 `c8382ba`. The intentional removal of the prior troubleshooting work artifacts
 was committed separately as `f743973` before Task 1.
 
+Follow-up presentation adjustment: the supporting label beneath **Import
+preferences** is **Import saved preferences** and does not expose the underlying
+filename.
+
 ## Compatibility decision
 
 The rename to `preferences.json` includes one compatibility bridge for existing

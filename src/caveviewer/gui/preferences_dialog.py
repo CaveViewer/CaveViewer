@@ -471,7 +471,7 @@ class PreferencesPanel:
         self._render_backup_action(
             transfer_group.content,
             title="Import preferences",
-            description="Load a preferences.json file, review it, then select Apply.",
+            description="Import saved preferences",
             button_text="Import preferences…",
             command=self.import_preferences,
             top_pad=self._form_row_gap(),
