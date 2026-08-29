@@ -34,6 +34,7 @@ from .update_package_reveal import UpdatePackageRevealAdapter
 from .update_package_storage import UpdatePackageStorageAdapter
 from .update_package_install import UpdatePackageInstallerAdapter
 from .saved_artifact_reveal import SavedArtifactRevealAdapter
+from .diagnostic_log_reveal import DiagnosticLogRevealAdapter
 from .recording_process import RecordingProcessAdapter
 from .tls_trust import TlsTrustAdapter
 from .window_backend import (
@@ -70,6 +71,7 @@ __all__ = [
     "UpdatePackageStorageAdapter",
     "UpdatePackageInstallerAdapter",
     "SavedArtifactRevealAdapter",
+    "DiagnosticLogRevealAdapter",
     "RecordingProcessAdapter",
     "TlsTrustAdapter",
     "ViewerWindowLaunchRequest",

@@ -74,6 +74,10 @@ from .saved_artifact_reveal import (
     SavedArtifactRevealAdapter,
     create_saved_artifact_reveal_adapter,
 )
+from .diagnostic_log_reveal import (
+    DiagnosticLogRevealAdapter,
+    create_diagnostic_log_reveal_adapter,
+)
 from .recording_process import (
     RecordingProcessAdapter,
     create_recording_process_adapter,
@@ -258,6 +262,7 @@ class PlatformRuntime:
     update_package_storage_adapter: UpdatePackageStorageAdapter
     update_package_installer_adapter: UpdatePackageInstallerAdapter
     saved_artifact_reveal_adapter: SavedArtifactRevealAdapter
+    diagnostic_log_reveal_adapter: DiagnosticLogRevealAdapter
     recording_process_adapter: RecordingProcessAdapter
     tls_trust_adapter: TlsTrustAdapter
     window_backend_adapter: WindowBackendAdapter
@@ -415,6 +420,7 @@ def create_platform_runtime(
     update_package_storage_adapter: UpdatePackageStorageAdapter | None = None,
     update_package_installer_adapter: UpdatePackageInstallerAdapter | None = None,
     saved_artifact_reveal_adapter: SavedArtifactRevealAdapter | None = None,
+    diagnostic_log_reveal_adapter: DiagnosticLogRevealAdapter | None = None,
     recording_process_adapter: RecordingProcessAdapter | None = None,
     tls_trust_adapter: TlsTrustAdapter | None = None,
     window_backend_adapter: WindowBackendAdapter | None = None,
@@ -464,6 +470,13 @@ def create_platform_runtime(
     resolved_saved_artifact_reveal_adapter = (
         saved_artifact_reveal_adapter
         or create_saved_artifact_reveal_adapter(
+            platform_name=resolved_platform_name,
+            desktop_services=resolved_desktop_services,
+        )
+    )
+    resolved_diagnostic_log_reveal_adapter = (
+        diagnostic_log_reveal_adapter
+        or create_diagnostic_log_reveal_adapter(
             platform_name=resolved_platform_name,
             desktop_services=resolved_desktop_services,
         )
@@ -533,6 +546,7 @@ def create_platform_runtime(
         update_package_storage_adapter=resolved_update_package_storage_adapter,
         update_package_installer_adapter=resolved_update_package_installer_adapter,
         saved_artifact_reveal_adapter=resolved_saved_artifact_reveal_adapter,
+        diagnostic_log_reveal_adapter=resolved_diagnostic_log_reveal_adapter,
         recording_process_adapter=resolved_recording_process_adapter,
         tls_trust_adapter=resolved_tls_trust_adapter,
         window_backend_adapter=resolved_window_backend_adapter,

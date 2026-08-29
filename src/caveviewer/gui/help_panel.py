@@ -13,6 +13,10 @@ from caveviewer.gui.controls_catalog import (
     is_help_shortcut_visible,
     shortcut_keycap_parts,
 )
+from caveviewer.gui.dialog_style import (
+    create_dialog_action_button,
+    set_dialog_action_button,
+)
 from caveviewer.gui.section_spacing import STANDARD_CONTENT_SECTION_SPACING
 from caveviewer.gui.scrollable_content import (
     CanvasScrollbarStyle,
@@ -23,6 +27,10 @@ from caveviewer.gui.top_tab_strip import (
     TopTabbedContentSurface,
     TopTabbedContentSurfaceStyle,
     TopTabStripStyle,
+)
+from caveviewer.gui.troubleshooting_logs import (
+    TroubleshootingLogController,
+    TroubleshootingLogState,
 )
 
 
@@ -200,6 +208,7 @@ class HelpPanel:
         px: Callable[[int | float], int],
         style: HelpPanelStyle,
         sections: Iterable[KeyboardShortcutSection],
+        troubleshooting_controller: TroubleshootingLogController | None = None,
     ) -> None:
         self.parent = parent
         self._px = px
@@ -216,6 +225,16 @@ class HelpPanel:
         if capture_section is not None:
             self._tab_sections["capture"] = capture_help_sections(capture_section)
             self._tabs.append(TopTab("capture", "Capture"))
+        self._tabs.append(TopTab("troubleshooting", "Troubleshooting"))
+        self._troubleshooting_controller = troubleshooting_controller
+        self._troubleshooting_state = TroubleshootingLogState(
+            latest_log=None,
+            status_text=(
+                "No logs yet. A log will appear after CaveViewer records "
+                "an application session."
+            ),
+        )
+        self._troubleshooting_button = None
         self._shell = None
         self._content_canvas = None
         self._scrollbar = None
@@ -275,6 +294,15 @@ class HelpPanel:
         self._action_font = self._create_canvas_font(canvas, style.action_font)
         self._overview_font = self._create_canvas_font(canvas, style.overview_font)
         self._detail_font = self._create_canvas_font(canvas, style.detail_font)
+        self._troubleshooting_button = create_dialog_action_button(
+            canvas,
+            "Show latest log",
+            self._show_latest_log,
+            font=style.overview_font,
+            enabled=False,
+            padx=self._px(12),
+            pady=self._px(7),
+        )
 
         self._scrollbar = CanvasVerticalScrollbar(
             content_shell,
@@ -298,12 +326,14 @@ class HelpPanel:
 
     def _show_tab(self, key: str) -> None:
         """Draw the selected Help table without rebuilding Tk widget trees."""
-        if key not in self._tab_sections:
+        if key not in {*self._tab_sections, "troubleshooting"}:
             return
         if key == self._active_tab_key:
             return
 
         self._active_tab_key = key
+        if key == "troubleshooting":
+            self._refresh_troubleshooting()
         canvas = self._content_canvas
         if canvas is None:
             return
@@ -350,6 +380,9 @@ class HelpPanel:
             width = self._px(320)
 
         canvas.delete("help-content")
+        if active_tab_key == "troubleshooting":
+            self._render_troubleshooting(canvas, width)
+            return
         y = 0
         for section_index, section in enumerate(self._tab_sections[active_tab_key]):
             if section_index:
@@ -372,6 +405,100 @@ class HelpPanel:
         scrollbar = self._scrollbar
         if scrollbar is not None:
             scrollbar.sync_overflow(self._content_height)
+
+    def _refresh_troubleshooting(self) -> None:
+        controller = self._troubleshooting_controller
+        if controller is not None:
+            self._troubleshooting_state = controller.refresh()
+
+    def _show_latest_log(self) -> None:
+        controller = self._troubleshooting_controller
+        if controller is None:
+            return
+        self._troubleshooting_state = controller.reveal_latest()
+        canvas = self._content_canvas
+        if canvas is not None:
+            self._render_table(canvas.winfo_width())
+
+    def _render_troubleshooting(self, canvas, width: int) -> None:
+        """Render the log-reveal action in the shared Help scroll surface."""
+
+        style = self._style
+        state = self._troubleshooting_state
+        y = 0
+        canvas.create_text(
+            0,
+            y,
+            text="APPLICATION LOGS",
+            font=self._canvas_font("section"),
+            fill=style.section_color,
+            anchor="nw",
+            tags="help-content",
+        )
+        y += self._font_line_height("section") + self._px(
+            STANDARD_CONTENT_SECTION_SPACING.heading_to_content_y
+        )
+        description = canvas.create_text(
+            0,
+            y,
+            text="Share the latest log with support to help diagnose a problem.",
+            font=self._canvas_font("action"),
+            fill=style.action_color,
+            anchor="nw",
+            justify="left",
+            width=max(self._px(260), width - self._px(20)),
+            tags="help-content",
+        )
+        bounds = canvas.bbox(description)
+        y += (
+            self._font_line_height("action")
+            if bounds is None
+            else max(1, bounds[3] - bounds[1])
+        ) + self._px(18)
+
+        button = self._troubleshooting_button
+        if button is not None:
+            set_dialog_action_button(button, enabled=state.can_reveal)
+            canvas.create_window(
+                0,
+                y,
+                window=button,
+                anchor="nw",
+                tags="help-content",
+            )
+            try:
+                button.update_idletasks()
+                button_height = max(self._px(36), button.winfo_reqheight())
+            except tk.TclError:
+                button_height = self._px(36)
+            y += button_height + self._px(12)
+
+        if state.status_text:
+            status_item = canvas.create_text(
+                0,
+                y,
+                text=state.status_text,
+                font=self._canvas_font("detail"),
+                fill=("#ff9b90" if state.is_error else style.detail_color),
+                anchor="nw",
+                justify="left",
+                width=max(self._px(260), width - self._px(20)),
+                tags="help-content",
+            )
+            status_bounds = canvas.bbox(status_item)
+            y += (
+                self._font_line_height("detail")
+                if status_bounds is None
+                else max(1, status_bounds[3] - status_bounds[1])
+            )
+
+        self._content_height = max(0, y + self._px(16))
+        try:
+            canvas.configure(scrollregion=(0, 0, width, self._content_height))
+        except tk.TclError:
+            return
+        if self._scrollbar is not None:
+            self._scrollbar.sync_overflow(self._content_height)
 
     def _draw_section_heading(
         self,

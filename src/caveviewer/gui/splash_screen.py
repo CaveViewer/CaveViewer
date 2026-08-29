@@ -60,6 +60,11 @@ from caveviewer.gui.cave_metadata_panel import (
 )
 from caveviewer.gui.controls_catalog import keyboard_control_sections
 from caveviewer.gui.help_panel import HelpPanel, HelpPanelStyle
+from caveviewer.core.diagnostics.catalog import application_log_directory
+from caveviewer.gui.platform.diagnostic_log_reveal import (
+    create_diagnostic_log_reveal_adapter,
+)
+from caveviewer.gui.troubleshooting_logs import TroubleshootingLogController
 from caveviewer.gui.map_library_controller import MapLibraryController
 from caveviewer.gui.map_history import load_recent_map_paths
 from caveviewer.gui.map_library_panel import (
@@ -1899,11 +1904,28 @@ def show_splash_screen(
         panel = help_panel_ref[0]
         if panel is not None:
             return panel
+        log_reveal_adapter = (
+            platform_runtime.diagnostic_log_reveal_adapter
+            if platform_runtime is not None
+            else create_diagnostic_log_reveal_adapter(
+                desktop_services=desktop_services
+            )
+        )
         panel = HelpPanel(
             help_surface,
             px=px,
             style=_help_panel_style(),
             sections=keyboard_control_sections(presentation_profile),
+            troubleshooting_controller=TroubleshootingLogController(
+                directory=application_log_directory(
+                    platform_name=(
+                        platform_runtime.profile.platform_name
+                        if platform_runtime is not None
+                        else None
+                    )
+                ),
+                reveal_adapter=log_reveal_adapter,
+            ),
         )
         panel.create()
         help_panel_ref[0] = panel

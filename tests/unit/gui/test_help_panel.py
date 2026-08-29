@@ -149,3 +149,14 @@ def test_help_panel_is_embedded_and_uses_the_shared_scroll_host():
     assert "tk.Toplevel" not in source
     assert "scrollbar.sync_overflow(self._content_height)" in source
     assert "def focus_content" in source
+
+
+def test_help_panel_exposes_troubleshooting_tab_and_log_action():
+    init_source = inspect.getsource(help_panel.HelpPanel.__init__)
+    create_source = inspect.getsource(help_panel.HelpPanel.create)
+    render_source = inspect.getsource(help_panel.HelpPanel._render_troubleshooting)
+
+    assert 'TopTab("troubleshooting", "Troubleshooting")' in init_source
+    assert '"Show latest log"' in create_source
+    assert "set_dialog_action_button(button, enabled=state.can_reveal)" in render_source
+    assert "APPLICATION LOGS" in render_source
