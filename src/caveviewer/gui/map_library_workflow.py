@@ -92,6 +92,8 @@ from caveviewer.gui.standard_library_maps import (
 
 FeedbackCallback = Callable[..., None]
 
+_ROW_ERROR_DETAIL_MAX_LENGTH = 96
+
 if TYPE_CHECKING:
     from caveviewer.gui.platform.runtime import PlatformRuntime
 
@@ -116,6 +118,23 @@ def _remaining_cache_error(
         except ValueError:
             continue
     return str(error)
+
+
+def _row_error_message(
+    prefix: str,
+    error: BaseException | str | None,
+) -> str:
+    """Return a concise one-line error suitable for a map row subtitle."""
+    if isinstance(error, OSError) and error.strerror:
+        detail = error.strerror
+    else:
+        detail = str(error or "")
+    detail = " ".join(detail.split())
+    if not detail:
+        return prefix
+    if len(detail) > _ROW_ERROR_DETAIL_MAX_LENGTH:
+        detail = f"{detail[: _ROW_ERROR_DETAIL_MAX_LENGTH - 1].rstrip()}…"
+    return f"{prefix}: {detail}"
 
 
 OpenMapCallback = Callable[[str], None]
@@ -1459,15 +1478,15 @@ class MapLibraryWorkflow:
             downloaded=False,
             action_text="Retry",
         )
-        self.set_row_metadata(library_map, row.detail)
         self.set_standard_action(library_map, row)
-        self.show_standard_row_status(library_map, "Download failed", error=True)
-        self.clear_active_download(library_map)
-        self._show_error(
-            f"Couldn't download {library_map.display_name}. "
-            "Check your connection and retry.",
-            max_wraplength=360,
+        # Keep the actual failure beside its Retry control instead of opening a
+        # detached, temporary feedback banner below the map list.
+        self.set_row_metadata(
+            library_map,
+            _row_error_message("Download failed", error),
+            error=True,
         )
+        self.clear_active_download(library_map)
 
     def start_inline_download(self, library_map) -> None:
         """Start a standard-library download from an already resolved row."""
@@ -1529,39 +1548,37 @@ class MapLibraryWorkflow:
                 downloaded=False,
                 action_text="Retry",
             )
-            self.set_row_metadata(library_map, row.detail)
             self.set_standard_action(library_map, row)
-            self.show_standard_row_status(library_map, "Download failed", error=True)
-            self.clear_active_download(library_map)
-            self._show_error(
-                f"Couldn't start the {library_map.display_name} download: {exc}",
-                max_wraplength=360,
+            self.set_row_metadata(
+                library_map,
+                _row_error_message("Download failed", exc),
+                error=True,
             )
+            self.clear_active_download(library_map)
             return
         # The cancel action is created before worker startup so the row responds
         # immediately. Both values are the same factory-created event.
         if owned_cancel_event is not cancel_event:
             cancel_event = owned_cancel_event
 
-    def handle_download_info_unavailable(self, library_map) -> None:
+    def handle_download_info_unavailable(
+        self,
+        library_map,
+        error: BaseException | str | None = None,
+    ) -> None:
         """Put a row into retry state when catalog details are unavailable."""
         row = self.standard_library_row(
             library_map,
             downloaded=False,
             action_text="Retry",
         )
-        self.set_row_metadata(library_map, row.detail)
         self.set_standard_action(library_map, row)
-        self.show_standard_row_status(
+        self.set_row_metadata(
             library_map,
-            "Download info unavailable",
+            _row_error_message("Download info unavailable", error),
             error=True,
         )
         self.set_non_active_actions_enabled(library_map, True)
-        self._show_error(
-            "Couldn't load download info. Check your connection and retry.",
-            max_wraplength=360,
-        )
 
     def _complete_catalog_fetch(self, completion) -> None:
         """Apply one catalog result delivered by the lifecycle owner."""
@@ -1572,7 +1589,10 @@ class MapLibraryWorkflow:
             return
         resolved_map = self.controller.resolve_catalog_entry(pending_map)
         if getattr(resolved_map, "download_url", None) is None:
-            self.handle_download_info_unavailable(pending_map)
+            self.handle_download_info_unavailable(
+                pending_map,
+                error=completion.error,
+            )
             return
         self.start_inline_download(resolved_map)
 

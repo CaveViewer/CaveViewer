@@ -735,7 +735,7 @@ def test_download_completion_restores_cave_metadata_after_progress_status():
     assert state.panel.standard_actions[_standard_key("devils-eye")][0] == "Open"
 
 
-def test_download_failure_returns_to_cave_metadata_after_error_feedback():
+def test_download_failure_keeps_the_actual_error_in_its_map_row():
     library_map = _library_map(
         display_name="Devils Eye",
         catalog_id="devils-eye",
@@ -747,17 +747,44 @@ def test_download_failure_returns_to_cave_metadata_after_error_feedback():
     )
     state.workflow.add_standard_row(library_map)
 
-    state.workflow.finish_download_failure(library_map, RuntimeError("offline"))
+    state.workflow.finish_download_failure(
+        library_map,
+        OSError(28, "No space left on device"),
+    )
+
+    assert state.panel.metadata[_standard_key("devils-eye")] == (
+        "Download failed: No space left on device",
+        True,
+    )
+    assert state.panel.standard_actions[_standard_key("devils-eye")][0] == "Retry"
+    assert not hasattr(state.panel, "standard_status")
+    assert state.feedback == []
+
+
+def test_download_cancellation_restores_normal_map_metadata_without_feedback():
+    library_map = _library_map(
+        display_name="Devils Eye",
+        catalog_id="devils-eye",
+        cave_metadata_id="us-fl-devils-spring-system",
+    )
+    state = _workflow(
+        [library_map],
+        cave_metadata_catalog=load_bundled_cave_metadata_catalog(),
+    )
+    state.workflow.add_standard_row(library_map)
+    state.workflow.set_row_metadata(library_map, "Stopping…")
+
+    state.workflow.finish_download_failure(
+        library_map,
+        state.workflow.download_cancelled_type("cancelled"),
+    )
 
     assert state.panel.metadata[_standard_key("devils-eye")] == (
         "Florida, United States · Underwater cave",
         False,
     )
-    assert state.panel.standard_status == (
-        _standard_key("devils-eye"),
-        "Download failed",
-        True,
-    )
+    assert state.panel.standard_actions[_standard_key("devils-eye")][0] == "Get"
+    assert state.feedback == []
 
 
 def test_map_library_root_change_refreshes_standard_rows():
@@ -1218,6 +1245,27 @@ def test_download_stop_action_requests_cancel_and_stays_in_stop_mode():
     assert state.panel.metadata[_standard_key("Test Cave")] == ("Stopping…", False)
 
 
+def test_download_worker_start_failure_stays_in_its_map_row():
+    library_map = _library_map()
+
+    def fail_to_start_worker(*_args):
+        raise RuntimeError("worker unavailable")
+
+    state = _workflow(
+        [library_map],
+        start_download_worker=fail_to_start_worker,
+    )
+    state.workflow.add_standard_row(library_map)
+
+    state.workflow.start_inline_download(library_map)
+
+    key = _standard_key("Test Cave")
+    assert state.panel.metadata[key] == ("Download failed: worker unavailable", True)
+    assert state.panel.standard_actions[key][0] == "Retry"
+    assert not hasattr(state.panel, "standard_status")
+    assert state.feedback == []
+
+
 def test_close_cancels_active_download_poll_and_closes_menu():
     library_map = _library_map()
     download_calls = []
@@ -1522,14 +1570,13 @@ def test_unavailable_catalog_details_show_retry_state():
     state.workflow.prepare_catalog_for_download(pending_map)
     state.workflow.catalog_workflow.poll()
 
-    assert state.panel.metadata[_standard_key("Test Cave")] == ("", False)
-    assert state.panel.standard_status == (
-        _standard_key("Test Cave"),
-        "Download info unavailable",
+    assert state.panel.metadata[_standard_key("Test Cave")] == (
+        "Download info unavailable: offline",
         True,
     )
     assert state.panel.standard_actions[_standard_key("Test Cave")][0] == "Retry"
-    assert state.feedback[-1][1]["kind"] == "error"
+    assert not hasattr(state.panel, "standard_status")
+    assert state.feedback == []
 
 
 def test_recent_menu_places_rebuild_above_remove_cache_and_never_opens_map():
