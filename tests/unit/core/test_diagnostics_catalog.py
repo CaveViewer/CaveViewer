@@ -71,6 +71,12 @@ def test_catalog_excludes_symlinks_that_could_escape_diagnostics(tmp_path):
         pytest.skip("symlinks are unavailable for this test user")
 
     assert catalog.application_logs(tmp_path) == ()
+    removed = catalog.prune_session_logs(
+        tmp_path,
+        now=time.time() + catalog.DEFAULT_SESSION_LOG_MAX_AGE_SECONDS + 1,
+    )
+    assert removed == ()
+    assert link.is_symlink()
 
 
 def test_latest_readable_application_log_skips_open_failure(tmp_path, monkeypatch):
@@ -107,12 +113,96 @@ def test_prune_session_logs_preserves_startup_and_requested_log(tmp_path):
 
     removed = catalog.prune_session_logs(tmp_path, keep=2, preserve=(logs[0],))
 
-    assert removed == (logs[1],)
+    assert removed == (logs[1], logs[1].with_suffix(".jsonl"))
     assert logs[0].exists()
     assert logs[2].exists()
     assert logs[3].exists()
     assert startup.exists()
     assert not logs[1].with_suffix(".jsonl").exists()
+
+
+def test_prune_session_logs_expires_artifacts_older_than_one_day(tmp_path):
+    now = 1_000_000.0
+    old_log = tmp_path / "viewer-session-old.log"
+    old_jsonl = old_log.with_suffix(".jsonl")
+    orphan_jsonl = tmp_path / "viewer-session-orphan.jsonl"
+    boundary_log = tmp_path / "viewer-session-boundary.log"
+    future_log = tmp_path / "viewer-session-future.log"
+    startup_log = tmp_path / "startup.log"
+    unrelated_log = tmp_path / "benchmark.log"
+    for path in (
+        old_log,
+        old_jsonl,
+        orphan_jsonl,
+        boundary_log,
+        future_log,
+        startup_log,
+        unrelated_log,
+    ):
+        path.write_text(path.name, encoding="utf-8")
+    old_timestamp = now - catalog.DEFAULT_SESSION_LOG_MAX_AGE_SECONDS - 1
+    boundary_timestamp = now - catalog.DEFAULT_SESSION_LOG_MAX_AGE_SECONDS
+    for path in (old_log, old_jsonl, orphan_jsonl):
+        os.utime(path, (old_timestamp, old_timestamp))
+    os.utime(boundary_log, (boundary_timestamp, boundary_timestamp))
+    os.utime(future_log, (now + 60, now + 60))
+    os.utime(startup_log, (old_timestamp, old_timestamp))
+    os.utime(unrelated_log, (old_timestamp, old_timestamp))
+
+    removed = catalog.prune_session_logs(tmp_path, keep=10, now=now)
+
+    assert set(removed) == {old_log, old_jsonl, orphan_jsonl}
+    assert boundary_log.exists()
+    assert future_log.exists()
+    assert startup_log.exists()
+    assert unrelated_log.exists()
+
+
+def test_prune_session_logs_preserves_active_session_even_when_timestamp_is_old(
+    tmp_path,
+):
+    now = 1_000_000.0
+    active_log = tmp_path / "viewer-session-active.log"
+    active_jsonl = active_log.with_suffix(".jsonl")
+    active_log.write_text("active", encoding="utf-8")
+    active_jsonl.write_text("active", encoding="utf-8")
+    old_timestamp = now - catalog.DEFAULT_SESSION_LOG_MAX_AGE_SECONDS - 1
+    os.utime(active_log, (old_timestamp, old_timestamp))
+    os.utime(active_jsonl, (old_timestamp, old_timestamp))
+
+    removed = catalog.prune_session_logs(
+        tmp_path,
+        keep=10,
+        preserve=(active_log,),
+        now=now,
+    )
+
+    assert removed == ()
+    assert active_log.exists()
+    assert active_jsonl.exists()
+
+
+def test_prune_session_logs_ignores_deletion_failure(
+    tmp_path,
+    monkeypatch,
+):
+    now = 1_000_000.0
+    blocked_log = tmp_path / "viewer-session-blocked.log"
+    blocked_log.write_text("blocked", encoding="utf-8")
+    old_timestamp = now - catalog.DEFAULT_SESSION_LOG_MAX_AGE_SECONDS - 1
+    os.utime(blocked_log, (old_timestamp, old_timestamp))
+    original_unlink = type(blocked_log).unlink
+
+    def fail_blocked(path, *args, **kwargs):
+        if path == blocked_log:
+            raise PermissionError(path)
+        return original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(type(blocked_log), "unlink", fail_blocked)
+    removed = catalog.prune_session_logs(tmp_path, keep=10, now=now)
+
+    assert removed == ()
+    assert blocked_log.exists()
 
 
 def test_last_error_excerpt_includes_three_physical_context_lines_and_traceback(

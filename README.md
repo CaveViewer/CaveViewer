@@ -222,9 +222,10 @@ log lines; use **Copy** beside **Last error** to copy that excerpt for a support
 request.
 
 If the current session has not written a log or error yet, the tab shows an
-empty-state explanation instead of opening an unrelated file. CaveViewer keeps
-the newest ten human-readable session logs and does not expose its structured
-JSONL diagnostics through this action.
+empty-state explanation instead of opening an unrelated file. At startup,
+CaveViewer removes session logs older than 24 hours and also keeps no more than
+the newest ten sessions. The Help action does not expose structured JSONL
+diagnostics.
 
 ## Contributing
 

@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from caveviewer.core.diagnostics.catalog import (
+    DEFAULT_SESSION_LOG_MAX_AGE_SECONDS,
     DEFAULT_SESSION_LOG_RETENTION,
     SESSION_LOG_PREFIX,
     application_log_directory,
@@ -176,6 +177,7 @@ def create_runtime_diagnostics(
     path: str | os.PathLike[str] | None = None,
     fault_handler: Any = faulthandler,
     retained_session_logs: int = DEFAULT_SESSION_LOG_RETENTION,
+    session_log_max_age_seconds: float = DEFAULT_SESSION_LOG_MAX_AGE_SECONDS,
 ) -> RuntimeDiagnostics | None:
     """Create cross-platform session diagnostics without blocking startup."""
 
@@ -204,6 +206,7 @@ def create_runtime_diagnostics(
         resolved_path.parent,
         keep=retained_session_logs,
         preserve=(resolved_path,),
+        max_age_seconds=session_log_max_age_seconds,
     )
     return diagnostics
 

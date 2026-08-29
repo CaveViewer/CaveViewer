@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+import time
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,6 +16,7 @@ DIAGNOSTICS_DIRECTORY_NAME = "diagnostics"
 SESSION_LOG_PREFIX = "viewer-session-"
 STARTUP_LOG_FILENAME = "startup.log"
 DEFAULT_SESSION_LOG_RETENTION = 10
+DEFAULT_SESSION_LOG_MAX_AGE_SECONDS = 24 * 60 * 60
 DEFAULT_ERROR_SEARCH_BYTES = 256 * 1024
 DEFAULT_ERROR_DISPLAY_CHARACTERS = 32 * 1024
 _LOG_RECORD_PATTERN = re.compile(
@@ -126,11 +128,37 @@ def prune_session_logs(
     *,
     keep: int = DEFAULT_SESSION_LOG_RETENTION,
     preserve: Iterable[str | os.PathLike[str]] = (),
+    max_age_seconds: float = DEFAULT_SESSION_LOG_MAX_AGE_SECONDS,
+    now: float | None = None,
 ) -> tuple[Path, ...]:
-    """Best-effort remove old session text logs and their JSONL companions."""
+    """Best-effort expire old session artifacts, then apply the count cap."""
 
     retention = max(1, int(keep))
-    preserved = {_normalized_path(path) for path in preserve}
+    preserved_paths = tuple(preserve)
+    preserved = {_normalized_path(path) for path in preserved_paths}
+    preserved.update(
+        _normalized_path(Path(path).with_suffix(".jsonl"))
+        for path in preserved_paths
+    )
+    cutoff = (time.time() if now is None else float(now)) - max(
+        0.0,
+        float(max_age_seconds),
+    )
+    removed: list[Path] = []
+
+    # Age cleanup includes orphan JSONL files left after an interrupted session.
+    for artifact in _session_artifacts(directory):
+        if _normalized_path(artifact) in preserved:
+            continue
+        try:
+            modified_at = artifact.stat().st_mtime
+        except OSError:
+            continue
+        if modified_at >= cutoff:
+            continue
+        if _unlink_session_artifact(artifact):
+            removed.append(artifact)
+
     session_logs = tuple(
         path
         for path in application_logs(directory)
@@ -141,21 +169,17 @@ def prune_session_logs(
         path for path in session_logs if _normalized_path(path) in preserved
     )
 
-    removed: list[Path] = []
     for path in session_logs:
         if path in retained or _normalized_path(path) in preserved:
             continue
-        try:
-            path.unlink()
-        except OSError:
-            continue
-        removed.append(path)
+        if _unlink_session_artifact(path):
+            removed.append(path)
         companion = path.with_suffix(".jsonl")
-        try:
-            if not companion.is_symlink():
-                companion.unlink(missing_ok=True)
-        except OSError:
-            pass
+        if (
+            _normalized_path(companion) not in preserved
+            and _unlink_session_artifact(companion)
+        ):
+            removed.append(companion)
     return tuple(removed)
 
 
@@ -178,6 +202,37 @@ def _is_eligible_log(path: Path) -> bool:
 
 def _normalized_path(path: str | os.PathLike[str]) -> str:
     return os.path.normcase(os.path.abspath(os.fspath(path)))
+
+
+def _session_artifacts(directory: str | os.PathLike[str]) -> tuple[Path, ...]:
+    root = Path(directory)
+    try:
+        candidates = tuple(root.iterdir())
+    except OSError:
+        return ()
+    artifacts = []
+    for path in candidates:
+        if not path.name.startswith(SESSION_LOG_PREFIX):
+            continue
+        if path.suffix not in {".log", ".jsonl"}:
+            continue
+        try:
+            if path.is_symlink() or not path.is_file():
+                continue
+        except OSError:
+            continue
+        artifacts.append(path)
+    return tuple(artifacts)
+
+
+def _unlink_session_artifact(path: Path) -> bool:
+    try:
+        if path.is_symlink() or not path.is_file():
+            return False
+        path.unlink()
+    except OSError:
+        return False
+    return True
 
 
 def _same_file_identity(opened_stat, current_stat) -> bool:

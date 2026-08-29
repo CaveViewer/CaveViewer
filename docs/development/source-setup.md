@@ -895,10 +895,10 @@ The text log records map selection, viewer launch, native-window/context
 construction, and the first render callback. It also receives Python
 fatal-fault tracebacks when available; the matching JSONL file contains the
 same session's structured application events and caught exception tracebacks.
-Each app run uses a new id, and CaveViewer retains the newest ten session-log
-pairs, so a later retry does not immediately overwrite the previous failure's
-logs. JSONL files remain developer diagnostics and are not shown by the Help
-action.
+Each app run uses a new id. At startup, CaveViewer removes session `.log` and
+`.jsonl` files older than 24 hours, including orphan JSONL files, and retains no
+more than the newest ten sessions as a secondary bound. JSONL files remain
+developer diagnostics and are not shown by the Help action.
 
 Disk-space checks therefore target the filesystem that will hold the cache,
 which is normally the map's filesystem unless an explicit cache root is set.

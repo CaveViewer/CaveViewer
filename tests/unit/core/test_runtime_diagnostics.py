@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 
 from caveviewer.core.diagnostics import runtime
 
@@ -102,6 +103,30 @@ def test_runtime_diagnostics_prune_old_session_logs_and_jsonl(tmp_path):
     assert not (diagnostics_directory / "viewer-session-0.jsonl").exists()
     assert not (diagnostics_directory / "viewer-session-1.jsonl").exists()
     assert not (diagnostics_directory / "viewer-session-2.jsonl").exists()
+
+
+def test_runtime_diagnostics_expire_session_logs_older_than_one_day(tmp_path):
+    diagnostics_directory = tmp_path / "diagnostics"
+    diagnostics_directory.mkdir()
+    expired_log = diagnostics_directory / "viewer-session-expired.log"
+    expired_log.write_text("expired", encoding="utf-8")
+    expired_log.with_suffix(".jsonl").write_text("expired", encoding="utf-8")
+    os.utime(expired_log, (1, 1))
+    os.utime(expired_log.with_suffix(".jsonl"), (1, 1))
+
+    current_path = diagnostics_directory / "viewer-session-current.log"
+    diagnostics = runtime.create_runtime_diagnostics(
+        platform_name="win32",
+        path=current_path,
+        session_id="current",
+        fault_handler=_FaultHandler(),
+    )
+
+    assert diagnostics is not None
+    diagnostics.close()
+    assert not expired_log.exists()
+    assert not expired_log.with_suffix(".jsonl").exists()
+    assert current_path.exists()
 
 
 def test_runtime_diagnostics_preserve_an_existing_fault_handler(tmp_path):
