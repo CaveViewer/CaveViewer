@@ -78,8 +78,14 @@ def test_every_platform_package_preserves_license_and_notices() -> None:
 
 def test_third_party_notices_retain_separate_license_terms() -> None:
     notices = _read("THIRD_PARTY_NOTICES.md")
+    retry_svg = _read("src/caveviewer/resources/images/ui/retry.svg")
 
     assert "MIT License" in notices
     assert "zlib/libpng license" in notices
     assert "SIL Open Font License 1.1" in notices
+    assert "Font Awesome Free 7.3.1" in notices
+    assert "arrow-rotate-right" in notices
+    assert "CC BY 4.0" in notices
+    assert "Font Awesome Free 7.3.1" in retry_svg
+    assert "License - https://fontawesome.com/license/free" in retry_svg
     assert "third-party" in notices.lower()

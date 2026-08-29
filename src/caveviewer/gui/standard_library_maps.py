@@ -1418,7 +1418,8 @@ def _legacy_standard_library_map_paths(
     return legacy_paths
 
 
-def _standard_library_publish_staging_prefix(dest_dir: str) -> str:
+def _standard_library_workspace_prefix(dest_dir: str) -> str:
+    """Return a hidden work-directory prefix for one destination-local install."""
     name = os.path.basename(os.path.normpath(dest_dir)) or "standard-library-map"
     safe_name = "".join(
         char if char.isalnum() or char in "._-" else "-"
@@ -1486,35 +1487,6 @@ def _publish_standard_library_map_directory(staging_dir: str, dest_dir: str) -> 
             )
 
 
-def _copy_and_publish_standard_library_map(
-    source_root: str,
-    dest_dir: str,
-    raise_if_cancelled: Callable[[], None],
-) -> None:
-    """
-    Copy an extracted standard-library map to private sibling staging, then publish it.
-
-    The sibling staging directory keeps the final rename on the destination
-    filesystem. If copying or publishing fails, the old installed map-library entry is
-    left in place and the unpublished staging tree is removed.
-    """
-    publish_dest_dir = os.path.abspath(dest_dir)
-    parent_dir = os.path.dirname(publish_dest_dir)
-    os.makedirs(parent_dir, exist_ok=True)
-    publish_staging_dir = tempfile.mkdtemp(
-        prefix=_standard_library_publish_staging_prefix(dest_dir),
-        dir=parent_dir,
-    )
-    try:
-        shutil.copytree(source_root, publish_staging_dir, dirs_exist_ok=True)
-        raise_if_cancelled()
-        _publish_standard_library_map_directory(publish_staging_dir, publish_dest_dir)
-        publish_staging_dir = ""
-    finally:
-        if publish_staging_dir:
-            shutil.rmtree(publish_staging_dir, ignore_errors=True)
-
-
 def download_standard_library_map_archive(
     download_url: str,
     expected_size_bytes: int | None,
@@ -1570,8 +1542,15 @@ def download_and_extract_standard_library_map(
     raise_if_cancelled()
     dest_dir = local_standard_library_map_path(install_dir, sample)
     os.makedirs(_map_library_container_dir(install_dir, sample), exist_ok=True)
+    workspace_parent = os.path.dirname(os.path.abspath(dest_dir))
 
-    with tempfile.TemporaryDirectory(prefix="caveviewer_map_library_") as tmp_dir:
+    # Large maps can expand far beyond their archive size.  Keep both the ZIP and
+    # its extracted tree on the filesystem selected for the Map Library instead of
+    # Linux's commonly quota-limited /tmp tmpfs.
+    with tempfile.TemporaryDirectory(
+        prefix=_standard_library_workspace_prefix(dest_dir),
+        dir=workspace_parent,
+    ) as tmp_dir:
         zip_path = os.path.join(tmp_dir, sample.asset_name)
 
         download_standard_library_map_archive(
@@ -1602,7 +1581,7 @@ def download_and_extract_standard_library_map(
             source_root = staging_dir
 
         raise_if_cancelled()
-        _copy_and_publish_standard_library_map(source_root, dest_dir, raise_if_cancelled)
+        _publish_standard_library_map_directory(source_root, dest_dir)
 
     record_managed_standard_library_map_install(sample, dest_dir)
     _LOG.info("Map library entry extracted: %s", dest_dir)

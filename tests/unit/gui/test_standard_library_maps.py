@@ -1014,10 +1014,30 @@ def test_successful_standard_library_download_extracts_expected_layout(
             progress_cb(1, 1)
 
     progress = []
+    temporary_directory_calls = []
+    real_temporary_directory = standard_library_maps.tempfile.TemporaryDirectory
+
+    def record_temporary_directory(*args, **kwargs):
+        temporary_directory_calls.append((args, kwargs))
+        return real_temporary_directory(*args, **kwargs)
+
+    def unexpected_copytree(*_args, **_kwargs):
+        raise AssertionError("map publication should not copy the extracted tree")
+
     monkeypatch.setattr(
         standard_library_maps,
         "download_standard_library_map_archive",
         create_zip,
+    )
+    monkeypatch.setattr(
+        standard_library_maps.tempfile,
+        "TemporaryDirectory",
+        record_temporary_directory,
+    )
+    monkeypatch.setattr(
+        standard_library_maps.shutil,
+        "copytree",
+        unexpected_copytree,
     )
 
     result = standard_library_maps.download_and_extract_standard_library_map(
@@ -1030,6 +1050,9 @@ def test_successful_standard_library_download_extracts_expected_layout(
     assert not list(destination.parent.glob(".Test-Cave.tmp-*"))
     assert not list(destination.parent.glob(".Test-Cave.tmp-*.previous"))
     assert progress == [(1, 1)]
+    assert temporary_directory_calls == [
+        ((), {"prefix": ".Test-Cave.tmp-", "dir": str(destination.parent)})
+    ]
 
 
 def test_standard_library_download_rejects_sha256_mismatch(tmp_path, monkeypatch):
@@ -1092,7 +1115,7 @@ def test_standard_library_download_accepts_matching_sha256(tmp_path, monkeypatch
     assert result == str(tmp_path / "Test Cave")
 
 
-def test_standard_library_publish_copy_failure_preserves_existing_install_and_cleans_staging(
+def test_standard_library_extraction_failure_preserves_existing_install_and_cleans_workspace(
     tmp_path, monkeypatch
 ):
     sample = standard_library_maps.StandardLibraryMapInfo(
@@ -1108,19 +1131,18 @@ def test_standard_library_publish_copy_failure_preserves_existing_install_and_cl
             archive.writestr("map.obj", "new mesh")
             archive.writestr("map.mtl", "newmtl rock")
 
-    def fail_copytree(_source, dest, *args, **kwargs):
-        del args, kwargs
-        Path(dest, "partial.obj").write_text("partial", encoding="utf-8")
-        raise OSError("copy failed")
+    def fail_extract(_archive, _member, target_dir, _password=None):
+        Path(target_dir, "partial.obj").write_text("partial", encoding="utf-8")
+        raise OSError("extract failed")
 
     monkeypatch.setattr(
         standard_library_maps,
         "download_standard_library_map_archive",
         create_zip,
     )
-    monkeypatch.setattr(standard_library_maps.shutil, "copytree", fail_copytree)
+    monkeypatch.setattr(standard_library_maps.zipfile.ZipFile, "extract", fail_extract)
 
-    with pytest.raises(OSError, match="copy failed"):
+    with pytest.raises(OSError, match="extract failed"):
         standard_library_maps.download_and_extract_standard_library_map(str(tmp_path), sample)
 
     assert marker.read_text(encoding="utf-8") == "existing map"
@@ -1145,12 +1167,15 @@ def test_standard_library_publish_failure_restores_existing_install_and_cleans_s
 
     real_replace = standard_library_maps.os.replace
 
+    publish_failed = [False]
+
     def fail_new_publish(source, dest):
         if (
-            Path(source).name.startswith(".Test-Cave.tmp-")
-            and not Path(source).name.endswith(".previous")
+            not publish_failed[0]
+            and Path(source) != destination
             and Path(dest) == destination
         ):
+            publish_failed[0] = True
             raise OSError("publish failed")
         real_replace(source, dest)
 
@@ -1205,9 +1230,9 @@ def test_cancelled_standard_library_download_removes_temporary_files_and_preserv
     destination.mkdir(parents=True)
     marker = destination / "map.obj"
     marker.write_text("existing map", encoding="utf-8")
-    temp_root = tmp_path / "temporary-downloads"
-    temp_root.mkdir()
-    monkeypatch.setattr(standard_library_maps.tempfile, "tempdir", str(temp_root))
+    system_temp_root = tmp_path / "system-temp"
+    system_temp_root.mkdir()
+    monkeypatch.setattr(standard_library_maps.tempfile, "tempdir", str(system_temp_root))
     cancel_requested = [False]
     partial_paths = []
 
@@ -1236,7 +1261,9 @@ def test_cancelled_standard_library_download_removes_temporary_files_and_preserv
 
     assert marker.read_text(encoding="utf-8") == "existing map"
     assert partial_paths and not partial_paths[0].exists()
-    assert list(temp_root.iterdir()) == []
+    assert partial_paths[0].parent.parent == tmp_path
+    assert not list(tmp_path.glob(".Test-Cave.tmp-*"))
+    assert list(system_temp_root.iterdir()) == []
 
 
 def test_retry_after_cancellation_starts_a_fresh_standard_library_download(

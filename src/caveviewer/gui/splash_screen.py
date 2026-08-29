@@ -101,6 +101,7 @@ from caveviewer.gui.splash_visuals import (
     VectorPath,
     VectorPolygon,
     fit_splash_background,
+    progress_control_photo,
     progress_ring_photo,
     vector_icon_photo,
 )
@@ -251,6 +252,9 @@ _LIBRARY_PROGRESS_TRACK_COLOR = DARK_THEME.entry_background
 _LIBRARY_PROGRESS_FILL_COLOR = DARK_THEME.primary_button
 _LIBRARY_ACTION_PROGRESS_RING_DIAMETER = 22
 _LIBRARY_ACTION_PROGRESS_RING_STROKE_WIDTH = 2
+# The circular retry arrow is visually denser than the neighboring chevron and
+# download glyphs, so it deliberately receives a smaller optical footprint.
+_LIBRARY_ACTION_RETRY_ICON_DIAMETER = 18
 _LIBRARY_ACTION_STOP_SIZE = 7
 _LIBRARY_ACTION_BUTTON_SIZE = 32
 _LIBRARY_ACTION_ICON_STROKE_WIDTH = 2
@@ -438,6 +442,7 @@ def _map_library_panel_style() -> MapLibraryPanelStyle:
         progress_fill_color=_LIBRARY_PROGRESS_FILL_COLOR,
         action_progress_ring_diameter=_LIBRARY_ACTION_PROGRESS_RING_DIAMETER,
         action_progress_ring_stroke_width=_LIBRARY_ACTION_PROGRESS_RING_STROKE_WIDTH,
+        action_retry_icon_diameter=_LIBRARY_ACTION_RETRY_ICON_DIAMETER,
         action_stop_size=_LIBRARY_ACTION_STOP_SIZE,
         action_button_size=_LIBRARY_ACTION_BUTTON_SIZE,
         action_icon_stroke_width=_LIBRARY_ACTION_ICON_STROKE_WIDTH,
@@ -1564,7 +1569,7 @@ def show_splash_screen(
         update_cancel_button.bind(sequence, _invoke_update_cancel)
 
     def _draw_update_cancel_button(progress_fraction: float) -> None:
-        """Draw the anti-aliased map-download stop/progress pattern."""
+        """Draw the anti-aliased update-download stop/progress pattern."""
         update_cancel_button.delete("all")
         size = update_cancel_button_size
         inset = px(3)
@@ -1572,7 +1577,8 @@ def show_splash_screen(
         clamped = max(0.0, min(1.0, float(progress_fraction)))
         stroke_width = max(1, px(2))
         ring_diameter = max(1, size - inset * 2)
-        ring_photo = progress_ring_photo(
+        stop_size = 2 * max(2, px(3))
+        progress_photo = progress_control_photo(
             update_cancel_button,
             image_size=ring_diameter + stroke_width * 2,
             ring_diameter=ring_diameter,
@@ -1581,22 +1587,17 @@ def show_splash_screen(
             fill_color=_BUTTON_BG,
             start_degrees=90,
             extent_degrees=-360 * clamped,
+            center_glyph="stop",
+            center_glyph_size=stop_size,
+            center_glyph_color=_BUTTON_BG,
         )
-        update_cancel_button._cv_progress_ring_photo = ring_photo
+        # Keep the stop square in the ring's high-DPI raster so both share an
+        # exact center rather than relying on separate Canvas coordinates.
+        update_cancel_button._cv_progress_control_photo = progress_photo
         update_cancel_button.create_image(
             size / 2,
             size / 2,
-            image=ring_photo,
-        )
-        stop_half_size = max(2, px(3))
-        center = size / 2
-        update_cancel_button.create_rectangle(
-            center - stop_half_size,
-            center - stop_half_size,
-            center + stop_half_size,
-            center + stop_half_size,
-            fill=_BUTTON_BG,
-            outline="",
+            image=progress_photo,
         )
 
     def _set_update_cluster_visible(visible: bool) -> None:
