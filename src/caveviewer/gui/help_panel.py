@@ -28,6 +28,20 @@ from caveviewer.gui.top_tab_strip import (
 
 _CAPTURE_HELP_LAYOUT = (
     (
+        "capture-control",
+        "Capture Control",
+        (
+            (
+                "capture-cancel",
+                "Cancel active capture",
+                "Only one capture can run at a time. Other capture shortcuts "
+                "are ignored; Escape discards the active capture and removes "
+                "partial files, then confirms that nothing was saved before "
+                "the viewer closes.",
+            ),
+        ),
+    ),
+    (
         "video",
         "Video",
         (

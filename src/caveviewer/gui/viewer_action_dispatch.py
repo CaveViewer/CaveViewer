@@ -19,6 +19,7 @@ class ViewerKeyPressActions:
     """Handlers considered, in priority order, for one key press."""
 
     window_shortcut: ViewerKeyAction
+    capture_escape: ViewerKeyAction
     recorded_dive: ViewerKeyAction
     begin_screen: ViewerKeyAction
     fly_speed: ViewerKeyAction
@@ -26,7 +27,6 @@ class ViewerKeyPressActions:
     manual_dive_trace: ViewerKeyAction
     slice: ViewerKeyAction
     recording: ViewerKeyAction
-    slice_escape: ViewerKeyAction
     reset_view: ViewerKeyAction
 
 
@@ -37,6 +37,9 @@ class ViewerActionDispatcher:
         """Run press actions until one consumes the key event."""
         for action in (
             actions.window_shortcut,
+            # CaveViewer must see Escape before overlays consume arbitrary
+            # keys so it can choose cancel-and-close instead of backend save.
+            actions.capture_escape,
             actions.recorded_dive,
             actions.begin_screen,
             actions.fly_speed,
@@ -44,7 +47,6 @@ class ViewerActionDispatcher:
             actions.manual_dive_trace,
             actions.slice,
             actions.recording,
-            actions.slice_escape,
             actions.reset_view,
         ):
             if action():

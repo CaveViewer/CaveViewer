@@ -133,10 +133,11 @@ def test_recording_help_copy_is_shortcut_only_and_format_neutral():
     assert rows["Ctrl + R"] == "Start/stop recording"
     assert rows["Ctrl + T"] == "Start/stop manual trace"
     assert rows["Ctrl + C"] == "Start/stop slice"
-    assert rows["Escape"] == "Cancel active slice"
+    assert rows["Escape"] == "Cancel active capture"
     assert rows["Space"] == "Pause/resume Recorded Dive"
     assert rows["Arrow keys"] == "Look left, right, up, and down"
-    assert rows["Ctrl + Shift + P"] == "Pause active import"
+    assert "Ctrl + Shift + P" not in rows
+    assert "Pause active import" not in rows.values()
     assert "Ctrl + Shift + 1–9" not in rows
 
 
@@ -167,7 +168,7 @@ def test_control_help_copy_uses_profile_for_macos_shortcuts():
     assert rows["Cmd + 0"] == "Reset view (level horizon)"
     assert rows["Cmd + 1–9"] == "Save camera bookmark"
     assert rows["Cmd + O"] == "Open another map"
-    assert rows["Escape"] == "Cancel active slice"
+    assert rows["Escape"] == "Cancel active capture"
     assert "Cmd + W" not in rows
     assert rows["Cmd + R"] == "Start/stop recording"
     assert rows["Cmd + T"] == "Start/stop manual trace"
@@ -188,7 +189,7 @@ def test_control_help_copy_uses_profile_for_control_shortcuts():
     assert rows["Ctrl + 1–9"] == "Save camera bookmark"
     assert "Ctrl + A" not in rows
     assert rows["Ctrl + O"] == "Open another map"
-    assert rows["Escape"] == "Cancel active slice"
+    assert rows["Escape"] == "Cancel active capture"
     assert "Ctrl + W" not in rows
     assert rows["Ctrl + R"] == "Start/stop recording"
     assert rows["Ctrl + T"] == "Start/stop manual trace"

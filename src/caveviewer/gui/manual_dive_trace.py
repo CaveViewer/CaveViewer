@@ -115,6 +115,7 @@ class ManualDiveTraceResult:
     partial_path: str
     completed: bool
     error: str | None
+    canceled: bool = False
 
 
 class ManualDiveTraceRecorder:
@@ -148,7 +149,9 @@ class ManualDiveTraceRecorder:
         )
         self._result_lock = threading.Lock()
         self._writer_done = threading.Event()
+        self._cancel_requested = threading.Event()
         self._writer_error: str | None = None
+        self._cancel_cleanup_error: str | None = None
         self._final_record: dict[str, Any] | None = None
         self._thread: threading.Thread | None = None
         self._active = False
@@ -349,14 +352,58 @@ class ManualDiveTraceRecorder:
         self._enqueue_stop()
         return self.output_path
 
+    def cancel(self) -> bool:
+        """Stop the writer and discard every queued or on-disk trace artifact."""
+        if self._thread is None:
+            return False
+        if self._writer_done.is_set():
+            self._cancel_requested.set()
+            self._active = False
+            # Publication may finish between the user's stop and Escape key.
+            # Move late deletion back to a worker so the render thread never
+            # performs filesystem cleanup.
+            self._writer_done.clear()
+            self._thread = threading.Thread(
+                target=self._cleanup_published_cancellation,
+                name="caveviewer-manual-dive-trace-cancel",
+                daemon=False,
+            )
+            try:
+                self._thread.start()
+            except RuntimeError as exc:
+                with self._result_lock:
+                    self._cancel_cleanup_error = (
+                        f"Could not start trace cleanup: {exc}"
+                    )
+                self._writer_done.set()
+            return True
+        self._cancel_requested.set()
+        self._active = False
+        self._final_record = None
+        # Releasing queued pose dictionaries here bounds cancellation memory;
+        # the writer still owns any record it is currently flushing.
+        self._discard_queued_records()
+        self._enqueue_stop()
+        return True
+
     def poll_result(self) -> ManualDiveTraceResult | None:
         if not self._writer_done.is_set():
             return None
+        canceled = self._cancel_requested.is_set()
+        with self._result_lock:
+            error = (
+                self._cancel_cleanup_error if canceled else self._writer_error
+            )
         return ManualDiveTraceResult(
             output_path=self.output_path,
             partial_path=os.fspath(self._partial_path),
-            completed=self._writer_error is None and self._output_path.exists(),
-            error=self._writer_error,
+            completed=(
+                not canceled
+                and error is None
+                and self._output_path.exists()
+            ),
+            error=error,
+            canceled=canceled,
         )
 
     def wait(self, timeout: float = 2.0) -> ManualDiveTraceResult | None:
@@ -419,6 +466,14 @@ class ManualDiveTraceRecorder:
             return
         self._dropped_sample_count += 1
 
+    def _discard_queued_records(self) -> None:
+        """Release all queued trace records before cancellation finalizes."""
+        while True:
+            try:
+                self._queue.get_nowait()
+            except queue.Empty:
+                return
+
     def _enqueue_stop(self) -> None:
         while True:
             try:
@@ -436,6 +491,8 @@ class ManualDiveTraceRecorder:
                 while True:
                     record = self._queue.get()
                     if record is _STOP_WRITER:
+                        if self._cancel_requested.is_set():
+                            break
                         final_record = dict(self._final_record or {})
                         final_record["sample_count"] = self._sample_count
                         final_record["dropped_sample_count"] = (
@@ -449,11 +506,44 @@ class ManualDiveTraceRecorder:
             # Windows cannot replace a file that this process still has open.
             # Closing the temporary sibling before publishing preserves the
             # atomic replacement guarantee on every supported platform.
-            os.replace(self._partial_path, self._output_path)
+            if not self._cancel_requested.is_set():
+                os.replace(self._partial_path, self._output_path)
         except Exception as exc:
             with self._result_lock:
                 self._writer_error = f"{type(exc).__name__}: {exc}"
         finally:
+            if self._cancel_requested.is_set():
+                cleanup_error = self._remove_canceled_artifacts()
+                with self._result_lock:
+                    self._cancel_cleanup_error = cleanup_error
+            self._writer_done.set()
+
+    def _remove_canceled_artifacts(self) -> str | None:
+        """Remove private and published paths after a cancellation request."""
+        failures: list[str] = []
+        for path in (self._partial_path, self._output_path):
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                failures.append(f"{path}: {type(exc).__name__}: {exc}")
+        if not failures:
+            return None
+        return "Could not remove canceled trace files: " + "; ".join(failures)
+
+    def _cleanup_published_cancellation(self) -> None:
+        """Remove a just-published trace without blocking the render thread."""
+        cleanup_error: str | None = None
+        try:
+            cleanup_error = self._remove_canceled_artifacts()
+        except Exception as exc:
+            cleanup_error = f"Could not remove canceled trace files: {exc}"
+        finally:
+            with self._result_lock:
+                self._cancel_cleanup_error = cleanup_error
+            # Always release capture ownership, even if an unexpected cleanup
+            # implementation failure escaped the normal per-path handling.
             self._writer_done.set()
 
 

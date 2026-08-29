@@ -81,6 +81,33 @@ def test_slice_countdown_uses_the_next_segment_for_the_current_cave(monkeypatch,
     assert window._slice_root_cave_name == "Ginnie Springs"
 
 
+def test_slice_cannot_start_while_video_owns_capture(tmp_path):
+    window = _slice_window(tmp_path)
+    window._recording_session = object()
+    window._recording_stop_thread = None
+
+    assert window._start_slice_countdown() is False
+
+    assert not window._ensure_slice_selection_controller().countdown_active
+    assert window._recording_status_message == "Capture in progress"
+    assert window._recording_status_detail == (
+        "Finish or cancel the current video recording before starting a new cave slice."
+    )
+
+
+def test_slice_cannot_start_while_dive_trace_owns_capture(tmp_path):
+    window = _slice_window(tmp_path)
+    window._manual_dive_trace = object()
+
+    assert window._start_slice_countdown() is False
+
+    assert not window._ensure_slice_selection_controller().countdown_active
+    assert window._recording_status_message == "Capture in progress"
+    assert window._recording_status_detail == (
+        "Finish or cancel the current dive trace before starting a new cave slice."
+    )
+
+
 def test_slice_prefers_visible_parent_map_name_over_opaque_source_model(
     monkeypatch,
     tmp_path,
@@ -151,6 +178,54 @@ def test_finish_slice_uses_current_camera_as_end_anchor_and_starts_export(tmp_pa
     assert launched[0].root_cave_name == "Ginnie Springs"
     assert selection.saving
     assert statuses[-1].message == "Saving slice…"
+    assert statuses[-1].detail == (
+        "Finishing the file. Press Esc to cancel. Keep CaveViewer open."
+    )
+
+
+def test_escape_discards_active_slice_selection_and_context(monkeypatch, tmp_path):
+    monkeypatch.setattr(viewer_window.time, "perf_counter", lambda: 10.0)
+    window = _slice_window(tmp_path)
+    selection = window._ensure_slice_selection_controller()
+    selection.start_countdown(now=0.0, start_number=0)
+    assert selection.begin_selection((1.0, 2.0, 3.0))
+    window._slice_source_cache_dir = window.cache_dir
+    window._slice_storage_parent = str(tmp_path / "maps")
+    window._slice_display_base = "Ginnie Springs - Segment 1"
+    window._slice_root_cave_name = "Ginnie Springs"
+
+    assert window._cancel_active_capture() is True
+
+    assert not selection.selection_active
+    assert selection.start_anchor is None
+    assert window._slice_source_cache_dir is None
+    assert window._slice_storage_parent is None
+    assert window._recording_status_message == "Slice canceled"
+    assert window._recording_status_detail == "No slice was saved."
+    assert window._recording_status_until == pytest.approx(13.0)
+
+
+def test_escape_requests_slice_export_cleanup(tmp_path):
+    window = _slice_window(tmp_path)
+    cancel_requests = []
+
+    class FakeExporter:
+        active = True
+
+        def request_cancel(self):
+            cancel_requests.append(True)
+            return True
+
+    window.__dict__["_slice_export_controller"] = FakeExporter()
+
+    assert window._cancel_active_capture() is True
+
+    assert cancel_requests == [True]
+    assert window._recording_status_message == "Canceling slice…"
+    assert window._recording_status_detail == (
+        "Stopping capture and removing partial files. "
+        "CaveViewer will close automatically."
+    )
 
 
 def test_slice_storage_directory_uses_the_preferences_map_library(monkeypatch, tmp_path):

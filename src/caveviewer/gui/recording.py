@@ -26,7 +26,8 @@ class RecordingStopWork:
 
     ``show_message`` controls HUD feedback. ``reveal_on_success`` is reserved
     for an explicit user stop, so an internally interrupted capture cannot
-    unexpectedly open a file manager.
+    unexpectedly open a file manager. ``cancel_event`` may be set while the
+    worker is finalizing to turn publication into discard-and-cleanup.
     """
 
     process: subprocess.Popen
@@ -36,6 +37,7 @@ class RecordingStopWork:
     stderr_thread: threading.Thread | None
     show_message: bool
     reveal_on_success: bool = False
+    cancel_event: threading.Event = field(default_factory=threading.Event)
 
 
 @dataclass(frozen=True)
@@ -49,6 +51,8 @@ class RecordingStopResult:
     dropped_frames: int
     show_message: bool
     reveal_on_success: bool = False
+    canceled: bool = False
+    cleanup_error: str | None = None
 
 
 @dataclass
@@ -114,9 +118,9 @@ class RecordingEncoderSession:
         )
         self.stderr_thread.start()
 
-    def signal_writer_stop(self) -> None:
-        """Ask the writer worker to finish after queued frames are drained."""
-        signal_writer_stop(self.frame_queue)
+    def signal_writer_stop(self, *, discard_pending: bool = False) -> None:
+        """Ask the writer worker to finish, optionally dropping queued frames."""
+        signal_writer_stop(self.frame_queue, discard_pending=discard_pending)
 
     def stopped_before_finalization(self) -> bool:
         """Return whether the encoder exited or its writer failed early."""
@@ -127,6 +131,7 @@ class RecordingEncoderSession:
         *,
         show_message: bool,
         reveal_on_success: bool = False,
+        cancel_event: threading.Event | None = None,
     ) -> RecordingStopWork:
         """Package this active session for asynchronous stop finalization."""
         return RecordingStopWork(
@@ -137,6 +142,9 @@ class RecordingEncoderSession:
             stderr_thread=self.stderr_thread,
             show_message=show_message,
             reveal_on_success=reveal_on_success,
+            cancel_event=(
+                cancel_event if cancel_event is not None else threading.Event()
+            ),
         )
 
 
@@ -293,10 +301,20 @@ def recording_failure_detail(stderr_text: str) -> str:
     return "Video could not be saved"
 
 
-def signal_writer_stop(frame_queue: queue.Queue | None) -> None:
-    """Queue a sentinel for the writer thread, dropping one frame if needed."""
+def signal_writer_stop(
+    frame_queue: queue.Queue | None,
+    *,
+    discard_pending: bool = False,
+) -> None:
+    """Queue a sentinel, optionally releasing every pending raw frame first."""
     if frame_queue is None:
         return
+    if discard_pending:
+        while True:
+            try:
+                frame_queue.get_nowait()
+            except queue.Empty:
+                break
     try:
         frame_queue.put_nowait(None)
         return
@@ -371,6 +389,7 @@ def finalize_stop_worker(
     """Finalize the encoder process and return its terminal result."""
     process = work.process
     finalize_error: Exception | None = None
+    cleanup_error: str | None = None
     try:
         if work.writer_thread is not None:
             work.writer_thread.join(timeout=2.0)
@@ -398,6 +417,20 @@ def finalize_stop_worker(
         finalize_error = exc
         logger.warning("Recording finalizer failed: %s", exc)
 
+    canceled = work.cancel_event.is_set()
+    if canceled and work.output_path:
+        try:
+            os.remove(work.output_path)
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            cleanup_error = f"{type(exc).__name__}: {exc}"
+            logger.warning(
+                "Could not remove canceled recording %s: %s",
+                work.output_path,
+                exc,
+            )
+
     return RecordingStopResult(
         output_path=work.output_path,
         returncode=process.returncode,
@@ -406,6 +439,8 @@ def finalize_stop_worker(
         dropped_frames=dropped_frames(),
         show_message=work.show_message,
         reveal_on_success=work.reveal_on_success,
+        canceled=canceled,
+        cleanup_error=cleanup_error,
     )
 
 

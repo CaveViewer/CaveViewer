@@ -139,6 +139,43 @@ def test_manual_trace_writes_start_samples_and_completion(tmp_path):
     }
 
 
+def test_manual_trace_cancel_discards_queue_and_all_disk_artifacts(tmp_path):
+    recorder = _recorder(
+        tmp_path,
+        sample_interval_s=0.0,
+        sample_distance_m=0.0,
+    )
+    output_path = Path(recorder.start(_pose(), now=10.0))
+    recorder.observe(_pose(1.0), now=10.1)
+    partial_path = output_path.parent / f".{output_path.name}.part"
+
+    assert recorder.cancel() is True
+
+    result = recorder.wait()
+    assert result is not None
+    assert result.canceled is True
+    assert result.completed is False
+    assert result.error is None
+    assert not output_path.exists()
+    assert not partial_path.exists()
+
+
+def test_manual_trace_can_cancel_a_completed_but_unpolled_publication(tmp_path):
+    recorder = _recorder(tmp_path)
+    output_path = Path(recorder.start(_pose(), now=10.0))
+    recorder.stop(_pose(1.0), now=10.1)
+    assert recorder.wait().completed is True
+    assert output_path.exists()
+
+    assert recorder.cancel() is True
+
+    result = recorder.wait()
+    assert result is not None
+    assert result.canceled is True
+    assert result.error is None
+    assert not output_path.exists()
+
+
 def test_trace_closes_partial_file_before_atomic_publish(tmp_path, monkeypatch):
     recorder = _recorder(tmp_path)
     opened_partial_files = []

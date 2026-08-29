@@ -87,8 +87,10 @@ from caveviewer.gui.viewer_action_dispatch import (
     ViewerKeyPressActions,
 )
 from caveviewer.gui.viewer_capture_workflow import (
+    CaptureOwner,
     CaptureOverlayMode,
     CaptureOverlayState,
+    CaptureOwnershipState,
     ViewerCaptureWorkflow,
 )
 from caveviewer.gui.viewer_frame_scheduler import (
@@ -691,6 +693,10 @@ class CaveViewerWindow(mglw.WindowConfig):
                 error,
             )
             raise
+        # moderngl-window closes its default Escape key before forwarding the
+        # key callback. CaveViewer owns Escape so capture discard can finish
+        # and present its result before the backend window is allowed to close.
+        self._claim_backend_escape_key()
         record_runtime_stage(
             "viewer_config_context_ready",
             context_version=getattr(getattr(self, "ctx", None), "version_code", None),
@@ -928,6 +934,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._recording_frame_queue: queue.Queue | None = None
         self._recording_stop_results: queue.Queue[_RecordingStopResult] = queue.Queue()
         self._recording_stop_thread: threading.Thread | None = None
+        self._recording_stop_cancel_event: threading.Event | None = None
 
         benchmark_config = CaveViewerWindow.cave_benchmark_config
         if benchmark_config is not None:
@@ -1336,6 +1343,94 @@ class CaveViewerWindow(mglw.WindowConfig):
             )
         ) or bool(exporter is not None and exporter.active)
 
+    def _capture_ownership_state(self) -> CaptureOwnershipState:
+        """Return all lifecycle owners used to enforce one capture at a time."""
+        return CaptureOwnershipState(
+            recording_owned=(
+                self._recording_is_armed() or self._recording_stop_in_progress()
+            ),
+            manual_dive_trace_owned=(
+                self._ensure_manual_dive_trace_controller().countdown_active
+                or getattr(self, "_manual_dive_trace", None) is not None
+                or bool(getattr(self, "_manual_dive_trace_writers", None))
+            ),
+            slice_owned=self._slice_interaction_active(),
+        )
+
+    def _capture_owner(self) -> CaptureOwner | None:
+        """Return the countdown, active capture, or finalizer owning capture."""
+        return self._ensure_capture_workflow().owner_for(
+            self._capture_ownership_state()
+        )
+
+    def _capture_start_blocked(self, requested_owner: CaptureOwner) -> bool:
+        """Reject a second capture while the current owner is still cleaning up."""
+        owner = self._capture_owner()
+        if owner is None:
+            return False
+        owner_name = {
+            CaptureOwner.VIDEO: "video recording",
+            CaptureOwner.DIVE_TRACE: "dive trace",
+            CaptureOwner.SLICE: "cave slice",
+        }[owner]
+        requested_name = {
+            CaptureOwner.VIDEO: "video recording",
+            CaptureOwner.DIVE_TRACE: "dive trace",
+            CaptureOwner.SLICE: "cave slice",
+        }[requested_owner]
+        self._show_capture_status(
+            "Capture in progress",
+            (
+                f"Finish or cancel the current {owner_name} before starting "
+                f"a new {requested_name}."
+            ),
+            kind="info",
+            duration=3.0,
+        )
+        return True
+
+    def _capture_shortcut_is_ignored(self, requested_owner: CaptureOwner) -> bool:
+        """Consume a foreign capture shortcut without presentation side effects."""
+        return self._ensure_capture_workflow().should_ignore_capture_shortcut(
+            active_owner=self._capture_owner(),
+            requested_owner=requested_owner,
+        )
+
+    def _active_capture_owner(self) -> CaptureOwner | None:
+        """Return the owner that is actively collecting a video, trace, or slice."""
+        selection = self.__dict__.get("_slice_selection_controller")
+        return self._ensure_capture_workflow().owner_for(
+            CaptureOwnershipState(
+                recording_owned=(
+                    getattr(self, "_recording_session", None) is not None
+                ),
+                manual_dive_trace_owned=(
+                    getattr(self, "_manual_dive_trace", None) is not None
+                ),
+                slice_owned=bool(
+                    selection is not None and selection.selection_active
+                ),
+            )
+        )
+
+    def _render_active_capture_instruction(
+        self,
+        window_size: tuple[int, int],
+    ) -> bool:
+        """Render guidance only if capture policy supplies a persistent banner."""
+        instruction = self._ensure_capture_workflow().instruction_for(
+            self._active_capture_owner(),
+            primary_shortcut_label=self._primary_shortcut_label(),
+        )
+        if instruction is None:
+            return False
+        self._render_dive_status_prompt(
+            window_size,
+            title=instruction.title,
+            note=instruction.note,
+        )
+        return True
+
     def _ensure_artifact_capture_presentation(
         self,
     ) -> ArtifactCapturePresentationController:
@@ -1473,6 +1568,10 @@ class CaveViewerWindow(mglw.WindowConfig):
     @_recording_status_until.setter
     def _recording_status_until(self, value: float | None) -> None:
         self._ensure_recording_controller().status_until = value
+
+    def _claim_backend_escape_key(self) -> None:
+        """Disable the backend's preemptive Escape close callback."""
+        self.wnd.exit_key = None
 
     def _set_runtime_window_icon(self) -> None:
         """Set the native viewer-window icon when the backend exposes one."""
@@ -2119,6 +2218,8 @@ class CaveViewerWindow(mglw.WindowConfig):
             self._recording_stop_results = queue.Queue()
         if not hasattr(self, "_recording_stop_thread"):
             self._recording_stop_thread = None
+        if not hasattr(self, "_recording_stop_cancel_event"):
+            self._recording_stop_cancel_event = None
 
     def _recording_stop_in_progress(self) -> bool:
         self._ensure_recording_stop_state()
@@ -2147,6 +2248,14 @@ class CaveViewerWindow(mglw.WindowConfig):
     def _exit_capture_finalization_active(self) -> bool:
         """Return whether shutdown is waiting for a user artifact writer."""
         return self._ensure_capture_workflow().exit_finalization_active
+
+    def _escape_capture_cancellation_active(self) -> bool:
+        """Return whether Escape is canceling a capture before viewer close."""
+        return self._ensure_capture_workflow().escape_cancellation_active
+
+    def _capture_close_pending(self) -> bool:
+        """Return whether capture cleanup currently owns viewer shutdown."""
+        return self._ensure_capture_workflow().close_pending
 
     def _defer_backend_close_request(self) -> None:
         """Keep the GLFW window alive after its close callback has fired."""
@@ -2191,6 +2300,39 @@ class CaveViewerWindow(mglw.WindowConfig):
             or "final capture cleanup",
         )
 
+    def _begin_escape_capture_cancellation(self) -> bool:
+        """Discard the active capture and close after its result is readable."""
+        owner = self._capture_owner()
+        if owner is None:
+            return False
+
+        workflow = self._ensure_capture_workflow()
+        workflow.begin_escape_cancellation()
+        self._defer_backend_close_request()
+        self._reset_transient_input_state("canceling capture before close")
+
+        # A discarded capture must never reveal a file that was queued by an
+        # earlier publication attempt while the cancellation takes ownership.
+        self._ensure_artifact_capture_presentation().discard_pending_reveals()
+        handled = self._cancel_active_capture()
+        owner_after_request = self._capture_owner()
+        cancellation_rejected = bool(
+            owner_after_request is not None
+            and getattr(self, "_recording_status_kind", None) == "error"
+        )
+        if not handled or cancellation_rejected:
+            # If cleanup could not start, keep the viewer open so the owned
+            # writer is not silently converted back into save-on-shutdown.
+            workflow.complete_escape_cancellation()
+            if owner_after_request is None:
+                self.on_close()
+            return True
+
+        _LOG.info(
+            "Waiting for capture cancellation feedback before closing the viewer."
+        )
+        return True
+
     def _complete_exit_capture_finalization_if_ready(
         self,
         *,
@@ -2215,11 +2357,25 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._complete_window_close()
         return True
 
+    def _complete_escape_capture_cancellation_if_ready(self) -> bool:
+        """Close after cancellation cleanup and its three-second result pause."""
+        workflow = self._ensure_capture_workflow()
+        if not workflow.can_complete_escape_cancellation(
+            artifacts_pending=bool(self._exit_capture_artifacts()),
+            confirmation_until=self._recording_status_until,
+            now=time.perf_counter(),
+        ):
+            return False
+
+        workflow.complete_escape_cancellation()
+        self._complete_window_close()
+        return True
+
     def _input_is_suppressed(self) -> bool:
         """Return whether viewer controls should ignore late input callbacks."""
         return bool(
             getattr(self, "_closing_requested", False)
-            or self._exit_capture_finalization_active()
+            or self._capture_close_pending()
         )
 
     def _recording_hides_hud(self) -> bool:
@@ -2229,7 +2385,10 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._drain_recording_stop_results()
         if self._recording_stop_in_progress():
             self._show_artifact_capture_status(
-                self._ensure_artifact_capture_presentation().saving_status("Video")
+                self._ensure_artifact_capture_presentation().saving_status(
+                    "Video",
+                    cancelable=True,
+                )
             )
             return
 
@@ -2249,16 +2408,44 @@ class CaveViewerWindow(mglw.WindowConfig):
 
         self._start_recording_countdown()
 
+    def _cancel_recording_capture(self) -> bool:
+        """Cancel recording countdown, capture, or pending output publication."""
+        if self._exit_capture_finalization_active():
+            return False
+        self._ensure_recording_stop_state()
+        self._drain_recording_stop_results()
+        controller = self._ensure_recording_controller()
+        if controller.countdown_until is not None:
+            controller.clear_countdown()
+            self._show_artifact_capture_status(
+                self._ensure_artifact_capture_presentation().canceled_status(
+                    "Video",
+                    after_escape=True,
+                ),
+                now=time.perf_counter(),
+            )
+            _LOG.info("Recording countdown canceled with Escape.")
+            return True
+        if getattr(self, "_recording_session", None) is not None:
+            self._stop_recording(show_message=True, cancel_output=True)
+            _LOG.info("Recording cancellation requested with Escape.")
+            return True
+        cancel_event = self._recording_stop_cancel_event
+        if self._recording_stop_in_progress() and cancel_event is not None:
+            cancel_event.set()
+            self._show_artifact_capture_status(
+                self._ensure_artifact_capture_presentation().canceling_status(
+                    "Video"
+                )
+            )
+            _LOG.info("Pending recording publication canceled with Escape.")
+            return True
+        return False
+
     def _start_recording_countdown(self) -> None:
         if not self._has_map_loaded:
             return
-        if self._slice_interaction_active():
-            self._show_capture_status(
-                "Slice in progress",
-                "Finish or cancel the slice before recording.",
-                kind="info",
-                duration=3.0,
-            )
+        if self._capture_start_blocked(CaptureOwner.VIDEO):
             return
         if self._recording_target_if_available() is None:
             return
@@ -2272,7 +2459,7 @@ class CaveViewerWindow(mglw.WindowConfig):
             start_number=self.RECORDING_COUNTDOWN_START_NUMBER,
         )
         _LOG.info(
-            "Recording countdown started. Press %s+R to cancel or stop.",
+            "Recording countdown started. Press %s+R to stop or Escape to cancel.",
             self._primary_shortcut_label(),
         )
 
@@ -2528,14 +2715,16 @@ class CaveViewerWindow(mglw.WindowConfig):
         *,
         show_message: bool = False,
         reveal_on_success: bool = False,
+        cancel_output: bool = False,
     ) -> None:
         self._ensure_recording_stop_state()
         self._drain_recording_stop_results()
         if self._recording_stop_in_progress():
+            if cancel_output and self._recording_stop_cancel_event is not None:
+                self._recording_stop_cancel_event.set()
             return
 
         session = self._recording_session
-        output_path = session.output_path if session is not None else None
 
         self._ensure_recording_controller().clear_countdown()
         self._recording_session = None
@@ -2550,10 +2739,15 @@ class CaveViewerWindow(mglw.WindowConfig):
         if session is None:
             return
 
-        session.signal_writer_stop()
+        cancel_event = threading.Event()
+        if cancel_output:
+            cancel_event.set()
+        self._recording_stop_cancel_event = cancel_event
+        session.signal_writer_stop(discard_pending=cancel_output)
         work = session.stop_work(
             show_message=show_message,
             reveal_on_success=reveal_on_success,
+            cancel_event=cancel_event,
         )
         self._recording_stop_thread = recording.start_stop_finalizer(
             work,
@@ -2565,7 +2759,16 @@ class CaveViewerWindow(mglw.WindowConfig):
         )
         if show_message:
             self._show_artifact_capture_status(
-                self._ensure_artifact_capture_presentation().saving_status("Video")
+                (
+                    self._ensure_artifact_capture_presentation().canceling_status(
+                        "Video"
+                    )
+                    if cancel_output
+                    else self._ensure_artifact_capture_presentation().saving_status(
+                        "Video",
+                        cancelable=True,
+                    )
+                )
             )
 
     def _drain_recording_stop_results(self) -> None:
@@ -2577,6 +2780,7 @@ class CaveViewerWindow(mglw.WindowConfig):
                 break
             self._apply_recording_stop_result(result)
             self._recording_stop_thread = None
+            self._recording_stop_cancel_event = None
 
     def _reveal_saved_output(
         self,
@@ -2615,6 +2819,30 @@ class CaveViewerWindow(mglw.WindowConfig):
 
     def _apply_recording_stop_result(self, result: _RecordingStopResult) -> None:
         self._ensure_recording_controller().reset_after_stop_result()
+
+        if result.canceled:
+            if result.cleanup_error:
+                _LOG.warning(
+                    "Canceled recording cleanup failed: %s",
+                    result.cleanup_error,
+                )
+                if result.show_message and not self._exit_capture_finalization_active():
+                    self._show_artifact_capture_status(
+                        self._ensure_artifact_capture_presentation().cancellation_failed_status(
+                            "Video",
+                            "The partial video could not be removed.",
+                        )
+                    )
+            else:
+                _LOG.info("Recording canceled and partial output removed.")
+                if result.show_message and not self._exit_capture_finalization_active():
+                    self._show_artifact_capture_status(
+                        self._ensure_artifact_capture_presentation().canceled_status(
+                            "Video",
+                            after_escape=True,
+                        )
+                    )
+            return
 
         if result.returncode == 0:
             _LOG.info(f"Recording saved: {result.output_path}")
@@ -2793,8 +3021,11 @@ class CaveViewerWindow(mglw.WindowConfig):
         )
 
     def _countdown_cancel_note(self, shortcut_key: str) -> str:
-        """Describe the active platform shortcut while a capture is armed."""
-        return f"Press {self._primary_shortcut_label()}+{shortcut_key} again to cancel."
+        """Show both the capture toggle and normalized Escape cancellation."""
+        return (
+            f"Press {self._primary_shortcut_label()}+{shortcut_key} again to stop. "
+            "Press Esc to cancel."
+        )
 
     def _print_texture_diagnostics(self, manifest: dict, textures_dir: str) -> None:
         """Print a one-time texture summary to console on map load."""
@@ -3091,7 +3322,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         title: str,
         note: str,
     ) -> None:
-        """Draw a small top prompt for Recorded Dive playback state."""
+        """Draw the small top prompt for Recorded Dive playback state."""
         w, h = window_size
         panel_w = min(
             max(
@@ -5215,7 +5446,7 @@ class CaveViewerWindow(mglw.WindowConfig):
                 setup_complete=setup_complete,
                 closing_requested=closing_requested,
                 iconified=bool(getattr(self, "_is_iconified", False)),
-                finalizing_capture=self._exit_capture_finalization_active(),
+                finalizing_capture=self._capture_close_pending(),
                 import_active=bool(getattr(self, "_import_active", False)),
                 map_loaded=bool(getattr(self, "_has_map_loaded", False)),
             )
@@ -5250,8 +5481,10 @@ class CaveViewerWindow(mglw.WindowConfig):
                 self._drain_recording_stop_results()
                 if self._slice_work_pending():
                     self._update_slice_export()
-                if self._exit_capture_finalization_active():
+                if self._capture_close_pending():
                     self._update_manual_dive_trace()
+                    if self._complete_escape_capture_cancellation_if_ready():
+                        return
                     self._complete_exit_capture_finalization_if_ready(
                         allow_unpresented_status=True
                     )
@@ -5271,6 +5504,8 @@ class CaveViewerWindow(mglw.WindowConfig):
             self._update_manual_dive_trace()
             if self._slice_work_pending():
                 self._update_slice_export()
+            if self._complete_escape_capture_cancellation_if_ready():
+                return
             if self._complete_exit_capture_finalization_if_ready():
                 return
             # Do not continue navigation, streaming, or map interaction while
@@ -5671,6 +5906,9 @@ class CaveViewerWindow(mglw.WindowConfig):
                 )
                 recording_stage_ms = self._recording_last_stage_ms
                 recording_drain_ms = self._recording_last_drain_ms
+                # The countdown has already explained the controls; leave the
+                # active recording view clear of a persistent status banner.
+                self._render_capture_status_message(self.wnd.size)
             overlay_ms = 0.0
         elif capture_overlay_mode is CaptureOverlayMode.MANUAL_DIVE_TRACE_COUNTDOWN:
             now = time.perf_counter()
@@ -5733,7 +5971,8 @@ class CaveViewerWindow(mglw.WindowConfig):
             # pieces do), so it should never be obscured by them.
             self.controls_overlay.update(visual_stats)
             self.controls_overlay.render(self.wnd.size)
-            self._render_dive_status(self.wnd.size)
+            if not self._render_active_capture_instruction(self.wnd.size):
+                self._render_dive_status(self.wnd.size)
             self._render_capture_status_message(self.wnd.size)
             overlay_ms = (time.perf_counter() - t0) * 1000.0
 
@@ -6055,16 +6294,7 @@ class CaveViewerWindow(mglw.WindowConfig):
             or self._ensure_slice_export_controller().active
         ):
             return False
-        if (
-            self._recording_is_armed()
-            or self._recording_stop_in_progress()
-            or getattr(self, "_manual_dive_trace", None) is not None
-            or self._ensure_manual_dive_trace_controller().countdown_active
-            or getattr(self, "_manual_dive_trace_writers", None)
-        ):
-            self._slice_unavailable(
-                "Finish the active recording or dive trace before slicing."
-            )
+        if self._capture_start_blocked(CaptureOwner.SLICE):
             return False
         source_cache_dir = getattr(self, "cache_dir", None)
         if not source_cache_dir or not os.path.isdir(source_cache_dir):
@@ -6098,7 +6328,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._slice_display_base = display_name
         self._slice_root_cave_name = root_cave_name
         _LOG.info(
-            "Slice countdown started. Press %s+C again to cancel.",
+            "Slice countdown started. Press %s+C to stop or Escape to cancel.",
             self._primary_shortcut_label(),
         )
         return True
@@ -6165,7 +6395,10 @@ class CaveViewerWindow(mglw.WindowConfig):
             return False
         if not closing:
             self._show_artifact_capture_status(
-                self._ensure_artifact_capture_presentation().saving_status("Slice")
+                self._ensure_artifact_capture_presentation().saving_status(
+                    "Slice",
+                    cancelable=True,
+                )
             )
         _LOG.info("Started slice export to %s", request.output_dir)
         return True
@@ -6206,7 +6439,10 @@ class CaveViewerWindow(mglw.WindowConfig):
         exporter = self._ensure_slice_export_controller()
         if exporter.active or selection.saving:
             self._show_artifact_capture_status(
-                self._ensure_artifact_capture_presentation().saving_status("Slice")
+                self._ensure_artifact_capture_presentation().saving_status(
+                    "Slice",
+                    cancelable=True,
+                )
             )
             return True
         if selection.countdown_active:
@@ -6235,20 +6471,35 @@ class CaveViewerWindow(mglw.WindowConfig):
         elif self._ensure_slice_export_controller().active:
             if not self._ensure_slice_export_controller().request_cancel():
                 return False
-            self._show_capture_status(
-                "Canceling slice…",
-                "Finishing cleanup. Keep CaveViewer open.",
-                kind="info",
-                duration=None,
+            self._show_artifact_capture_status(
+                self._ensure_artifact_capture_presentation().canceling_status(
+                    "Slice"
+                )
             )
             return True
         else:
             return False
         self._show_artifact_capture_status(
-            self._ensure_artifact_capture_presentation().canceled_status("Slice"),
+            self._ensure_artifact_capture_presentation().canceled_status(
+                "Slice",
+                after_escape=True,
+            ),
             now=time.perf_counter(),
         )
         return True
+
+    def _cancel_active_capture(self) -> bool:
+        """Cancel the one recording, trace, or slice lifecycle owning capture."""
+        if self._exit_capture_finalization_active():
+            return False
+        owner = self._capture_owner()
+        if owner is CaptureOwner.VIDEO:
+            return self._cancel_recording_capture()
+        if owner is CaptureOwner.DIVE_TRACE:
+            return self._cancel_manual_dive_trace_capture()
+        if owner is CaptureOwner.SLICE:
+            return self._cancel_slice_interaction()
+        return False
 
     def _update_slice_export(self, *, now: float | None = None) -> None:
         """Advance countdown anchors and apply child export outcomes on the UI thread."""
@@ -6294,7 +6545,8 @@ class CaveViewerWindow(mglw.WindowConfig):
                 if not self._exit_capture_finalization_active():
                     self._show_artifact_capture_status(
                         self._ensure_artifact_capture_presentation().canceled_status(
-                            "Slice"
+                            "Slice",
+                            after_escape=True,
                         ),
                         now=current_time,
                     )
@@ -6316,13 +6568,7 @@ class CaveViewerWindow(mglw.WindowConfig):
             or getattr(self, "_manual_dive_trace", None) is not None
         ):
             return False
-        if self._slice_interaction_active():
-            self._show_capture_status(
-                "Slice in progress",
-                "Finish or cancel the slice before planning a dive.",
-                kind="info",
-                duration=3.0,
-            )
+        if self._capture_start_blocked(CaptureOwner.DIVE_TRACE):
             return False
         controller = self._ensure_manual_dive_trace_controller()
         if controller.countdown_active:
@@ -6341,7 +6587,8 @@ class CaveViewerWindow(mglw.WindowConfig):
             start_number=self.MANUAL_DIVE_TRACE_COUNTDOWN_START_NUMBER,
         )
         _LOG.info(
-            "Manual Guided Dive trace countdown started. Press %s+T to cancel.",
+            "Manual Guided Dive trace countdown started. "
+            "Press %s+T to stop or Escape to cancel.",
             self._primary_shortcut_label(),
         )
         return True
@@ -6351,6 +6598,8 @@ class CaveViewerWindow(mglw.WindowConfig):
             not self._has_map_loaded
             or getattr(self, "_manual_dive_trace", None) is not None
         ):
+            return False
+        if self._capture_start_blocked(CaptureOwner.DIVE_TRACE):
             return False
         pose = self._manual_dive_trace_pose()
         if pose is None:
@@ -6375,7 +6624,8 @@ class CaveViewerWindow(mglw.WindowConfig):
             return False
         self._manual_dive_trace = recorder
         _LOG.info(
-            "Manual Guided Dive trace started. Press %s+T to stop and save: %s",
+            "Manual Guided Dive trace started. Press %s+T to stop and save or "
+            "Escape to cancel: %s",
             self._primary_shortcut_label(),
             output_path,
         )
@@ -6410,8 +6660,95 @@ class CaveViewerWindow(mglw.WindowConfig):
         _LOG.info("Manual Guided Dive trace is saving: %s", output_path)
         if show_completion:
             self._show_artifact_capture_status(
-                self._ensure_artifact_capture_presentation().saving_status("Dive trace")
+                self._ensure_artifact_capture_presentation().saving_status(
+                    "Dive trace",
+                    cancelable=True,
+                )
             )
+        return True
+
+    def _cancel_manual_dive_trace_capture(self) -> bool:
+        """Cancel trace countdown or discard the active/pending trace writer."""
+        if self._exit_capture_finalization_active():
+            return False
+        canceled = False
+        cleanup_pending = False
+        controller = self._ensure_manual_dive_trace_controller()
+        if controller.countdown_active:
+            controller.clear_countdown()
+            canceled = True
+
+        writers = getattr(self, "_manual_dive_trace_writers", None)
+        if writers is None:
+            writers = []
+            self._manual_dive_trace_writers = writers
+
+        recorder = getattr(self, "_manual_dive_trace", None)
+        if recorder is not None:
+            try:
+                requested = bool(recorder.cancel())
+            except Exception as exc:
+                _LOG.warning("Manual Guided Dive trace could not cancel: %s", exc)
+                requested = False
+            if requested:
+                self._manual_dive_trace = None
+                writers.append(
+                    _PendingManualDiveTraceWriter(
+                        recorder=recorder,
+                        show_completion=True,
+                        reveal_on_success=False,
+                    )
+                )
+                canceled = True
+                cleanup_pending = True
+            else:
+                self._show_artifact_capture_status(
+                    self._ensure_artifact_capture_presentation().cancellation_failed_status(
+                        "Dive trace",
+                        "The trace writer could not start cleanup.",
+                    ),
+                    now=time.perf_counter(),
+                )
+                # Keep the recorder attached so its resources remain owned and
+                # a later Escape or normal stop can retry cleanup safely.
+                return True
+
+        for index, pending_writer in enumerate(tuple(writers)):
+            if pending_writer.recorder is recorder:
+                continue
+            try:
+                requested = bool(pending_writer.recorder.cancel())
+            except Exception as exc:
+                _LOG.warning(
+                    "Pending Manual Guided Dive trace could not cancel: %s",
+                    exc,
+                )
+                requested = False
+            if not requested:
+                continue
+            writers[index] = _PendingManualDiveTraceWriter(
+                recorder=pending_writer.recorder,
+                show_completion=True,
+                reveal_on_success=False,
+            )
+            canceled = True
+            cleanup_pending = True
+
+        if not canceled:
+            return False
+        presentation = self._ensure_artifact_capture_presentation()
+        self._show_artifact_capture_status(
+            (
+                presentation.canceling_status("Dive trace")
+                if cleanup_pending
+                else presentation.canceled_status(
+                    "Dive trace",
+                    after_escape=True,
+                )
+            ),
+            now=time.perf_counter(),
+        )
+        _LOG.info("Manual Guided Dive trace canceled with Escape.")
         return True
 
     def _toggle_manual_dive_trace(self) -> bool:
@@ -6467,7 +6804,29 @@ class CaveViewerWindow(mglw.WindowConfig):
                 pending_writer.show_completion
                 and not self._exit_capture_finalization_active()
             )
-            if result.completed:
+            if result.canceled:
+                if show_completion:
+                    if result.error:
+                        status = self._ensure_artifact_capture_presentation().cancellation_failed_status(
+                            "Dive trace",
+                            "The partial trace could not be removed.",
+                        )
+                    else:
+                        status = self._ensure_artifact_capture_presentation().canceled_status(
+                            "Dive trace",
+                            after_escape=True,
+                        )
+                    self._show_artifact_capture_status(status, now=now)
+                if result.error:
+                    _LOG.warning(
+                        "Manual Guided Dive trace cancellation cleanup failed: %s",
+                        result.error,
+                    )
+                else:
+                    _LOG.info(
+                        "Manual Guided Dive trace canceled and partial output removed."
+                    )
+            elif result.completed:
                 _LOG.info("Manual Guided Dive trace saved: %s", result.output_path)
                 if show_completion:
                     status = self._ensure_artifact_capture_presentation().saved_status(
@@ -6681,6 +7040,7 @@ class CaveViewerWindow(mglw.WindowConfig):
                     key, modifiers
                 ),
                 begin_screen=lambda: self._handle_begin_screen_hotkey(key),
+                capture_escape=lambda: self._handle_capture_escape_hotkey(key),
                 fly_speed=lambda: self._handle_fly_speed_hotkey(key, modifiers),
                 bookmark=lambda: self._handle_bookmark_hotkey(key, modifiers),
                 manual_dive_trace=lambda: self._handle_manual_dive_trace_hotkey(
@@ -6688,7 +7048,6 @@ class CaveViewerWindow(mglw.WindowConfig):
                 ),
                 slice=lambda: self._handle_slice_hotkey(key, modifiers),
                 recording=lambda: self._handle_recording_hotkey(key, modifiers),
-                slice_escape=lambda: self._handle_slice_escape_hotkey(key),
                 reset_view=lambda: self._handle_reset_view_shortcut(key, modifiers),
             )
             if self._ensure_action_dispatcher().dispatch_key_press(actions):
@@ -6770,6 +7129,8 @@ class CaveViewerWindow(mglw.WindowConfig):
             return False
         if not self._primary_shortcut_is_down(modifiers):
             return False
+        if self._capture_shortcut_is_ignored(CaptureOwner.DIVE_TRACE):
+            return True
         self._toggle_manual_dive_trace()
         return True
 
@@ -6784,14 +7145,19 @@ class CaveViewerWindow(mglw.WindowConfig):
             or not self._primary_shortcut_is_down(modifiers)
         ):
             return False
+        if self._capture_shortcut_is_ignored(CaptureOwner.SLICE):
+            return True
         return self._toggle_slice()
 
-    def _handle_slice_escape_hotkey(self, key) -> bool:
-        """Allow Escape to cancel a user-owned slice before publication."""
+    def _handle_capture_escape_hotkey(self, key) -> bool:
+        """Own Escape so capture cancellation precedes delayed viewer close."""
         escape_key = self._resolve_key_optional(self.wnd.keys, "ESCAPE", "ESC")
         if escape_key is None or key != escape_key:
             return False
-        return self._cancel_slice_interaction()
+        if self._capture_owner() is not None:
+            return self._begin_escape_capture_cancellation()
+        self.on_close()
+        return True
 
     def _handle_recorded_dive_hotkey(
         self,
@@ -6816,6 +7182,8 @@ class CaveViewerWindow(mglw.WindowConfig):
             return False
         if not self._primary_shortcut_is_down(modifiers):
             return False
+        if self._capture_shortcut_is_ignored(CaptureOwner.VIDEO):
+            return True
         self._toggle_recording()
         return True
 
@@ -7216,7 +7584,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         if self._closing_requested:
             return
         self._closing_requested = True
-        self._ensure_capture_workflow().complete_exit_finalization()
+        self._ensure_capture_workflow().complete_close_workflows()
         self._slice_reveal_before_close = False
         self._slice_reveal_output_path = None
 
@@ -7246,6 +7614,11 @@ class CaveViewerWindow(mglw.WindowConfig):
 
     def on_close(self):
         if self._closing_requested:
+            return
+        if self._escape_capture_cancellation_active():
+            # Escape owns this shutdown request until discard cleanup and the
+            # three-second no-save confirmation have both completed.
+            self._defer_backend_close_request()
             return
         if self._exit_capture_finalization_active():
             # Repeated close requests must not tear down the OpenGL context

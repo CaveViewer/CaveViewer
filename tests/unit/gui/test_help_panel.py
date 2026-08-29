@@ -112,7 +112,13 @@ def test_capture_help_preserves_platform_shortcuts_and_explains_artifacts():
         "map. It is precompiled and cannot be rebuilt because the source "
         "model is not included."
     )
-    assert "slice-cancel" not in rows
+    assert rows["capture-cancel"].shortcut == "Escape"
+    assert rows["capture-cancel"].action == "Cancel active capture"
+    assert rows["capture-cancel"].context_note == (
+        "Only one capture can run at a time. Other capture shortcuts are "
+        "ignored; Escape discards the active capture and removes partial files, "
+        "then confirms that nothing was saved before the viewer closes."
+    )
 
 
 def test_help_panel_uses_a_quiet_table_without_card_borders():

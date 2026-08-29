@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import queue
+import threading
 from types import SimpleNamespace
 
 from caveviewer.gui import recording
@@ -49,6 +50,86 @@ def test_signal_writer_stop_replaces_full_frame_with_sentinel():
     recording.signal_writer_stop(frame_queue)
 
     assert frame_queue.get_nowait() is None
+
+
+def test_cancel_signal_releases_every_queued_raw_frame():
+    frame_queue = queue.Queue(maxsize=3)
+    frame_queue.put_nowait(b"frame-1")
+    frame_queue.put_nowait(b"frame-2")
+
+    recording.signal_writer_stop(frame_queue, discard_pending=True)
+
+    assert frame_queue.qsize() == 1
+    assert frame_queue.get_nowait() is None
+
+
+def test_canceled_recording_finalizer_removes_partial_output(tmp_path):
+    output_path = tmp_path / "capture.mp4"
+    output_path.write_bytes(b"partial mp4")
+    cancel_event = threading.Event()
+    cancel_event.set()
+
+    class FakeProcess:
+        stdin = None
+        returncode = 0
+
+        @staticmethod
+        def wait(timeout=None):
+            return 0
+
+    work = recording.RecordingStopWork(
+        process=FakeProcess(),
+        output_path=str(output_path),
+        frame_queue=None,
+        writer_thread=None,
+        stderr_thread=None,
+        show_message=True,
+        cancel_event=cancel_event,
+    )
+    result = recording.finalize_stop_worker(
+        work,
+        stderr_text=lambda: "",
+        writer_error=lambda: None,
+        dropped_frames=lambda: 0,
+        logger=SimpleNamespace(warning=lambda *_args: None),
+    )
+
+    assert result.canceled is True
+    assert result.cleanup_error is None
+    assert not output_path.exists()
+
+
+def test_normal_recording_finalizer_preserves_published_output(tmp_path):
+    output_path = tmp_path / "capture.mp4"
+    output_path.write_bytes(b"complete mp4")
+
+    class FakeProcess:
+        stdin = None
+        returncode = 0
+
+        @staticmethod
+        def wait(timeout=None):
+            return 0
+
+    work = recording.RecordingStopWork(
+        process=FakeProcess(),
+        output_path=str(output_path),
+        frame_queue=None,
+        writer_thread=None,
+        stderr_thread=None,
+        show_message=True,
+    )
+    result = recording.finalize_stop_worker(
+        work,
+        stderr_text=lambda: "",
+        writer_error=lambda: None,
+        dropped_frames=lambda: 0,
+        logger=SimpleNamespace(warning=lambda *_args: None),
+    )
+
+    assert result.canceled is False
+    assert result.cleanup_error is None
+    assert output_path.read_bytes() == b"complete mp4"
 
 
 def test_start_encoder_session_starts_process_and_worker_threads(monkeypatch):

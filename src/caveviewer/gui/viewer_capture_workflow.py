@@ -20,6 +20,14 @@ class CaptureOverlayMode(Enum):
     HUD = auto()
 
 
+class CaptureOwner(Enum):
+    """The single capture lifecycle allowed to own a viewer session."""
+
+    VIDEO = auto()
+    DIVE_TRACE = auto()
+    SLICE = auto()
+
+
 @dataclass(frozen=True)
 class CaptureOverlayState:
     """Capture facts used to choose a non-GL overlay mode."""
@@ -29,18 +37,46 @@ class CaptureOverlayState:
     slice_countdown_active: bool
 
 
+@dataclass(frozen=True)
+class CaptureOwnershipState:
+    """Cross-capture lifecycle facts, including asynchronous finalization."""
+
+    recording_owned: bool
+    manual_dive_trace_owned: bool
+    slice_owned: bool
+
+
+@dataclass(frozen=True)
+class CaptureInstruction:
+    """Persistent non-video capture guidance rendered above the cave view."""
+
+    title: str
+    note: str
+
+
 @dataclass
 class ViewerCaptureWorkflow:
-    """Coordinate exit-time capture finalization without owning writers."""
+    """Coordinate capture-aware viewer shutdown without owning writers."""
 
     exit_status_minimum_seconds: float = 0.75
     exit_finalization_requested: bool = False
     exit_status_presented_at: float | None = None
+    escape_cancellation_close_requested: bool = False
 
     @property
     def exit_finalization_active(self) -> bool:
         """Return whether viewer shutdown is waiting for capture publication."""
         return self.exit_finalization_requested
+
+    @property
+    def escape_cancellation_active(self) -> bool:
+        """Return whether Escape owns shutdown through capture cancellation."""
+        return self.escape_cancellation_close_requested
+
+    @property
+    def close_pending(self) -> bool:
+        """Return whether either capture-aware shutdown workflow owns the viewer."""
+        return self.exit_finalization_active or self.escape_cancellation_active
 
     def begin_exit_finalization(self) -> None:
         """Start an exit workflow and require a visible status before closing."""
@@ -51,6 +87,19 @@ class ViewerCaptureWorkflow:
         """Clear the completed exit workflow before the window is released."""
         self.exit_finalization_requested = False
         self.exit_status_presented_at = None
+
+    def begin_escape_cancellation(self) -> None:
+        """Keep the viewer alive while Escape discards the active capture."""
+        self.escape_cancellation_close_requested = True
+
+    def complete_escape_cancellation(self) -> None:
+        """Clear Escape-owned shutdown after cleanup and confirmation."""
+        self.escape_cancellation_close_requested = False
+
+    def complete_close_workflows(self) -> None:
+        """Clear every capture-aware shutdown mode before releasing the window."""
+        self.complete_exit_finalization()
+        self.complete_escape_cancellation()
 
     def mark_exit_status_presented(self, *, now: float) -> None:
         """Record the first frame that visibly presented exit progress."""
@@ -76,6 +125,21 @@ class ViewerCaptureWorkflow:
             >= self.exit_status_minimum_seconds
         )
 
+    def can_complete_escape_cancellation(
+        self,
+        *,
+        artifacts_pending: bool,
+        confirmation_until: float | None,
+        now: float,
+    ) -> bool:
+        """Close only after discard cleanup and its timed result are complete."""
+        return bool(
+            self.escape_cancellation_active
+            and not artifacts_pending
+            and confirmation_until is not None
+            and now >= confirmation_until
+        )
+
     @staticmethod
     def overlay_mode_for(state: CaptureOverlayState) -> CaptureOverlayMode:
         """Choose the capture overlay with the established action priority."""
@@ -86,3 +150,35 @@ class ViewerCaptureWorkflow:
         if state.slice_countdown_active:
             return CaptureOverlayMode.SLICE_COUNTDOWN
         return CaptureOverlayMode.HUD
+
+    @staticmethod
+    def owner_for(state: CaptureOwnershipState) -> CaptureOwner | None:
+        """Return the sole capture owner using the established safety priority."""
+        if state.recording_owned:
+            return CaptureOwner.VIDEO
+        if state.manual_dive_trace_owned:
+            return CaptureOwner.DIVE_TRACE
+        if state.slice_owned:
+            return CaptureOwner.SLICE
+        return None
+
+    @staticmethod
+    def should_ignore_capture_shortcut(
+        *,
+        active_owner: CaptureOwner | None,
+        requested_owner: CaptureOwner,
+    ) -> bool:
+        """Silently consume a capture shortcut aimed at a different owner."""
+        return active_owner is not None and active_owner is not requested_owner
+
+    @staticmethod
+    def instruction_for(
+        owner: CaptureOwner | None,
+        *,
+        primary_shortcut_label: str,
+    ) -> CaptureInstruction | None:
+        """Keep every active capture view banner-free after its countdown."""
+        del owner, primary_shortcut_label
+        # Each countdown already teaches finish/save and Escape cancellation;
+        # repeating that guidance throughout capture obstructs the cave view.
+        return None
