@@ -240,6 +240,8 @@ def test_packaging_consumers_reference_migrated_paths():
     assert "cave_metadata_catalog.v1.json" in pyinstaller_spec
     assert "cave_metadata_catalog.v1.json" in linux_builder
     assert "release_metadata.v1.json" in pyinstaller_spec
+    assert "CAVEVIEWER_BRAND_PROFILE_DIR" in pyinstaller_spec
+    assert "CAVEVIEWER_BRANDING_EXPORT_SUMMARY" in pyinstaller_spec
     assert "release_metadata.v1.json" in linux_builder
 
 

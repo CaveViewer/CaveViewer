@@ -212,7 +212,6 @@ fi
 
 version_file="$repo_root/src/caveviewer/version.py"
 installer_script="$repo_root/packaging/windows/CaveViewerSetup.iss"
-icon_file="$repo_root/scripts/windows/icon/caveviewer.ico"
 sign_script="$script_dir/sign_artifact.ps1"
 verify_script="$script_dir/verify_signature.ps1"
 metadata_writer="$script_dir/write_package_metadata.py"
@@ -222,7 +221,7 @@ installer_dir="$repo_root/dist/windows/installer"
 payload_dir="$repo_root/dist/windows/app/CaveViewer"
 release_channel="$(cv_release_channel)"
 
-for required_path in "$version_file" "$installer_script" "$icon_file" "$metadata_writer"; do
+for required_path in "$version_file" "$installer_script" "$metadata_writer"; do
   if [ ! -f "$required_path" ]; then
     echo "Error: required Windows package input is missing: $required_path" >&2
     exit 1
@@ -245,6 +244,14 @@ if [ -z "$version" ] || [ -z "$app_name" ]; then
 fi
 
 "$script_dir/build.sh"
+icon_file="$repo_root/build/branding/windows/windows/caveviewer.ico"
+branding_summary="$repo_root/build/branding/windows/export-summary.v1.json"
+for required_path in "$icon_file" "$branding_summary"; do
+  if [ ! -f "$required_path" ]; then
+    echo "Error: required Windows branding output is missing: $required_path" >&2
+    exit 1
+  fi
+done
 if [ ! -f "$payload_dir/CaveViewer.exe" ]; then
   echo "Error: frozen Windows payload is missing CaveViewer.exe: $payload_dir" >&2
   exit 1

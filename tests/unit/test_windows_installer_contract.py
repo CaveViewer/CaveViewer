@@ -8,6 +8,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+from PIL import Image
+
+from caveviewer.branding import resolve_branding_profile
+from caveviewer.branding_export import export_branding_profile
+
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 WINDOWS_SCRIPTS = REPOSITORY_ROOT / "scripts" / "windows"
@@ -111,6 +116,12 @@ def test_frozen_installer_pipeline_is_per_user_and_fails_closed_without_signing(
 
     assert "packaging/pyinstaller/CaveViewer.spec" in builder
     assert "CAVEVIEWER_RELEASE_METADATA_PATH" in builder
+    assert "caveviewer.branding_export" in builder
+    assert "CAVEVIEWER_BRAND_PROFILE" in builder
+    assert "CAVEVIEWER_BRAND_PROFILE_DIR" in builder
+    assert "CAVEVIEWER_BRANDING_EXPORT_SUMMARY" in builder
+    assert "build/branding/windows" in builder
+    assert "scripts/windows/icon/caveviewer.ico" not in builder
     assert "release_metadata.v1.json" in builder
     assert "dist/windows/app/CaveViewer" in builder
     assert "pyinstaller==6.21.0" in builder
@@ -130,6 +141,8 @@ def test_frozen_installer_pipeline_is_per_user_and_fails_closed_without_signing(
     assert '"-DPayloadDir=$(windows_path "$payload_dir")"' in packager
     assert '"-DOutputDir=$(windows_path "$installer_dir")"' in packager
     assert '"-DSetupIconFile=$(windows_path "$icon_file")"' in packager
+    assert "build/branding/windows/windows/caveviewer.ico" in packager
+    assert "scripts/windows/icon/caveviewer.ico" not in packager
     assert '"-DEnableCodeSigning=1"' in packager
     assert '"-SCaveViewerSign=$inno_sign_command"' in packager
     assert '"/DAppVersion=$version"' not in packager
@@ -170,6 +183,29 @@ def test_frozen_installer_pipeline_is_per_user_and_fails_closed_without_signing(
     assert "Start-Process -FilePath $Path -ArgumentList $commandLine -PassThru" in smoke
     assert "$process.WaitForExit($InstallerProcessWaitMilliseconds)" in smoke
     assert "$process.ExitCode" in smoke
+
+
+def test_default_windows_icon_alias_contains_every_shell_frame(tmp_path):
+    icon_path = REPOSITORY_ROOT / "scripts" / "windows" / "icon" / "caveviewer.ico"
+
+    with Image.open(icon_path) as icon:
+        assert set(icon.info["sizes"]) == {
+            (16, 16),
+            (24, 24),
+            (32, 32),
+            (48, 48),
+            (64, 64),
+            (128, 128),
+            (256, 256),
+        }
+
+    export_directory = tmp_path / "branding"
+    export_branding_profile(
+        resolve_branding_profile(environ={}), export_directory
+    )
+    assert icon_path.read_bytes() == (
+        export_directory / "windows" / "caveviewer.ico"
+    ).read_bytes()
 
 
 def test_authenticode_helpers_use_certificate_store_sha256_and_timestamping():
