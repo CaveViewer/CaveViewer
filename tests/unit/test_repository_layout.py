@@ -132,6 +132,26 @@ def test_branding_contract_is_documented_and_discoverable():
     ).read_text(encoding="utf-8")
 
 
+def test_ux_guidelines_are_documented_without_owning_branding():
+    ux_path = REPOSITORY_ROOT / "docs" / "development" / "ux-guidelines.md"
+    ux_guidelines = ux_path.read_text(encoding="utf-8")
+    development_index = (
+        REPOSITORY_ROOT / "docs" / "development" / "README.md"
+    ).read_text(encoding="utf-8")
+
+    for heading in (
+        "## Experience principles",
+        "## Layout, density, and scaling",
+        "## Dialogs and confirmations",
+        "## Keyboard and accessibility",
+        "## UX validation checklist",
+    ):
+        assert heading in ux_guidelines
+    assert "Brand identity is deliberately out of scope." in ux_guidelines
+    assert "[branding.md](branding.md)" in ux_guidelines
+    assert "[UX guidelines](ux-guidelines.md)" in development_index
+
+
 def test_package_resource_service_resolves_runtime_files():
     assert shader_path("mesh.vert").is_file()
     assert image_path("app_mark_transparent.png").is_file()

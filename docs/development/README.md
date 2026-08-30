@@ -10,6 +10,8 @@
   and the completed migration sequence.
 - [Coding standards](coding-standards.md): implementation conventions and
   safety rules.
+- [UX guidelines](ux-guidelines.md): interaction, layout, forms, dialogs,
+  feedback, progress, accessibility, and platform-integration standards.
 - [Testing](testing.md): test placement, commands, markers, and coverage policy.
 - [Viewer benchmarking](benchmarking.md): automated FPS regression benchmark
   design, artifacts, workflow inputs, and calibration policy.
