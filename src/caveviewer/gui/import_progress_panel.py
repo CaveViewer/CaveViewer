@@ -65,25 +65,13 @@ uniform float u_progress;
 uniform float u_indeterminate;
 uniform float u_spinner_phase;
 uniform float u_logo_alpha;
+uniform vec3 u_track_rgb;
+uniform vec3 u_fill_rgb;
 in vec2 v_uv;
 out vec4 f_color;
 
-bool is_amber(vec4 color) {
-    return (
-        color.a > 0.05 &&
-        color.r > 0.45 &&
-        color.g > 0.26 &&
-        color.b < 0.22 &&
-        color.r > color.b * 2.2 &&
-        color.g > color.b * 1.6
-    );
-}
-
 void main() {
     vec4 tex_color = texture(u_texture, v_uv);
-    if (is_amber(tex_color)) {
-        tex_color.a = 0.0;
-    }
     tex_color.a *= u_logo_alpha;
 
     vec2 centered = v_uv - vec2(0.5, 0.5);
@@ -128,9 +116,7 @@ void main() {
         fill_strength = arc_mask * mix(0.48, 1.0, leading_taper);
     }
 
-    vec3 track_rgb = vec3(0.315, 0.325, 0.360);
-    vec3 fill_rgb = vec3(0.8980, 0.6314, 0.1216);
-    vec4 ring_color = vec4(mix(track_rgb, fill_rgb, fill_strength), ring_alpha * mix(0.58, 1.0, fill_strength));
+    vec4 ring_color = vec4(mix(u_track_rgb, u_fill_rgb, fill_strength), ring_alpha * mix(0.58, 1.0, fill_strength));
 
     float out_alpha = tex_color.a + ring_color.a * (1.0 - tex_color.a);
     vec3 out_rgb = vec3(0.0);
@@ -143,6 +129,12 @@ void main() {
     f_color = vec4(out_rgb, out_alpha * u_alpha);
 }
 """
+
+
+def _hex_color_rgb(color: str) -> tuple[float, float, float]:
+    """Convert a validated six-digit brand color to shader RGB values."""
+    return tuple(int(color[index : index + 2], 16) / 255.0 for index in (1, 3, 5))
+
 
 class ImportProgressPanel:
     LOGO_SIZE = 172.0
@@ -172,26 +164,48 @@ class ImportProgressPanel:
         )
 
         self.logo_program = ctx.program(vertex_shader=_LOGO_VERT_SRC, fragment_shader=_LOGO_FRAG_SRC)
+        self.logo_program["u_track_rgb"].value = _hex_color_rgb(
+            self._branding_assets.loading_ring.track_color
+        )
+        self.logo_program["u_fill_rgb"].value = _hex_color_rgb(
+            self._branding_assets.loading_ring.fill_color
+        )
         self._logo_vbo = ctx.buffer(reserve=6 * 4 * 4)
         self._logo_vao = ctx.vertex_array(
             self.logo_program, [(self._logo_vbo, "2f 2f", "in_pos", "in_uv")]
         )
         self._logo_texture = None
         self._logo_aspect = 1.0
+        self._logo_available = False
         self._load_logo_texture()
 
         self._display_fraction = 0.0
         self._progress_token = None
 
     def _load_logo_texture(self) -> None:
+        texture = None
         try:
-            img = Image.open(self._branding_assets.loading_mark).convert("RGBA")
+            with Image.open(self._branding_assets.loading_mark) as image:
+                img = image.convert("RGBA")
             self._logo_aspect = img.size[0] / img.size[1]
-            self._logo_texture = self.ctx.texture(img.size, 4, img.tobytes())
-            self._logo_texture.build_mipmaps()
+            texture = self.ctx.texture(img.size, 4, img.tobytes())
+            texture.build_mipmaps()
+            self._logo_texture = texture
+            self._logo_available = True
         except Exception:
-            self._logo_texture = None
+            if texture is not None:
+                try:
+                    texture.release()
+                except Exception:
+                    pass
             self._logo_aspect = 1.0
+            self._logo_available = False
+            try:
+                self._logo_texture = self.ctx.texture(
+                    (1, 1), 4, b"\x00\x00\x00\x00"
+                )
+            except Exception:
+                self._logo_texture = None
 
     def release(self) -> None:
         for attr in ("_logo_texture", "_logo_vao", "_logo_vbo", "logo_program"):
@@ -296,8 +310,11 @@ class ImportProgressPanel:
         alpha: float = 1.0,
         logo_alpha: float = 1.0,
     ) -> None:
-        if self._logo_texture is None:
+        mode = self._branding_assets.loading_ring.mode
+        if self._logo_texture is None or mode == "text_only":
             return
+        if mode == "ring_only" or not self._logo_available:
+            logo_alpha = 0.0
 
         size_px = self.LOGO_SIZE
         if self._logo_aspect >= 1.0:

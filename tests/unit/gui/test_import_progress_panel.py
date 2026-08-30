@@ -75,3 +75,94 @@ def test_progress_ring_shader_uses_framebuffer_derivative_smoothing():
     assert "fwidth(arc_offset)" in source
     assert "float edge = 0.005;" not in source
     assert "step(pixel_progress, progress)" not in source
+
+
+def test_progress_ring_shader_uses_profile_colors_without_logo_color_filtering():
+    source = import_progress_panel._LOGO_FRAG_SRC
+
+    assert "uniform vec3 u_track_rgb;" in source
+    assert "uniform vec3 u_fill_rgb;" in source
+    assert "vec3 track_rgb =" not in source
+    assert "vec3 fill_rgb =" not in source
+    assert "is_amber" not in source
+
+
+def test_hex_brand_color_conversion_matches_shader_values():
+    assert import_progress_panel._hex_color_rgb("#FF8000") == (
+        1.0,
+        pytest.approx(128 / 255),
+        0.0,
+    )
+
+
+def test_failed_loading_mark_decode_falls_back_to_transparent_ring_texture(
+    tmp_path,
+):
+    class FakeTexture:
+        def __init__(self):
+            self.released = False
+
+        def release(self):
+            self.released = True
+
+    class FakeContext:
+        def __init__(self):
+            self.calls = []
+
+        def texture(self, size, components, data):
+            self.calls.append((size, components, data))
+            return FakeTexture()
+
+    branding_assets = import_progress_panel.resolve_branding_assets(environ={})
+    panel = object.__new__(ImportProgressPanel)
+    panel.ctx = FakeContext()
+    panel._branding_assets = import_progress_panel.BrandingAssets(
+        profile_id=branding_assets.profile_id,
+        application_mark=branding_assets.application_mark,
+        about_mark=branding_assets.about_mark,
+        loading_mark=tmp_path / "missing.png",
+        windows_app_icon=branding_assets.windows_app_icon,
+        macos_app_icon=branding_assets.macos_app_icon,
+        linux_app_icon=branding_assets.linux_app_icon,
+        loading_ring=branding_assets.loading_ring,
+    )
+    panel._logo_texture = None
+    panel._logo_aspect = 2.0
+    panel._logo_available = True
+
+    panel._load_logo_texture()
+
+    assert panel._logo_available is False
+    assert panel._logo_aspect == 1.0
+    assert panel._logo_texture is not None
+    assert panel.ctx.calls == [((1, 1), 4, b"\x00\x00\x00\x00")]
+
+
+def test_failed_loading_mark_upload_retries_with_ring_only_texture():
+    class FakeTexture:
+        def build_mipmaps(self):
+            return None
+
+    class FakeContext:
+        def __init__(self):
+            self.calls = []
+
+        def texture(self, size, components, data):
+            self.calls.append((size, components, len(data)))
+            if len(self.calls) == 1:
+                raise RuntimeError("simulated full-mark upload failure")
+            return FakeTexture()
+
+    panel = object.__new__(ImportProgressPanel)
+    panel.ctx = FakeContext()
+    panel._branding_assets = import_progress_panel.resolve_branding_assets(environ={})
+    panel._logo_texture = None
+    panel._logo_aspect = 1.0
+    panel._logo_available = False
+
+    panel._load_logo_texture()
+
+    assert panel._logo_available is False
+    assert panel._logo_texture is not None
+    assert len(panel.ctx.calls) == 2
+    assert panel.ctx.calls[1] == ((1, 1), 4, 4)

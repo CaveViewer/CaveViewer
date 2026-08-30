@@ -27,6 +27,7 @@
   },
   "loading_ring": {
     "fill_color": "#FFB000",
-    "track_color": "#3B3428"
+    "track_color": "#3B3428",
+    "mode": "ring_with_mark"
   }
 }

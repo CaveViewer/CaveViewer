@@ -31,6 +31,7 @@ def test_bundled_default_profile_is_complete_and_uses_approved_cookie():
     assert profile.asset_for("about_mark") is profile.asset_for("application_mark")
     assert profile.loading_ring.fill_color == "#FFB000"
     assert profile.loading_ring.track_color == "#3B3428"
+    assert profile.loading_ring.mode == "ring_with_mark"
 
 
 def test_runtime_snapshot_resolves_semantic_paths_and_platform_icons():
@@ -93,6 +94,10 @@ def test_frozen_application_ignores_external_profile_override(tmp_path):
         (
             lambda payload: payload["assets"]["cookie"].update(safe_area_inset=0.5),
             "between 0 and 0.25",
+        ),
+        (
+            lambda payload: payload["loading_ring"].update(mode="logo_spinner"),
+            "mode must be",
         ),
     ],
 )

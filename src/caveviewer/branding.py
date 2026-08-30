@@ -42,6 +42,9 @@ _ALLOWED_TOP_LEVEL_KEYS = frozenset(
         "loading_ring",
     }
 )
+_LOADING_PRESENTATION_MODES = frozenset(
+    {"text_only", "ring_only", "ring_with_mark"}
+)
 
 
 class BrandingProfileError(ValueError):
@@ -67,6 +70,7 @@ class LoadingRingTokens:
 
     fill_color: str
     track_color: str
+    mode: str = "ring_with_mark"
 
 
 @dataclass(frozen=True)
@@ -235,9 +239,27 @@ def load_branding_profile(manifest_path: str | os.PathLike[str]) -> BrandingProf
         roles[role] = asset_id
 
     loading_ring_payload = _object(payload.get("loading_ring"), "loading_ring")
+    unknown_loading_ring_keys = set(loading_ring_payload) - {
+        "fill_color",
+        "track_color",
+        "mode",
+    }
+    if unknown_loading_ring_keys:
+        raise BrandingProfileError(
+            "loading_ring contains unknown keys: "
+            f"{sorted(unknown_loading_ring_keys)}"
+        )
+    loading_mode = _non_empty_text(
+        loading_ring_payload.get("mode"), "loading_ring.mode"
+    )
+    if loading_mode not in _LOADING_PRESENTATION_MODES:
+        raise BrandingProfileError(
+            "loading_ring.mode must be text_only, ring_only, or ring_with_mark"
+        )
     loading_ring = LoadingRingTokens(
         fill_color=_color(loading_ring_payload.get("fill_color"), "fill_color"),
         track_color=_color(loading_ring_payload.get("track_color"), "track_color"),
+        mode=loading_mode,
     )
     return BrandingProfile(
         profile_id=profile_id,
