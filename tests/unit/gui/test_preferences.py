@@ -294,10 +294,41 @@ def test_map_library_path_expands_home(valid_preferences):
     )
 
 
-def test_load_missing_settings_returns_validated_defaults(tmp_path):
-    loaded = settings.load_preferences(tmp_path / "missing.json")
+def test_load_missing_settings_returns_and_persists_validated_defaults(
+    tmp_path,
+    caplog,
+):
+    path = tmp_path / "preferences.json"
+    with caplog.at_level(logging.WARNING, logger="caveviewer"):
+        loaded = settings.load_preferences(path)
+
     assert isinstance(loaded, settings.Preferences)
     assert loaded == settings.preference_defaults()
+    assert "preferences.json was not found; using and saving defaults" in caplog.text
+    assert json.loads(path.read_text(encoding="utf-8")) == loaded.as_dict()
+
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="caveviewer"):
+        reloaded = settings.load_preferences(path)
+    assert reloaded == loaded
+    assert "Loaded preferences from preferences.json." in caplog.text
+    assert "was not found" not in caplog.text
+
+
+def test_missing_preferences_save_failure_keeps_defaults_without_partial_file(
+    tmp_path,
+    caplog,
+):
+    path = tmp_path / "missing-parent" / "preferences.json"
+
+    with caplog.at_level(logging.WARNING, logger="caveviewer"):
+        loaded = settings.load_preferences(path)
+
+    assert loaded == settings.preference_defaults()
+    assert "was not found; using and saving defaults" in caplog.text
+    assert "Could not save preferences" in caplog.text
+    assert not path.exists()
+    assert not list(tmp_path.rglob("*.tmp"))
 
 
 @pytest.mark.parametrize("content", ["{broken", "[]", "null", '"text"'])
@@ -495,7 +526,7 @@ def test_older_dotfile_settings_are_not_discovered():
     older.write_text('{"io_workers": "6"}', encoding="utf-8")
 
     assert settings.load_preferences()["io_workers"] == "2"
-    assert not Path(settings.preferences_file()).exists()
+    assert Path(settings.preferences_file()).is_file()
 
 
 def test_settings_save_failure_is_reported(valid_preferences, tmp_path, caplog):

@@ -76,7 +76,25 @@ def preferences_load_file() -> str:
 def load_preferences(
     preferences_path: str | os.PathLike[str] | None = None,
 ) -> Preferences:
-    return resolve_preferences(load_saved_preference_values(preferences_path))
+    path = (
+        Path(preferences_path)
+        if preferences_path is not None
+        else Path(preferences_load_file())
+    )
+    if not path.exists():
+        defaults = resolve_preferences()
+        _LOG.warning(
+            "Preferences file %s was not found; using and saving defaults.",
+            path.name,
+        )
+        try:
+            save_preferences(defaults, path)
+        except PreferencesSaveError:
+            # Saving reports its own warning; startup must still have a valid
+            # in-memory snapshot when the configuration location is unwritable.
+            pass
+        return defaults
+    return resolve_preferences(load_saved_preference_values(path))
 
 
 def load_saved_preference_values(
