@@ -74,7 +74,7 @@ def test_reveal_latest_resolves_again_at_action_time(tmp_path):
 
     assert state.latest_log == newest
     assert controller.reveal_adapter.paths == [str(newest)]
-    assert "selected the latest log" in state.status_text
+    assert state.status_text == ""
 
 
 def test_reveal_latest_handles_log_deleted_after_refresh(tmp_path):

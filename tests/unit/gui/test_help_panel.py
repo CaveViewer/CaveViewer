@@ -167,6 +167,12 @@ def test_help_panel_exposes_troubleshooting_tab_and_log_action():
     assert "state.error_excerpt" in render_source
 
 
+def test_help_panel_only_renders_log_action_status_when_present():
+    render_source = inspect.getsource(help_panel.HelpPanel._render_troubleshooting)
+
+    assert "if state.status_text:" in render_source
+
+
 def test_copy_error_excerpt_uses_exact_displayed_text():
     class Clipboard:
         def __init__(self):
