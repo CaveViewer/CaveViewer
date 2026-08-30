@@ -44,6 +44,10 @@ from caveviewer.core.diagnostics.startup import (
 )
 from caveviewer.core.preferences.runtime_settings import RuntimeSettings
 from caveviewer.gui.preferences_dialog import PreferencesPanel
+from caveviewer.gui.preferences_workflow import (
+    PreferencesCloseAction,
+    resolve_preferences_close,
+)
 from caveviewer.gui.dpi_utils import (
     apply_tk_scaling,
     configure_process_dpi_awareness,
@@ -949,14 +953,16 @@ def _show_themed_about_dialog(
         pass
 
 
-def _show_discard_preferences_dialog(
+def _show_unsaved_preferences_dialog(
     root,
     *,
     px,
     dialog_ref: list[object | None],
+    on_save: Callable[[], bool],
     on_discard: Callable[[], None],
+    on_continue: Callable[[], None],
 ) -> None:
-    """Ask before a navigation action discards an embedded form's edits."""
+    """Offer save, discard, or continued editing before leaving Preferences."""
     active_dialog = dialog_ref[0]
     if _tk_root_exists(active_dialog):
         try:
@@ -972,7 +978,7 @@ def _show_discard_preferences_dialog(
     dialog = tk.Toplevel(root)
     dialog_ref[0] = dialog
     dialog.withdraw()
-    dialog.title("Discard unsaved preferences?")
+    dialog.title("Save changes to preferences?")
     dialog.configure(bg=_BG_COLOR)
     dialog.resizable(False, False)
     dialog.transient(root)
@@ -982,7 +988,7 @@ def _show_discard_preferences_dialog(
     content.pack(fill="both", expand=True, padx=px(28), pady=px(24))
     tk.Label(
         content,
-        text="Discard unsaved changes?",
+        text="Save changes to preferences?",
         font=_TYPOGRAPHY.body_strong,
         fg=_TITLE_COLOR,
         bg=_BG_COLOR,
@@ -991,8 +997,8 @@ def _show_discard_preferences_dialog(
     tk.Label(
         content,
         text=(
-            "Your changes to Preferences have not been applied. "
-            "Discard them and return to the Map Library?"
+            "Your Preferences changes have not been saved. "
+            "Save or discard them before leaving Preferences."
         ),
         font=_TYPOGRAPHY.body,
         fg=_SUBTITLE_COLOR,
@@ -1023,6 +1029,13 @@ def _show_discard_preferences_dialog(
         on_discard()
         return "break"
 
+    def _save(_event=None):
+        if not on_save():
+            return "break"
+        _close_dialog()
+        on_continue()
+        return "break"
+
     def _make_button(text: str, callback, *, primary: bool):
         normal_bg = _BUTTON_BG if primary else DARK_THEME.secondary_button
         hover_bg = (
@@ -1049,9 +1062,11 @@ def _show_discard_preferences_dialog(
         button.bind("<Leave>", lambda _event: button.config(bg=normal_bg))
         return button
 
-    discard_button = _make_button("Discard changes", _discard, primary=True)
+    save_button = _make_button("Save changes", _save, primary=True)
+    discard_button = _make_button("Discard changes", _discard, primary=False)
     keep_button = _make_button("Keep editing", _close_dialog, primary=False)
-    discard_button.pack(side="right")
+    save_button.pack(side="right")
+    discard_button.pack(side="right", padx=(0, px(8)))
     keep_button.pack(side="right", padx=(0, px(8)))
 
     dialog.bind("<Escape>", _close_dialog)
@@ -1074,7 +1089,7 @@ def _show_discard_preferences_dialog(
     dialog.lift(root)
     try:
         dialog.grab_set()
-        keep_button.focus_set()
+        save_button.focus_set()
     except tk.TclError:
         pass
 
@@ -1854,11 +1869,11 @@ def show_splash_screen(
     def _request_leave_preferences(next_action: Callable[[], None]) -> None:
         """Keep navigation from silently throwing away edited Preferences."""
         panel = preferences_panel_ref[0]
-        if (
-            active_surface[0] != "preferences"
-            or panel is None
-            or not panel.has_unsaved_changes
-        ):
+        preferences_active = active_surface[0] == "preferences" and panel is not None
+        close_action = resolve_preferences_close(
+            bool(preferences_active and panel.has_unsaved_changes)
+        )
+        if close_action is PreferencesCloseAction.LEAVE:
             next_action()
             return
 
@@ -1866,11 +1881,13 @@ def show_splash_screen(
             panel.discard_changes()
             next_action()
 
-        _show_discard_preferences_dialog(
+        _show_unsaved_preferences_dialog(
             root,
             px=px,
             dialog_ref=discard_preferences_dialog_ref,
+            on_save=panel.apply,
             on_discard=_discard_and_continue,
+            on_continue=next_action,
         )
 
     def _ensure_preferences_panel() -> PreferencesPanel:

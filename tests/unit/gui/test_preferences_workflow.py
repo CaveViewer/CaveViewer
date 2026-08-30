@@ -13,7 +13,27 @@ from caveviewer.gui.preferences_workflow import (
     PreferencesDialogWorkflow,
     PreferencesExportWorkflowResult,
     PreferencesImportWorkflowResult,
+    PreferencesCloseAction,
+    PreferencesCloseChoice,
+    resolve_preferences_close,
 )
+
+
+def test_preferences_close_resolution_covers_clean_and_dirty_choices():
+    assert resolve_preferences_close(False) is PreferencesCloseAction.LEAVE
+    assert resolve_preferences_close(True) is PreferencesCloseAction.PROMPT
+    assert (
+        resolve_preferences_close(True, PreferencesCloseChoice.SAVE)
+        is PreferencesCloseAction.SAVE
+    )
+    assert (
+        resolve_preferences_close(True, PreferencesCloseChoice.DISCARD)
+        is PreferencesCloseAction.DISCARD
+    )
+    assert (
+        resolve_preferences_close(True, PreferencesCloseChoice.KEEP_EDITING)
+        is PreferencesCloseAction.STAY
+    )
 
 
 def test_preferences_workflow_loads_initial_preferences_without_notifying_save():

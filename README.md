@@ -198,6 +198,8 @@ preference filenames are not discovered.
   file for review, or stages the built-in defaults. Imported and restored
   values are not saved until you select **Save changes**; **Discard changes**
   restores the previously saved preferences.
+- Leaving Preferences with pending edits offers **Save changes**, **Discard
+  changes**, and **Keep editing** so navigation cannot silently lose changes.
 
 Exports open a native Save dialog in a user-visible location. Imports use the
 native Open dialog and accept UTF-8 JSON objects up to 256 KiB. Missing or

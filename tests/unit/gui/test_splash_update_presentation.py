@@ -879,7 +879,9 @@ def test_splash_navigation_actions_are_keyboard_accessible_without_fallthrough()
     assert "_build_themed_about_content(" in source
     assert "show_close=False" in source
     assert "def _request_leave_preferences" in source
-    assert "_show_discard_preferences_dialog(" in source
+    assert "_show_unsaved_preferences_dialog(" in source
+    assert "on_save=panel.apply" in source
+    assert "on_continue=next_action" in source
     assert source.index("help_navigation_item = _create_navigation_item") < source.index(
         "about_navigation_item = _create_navigation_item"
     )
@@ -940,6 +942,18 @@ def test_splash_navigation_selection_uses_type_and_color_without_a_fill():
     assert "_NAVIGATION_ACTIVE_BG" not in inspect.getsource(splash_screen)
     assert "background = _NAVIGATION_HOVER_BG if active else _BG_COLOR" in source
     assert "_TYPOGRAPHY.body_strong" in source
+
+
+def test_unsaved_preferences_dialog_offers_three_explicit_close_choices():
+    source = inspect.getsource(splash_screen._show_unsaved_preferences_dialog)
+
+    assert '_make_button("Save changes"' in source
+    assert '_make_button("Discard changes"' in source
+    assert '_make_button("Keep editing"' in source
+    assert "if not on_save():" in source
+    assert 'dialog.bind("<Escape>", _close_dialog)' in source
+    assert 'dialog.protocol("WM_DELETE_WINDOW", _close_dialog)' in source
+    assert "save_button.focus_set()" in source
 
 
 def test_preferences_and_help_share_a_compact_embedded_panel_type_scale():

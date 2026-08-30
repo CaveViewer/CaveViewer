@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 
 from caveviewer.core.preferences.transfer import (
@@ -18,6 +19,40 @@ from caveviewer.gui.preferences import (
     load_preferences,
     save_preferences,
 )
+
+
+class PreferencesCloseChoice(str, Enum):
+    """Explicit user choice when leaving Preferences with staged changes."""
+
+    SAVE = "save"
+    DISCARD = "discard"
+    KEEP_EDITING = "keep_editing"
+
+
+class PreferencesCloseAction(str, Enum):
+    """Side effect requested by one Preferences close interaction."""
+
+    LEAVE = "leave"
+    PROMPT = "prompt"
+    SAVE = "save"
+    DISCARD = "discard"
+    STAY = "stay"
+
+
+def resolve_preferences_close(
+    has_unsaved_changes: bool,
+    choice: PreferencesCloseChoice | None = None,
+) -> PreferencesCloseAction:
+    """Resolve close intent without performing persistence or Tk operations."""
+    if not has_unsaved_changes:
+        return PreferencesCloseAction.LEAVE
+    if choice is None:
+        return PreferencesCloseAction.PROMPT
+    return {
+        PreferencesCloseChoice.SAVE: PreferencesCloseAction.SAVE,
+        PreferencesCloseChoice.DISCARD: PreferencesCloseAction.DISCARD,
+        PreferencesCloseChoice.KEEP_EDITING: PreferencesCloseAction.STAY,
+    }[choice]
 
 
 @dataclass(frozen=True)
