@@ -325,6 +325,12 @@ def test_load_falls_back_only_invalid_saved_fields(tmp_path, caplog):
     assert loaded["io_workers"] == "2"
     assert loaded["upload_chunks_per_frame"] == "3"
     assert "Ignoring invalid saved io_workers" in caplog.text
+    assert "999" not in caplog.text
+
+    settings.save_preferences(loaded, path)
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert saved["io_workers"] == settings.preference_defaults()["io_workers"]
+    assert saved["upload_chunks_per_frame"] == "3"
 
 
 def test_loaded_settings_snapshot_is_immutable(tmp_path):

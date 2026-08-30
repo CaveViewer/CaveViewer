@@ -682,9 +682,8 @@ def resolve_preferences(
             resolved[field.key] = result.normalized_value
             continue
         _LOG.warning(
-            "Ignoring invalid saved %s value %r: %s",
+            "Ignoring invalid saved %s; using its default: %s",
             field.key,
-            candidate,
             result.message,
         )
         resolved[field.key] = defaults[field.key]
