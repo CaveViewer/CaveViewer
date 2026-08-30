@@ -94,6 +94,34 @@ def test_application_uses_src_package_layout():
     assert not missing, f"missing migrated paths: {missing}"
 
 
+def test_branding_contract_is_documented_and_discoverable():
+    branding_path = REPOSITORY_ROOT / "docs" / "development" / "branding.md"
+    branding = branding_path.read_text(encoding="utf-8")
+    development_index = (
+        REPOSITORY_ROOT / "docs" / "development" / "README.md"
+    ).read_text(encoding="utf-8")
+    architecture = (
+        REPOSITORY_ROOT / "docs" / "development" / "architecture.md"
+    ).read_text(encoding="utf-8")
+    repository_layout = (
+        REPOSITORY_ROOT / "docs" / "development" / "repository-layout.md"
+    ).read_text(encoding="utf-8")
+
+    assert "## Consumer and output matrix" in branding
+    assert "## Stable product identity" in branding
+    for stable_identity in (
+        "com.caveviewer.CaveViewer",
+        "io.github.caveviewer.caveviewer",
+        "StartupWMClass",
+        "update-manifest paths",
+        "application-data roots",
+    ):
+        assert stable_identity in branding
+    assert "[Branding](branding.md)" in development_index
+    assert "[Branding](branding.md)" in architecture
+    assert "[branding.md](branding.md)" in repository_layout
+
+
 def test_package_resource_service_resolves_runtime_files():
     assert shader_path("mesh.vert").is_file()
     assert image_path("app_mark_transparent.png").is_file()
