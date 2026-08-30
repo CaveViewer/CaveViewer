@@ -879,6 +879,8 @@ def test_splash_navigation_actions_are_keyboard_accessible_without_fallthrough()
     assert "_build_themed_about_content(" in source
     assert "show_close=False" in source
     assert "def _request_leave_preferences" in source
+    assert "def _prepare_surface_change" in source
+    assert 'panel.on_hidden()' in source
     assert "_show_unsaved_preferences_dialog(" in source
     assert "on_save=panel.apply" in source
     assert "on_continue=next_action" in source

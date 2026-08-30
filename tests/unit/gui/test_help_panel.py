@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+from types import SimpleNamespace
 
 from caveviewer.gui import help_panel
 from caveviewer.gui.controls_catalog import keyboard_control_sections
@@ -193,3 +194,31 @@ def test_copy_error_excerpt_reports_clipboard_failure():
         help_panel.copy_error_excerpt_to_clipboard(BrokenClipboard(), "ERROR")
         is False
     )
+
+
+def test_help_copy_confirmation_clears_on_timeout_and_leave():
+    cancelled = []
+    rendered = []
+    canvas = SimpleNamespace(
+        after_cancel=lambda after_id: cancelled.append(after_id),
+        winfo_width=lambda: 640,
+    )
+    panel = help_panel.HelpPanel.__new__(help_panel.HelpPanel)
+    panel._copy_feedback_after_id = "copy-timer"
+    panel._copy_feedback = "Copied"
+    panel._copy_feedback_is_error = False
+    panel._copy_error_button = None
+    panel._content_canvas = canvas
+    panel._render_table = lambda width: rendered.append(width)
+
+    panel._reset_copy_button_label()
+
+    assert panel._copy_feedback == ""
+    assert panel._copy_feedback_after_id is None
+    assert rendered == [640]
+
+    panel._copy_feedback_after_id = "second-timer"
+    panel._copy_feedback = "Copied"
+    panel.on_hidden()
+    assert cancelled == ["second-timer"]
+    assert panel._copy_feedback == ""

@@ -297,6 +297,8 @@ class PreferencesPanel:
         self.button_row = None
         self.error_label = None
         self._feedback_override: tuple[str, str] | None = None
+        self._feedback_override_is_transient = False
+        self._feedback_after_id: str | None = None
         self._page_layout_after_id: str | None = None
         self._pending_page_canvas_width: int | None = None
         self._page_canvas_window_width: int | None = None
@@ -882,10 +884,11 @@ class PreferencesPanel:
         return self._surface_px(self._layout_policy.row_pad_y + 6)
 
     def _on_container_destroy(self, event) -> None:
-        """Cancel the panel-owned idle layout callback during Tk teardown."""
+        """Cancel panel-owned callbacks during Tk teardown."""
         if event.widget is not self.container:
             return
         self._destroyed = True
+        self._cancel_transient_feedback(clear=False)
         after_id = self._page_layout_after_id
         self._page_layout_after_id = None
         if after_id is None:
@@ -1284,9 +1287,56 @@ class PreferencesPanel:
     def _on_field_changed(self, key: str) -> None:
         if not self.form_ready or self.rendering_state:
             return
+        self._cancel_transient_feedback(clear=False)
         self._feedback_override = None
+        self._feedback_override_is_transient = False
         state = self.form.change(key, self.field_vars[key].get())
         self._render_form_state(state, preferred_key=key)
+
+    def _cancel_transient_feedback(self, *, clear: bool) -> None:
+        """Cancel an event confirmation and optionally remove its message."""
+        after_id = getattr(self, "_feedback_after_id", None)
+        self._feedback_after_id = None
+        if after_id is not None:
+            try:
+                self.dialog.after_cancel(after_id)
+            except (AttributeError, tk.TclError):
+                pass
+        if clear and getattr(self, "_feedback_override_is_transient", False):
+            self._feedback_override = None
+            self._feedback_override_is_transient = False
+            if not getattr(self, "_destroyed", False):
+                self._sync_feedback_to_current_state()
+
+    def _clear_transient_feedback(self) -> None:
+        """Remove the current event confirmation after its bounded lifetime."""
+        self._feedback_after_id = None
+        if not getattr(self, "_feedback_override_is_transient", False):
+            return
+        self._feedback_override = None
+        self._feedback_override_is_transient = False
+        if not getattr(self, "_destroyed", False):
+            self._sync_feedback_to_current_state()
+
+    def _show_transient_feedback(
+        self,
+        message: str,
+        color: str,
+        *,
+        duration_ms: int,
+    ) -> None:
+        """Show one bounded event confirmation owned by this panel."""
+        self._cancel_transient_feedback(clear=False)
+        self._feedback_override = (message, color)
+        self._feedback_override_is_transient = True
+        self._sync_feedback_to_current_state()
+        try:
+            self._feedback_after_id = self.dialog.after(
+                duration_ms,
+                self._clear_transient_feedback,
+            )
+        except (AttributeError, tk.TclError):
+            self._feedback_after_id = None
 
     def _sync_field_value(self, key: str, value: str) -> None:
         # A lazily constructed tab reads its value directly from the form
@@ -1321,7 +1371,9 @@ class PreferencesPanel:
         self._render_form_state(state, preferred_key=key)
 
     def apply(self) -> bool:
+        self._cancel_transient_feedback(clear=False)
         self._feedback_override = None
+        self._feedback_override_is_transient = False
         state, preferences = self.form.attempt_apply()
         self._render_form_state(state, focus_invalid=True)
         if preferences is None:
@@ -1342,11 +1394,11 @@ class PreferencesPanel:
         if result.preferences is not None:
             clean_state = self.form.mark_saved(result.preferences)
             self._render_form_state(clean_state)
-        self._feedback_override = (
+        self._show_transient_feedback(
             "Preferences saved.",
             DARK_THEME.primary_button,
+            duration_ms=4000,
         )
-        self._sync_feedback_to_current_state()
         on_applied = getattr(self, "on_applied", None)
         if on_applied is not None and result.preferences is not None:
             on_applied(result.preferences)
@@ -1378,11 +1430,11 @@ class PreferencesPanel:
                 MessageKind.ERROR,
             )
             return
-        self._feedback_override = (
+        self._show_transient_feedback(
             f"Preferences saved to {selection.path}.",
             DARK_THEME.primary_button,
+            duration_ms=5000,
         )
-        self._sync_feedback_to_current_state()
 
     def import_preferences(self) -> None:
         """Choose and stage a portable snapshot without saving it yet."""
@@ -1448,6 +1500,7 @@ class PreferencesPanel:
         )
 
     def _stage_preferences(self, preferences: Preferences, message: str) -> None:
+        self._cancel_transient_feedback(clear=False)
         state = self.form.stage(preferences.as_dict())
         self.rendering_state = True
         try:
@@ -1457,6 +1510,7 @@ class PreferencesPanel:
             self.rendering_state = False
         self.rendered_invalid_key = None
         self._feedback_override = (message, DARK_THEME.primary_button)
+        self._feedback_override_is_transient = False
         self._render_form_state(state)
 
     def cancel(self) -> None:
@@ -1476,6 +1530,7 @@ class PreferencesPanel:
 
     def discard_changes(self) -> None:
         """Restore the last saved values without destroying this panel."""
+        self._cancel_transient_feedback(clear=False)
         preferences = getattr(self, "preferences", None)
         if preferences is None:
             return
@@ -1488,7 +1543,12 @@ class PreferencesPanel:
             self.rendering_state = False
         self.rendered_invalid_key = None
         self._feedback_override = None
+        self._feedback_override_is_transient = False
         self._render_form_state(state)
+
+    def on_hidden(self) -> None:
+        """Clear obsolete event confirmations when Preferences is left."""
+        self._cancel_transient_feedback(clear=True)
 
     def focus_content(self) -> None:
         """Move keyboard focus into the active embedded Preferences view."""

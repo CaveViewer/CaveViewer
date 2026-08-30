@@ -1764,6 +1764,62 @@ def test_preferences_panel_tracks_and_discards_unsaved_values(valid_preferences)
     assert panel._feedback_override is None
 
 
+def test_preferences_transient_feedback_times_out_and_replaces_prior_timer():
+    from caveviewer.gui import preferences_dialog
+
+    callbacks = {}
+    cancelled = []
+    panel = preferences_dialog.PreferencesPanel.__new__(
+        preferences_dialog.PreferencesPanel
+    )
+    panel.dialog = SimpleNamespace(
+        after=lambda duration, callback: callbacks.setdefault(duration, callback)
+        or "timer",
+        after_cancel=lambda after_id: cancelled.append(after_id),
+    )
+    panel._feedback_after_id = "old-timer"
+    panel._feedback_override = ("Old", "#fff")
+    panel._feedback_override_is_transient = True
+    panel._destroyed = False
+    synchronized = []
+    panel._sync_feedback_to_current_state = lambda: synchronized.append(
+        panel._feedback_override
+    )
+
+    panel._show_transient_feedback("Preferences saved.", "#0f0", duration_ms=4000)
+
+    assert cancelled == ["old-timer"]
+    assert panel._feedback_override == ("Preferences saved.", "#0f0")
+    assert synchronized[-1] == panel._feedback_override
+    callbacks[4000]()
+    assert panel._feedback_override is None
+    assert synchronized[-1] is None
+
+
+def test_preferences_hidden_clears_only_transient_feedback():
+    from caveviewer.gui import preferences_dialog
+
+    panel = preferences_dialog.PreferencesPanel.__new__(
+        preferences_dialog.PreferencesPanel
+    )
+    panel.dialog = SimpleNamespace(after_cancel=lambda _after_id: None)
+    panel._feedback_after_id = "timer"
+    panel._feedback_override = ("Preferences saved.", "#0f0")
+    panel._feedback_override_is_transient = True
+    panel._destroyed = False
+    panel._sync_feedback_to_current_state = lambda: None
+
+    panel.on_hidden()
+
+    assert panel._feedback_override is None
+    assert panel._feedback_after_id is None
+
+    panel._feedback_override = ("Could not save preferences.", "#f00")
+    panel._feedback_override_is_transient = False
+    panel.on_hidden()
+    assert panel._feedback_override == ("Could not save preferences.", "#f00")
+
+
 def test_preferences_invalid_field_switches_to_containing_page():
     from caveviewer.gui import preferences_dialog
 

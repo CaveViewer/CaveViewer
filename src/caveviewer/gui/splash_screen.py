@@ -1852,6 +1852,7 @@ def show_splash_screen(
 
     def _show_map_library_surface() -> None:
         """Reveal the existing Map Library without rebuilding its catalog."""
+        _prepare_surface_change("map_library")
         if active_surface[0] != "map_library":
             map_library_surface.tkraise()
             active_surface[0] = "map_library"
@@ -1890,6 +1891,19 @@ def show_splash_screen(
             on_continue=next_action,
         )
 
+    def _prepare_surface_change(next_surface: str) -> None:
+        """Let the outgoing panel discard transient presentation state."""
+        if active_surface[0] == next_surface:
+            return
+        if active_surface[0] == "preferences":
+            panel = preferences_panel_ref[0]
+            if panel is not None:
+                panel.on_hidden()
+        elif active_surface[0] == "help":
+            panel = help_panel_ref[0]
+            if panel is not None:
+                panel.on_hidden()
+
     def _ensure_preferences_panel() -> PreferencesPanel:
         panel = preferences_panel_ref[0]
         if panel is not None:
@@ -1909,6 +1923,7 @@ def show_splash_screen(
 
     def _show_preferences_surface() -> None:
         panel = _ensure_preferences_panel()
+        _prepare_surface_change("preferences")
         if active_surface[0] != "preferences":
             preferences_surface.tkraise()
             active_surface[0] = "preferences"
@@ -1951,6 +1966,7 @@ def show_splash_screen(
 
     def _show_help_surface() -> None:
         panel = _ensure_help_panel()
+        _prepare_surface_change("help")
         if active_surface[0] != "help":
             help_surface.tkraise()
             active_surface[0] = "help"
@@ -1991,6 +2007,7 @@ def show_splash_screen(
 
     def _show_about_surface() -> None:
         _ensure_about_surface()
+        _prepare_surface_change("about")
         if active_surface[0] != "about":
             about_surface.tkraise()
             active_surface[0] = "about"
@@ -2300,6 +2317,7 @@ def show_splash_screen(
 
     def _show_cave_metadata(cave: CaveMetadata) -> None:
         """Replace the right surface with one cave's descriptive information."""
+        _prepare_surface_change("cave_metadata")
         for child in cave_metadata_surface.winfo_children():
             child.destroy()
         panel = CaveMetadataPanel(
