@@ -87,3 +87,73 @@ Windows, macOS, Ubuntu, and Fedora.
 
 Screenshots, website assets, and store metadata are updated after a candidate
 brand is accepted rather than for every developer experiment.
+
+## Developer workflow
+
+A profile is a directory containing `branding.v1.json` and its referenced PNG
+sources. Copy the bundled default profile to an ignored working directory,
+update its identity, provenance, roles, hashes, and artwork, then validate it:
+
+```powershell
+caveviewer-branding --profile .work/brands/candidate validate
+```
+
+Generate every platform derivative and the comparison sheet together:
+
+```powershell
+caveviewer-branding --profile .work/brands/candidate export `
+  --output .work/branding-preview --replace
+```
+
+Review `previews/contact-sheet.png` for exact 16-, 24-, and 32-pixel samples
+on light and dark surfaces. `export-summary.v1.json` records the selected
+profile, semantic-role source hashes, and every output hash.
+
+For an editable source run, select the candidate without changing Preferences:
+
+```powershell
+$env:CAVEVIEWER_BRAND_PROFILE = Resolve-Path .work/brands/candidate
+caveviewer
+Remove-Item Env:CAVEVIEWER_BRAND_PROFILE
+```
+
+Frozen signed applications ignore external runtime profiles. All native build
+scripts accept the same variable and embed the selected profile and provenance.
+Omitting it selects the bundled `default` profile.
+
+## Profile fields
+
+- `schema_version` is currently `1`.
+- `profile_id` and `provenance` identify and license the source.
+- `assets` declares relative paths, SHA-256 hashes, minimum dimensions, alpha,
+  square geometry, and safe-area inset.
+- `roles` maps application, About, loading, and platform icon semantics.
+- `loading_ring` selects `text_only`, `ring_only`, or `ring_with_mark` and
+  supplies validated fill and track colors.
+
+Correct validation errors in sources or the manifest, then export again. Never
+repair a profile by editing generated output.
+
+## Generated and tracked assets
+
+Manifests and accepted source artwork are authoritative. Iconsets, contact
+sheets, summaries, hicolor trees, ICNS files, and package staging trees belong
+under `build/`, `dist/`, or ignored `.work/`. The checked Windows ICO is a
+compatibility alias, and tests require it to match the default export exactly.
+
+Update website imagery, AppStream and documentation screenshots, favicons, and
+social previews only after a profile is accepted.
+
+## Native verification and icon caches
+
+- Windows: inspect executable, installer, title bar, taskbar, Start menu,
+  shortcuts, Installed Apps, and uninstaller. Unpin old shortcuts and refresh
+  the per-user icon cache when Windows retains old artwork.
+- macOS ARM64 and Intel: inspect Finder, Applications, Dock, Command-Tab, and
+  the mounted DMG. Remove old Dock items and relaunch Finder/Dock when needed.
+- Ubuntu and Fedora on GNOME Wayland and Xorg: inspect AppImage root icon, app
+  grid, Dock/task switcher grouping, launcher, and hicolor sizes. Refresh
+  `gtk-update-icon-cache` and `update-desktop-database` after replacement.
+
+Run package-only workflows and native smoke scripts before release. Stable
+names, application IDs, signing, updates, and storage paths remain unchanged.

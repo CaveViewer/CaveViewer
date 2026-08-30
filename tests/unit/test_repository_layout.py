@@ -120,6 +120,16 @@ def test_branding_contract_is_documented_and_discoverable():
     assert "[Branding](branding.md)" in development_index
     assert "[Branding](branding.md)" in architecture
     assert "[branding.md](branding.md)" in repository_layout
+    assert "## Developer workflow" in branding
+    assert "caveviewer-branding --profile" in branding
+    assert "CAVEVIEWER_BRAND_PROFILE" in branding
+    assert "## Native verification and icon caches" in branding
+    assert "[Branding](branding.md)" in (
+        REPOSITORY_ROOT / "docs/development/source-setup.md"
+    ).read_text(encoding="utf-8")
+    assert "[branding profile workflow](branding.md)" in (
+        REPOSITORY_ROOT / "docs/development/releases.md"
+    ).read_text(encoding="utf-8")
 
 
 def test_package_resource_service_resolves_runtime_files():

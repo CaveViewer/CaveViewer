@@ -4,6 +4,9 @@ This document is the canonical release checklist for CaveViewer. Script CLI
 details remain in [`scripts/README.md`](../../scripts/README.md), while update
 configuration and local packaging variables remain in
 [`source-setup.md`](source-setup.md).
+Every native package selects visual assets through the shared
+[branding profile workflow](branding.md); release identity, signing, and update
+paths remain independent of that selection.
 
 ## Release governance
 
