@@ -313,7 +313,9 @@ class ImportProgressPanel:
             self._display_fraction = max(self._display_fraction, fraction_clamped)
 
         bar_cx = w / 2.0
-        bar_cy = panel_y0 + panel_h * 0.50
+        # Keep the active stage where it was, but place progress after it in
+        # reading order and before the explanatory note.
+        bar_cy = panel_y0 + panel_h * 0.50 + 58.0
         bar_x0 = bar_cx - self.PROGRESS_BAR_WIDTH / 2.0
         bar_x1 = bar_cx + self.PROGRESS_BAR_WIDTH / 2.0
         bar_y0 = bar_cy - self.PROGRESS_BAR_HEIGHT / 2.0
@@ -403,10 +405,11 @@ class ImportProgressPanel:
             center_x=center_x,
             window_width=window_width,
             title=title,
-            title_y=center_y - 54.0,
+            title_y=center_y - 112.0,
             stage=stage,
-            stage_y=center_y + 28.0,
+            stage_y=center_y - 30.0,
             note=note,
+            note_y=center_y + 30.0,
         )
 
     def _render_logo(
@@ -686,6 +689,7 @@ class ImportProgressPanel:
         stage: str | None,
         stage_y: float,
         note: str | None,
+        note_y: float | None = None,
         alpha: float = 1.0,
         fixed_text_scale: float | None = None,
     ) -> None:
@@ -741,7 +745,8 @@ class ImportProgressPanel:
             self.STAGE_TEXT_SIZE,
             self._STAGE_TEXT_RGBA,
         )
-        note_y = stage_y if stage_height == 0.0 else stage_y + stage_height + 22.0
+        if note_y is None:
+            note_y = stage_y if stage_height == 0.0 else stage_y + stage_height + 22.0
         add_centered_text(note, note_y, self.NOTE_TEXT_SIZE, self._NOTE_TEXT_RGBA)
 
     def _stage_label(self, stage: str) -> str:
