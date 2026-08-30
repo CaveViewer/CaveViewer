@@ -75,7 +75,7 @@ splash, and map-library tests passed (250 passed); the complete applicable
 Windows suite passed (2,008 passed, 23 skipped, 1 symlink-privilege
 deselection); compileall and `git diff --check` passed.
 
-Task 15 is complete pending commit: focused feedback-policy and affected-panel
+Task 15 is complete in commit `4fe6b28`: focused feedback-policy and affected-panel
 tests passed (303 passed); the complete applicable Windows suite passed (2,009
 passed, 23 skipped, 1 symlink-privilege deselection); compileall and
 `git diff --check` passed. The planned-status labels in rows 14 and 15 record
