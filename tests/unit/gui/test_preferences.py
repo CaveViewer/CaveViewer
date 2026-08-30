@@ -1141,10 +1141,10 @@ def test_preferences_directory_browse_blocks_disabled_route_before_chooser(tmp_p
     ]
 
 
-def test_preferences_directory_browse_uses_legacy_compatible_service(tmp_path):
+def test_preferences_directory_browse_keeps_compatible_service_feedback_quiet(
+    tmp_path,
+):
     from caveviewer.gui import preferences_dialog
-    from caveviewer.gui.preferences_form import MessageKind
-
     selected_dir = tmp_path / "selected"
     selected_dir.mkdir()
     chooser_calls = []
@@ -1165,12 +1165,7 @@ def test_preferences_directory_browse_uses_legacy_compatible_service(tmp_path):
 
     assert len(chooser_calls) == 1
     assert values.value == str(selected_dir)
-    assert feedback == [
-        (
-            "Directory selection is available through this desktop service.",
-            MessageKind.WARNING,
-        )
-    ]
+    assert feedback == []
 
 
 def test_preferences_directory_browse_reports_desktop_action_failure(tmp_path):

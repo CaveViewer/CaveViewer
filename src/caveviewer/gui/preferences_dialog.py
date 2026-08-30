@@ -25,7 +25,6 @@ from caveviewer.gui.preferences_form import (
     MessageKind,
 )
 from caveviewer.gui.section_spacing import STANDARD_CONTENT_SECTION_SPACING
-from caveviewer.gui.features import FeatureState
 from caveviewer.gui.dialog_style import (
     DIALOG_BODY_PAD_Y,
     create_dialog_action_button,
@@ -876,9 +875,6 @@ class PreferencesPanel:
         if not decision.allows_execution:
             self._set_feedback(decision.explanation, MessageKind.WARNING)
             return
-        if decision.state is FeatureState.DEGRADED:
-            self._set_feedback(decision.explanation, MessageKind.WARNING)
-
         var = self.field_vars[key]
         initial_dir = os.path.expanduser(var.get().strip() or "~")
         if not os.path.isdir(initial_dir):
