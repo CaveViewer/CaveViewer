@@ -50,6 +50,7 @@ from caveviewer.gui.scrollable_content import (
 )
 from caveviewer.gui.modal_dialog import ask_confirmation
 from caveviewer.gui.top_tab_strip import (
+    TABBED_CONTENT_ALIGNMENT_INSET,
     TopTab,
     TopTabbedContentSurface,
     TopTabbedContentSurfaceStyle,
@@ -183,6 +184,7 @@ class PreferenceSectionContainer:
         """Place this group with the standard preceding-section separation."""
         self.widget.pack(
             fill="x",
+            padx=(self._px(TABBED_CONTENT_ALIGNMENT_INSET), 0),
             pady=(
                 0
                 if first

@@ -1259,6 +1259,9 @@ def test_preferences_panel_uses_compact_tabbed_pages():
     render_field_source = inspect.getsource(
         preferences_dialog.PreferencesPanel._render_field
     )
+    section_pack_source = inspect.getsource(
+        preferences_dialog.PreferenceSectionContainer.pack
+    )
     page_keys = [page[0] for page in preferences_dialog._PREFERENCE_PAGES]
     page_labels = [page[1] for page in preferences_dialog._PREFERENCE_PAGES]
     field_sections = {
@@ -1292,6 +1295,7 @@ def test_preferences_panel_uses_compact_tabbed_pages():
     assert "self.button_row.pack(" in source
     assert "self.page_scroll_shell.pack(side=\"top\", fill=\"both\", expand=True)" in source
     assert "TopTabbedContentSurface(" in source
+    assert "padx=(self._px(TABBED_CONTENT_ALIGNMENT_INSET), 0)" in section_pack_source
     assert "on_selected=self._show_page" in source
     assert "self.tab_strip.select(page_key, notify=False)" in show_page_source
     assert "CanvasVerticalScrollbar(" in source
