@@ -75,6 +75,7 @@ _SCROLLBAR_GUTTER_X = 18
 _PLACEHOLDER_COLOR = DARK_THEME.placeholder_text
 _INLINE_FEEDBACK_PAD_X = 10
 _CONTROL_GAP_X = 10
+_COMPACT_PATH_CONTROL_PAD_Y = 5
 _BACKUP_ACTION_BUTTON_WIDTH = 10
 _MIN_HINT_WRAP_LENGTH = 200
 _HINT_WRAP_INSET = 4
@@ -705,7 +706,14 @@ class PreferencesPanel:
             add="+",
         )
         if compact_path:
-            entry.grid(row=0, column=0, sticky="ew")
+            # Match the Browse action's vertical padding so the read-only path
+            # and its action read as one deliberate control row.
+            entry.grid(
+                row=0,
+                column=0,
+                sticky="ew",
+                ipady=_COMPACT_PATH_CONTROL_PAD_Y,
+            )
         else:
             entry.pack(side="left")
 
