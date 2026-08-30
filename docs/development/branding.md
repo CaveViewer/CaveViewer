@@ -17,6 +17,7 @@ The branding system may control these roles:
 
 - application mark;
 - Windows, macOS, and Linux application-icon overrides;
+- Linux full-color scalable and High Contrast symbolic application icons;
 - About-page mark;
 - loading-indicator mark and progress mask;
 - bounded loading-ring presentation tokens; and
@@ -38,7 +39,7 @@ Tk, OpenGL, or platform packaging tools.
 | macOS | Application windows, Dock, Command-Tab, Finder and Applications | macOS application icon | Complete iconset and ICNS in the application bundle | macOS packaging |
 | macOS | Distributed disk image | macOS application icon; optional DMG artwork | Bundled `.app`; optional volume icon/background | macOS packaging |
 | Linux | Runtime window and task switcher grouping | Linux application icon | Runtime RGBA image; shell grouping inherits stable application identity | GUI/platform adapter |
-| Linux | App grid, Dock, launcher, AppImage and desktop integration | Linux application icon | Hicolor PNGs, root icon and `.DirIcon` | Linux packaging |
+| Linux | App grid, Dock, launcher, AppImage and desktop integration | Linux application icon plus scalable and symbolic variants | Hicolor PNGs/SVGs, root icon and `.DirIcon` | Linux packaging |
 | Store and release metadata | AppStream/store presentation | Accepted application icon and screenshots | Metadata images and screenshots | Release/documentation workflow |
 | Web and documentation | Favicon, social preview, site imagery and screenshots | Accepted brand artwork | Web-specific exports | Documentation workflow |
 | Future document integration | File associations for supported map formats | Optional document marks | Platform-specific document icons | Separate approved feature |
@@ -127,10 +128,11 @@ Omitting it selects the bundled `default` profile.
 - `profile_id` and `provenance` identify and license the source.
 - `assets` declares relative paths, SHA-256 hashes, minimum dimensions, alpha,
   square geometry, and safe-area inset.
-- `roles` maps application, About, loading mark/mask, and platform icon
-  semantics. The loading progress mask is an alpha-only source aligned with the
-  loading mark; its non-transparent pixels define the brand shape that receives
-  track and fill colors.
+- `roles` maps application, About, loading mark/mask, platform raster-icon,
+  Linux scalable-icon, and Linux symbolic-icon semantics. The loading progress
+  mask is an alpha-only source aligned with the loading mark; its
+  non-transparent pixels define the brand shape that receives track and fill
+  colors.
 - `loading_ring` selects `text_only`, `ring_only`, or `ring_with_mark` and
   supplies validated fill and track colors.
 
@@ -155,8 +157,25 @@ social previews only after a profile is accepted.
 - macOS ARM64 and Intel: inspect Finder, Applications, Dock, Command-Tab, and
   the mounted DMG. Remove old Dock items and relaunch Finder/Dock when needed.
 - Ubuntu and Fedora on GNOME Wayland and Xorg: inspect AppImage root icon, app
-  grid, Dock/task switcher grouping, launcher, and hicolor sizes. Refresh
+  grid, Dock/task switcher grouping, launcher, fixed hicolor sizes, scalable
+  rendering, and High Contrast symbolic selection. Refresh
   `gtk-update-icon-cache` and `update-desktop-database` after replacement.
+
+## Current platform-native icon policy
+
+The default profile uses one accepted cave/light metaphor with separate
+optical compositions: an un-enclosed Windows small-icon master, an enclosed
+1024-pixel macOS master, and a transparent GNOME-weighted Linux master. Linux
+also ships self-contained full-color scalable and monochrome symbolic SVGs
+named from the stable application ID.
+
+The macOS package continues to generate the complete traditional iconset and
+ICNS because CaveViewer is assembled through PyInstaller rather than an Xcode
+asset catalog. Apple's layered Icon Composer format requires Xcode-owned bundle
+integration and appearance annotations. Adopt it only in a separate native
+toolchain change that preserves the ICNS fallback and can be tested on both
+supported macOS architectures; do not treat a flattened approximation as a
+layered source.
 
 Run package-only workflows and native smoke scripts before release. Stable
 names, application IDs, signing, updates, and storage paths remain unchanged.

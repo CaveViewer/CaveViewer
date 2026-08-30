@@ -77,6 +77,18 @@ def export_branding_profile(
         _write_macos_outputs(profile, staging)
         _write_linux_outputs(profile, staging)
         _write_contact_sheet(profile, staging / "previews" / "contact-sheet.png")
+        _write_contact_sheet(
+            profile,
+            staging / "previews" / "macos-contact-sheet.png",
+            role="macos_app_icon",
+            sizes=(32, 64, 128),
+        )
+        _write_contact_sheet(
+            profile,
+            staging / "previews" / "linux-contact-sheet.png",
+            role="linux_app_icon",
+            sizes=(32, 64, 128),
+        )
         summary_path = _write_summary(profile, staging)
         if destination.exists():
             if destination.is_symlink() or not destination.is_dir():
@@ -144,9 +156,31 @@ def _write_linux_outputs(profile: BrandingProfile, root: Path) -> None:
     root_icon = _render_asset(asset, 256)
     _save_png(root_icon, root / "linux" / f"{LINUX_APPLICATION_ID}.png")
     _save_png(root_icon, root / "linux" / ".DirIcon")
+    _copy_svg(
+        profile.asset_for("linux_scalable_icon"),
+        root
+        / "linux"
+        / "hicolor"
+        / "scalable"
+        / "apps"
+        / f"{LINUX_APPLICATION_ID}.svg",
+    )
+    _copy_svg(
+        profile.asset_for("linux_symbolic_icon"),
+        root
+        / "linux"
+        / "hicolor"
+        / "symbolic"
+        / "apps"
+        / f"{LINUX_APPLICATION_ID}-symbolic.svg",
+    )
 
 
 def _render_asset(asset: BrandingAsset, size: int) -> Image.Image:
+    if asset.path.suffix != ".png":
+        raise BrandingExportError(
+            f"raster branding role requires PNG artwork: {asset.path}"
+        )
     with Image.open(asset.path) as source_file:
         source = source_file.convert("RGBA")
     content_size = max(1, round(size * (1.0 - (2.0 * asset.safe_area_inset))))
@@ -162,27 +196,43 @@ def _save_png(image: Image.Image, destination: Path) -> None:
     image.save(destination, format="PNG", optimize=False, compress_level=9)
 
 
-def _write_contact_sheet(profile: BrandingProfile, destination: Path) -> None:
+def _copy_svg(asset: BrandingAsset, destination: Path) -> None:
+    """Copy one validated SVG input without rewriting its deterministic bytes."""
+    if asset.path.suffix != ".svg":
+        raise BrandingExportError(
+            f"vector branding role requires SVG artwork: {asset.path}"
+        )
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_bytes(asset.path.read_bytes())
+
+
+def _write_contact_sheet(
+    profile: BrandingProfile,
+    destination: Path,
+    *,
+    role: str = "windows_app_icon",
+    sizes: tuple[int, ...] = PREVIEW_ICON_SIZES,
+) -> None:
     # Keep the largest exact-size preview wholly inside its cell. The previous
     # 5x enlargement clipped 32-pixel artwork and gave a misleading impression
     # of the icon's safe area during brand review.
-    scale = 4
+    scale = max(1, min(4, 128 // max(sizes)))
     margin = 20
     cell_width = 160
     cell_height = 180
     backgrounds = (("light", (245, 243, 237, 255)), ("dark", (24, 24, 22, 255)))
     sheet = Image.new(
         "RGBA",
-        (margin * 2 + cell_width * len(PREVIEW_ICON_SIZES),
+        (margin * 2 + cell_width * len(sizes),
          margin * 2 + cell_height * len(backgrounds)),
         (38, 36, 32, 255),
     )
     draw = ImageDraw.Draw(sheet)
     # Preview the role actually used for shell/taskbar icon frames. About and
     # other large presentation marks may intentionally use richer artwork.
-    asset = profile.asset_for("windows_app_icon")
+    asset = profile.asset_for(role)
     for row, (label, background) in enumerate(backgrounds):
-        for column, size in enumerate(PREVIEW_ICON_SIZES):
+        for column, size in enumerate(sizes):
             left = margin + column * cell_width
             top = margin + row * cell_height
             draw.rounded_rectangle(

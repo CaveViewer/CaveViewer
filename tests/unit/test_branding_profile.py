@@ -36,6 +36,14 @@ def test_bundled_default_profile_uses_original_mark_for_windows_and_about():
     assert profile.asset_for("windows_app_icon") is not profile.asset_for(
         "about_mark"
     )
+    assert profile.asset_for("macos_app_icon").path.name == "macos-app-mark.png"
+    assert profile.asset_for("linux_app_icon").path.name == "linux-app-mark.png"
+    assert profile.asset_for("linux_scalable_icon").path.name == (
+        "linux-app-icon.svg"
+    )
+    assert profile.asset_for("linux_symbolic_icon").path.name == (
+        "linux-app-icon-symbolic.svg"
+    )
     assert profile.asset_for("loading_mark").path.name == "loading-progress-mark.png"
     assert profile.asset_for("loading_progress_mask").path.name == (
         "loading-progress-rim-mask.png"
@@ -159,6 +167,24 @@ def test_profile_rejects_png_without_required_alpha(tmp_path):
     _write_manifest(profile_dir, payload)
 
     with pytest.raises(BrandingProfileError, match="requires an alpha channel"):
+        load_branding_profile(profile_dir / "branding.v1.json")
+
+
+def test_profile_rejects_svg_with_external_behavior(tmp_path):
+    profile_dir = _copy_default_profile(tmp_path)
+    artwork = profile_dir / "linux-app-icon.svg"
+    data = (
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">'
+        '<image href="https://example.invalid/icon.png"/></svg>'
+    ).encode()
+    artwork.write_bytes(data)
+    payload = _read_manifest(profile_dir)
+    payload["assets"]["linux_scalable_mark"]["sha256"] = hashlib.sha256(
+        data
+    ).hexdigest()
+    _write_manifest(profile_dir, payload)
+
+    with pytest.raises(BrandingProfileError, match="self-contained vector"):
         load_branding_profile(profile_dir / "branding.v1.json")
 
 

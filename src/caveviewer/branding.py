@@ -11,6 +11,7 @@ import struct
 import sys
 from types import MappingProxyType
 from typing import Mapping
+from xml.etree import ElementTree
 
 from caveviewer.resources import resource_path
 
@@ -28,6 +29,8 @@ REQUIRED_ROLES = frozenset(
         "windows_app_icon",
         "macos_app_icon",
         "linux_app_icon",
+        "linux_scalable_icon",
+        "linux_symbolic_icon",
     }
 )
 
@@ -309,7 +312,15 @@ def _load_asset(profile_root: Path, asset_id: str, payload) -> BrandingAsset:
             f"{expected_hash}, got {file_hash}"
         )
 
-    width, height, has_alpha = _read_png_header(asset_path)
+    if asset_path.suffix == ".png":
+        width, height, has_alpha = _read_png_header(asset_path)
+    elif asset_path.suffix == ".svg":
+        width, height = _read_svg_geometry(asset_path)
+        has_alpha = True
+    else:
+        raise BrandingProfileError(
+            f"branding asset must be PNG or SVG: {asset_path}"
+        )
     minimum_width = _positive_int(
         value.get("minimum_width"), f"assets.{asset_id}.minimum_width"
     )
@@ -361,6 +372,54 @@ def _read_png_header(path: Path) -> tuple[int, int, bool]:
     width, height = struct.unpack(">II", header[16:24])
     color_type = header[25]
     return width, height, color_type in {4, 6}
+
+
+def _read_svg_geometry(path: Path) -> tuple[int, int]:
+    """Validate a self-contained square SVG source and return its view-box size."""
+    try:
+        raw = path.read_bytes()
+    except OSError as exc:
+        raise BrandingProfileError(f"cannot read branding SVG {path}: {exc}") from exc
+    lowered = raw.lower()
+    if b"<!doctype" in lowered or b"<!entity" in lowered:
+        raise BrandingProfileError(f"branding SVG must not declare a DTD: {path}")
+    try:
+        root = ElementTree.fromstring(raw)
+    except ElementTree.ParseError as exc:
+        raise BrandingProfileError(f"branding asset must be valid SVG: {path}") from exc
+    if root.tag.rsplit("}", 1)[-1] != "svg":
+        raise BrandingProfileError(f"branding SVG root must be svg: {path}")
+    try:
+        left, top, width, height = (
+            float(value) for value in root.attrib["viewBox"].replace(",", " ").split()
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise BrandingProfileError(
+            f"branding SVG requires a numeric four-value viewBox: {path}"
+        ) from exc
+    if left != 0.0 or top != 0.0 or width <= 0.0 or height <= 0.0:
+        raise BrandingProfileError(
+            f"branding SVG viewBox must start at zero with positive dimensions: {path}"
+        )
+    if abs(width - height) > 0.001:
+        raise BrandingProfileError(f"branding asset must be square: {path}")
+    forbidden_tags = {"foreignObject", "image", "script", "use"}
+    for element in root.iter():
+        if element.tag.rsplit("}", 1)[-1] in forbidden_tags:
+            raise BrandingProfileError(
+                f"branding SVG must be self-contained vector artwork: {path}"
+            )
+        for name, value in element.attrib.items():
+            local_name = name.rsplit("}", 1)[-1].lower()
+            if (
+                local_name.startswith("on")
+                or local_name == "href"
+                or (local_name == "style" and "url(" in value.lower())
+            ):
+                raise BrandingProfileError(
+                    f"branding SVG contains unsafe external behavior: {path}"
+                )
+    return round(width), round(height)
 
 
 def _object(value, field: str) -> dict:

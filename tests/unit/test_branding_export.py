@@ -8,7 +8,7 @@ from pathlib import Path
 from PIL import Image
 import pytest
 
-from caveviewer.branding import resolve_branding_profile
+from caveviewer.branding import REQUIRED_ROLES, resolve_branding_profile
 from caveviewer.branding_export import (
     LINUX_APPLICATION_ID,
     LINUX_ICON_SIZES,
@@ -54,15 +54,35 @@ def test_export_produces_every_runtime_and_platform_artifact(tmp_path):
             / f"{LINUX_APPLICATION_ID}.png",
             size,
         )
+    scalable_icon = (
+        destination
+        / "linux"
+        / "hicolor"
+        / "scalable"
+        / "apps"
+        / f"{LINUX_APPLICATION_ID}.svg"
+    )
+    symbolic_icon = (
+        destination
+        / "linux"
+        / "hicolor"
+        / "symbolic"
+        / "apps"
+        / f"{LINUX_APPLICATION_ID}-symbolic.svg"
+    )
+    assert scalable_icon.read_text(encoding="utf-8").startswith("<?xml")
+    assert symbolic_icon.read_text(encoding="utf-8").startswith("<?xml")
     _assert_ico_sizes(destination / "windows" / "caveviewer.ico")
     assert (destination / "linux" / ".DirIcon").is_file()
     assert (destination / "previews" / "contact-sheet.png").is_file()
+    assert (destination / "previews" / "macos-contact-sheet.png").is_file()
+    assert (destination / "previews" / "linux-contact-sheet.png").is_file()
     assert summary_path == destination / "export-summary.v1.json"
 
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
     assert summary["schema_version"] == 1
     assert summary["profile"]["id"] == "default"
-    assert set(summary["roles"]) == set(RUNTIME_ROLE_SIZES)
+    assert set(summary["roles"]) == REQUIRED_ROLES
     assert all("sha256" in output for output in summary["outputs"])
     assert all(not Path(output["path"]).is_absolute() for output in summary["outputs"])
 

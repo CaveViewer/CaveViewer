@@ -5,7 +5,7 @@
   "provenance": {
     "creator": "CaveViewer project",
     "license": "CaveViewer project artwork",
-    "source": "Monochromatic amber cave-map concept derived from the original CaveViewer app mark; approved faceted cookie hue V6 retained for loading and non-Windows platform roles"
+    "source": "Monochromatic amber cave-map concept derived from the original CaveViewer app mark, with optical compositions for Windows, macOS, and GNOME plus self-contained Linux vector variants"
   },
   "assets": {
     "cookie": {
@@ -32,6 +32,38 @@
       "alpha": "required",
       "safe_area_inset": 0.0
     },
+    "macos_app_mark": {
+      "path": "macos-app-mark.png",
+      "sha256": "7b502bbc107e10fe6033694dbeb3c3847711e05096e10a85fc96ae5e4e471298",
+      "minimum_width": 1024,
+      "minimum_height": 1024,
+      "alpha": "required",
+      "safe_area_inset": 0.0
+    },
+    "linux_app_mark": {
+      "path": "linux-app-mark.png",
+      "sha256": "9695bd0da5b792d5821462c6047599d51e63636bf706595ac415e2f440ecf78c",
+      "minimum_width": 1024,
+      "minimum_height": 1024,
+      "alpha": "required",
+      "safe_area_inset": 0.0
+    },
+    "linux_scalable_mark": {
+      "path": "linux-app-icon.svg",
+      "sha256": "90fc559d9fdd656c3c44192b14b7c650f737fc63d3fd4374d3c02c049a193cdb",
+      "minimum_width": 128,
+      "minimum_height": 128,
+      "alpha": "required",
+      "safe_area_inset": 0.0
+    },
+    "linux_symbolic_mark": {
+      "path": "linux-app-icon-symbolic.svg",
+      "sha256": "2e3080d646a4737e730346192f5a4ef775699a878692db3c54f38146e5188aa0",
+      "minimum_width": 128,
+      "minimum_height": 128,
+      "alpha": "required",
+      "safe_area_inset": 0.0
+    },
     "loading_progress_mark": {
       "path": "loading-progress-mark.png",
       "sha256": "8ffcf0a8b4878a1b48e9a45880a2516325eafc12ede1987bf6fde7575baa6f2c",
@@ -55,8 +87,10 @@
     "loading_mark": "loading_progress_mark",
     "loading_progress_mask": "loading_progress_rim_mask",
     "windows_app_icon": "windows_small_mark",
-    "macos_app_icon": "cookie",
-    "linux_app_icon": "cookie"
+    "macos_app_icon": "macos_app_mark",
+    "linux_app_icon": "linux_app_mark",
+    "linux_scalable_icon": "linux_scalable_mark",
+    "linux_symbolic_icon": "linux_symbolic_mark"
   },
   "loading_ring": {
     "fill_color": "#FFB000",

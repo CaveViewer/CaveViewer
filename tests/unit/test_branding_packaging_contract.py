@@ -67,6 +67,7 @@ def test_branding_package_data_and_native_smoke_contracts_are_tracked():
 
     assert '"branding/**/*.json"' in pyproject
     assert '"branding/**/*.png"' in pyproject
+    assert '"branding/**/*.svg"' in pyproject
     assert "CFBundleIconFile" in macos_smoke
     assert "hicolor" in linux_package and ".DirIcon" in linux_package
     assert "SetupIconFile" in windows_package
