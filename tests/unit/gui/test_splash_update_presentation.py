@@ -854,10 +854,12 @@ def test_splash_navigation_actions_are_keyboard_accessible_without_fallthrough()
     assert "if not readiness_gate.ready:" in reveal_source
     assert "readiness_gate.remaining_delay_ms(time.monotonic())" in reveal_source
     assert "launch_surface.destroy()" in reveal_source
-    assert "root.resizable(True, True)" in reveal_source
+    assert "root.resizable(" not in reveal_source
     assert "after_idle(" not in reveal_source
     assert "schedule_after(" not in reveal_source
-    assert "root.resizable(False, False)" in source
+    assert source.count("root.resizable(True, True)") == 1
+    assert source.index("root.resizable(True, True)") < source.index("root.deiconify()")
+    assert "root.resizable(False, False)" not in source
     assert "available_width = max(1, screen_w - display_margin)" in source
     assert "available_height = max(1, screen_h - display_margin)" in source
     assert "root.minsize(" in source

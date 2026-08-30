@@ -1419,7 +1419,10 @@ def show_splash_screen(
     root.withdraw()
     root.title(program_name)
     root.configure(bg=_BG_COLOR)
-    root.resizable(False, False)
+    # Establish the final native frame style before the first reveal. Toggling
+    # resize capability during the launch-to-library handoff makes Windows
+    # rebuild its non-client frame and produces a visible flash.
+    root.resizable(True, True)
     _set_tk_window_icon(root)
 
     presentation_actions_adapter.install_about_handler(root, program_name, version)
@@ -2480,9 +2483,6 @@ def show_splash_screen(
             )
             return
         content_frame.tkraise()
-        # Keep startup geometry stable while composing, then hand users a
-        # normal resizable desktop window once every primary surface is ready.
-        root.resizable(True, True)
         if launch_surface is not None:
             launch_surface.destroy()
             mark_startup_splash_visible()

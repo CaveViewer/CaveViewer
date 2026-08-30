@@ -62,8 +62,9 @@ primitives remain documented in [design-system.md](design-system.md).
 - Use the same primary-shell geometry on Windows, macOS, and Linux: 1160 by
   820 logical pixels by default and a 940 by 680 logical-pixel resize minimum.
   Clamp both the initial geometry and minimum constraints when the available
-  display is smaller. Keep startup fixed while composing, then enable resizing
-  when the ready main surface is revealed.
+  display is smaller. Establish native resize capability before the window is
+  first shown; do not toggle native frame styles during a visible surface
+  handoff.
 - Recalculate wrapping and overflow from the final mapped width. Coalesce idle
   layout work and avoid update loops that repeatedly measure unchanged geometry.
 
