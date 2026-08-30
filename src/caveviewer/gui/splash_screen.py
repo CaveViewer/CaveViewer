@@ -245,6 +245,8 @@ _TYPOGRAPHY: TkTypography = create_tk_typography(
 )
 _SPLASH_WINDOW_WIDTH = _SPLASH_LAYOUT_POLICY.window_width
 _SPLASH_WINDOW_MIN_HEIGHT = _SPLASH_LAYOUT_POLICY.min_height
+_SPLASH_RESIZE_MIN_WIDTH = _SPLASH_LAYOUT_POLICY.resize_min_width
+_SPLASH_RESIZE_MIN_HEIGHT = _SPLASH_LAYOUT_POLICY.resize_min_height
 _SPLASH_WINDOW_EXTRA_BOTTOM_SLACK = _SPLASH_LAYOUT_POLICY.extra_bottom_slack
 _CREDITS_TEXT = (
     "Concept by Brian Deatherage and Zsolt Szabo of\n"
@@ -390,6 +392,7 @@ def _activate_presentation_profile(
     global _WINDOWS_SPLASH_LAYOUT, _LINUX_SPLASH_LAYOUT
     global _UI_FONT_FAMILY, _TK_TEXT_SCALE
     global _SPLASH_WINDOW_WIDTH, _SPLASH_WINDOW_MIN_HEIGHT
+    global _SPLASH_RESIZE_MIN_WIDTH, _SPLASH_RESIZE_MIN_HEIGHT
     global _SPLASH_WINDOW_EXTRA_BOTTOM_SLACK
 
     _PRESENTATION_PROFILE = profile
@@ -404,6 +407,8 @@ def _activate_presentation_profile(
     _TK_TEXT_SCALE = 1.0
     _SPLASH_WINDOW_WIDTH = _SPLASH_LAYOUT_POLICY.window_width
     _SPLASH_WINDOW_MIN_HEIGHT = _SPLASH_LAYOUT_POLICY.min_height
+    _SPLASH_RESIZE_MIN_WIDTH = _SPLASH_LAYOUT_POLICY.resize_min_width
+    _SPLASH_RESIZE_MIN_HEIGHT = _SPLASH_LAYOUT_POLICY.resize_min_height
     _SPLASH_WINDOW_EXTRA_BOTTOM_SLACK = _SPLASH_LAYOUT_POLICY.extra_bottom_slack
     _refresh_tk_font_tokens()
 
@@ -1419,14 +1424,23 @@ def show_splash_screen(
 
     presentation_actions_adapter.install_about_handler(root, program_name, version)
 
-    window_w, window_h = px(_SPLASH_WINDOW_WIDTH), px(_SPLASH_WINDOW_MIN_HEIGHT)
-
     # Center the window on screen rather than letting the OS place it
     # arbitrarily -- a first-launch splash screen appearing somewhere
     # random/off-center is a small but noticeable rough edge.
     root.update_idletasks()
     screen_w = root.winfo_screenwidth()
     screen_h = root.winfo_screenheight()
+    display_margin = px(80)
+    available_width = max(1, screen_w - display_margin)
+    available_height = max(1, screen_h - display_margin)
+    window_w = min(px(_SPLASH_WINDOW_WIDTH), available_width)
+    window_h = min(px(_SPLASH_WINDOW_MIN_HEIGHT), available_height)
+    # Compact displays must never receive a minimum larger than the initial
+    # display-clamped window. Normal displays retain the shared shell minimum.
+    root.minsize(
+        min(px(_SPLASH_RESIZE_MIN_WIDTH), available_width),
+        min(px(_SPLASH_RESIZE_MIN_HEIGHT), available_height),
+    )
     pos_x = (screen_w - window_w) // 2
     pos_y = (screen_h - window_h) // 3  # slightly above true vertical center, reads better
     root.geometry(f"{window_w}x{window_h}+{pos_x}+{pos_y}")
@@ -2440,8 +2454,7 @@ def show_splash_screen(
         px(_SPLASH_WINDOW_MIN_HEIGHT),
         root.winfo_reqheight() + px(_SPLASH_WINDOW_EXTRA_BOTTOM_SLACK),
     )
-    max_height = max(px(360), root.winfo_screenheight() - px(80))
-    final_height = min(final_height, max_height)
+    final_height = min(final_height, available_height)
     pos_y = (screen_h - final_height) // 3
     root.geometry(f"{window_w}x{final_height}+{pos_x}+{pos_y}")
 
@@ -2467,6 +2480,9 @@ def show_splash_screen(
             )
             return
         content_frame.tkraise()
+        # Keep startup geometry stable while composing, then hand users a
+        # normal resizable desktop window once every primary surface is ready.
+        root.resizable(True, True)
         if launch_surface is not None:
             launch_surface.destroy()
             mark_startup_splash_visible()

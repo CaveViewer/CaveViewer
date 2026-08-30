@@ -24,6 +24,8 @@ class SplashLayoutPolicy:
     linux_layout: bool
     window_width: int
     min_height: int
+    resize_min_width: int
+    resize_min_height: int
     extra_bottom_slack: int
     secondary_link_row_bottom_gap: int
     footer_credits_bottom_pad: int
@@ -194,11 +196,13 @@ _DEFAULT_PRESENTATION_PROFILE = PresentationProfile(
         destroy_root_on_close=True,
         windows_layout=False,
         linux_layout=False,
-        window_width=940,
+        window_width=1160,
         # Keep the embedded Preferences form visible without its overflow
         # scrollbar on ordinary desktop displays. Splash composition still
         # clamps this preferred height to the usable screen area.
         min_height=820,
+        resize_min_width=940,
+        resize_min_height=680,
         extra_bottom_slack=0,
         secondary_link_row_bottom_gap=36,
         footer_credits_bottom_pad=36,
@@ -266,8 +270,10 @@ def select_presentation_profile(*, platform_name: str) -> PresentationProfile:
                 destroy_root_on_close=False,
                 windows_layout=False,
                 linux_layout=False,
-                window_width=1100,
+                window_width=1160,
                 min_height=820,
+                resize_min_width=940,
+                resize_min_height=680,
                 extra_bottom_slack=36,
                 secondary_link_row_bottom_gap=28,
                 footer_credits_bottom_pad=24,
@@ -322,8 +328,10 @@ def select_presentation_profile(*, platform_name: str) -> PresentationProfile:
                 destroy_root_on_close=True,
                 windows_layout=True,
                 linux_layout=False,
-                window_width=940,
+                window_width=1160,
                 min_height=820,
+                resize_min_width=940,
+                resize_min_height=680,
                 extra_bottom_slack=0,
                 secondary_link_row_bottom_gap=36,
                 footer_credits_bottom_pad=36,
@@ -369,8 +377,10 @@ def select_presentation_profile(*, platform_name: str) -> PresentationProfile:
                 destroy_root_on_close=True,
                 windows_layout=False,
                 linux_layout=True,
-                window_width=940,
+                window_width=1160,
                 min_height=820,
+                resize_min_width=940,
+                resize_min_height=680,
                 extra_bottom_slack=0,
                 secondary_link_row_bottom_gap=36,
                 footer_credits_bottom_pad=36,

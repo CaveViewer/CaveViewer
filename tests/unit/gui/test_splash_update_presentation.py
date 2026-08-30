@@ -854,8 +854,16 @@ def test_splash_navigation_actions_are_keyboard_accessible_without_fallthrough()
     assert "if not readiness_gate.ready:" in reveal_source
     assert "readiness_gate.remaining_delay_ms(time.monotonic())" in reveal_source
     assert "launch_surface.destroy()" in reveal_source
+    assert "root.resizable(True, True)" in reveal_source
     assert "after_idle(" not in reveal_source
     assert "schedule_after(" not in reveal_source
+    assert "root.resizable(False, False)" in source
+    assert "available_width = max(1, screen_w - display_margin)" in source
+    assert "available_height = max(1, screen_h - display_margin)" in source
+    assert "root.minsize(" in source
+    assert "min(px(_SPLASH_RESIZE_MIN_WIDTH), available_width)" in source
+    assert "min(px(_SPLASH_RESIZE_MIN_HEIGHT), available_height)" in source
+    assert "final_height = min(final_height, available_height)" in source
     assert "if show_launch_overlay" in source
     assert "else:\n        splash_controller.schedule_idle" in source
     assert "readiness_gate.visual_progress(now)" in source
