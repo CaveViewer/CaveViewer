@@ -26,7 +26,7 @@
     },
     "windows_small_mark": {
       "path": "windows-small-mark.png",
-      "sha256": "86e1478633556e1821725fce4afe2c9b7a4680afe04ddf52dc0a7991f69db112",
+      "sha256": "51e51cf29940eb2d07f83e1d489df64ec00f3d852ac307976e2783948974fe76",
       "minimum_width": 1024,
       "minimum_height": 1024,
       "alpha": "required",
@@ -34,7 +34,7 @@
     },
     "loading_progress_mark": {
       "path": "loading-progress-mark.png",
-      "sha256": "f8f5ad4dfe96d9c65dcafb2cd23d75b0abaad13efd1e98dd525107ce0f78769d",
+      "sha256": "8ffcf0a8b4878a1b48e9a45880a2516325eafc12ede1987bf6fde7575baa6f2c",
       "minimum_width": 1024,
       "minimum_height": 1024,
       "alpha": "required",
@@ -42,7 +42,7 @@
     },
     "loading_progress_rim_mask": {
       "path": "loading-progress-rim-mask.png",
-      "sha256": "fe4883065f4fe3029773aba400a2b2f50b3b3c5830d7baa35f79c33e3743e45c",
+      "sha256": "8142d8eb9ffcc1a721ef8b4b9af59d4591721d64c6e74e430ab36bbffeefdbce",
       "minimum_width": 1024,
       "minimum_height": 1024,
       "alpha": "required",
