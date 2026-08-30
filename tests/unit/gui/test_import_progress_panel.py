@@ -67,6 +67,68 @@ def test_ring_labels_share_the_import_title_stage_note_layout(monkeypatch):
     ]
 
 
+def test_bar_labels_use_compact_progress_layout(monkeypatch):
+    panel = object.__new__(ImportProgressPanel)
+    text_calls = []
+
+    monkeypatch.setattr(
+        import_progress_panel.bitmap_font,
+        "text_bounds_px",
+        lambda text, pixel_size: (0.0, 0.0, len(text) * pixel_size, pixel_size),
+    )
+    monkeypatch.setattr(
+        import_progress_panel.bitmap_font,
+        "iter_text_pixels",
+        lambda text, _x, y, pixel_size: text_calls.append(
+            (text, y, pixel_size)
+        )
+        or (),
+    )
+
+    panel._add_bar_labels(
+        add_quad_px=lambda *_args: None,
+        center_x=400.0,
+        center_y=300.0,
+        window_width=800.0,
+        title="Preparing Map",
+        stage="Building map chunksâ€¦",
+        note="First-time setup in progress.",
+    )
+
+    assert text_calls == [
+        ("Preparing Map", 246.0, ImportProgressPanel.TITLE_TEXT_SIZE),
+        ("Building map chunksâ€¦", 328.0, ImportProgressPanel.STAGE_TEXT_SIZE),
+        (
+            "First-time setup in progress.",
+            pytest.approx(352.65),
+            ImportProgressPanel.NOTE_TEXT_SIZE,
+        ),
+    ]
+
+
+def test_progress_bar_fill_bounds_cover_determinate_and_indeterminate_states():
+    assert ImportProgressPanel._progress_bar_fill_bounds(100.0, 400.0, 0.0, 0.5) == ()
+    assert ImportProgressPanel._progress_bar_fill_bounds(100.0, 400.0, 0.25, 0.5) == (
+        (100.0, 175.0),
+    )
+    assert ImportProgressPanel._progress_bar_fill_bounds(100.0, 400.0, 2.0, 0.5) == (
+        (100.0, 400.0),
+    )
+    indeterminate = ImportProgressPanel._progress_bar_fill_bounds(
+        100.0, 400.0, None, 0.5
+    )
+    assert len(indeterminate) == 1
+    assert indeterminate[0][1] - indeterminate[0][0] == pytest.approx(84.0)
+
+
+def test_import_render_uses_flat_bar_without_large_logo():
+    source = import_progress_panel.ImportProgressPanel.render.__code__.co_names
+
+    assert "_progress_bar_fill_bounds" in source
+    assert "_add_bar_labels" in source
+    assert "_render_logo" not in source
+
+
 def test_progress_ring_shader_uses_framebuffer_derivative_smoothing():
     source = import_progress_panel._LOGO_FRAG_SRC
 

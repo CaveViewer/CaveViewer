@@ -146,6 +146,9 @@ def _hex_color_rgb(color: str) -> tuple[float, float, float]:
 
 class ImportProgressPanel:
     LOGO_SIZE = 172.0
+    PROGRESS_BAR_WIDTH = 300.0
+    PROGRESS_BAR_HEIGHT = 4.0
+    INDETERMINATE_SEGMENT_FRACTION = 0.28
     TITLE_TEXT_SIZE = 2.1
     STAGE_TEXT_SIZE = 2.65
     NOTE_TEXT_SIZE = 1.94
@@ -177,6 +180,14 @@ class ImportProgressPanel:
         )
         self.logo_program["u_fill_rgb"].value = _hex_color_rgb(
             self._branding_assets.loading_ring.fill_color
+        )
+        self._progress_track_rgba = (
+            *_hex_color_rgb(self._branding_assets.loading_ring.track_color),
+            1.0,
+        )
+        self._progress_fill_rgba = (
+            *_hex_color_rgb(self._branding_assets.loading_ring.fill_color),
+            1.0,
         )
         self._logo_vbo = ctx.buffer(reserve=6 * 4 * 4)
         self._logo_vao = ctx.vertex_array(
@@ -301,12 +312,30 @@ class ImportProgressPanel:
         if not indeterminate:
             self._display_fraction = max(self._display_fraction, fraction_clamped)
 
-        logo_cx = w / 2.0
-        logo_cy = panel_y0 + panel_h * 0.50
-        self._add_ring_labels(
+        bar_cx = w / 2.0
+        bar_cy = panel_y0 + panel_h * 0.50
+        bar_x0 = bar_cx - self.PROGRESS_BAR_WIDTH / 2.0
+        bar_x1 = bar_cx + self.PROGRESS_BAR_WIDTH / 2.0
+        bar_y0 = bar_cy - self.PROGRESS_BAR_HEIGHT / 2.0
+        bar_y1 = bar_cy + self.PROGRESS_BAR_HEIGHT / 2.0
+        add_quad_px(bar_x0, bar_y0, bar_x1, bar_y1, self._progress_track_rgba)
+        for fill_x0, fill_x1 in self._progress_bar_fill_bounds(
+            bar_x0,
+            bar_x1,
+            None if indeterminate else self._display_fraction,
+            (time.perf_counter() * 0.72) % 1.0,
+        ):
+            add_quad_px(
+                fill_x0,
+                bar_y0,
+                fill_x1,
+                bar_y1,
+                self._progress_fill_rgba,
+            )
+        self._add_bar_labels(
             add_quad_px=add_quad_px,
-            center_x=logo_cx,
-            center_y=logo_cy,
+            center_x=bar_cx,
+            center_y=bar_cy,
             window_width=w,
             title=title,
             stage=self._stage_label(stage),
@@ -329,15 +358,56 @@ class ImportProgressPanel:
         self.ctx.disable(moderngl.DEPTH_TEST)
         self.ctx.enable(moderngl.BLEND)
         self._vao.render(moderngl.TRIANGLES, vertices=len(verts))
-        self._render_logo(
-            logo_cx,
-            logo_cy,
-            window_size,
-            None if indeterminate else self._display_fraction,
-        )
         self.ctx.disable(moderngl.BLEND)
         self.ctx.enable(moderngl.DEPTH_TEST)
         self.ctx.enable(moderngl.CULL_FACE)
+
+    @classmethod
+    def _progress_bar_fill_bounds(
+        cls,
+        left: float,
+        right: float,
+        progress: float | None,
+        phase: float,
+    ) -> tuple[tuple[float, float], ...]:
+        """Return determinate fill or a wrapping indeterminate segment."""
+        width = max(0.0, right - left)
+        if width == 0.0:
+            return ()
+        if progress is not None:
+            fill_right = left + width * max(0.0, min(1.0, progress))
+            return () if fill_right <= left else ((left, fill_right),)
+
+        segment_width = width * cls.INDETERMINATE_SEGMENT_FRACTION
+        start = left + (width + segment_width) * (phase % 1.0) - segment_width
+        end = start + segment_width
+        bounds = []
+        if end > left and start < right:
+            bounds.append((max(left, start), min(right, end)))
+        return tuple(bounds)
+
+    def _add_bar_labels(
+        self,
+        *,
+        add_quad_px,
+        center_x: float,
+        center_y: float,
+        window_width: float,
+        title: str | None = None,
+        stage: str | None = None,
+        note: str | None = None,
+    ) -> None:
+        """Append the import title, stage, and note around the flat progress bar."""
+        self._add_labels(
+            add_quad_px=add_quad_px,
+            center_x=center_x,
+            window_width=window_width,
+            title=title,
+            title_y=center_y - 54.0,
+            stage=stage,
+            stage_y=center_y + 28.0,
+            note=note,
+        )
 
     def _render_logo(
         self,
@@ -592,6 +662,34 @@ class ImportProgressPanel:
         fixed_text_scale: float | None = None,
     ) -> None:
         """Append labels using the shared title, stage, and note hierarchy."""
+        self._add_labels(
+            add_quad_px=add_quad_px,
+            center_x=center_x,
+            window_width=window_width,
+            title=title,
+            title_y=center_y - (self.LOGO_SIZE / 2.0) - 42.0,
+            stage=stage,
+            stage_y=center_y + (self.LOGO_SIZE / 2.0) + 30.0,
+            note=note,
+            alpha=alpha,
+            fixed_text_scale=fixed_text_scale,
+        )
+
+    def _add_labels(
+        self,
+        *,
+        add_quad_px,
+        center_x: float,
+        window_width: float,
+        title: str | None,
+        title_y: float,
+        stage: str | None,
+        stage_y: float,
+        note: str | None,
+        alpha: float = 1.0,
+        fixed_text_scale: float | None = None,
+    ) -> None:
+        """Append title, stage, and note at caller-selected vertical anchors."""
         def add_centered_text(
             text: str | None,
             y: float,
@@ -635,10 +733,8 @@ class ImportProgressPanel:
                 )
             return text_height
 
-        title_y = center_y - (self.LOGO_SIZE / 2.0) - 42.0
         add_centered_text(title, title_y, self.TITLE_TEXT_SIZE, self._TITLE_TEXT_RGBA)
 
-        stage_y = center_y + (self.LOGO_SIZE / 2.0) + 30.0
         stage_height = add_centered_text(
             stage,
             stage_y,
