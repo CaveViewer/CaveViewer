@@ -36,7 +36,8 @@ request [#324](https://github.com/CaveViewer/CaveViewer/pull/324) is open agains
 
 PR #324 was merged to `main` at `8f7090b`. Follow-up work continues on
 `feat/preferences-unsaved-changes`: Task 5 is commit `09d41bc`, Task 6 is commit
-`529fe30`, and Task 7 is verified with its commit pending.
+`529fe30`, and Task 7 is commit `0e65acf`. Tasks 5–7 are complete and verified;
+the per-row “commit pending” labels record their pre-commit checkpoints.
 
 Follow-up presentation adjustment: the supporting label beneath **Import
 preferences** is **Import saved preferences** and does not expose the underlying
