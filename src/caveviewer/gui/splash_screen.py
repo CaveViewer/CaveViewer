@@ -30,7 +30,6 @@ manual reveal-only.
 from __future__ import annotations
 
 import enum
-import math
 import os
 import time
 from dataclasses import dataclass
@@ -104,14 +103,17 @@ from caveviewer.gui.platform.presentation_actions import (
     create_presentation_actions_adapter,
 )
 from caveviewer.gui.preference_paths import migrate_state_file, write_text_atomic
-from caveviewer.gui.splash_controller import SplashController, SplashScheduler
+from caveviewer.gui.splash_controller import (
+    SplashController,
+    SplashScheduler,
+    StartupReadinessGate,
+)
 from caveviewer.gui.splash_visuals import (
     VectorEllipse,
     VectorPath,
     VectorPolygon,
     fit_splash_background,
     progress_control_photo,
-    progress_ring_photo,
     vector_icon_photo,
 )
 from caveviewer.gui.tk_feedback import (
@@ -225,9 +227,9 @@ _UI_FONT_FAMILY = _PRESENTATION_PROFILE.ui_font_family
 _TK_TEXT_SCALE = 1.0
 _CACHE_REBUILD_CLOSE_PAUSE_ATTEMPTS = 25
 _UPDATE_READY_ACTION_DELAY_MS = 3_000
-_MIN_LAUNCH_SPLASH_MS = 5_000
-_LAUNCH_INDICATOR_INTERVAL_MS = 50
-_LAUNCH_INDICATOR_ARC_DEGREES = 92
+_MIN_LAUNCH_SPLASH_MS = 3_000
+_LAUNCH_PROGRESS_WIDTH = 280
+_LAUNCH_PROGRESS_HEIGHT = 5
 
 _TYPOGRAPHY: TkTypography = create_tk_typography(
     _UI_FONT_FAMILY,
@@ -660,71 +662,47 @@ def _render_launch_background(canvas, *, source_image, size: tuple[int, int]) ->
         _LOG.warning("Could not render launch splash background: %s", exc)
 
 
-def _draw_launch_indicator_frame(canvas, *, phase_degrees: float, px) -> None:
-    """Draw one anti-aliased launch ring around the brand mark."""
-    canvas.delete("launch_indicator")
-    width, height = _launch_canvas_dimensions(canvas)
-    center_x, center_y = getattr(
-        canvas,
-        "_cv_launch_indicator_center",
-        (width / 2, height / 2),
-    )
-    ring_diameter = min(max(1, px(91)), width, height)
-    stroke_width = max(1, px(2))
-    ring_photo = progress_ring_photo(
-        canvas,
-        image_size=ring_diameter + stroke_width * 2,
-        ring_diameter=ring_diameter,
-        stroke_width=stroke_width,
-        track_color=DARK_THEME.entry_border,
-        fill_color=_BUTTON_BG,
-        start_degrees=90 - float(phase_degrees),
-        extent_degrees=-_LAUNCH_INDICATOR_ARC_DEGREES,
-    )
-    canvas._cv_launch_indicator_photo = ring_photo
-    canvas.create_image(
-        center_x,
-        center_y,
-        image=ring_photo,
-        tags="launch_indicator",
-    )
-
-
-def _render_launch_content(canvas, *, program_name: str, px) -> None:
-    """Center the logo, indicator, and launch copy over the cave background."""
+def _render_launch_content(canvas, *, progress: float, px) -> None:
+    """Center the launch copy and flat milestone bar over the cave background."""
     width, height = _launch_canvas_dimensions(canvas)
     center_x = width / 2
-    indicator_center_y = height * 0.46
+    label_y = height * 0.50
     canvas.delete("launch_content")
-    logo_photo = getattr(canvas, "_cv_launch_logo_photo", None)
-    if logo_photo is not None:
-        canvas.create_image(
-            center_x,
-            indicator_center_y,
-            image=logo_photo,
-            tags="launch_content",
-        )
     canvas.create_text(
         center_x,
-        indicator_center_y + px(90),
-        text=program_name,
+        label_y,
+        text="Preparing to explore what lies beneath...",
         font=_TYPOGRAPHY.heading,
         fill=_TITLE_COLOR,
         tags="launch_content",
     )
-    canvas.create_text(
-        center_x,
-        indicator_center_y + px(118),
-        text="Preparing to explore what lies beneath…",
-        font=_TYPOGRAPHY.supporting,
-        fill=_SUBTITLE_COLOR,
+    bar_width = min(px(_LAUNCH_PROGRESS_WIDTH), max(1, width - px(80)))
+    bar_height = max(1, px(_LAUNCH_PROGRESS_HEIGHT))
+    bar_left = center_x - bar_width / 2
+    bar_top = label_y + px(34)
+    canvas.create_rectangle(
+        bar_left,
+        bar_top,
+        bar_left + bar_width,
+        bar_top + bar_height,
+        fill=_LIBRARY_PROGRESS_TRACK_COLOR,
+        outline="",
         tags="launch_content",
     )
-    canvas._cv_launch_indicator_center = (center_x, indicator_center_y)
-    _draw_launch_indicator_frame(canvas, phase_degrees=0, px=px)
+    bounded_progress = max(0.0, min(1.0, float(progress)))
+    if bounded_progress > 0.0:
+        canvas.create_rectangle(
+            bar_left,
+            bar_top,
+            bar_left + bar_width * bounded_progress,
+            bar_top + bar_height,
+            fill=_LIBRARY_PROGRESS_FILL_COLOR,
+            outline="",
+            tags="launch_content",
+        )
 
 
-def _build_launch_surface(parent, *, program_name: str, px):
+def _build_launch_surface(parent, *, px):
     """Build the branded, dark-cave launch surface and return its canvas."""
     import tkinter as tk
 
@@ -738,12 +716,7 @@ def _build_launch_surface(parent, *, program_name: str, px):
     )
     launch_canvas.pack(fill="both", expand=True)
     launch_canvas._cv_launch_background_image = _load_launch_background_image()
-    launch_canvas._cv_launch_logo_photo = _load_brand_logo(
-        launch_canvas,
-        px=px,
-        max_dimension=108,
-        suppress_amber=True,
-    )
+    launch_canvas._cv_launch_progress = 0.0
 
     def _refresh_launch_surface(_event=None) -> None:
         size = _launch_canvas_dimensions(launch_canvas)
@@ -752,7 +725,11 @@ def _build_launch_surface(parent, *, program_name: str, px):
             source_image=launch_canvas._cv_launch_background_image,
             size=size,
         )
-        _render_launch_content(launch_canvas, program_name=program_name, px=px)
+        _render_launch_content(
+            launch_canvas,
+            progress=launch_canvas._cv_launch_progress,
+            px=px,
+        )
 
     launch_canvas.bind("<Configure>", _refresh_launch_surface, add="+")
     _refresh_launch_surface()
@@ -763,17 +740,6 @@ def _settle_launch_layout(root, *, passes: int = 3) -> None:
     """Run a fixed, bounded number of Tk geometry-only settlement passes."""
     for _pass in range(max(0, int(passes))):
         root.update_idletasks()
-
-
-def _remaining_launch_delay_ms(
-    *,
-    visible_at: float,
-    now: float,
-    minimum_ms: int = _MIN_LAUNCH_SPLASH_MS,
-) -> int:
-    """Return the one-shot delay needed to honor the minimum splash duration."""
-    elapsed_ms = max(0.0, (float(now) - float(visible_at)) * 1_000.0)
-    return max(0, int(math.ceil(max(0, int(minimum_ms)) - elapsed_ms)))
 
 
 def _build_themed_about_content(
@@ -1447,7 +1413,6 @@ def show_splash_screen(
         launch_surface.grid(row=0, column=0, sticky="nsew")
         launch_indicator = _build_launch_surface(
             launch_surface,
-            program_name=program_name,
             px=px,
         )
 
@@ -1471,35 +1436,22 @@ def show_splash_screen(
         )
         _settle_launch_layout(root, passes=1)
 
-    launch_indicator_active = [True]
-    launch_indicator_phase = [0.0]
+    readiness_gate = StartupReadinessGate(
+        visible_at=launch_visible_at,
+        minimum_ms=_MIN_LAUNCH_SPLASH_MS,
+    )
 
-    def _advance_launch_indicator() -> None:
-        """Advance one owned frame while the launch surface remains visible."""
-        if (
-            launch_indicator is None
-            or not launch_indicator_active[0]
-            or splash_controller.closing
-        ):
+    def _advance_launch_progress(fraction: float) -> None:
+        """Paint one monotonic composition milestone while startup is visible."""
+        progress = readiness_gate.advance(fraction)
+        if launch_indicator is None:
             return
-        try:
-            if not launch_indicator.winfo_exists():
-                return
-        except Exception:
-            return
-        _draw_launch_indicator_frame(
-            launch_indicator,
-            phase_degrees=launch_indicator_phase[0],
-            px=px,
-        )
-        launch_indicator_phase[0] = (launch_indicator_phase[0] + 12.0) % 360.0
-        splash_controller.schedule(
-            _LAUNCH_INDICATOR_INTERVAL_MS,
-            _advance_launch_indicator,
-        )
+        launch_indicator._cv_launch_progress = progress
+        _render_launch_content(launch_indicator, progress=progress, px=px)
+        root.update_idletasks()
 
     if show_launch_overlay:
-        _advance_launch_indicator()
+        _advance_launch_progress(0.08)
 
     # The splash is organized as a stable navigation rail beside an active
     # content surface. Keeping the rail a fixed width prevents map-library
@@ -2457,6 +2409,7 @@ def show_splash_screen(
 
     _create_map_library_panel(map_library_surface)
     map_library_surface.tkraise()
+    _advance_launch_progress(0.58)
 
     # Keep deferred navigation surfaces out of the initial Tk geometry pass.
     # Preferences creates only its active tab on first use and coalesces the
@@ -2478,11 +2431,31 @@ def show_splash_screen(
     # already owns its final mapped width. Fixed settlement passes drain only
     # geometry work; width/size guards prevent callbacks from cascading.
     _ensure_preferences_panel()
+    _advance_launch_progress(0.88)
     _settle_launch_layout(root, passes=3)
+    readiness_gate.mark_ready()
+    if launch_indicator is not None:
+        launch_indicator._cv_launch_progress = readiness_gate.progress
+        _render_launch_content(
+            launch_indicator,
+            progress=readiness_gate.progress,
+            px=px,
+        )
+        root.update_idletasks()
 
     def _reveal_composed_main_surface() -> None:
         """Reveal the fully painted main surface in one non-repeating handoff."""
-        launch_indicator_active[0] = False
+        if not readiness_gate.ready:
+            return
+        remaining_ms = readiness_gate.remaining_delay_ms(time.monotonic())
+        if remaining_ms:
+            # Tk should not dispatch an ``after`` callback early, but guard the
+            # boundary so coarse platform clocks cannot bypass the 3 s policy.
+            splash_controller.schedule(
+                remaining_ms,
+                _reveal_composed_main_surface,
+            )
+            return
         content_frame.tkraise()
         if launch_surface is not None:
             launch_surface.destroy()
@@ -2503,10 +2476,7 @@ def show_splash_screen(
     # frame. Fast builds wait only for the remaining time; slow builds reveal
     # on the next idle paint. Neither path polls or reschedules itself.
     remaining_launch_ms = (
-        _remaining_launch_delay_ms(
-            visible_at=launch_visible_at,
-            now=time.monotonic(),
-        )
+        readiness_gate.remaining_delay_ms(time.monotonic())
         if show_launch_overlay
         else 0
     )

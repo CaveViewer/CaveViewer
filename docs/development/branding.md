@@ -33,6 +33,7 @@ Tk, OpenGL, or platform packaging tools.
 | Platform or area | User-visible surface | Semantic input | Derived or inherited output | Owner |
 | --- | --- | --- | --- | --- |
 | All desktop platforms | About page | About mark | Runtime RGBA image | GUI composition |
+| All desktop platforms | Initial startup | Dark cave background, launch copy, and shared progress colors | Text-and-bar launch surface gated by minimum display time and composed-main-screen readiness | GUI composition |
 | All desktop platforms | Import/loading progress | Loading mark, progress mask, and ring tokens | Static mark plus masked progress rim; circular ring, text-only, or ring-only failure fallback | GUI presentation |
 | Windows | Window upper-left icon, taskbar, title bar, native dialogs | Windows application icon | Runtime PNG and inherited window icon | GUI/platform adapter |
 | Windows | Executable, installer, Start menu, shortcuts, pinned taskbar, Installed Apps and uninstaller | Windows application icon | Multi-frame ICO embedded by PyInstaller and Inno Setup | Windows packaging |
@@ -176,6 +177,17 @@ integration and appearance annotations. Adopt it only in a separate native
 toolchain change that preserves the ICNS fallback and can be tested on both
 supported macOS architectures; do not treat a flattened approximation as a
 layered source.
+
+The initial startup surface intentionally carries no independent logo or
+product-title lockup. It uses the dark cave photograph, the sentence
+`Preparing to explore what lies beneath...`, and the same subdued-track/amber-
+fill flat progress language used by map loading. Composition milestones are
+monotonic and remain below 100 percent until the map library, Preferences
+surface, final geometry, and idle layout work needed by the first interactive
+frame are ready. The launch surface is then dismissed only after both that
+readiness signal and a three-second minimum visible duration are satisfied;
+the remaining delay is scheduled on the Tk event loop and never implemented
+as a blocking sleep.
 
 Run package-only workflows and native smoke scripts before release. Stable
 names, application IDs, signing, updates, and storage paths remain unchanged.

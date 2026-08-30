@@ -2,9 +2,41 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable
 from dataclasses import dataclass
+
 from caveviewer.gui.splash_session import SplashSession
+
+
+@dataclass(slots=True)
+class StartupReadinessGate:
+    """Track monotonic startup progress and the two conditions for reveal."""
+
+    visible_at: float
+    minimum_ms: int = 3_000
+    progress: float = 0.0
+    ready: bool = False
+
+    def advance(self, fraction: float) -> float:
+        """Advance measurable startup work without allowing progress reversal."""
+        bounded = max(0.0, min(0.99, float(fraction)))
+        self.progress = max(self.progress, bounded)
+        return self.progress
+
+    def mark_ready(self) -> None:
+        """Record that artifacts needed by the first interactive frame exist."""
+        self.ready = True
+        self.progress = 1.0
+
+    def remaining_delay_ms(self, now: float) -> int:
+        """Return the non-blocking delay still required by launch policy."""
+        elapsed_ms = max(0.0, (float(now) - float(self.visible_at)) * 1_000.0)
+        return max(0, int(math.ceil(max(0, self.minimum_ms) - elapsed_ms)))
+
+    def can_reveal(self, now: float) -> bool:
+        """Return whether readiness and minimum visible duration are both met."""
+        return self.ready and self.remaining_delay_ms(now) == 0
 
 
 @dataclass(frozen=True, slots=True)

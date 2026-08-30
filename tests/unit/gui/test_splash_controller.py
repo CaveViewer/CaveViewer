@@ -2,7 +2,11 @@
 
 import pytest
 
-from caveviewer.gui.splash_controller import SplashController, SplashScheduler
+from caveviewer.gui.splash_controller import (
+    SplashController,
+    SplashScheduler,
+    StartupReadinessGate,
+)
 
 
 class _Scheduler:
@@ -64,3 +68,33 @@ def test_controller_cannot_schedule_before_start_or_after_close():
     controller.close()
     with pytest.raises(RuntimeError):
         controller.schedule(1, lambda: None)
+
+
+def test_startup_readiness_gate_requires_time_and_composition_readiness():
+    gate = StartupReadinessGate(visible_at=10.0)
+
+    assert gate.can_reveal(13.0) is False
+    gate.mark_ready()
+    assert gate.can_reveal(12.999) is False
+    assert gate.can_reveal(13.0) is True
+
+
+def test_startup_readiness_gate_extends_for_slow_composition():
+    gate = StartupReadinessGate(visible_at=10.0)
+
+    gate.mark_ready()
+
+    assert gate.can_reveal(15.0) is True
+    assert gate.remaining_delay_ms(15.0) == 0
+
+
+def test_startup_readiness_gate_progress_is_monotonic_and_caps_before_ready():
+    gate = StartupReadinessGate(visible_at=0.0)
+
+    assert gate.advance(0.6) == pytest.approx(0.6)
+    assert gate.advance(0.2) == pytest.approx(0.6)
+    assert gate.advance(2.0) == pytest.approx(0.99)
+    gate.mark_ready()
+
+    assert gate.progress == pytest.approx(1.0)
+    assert gate.ready is True
