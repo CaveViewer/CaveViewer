@@ -1340,7 +1340,8 @@ class PreferencesPanel:
             return False
         self.preferences = result.preferences
         if result.preferences is not None:
-            self.form.mark_saved(result.preferences)
+            clean_state = self.form.mark_saved(result.preferences)
+            self._render_form_state(clean_state)
         self._feedback_override = (
             "Preferences saved.",
             DARK_THEME.primary_button,

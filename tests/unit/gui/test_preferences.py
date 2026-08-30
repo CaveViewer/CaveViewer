@@ -1830,14 +1830,17 @@ def test_preferences_panel_calls_apply_callback_after_success(valid_preferences)
     snapshot = settings.require_validated_preferences(valid_preferences)
     applied = []
     marked_saved = []
+    rendered = []
+    clean_state = SimpleNamespace(has_unsaved_changes=False)
     panel = preferences_dialog.PreferencesPanel.__new__(
         preferences_dialog.PreferencesPanel
     )
     panel.form = SimpleNamespace(
         attempt_apply=lambda: (SimpleNamespace(), snapshot),
-        mark_saved=marked_saved.append,
+        mark_saved=lambda preferences: marked_saved.append(preferences)
+        or clean_state,
     )
-    panel._render_form_state = lambda *_args, **_kwargs: None
+    panel._render_form_state = lambda state, **_kwargs: rendered.append(state)
     panel.numeric_entry_states = {}
     panel.workflow = SimpleNamespace(
         apply=lambda preferences: PreferencesApplyResult(
@@ -1851,4 +1854,5 @@ def test_preferences_panel_calls_apply_callback_after_success(valid_preferences)
 
     assert applied == [snapshot]
     assert marked_saved == [snapshot]
+    assert rendered[-1] is clean_state
     assert panel.preferences is snapshot
