@@ -26,7 +26,7 @@
     },
     "windows_small_mark": {
       "path": "windows-small-mark.png",
-      "sha256": "e67312707d904ec77cae96935b014f708649203018630bdafb74818074c8dde0",
+      "sha256": "b79bc7d1f92b8374659ce332b43cb798ca8814237fced8d2d87515b3278e0617",
       "minimum_width": 1024,
       "minimum_height": 1024,
       "alpha": "required",
