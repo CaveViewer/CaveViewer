@@ -332,10 +332,73 @@ def test_missing_preferences_save_failure_keeps_defaults_without_partial_file(
 
 
 @pytest.mark.parametrize("content", ["{broken", "[]", "null", '"text"'])
-def test_load_malformed_or_non_object_settings_returns_defaults(tmp_path, content):
+def test_load_malformed_or_non_object_settings_returns_defaults(
+    tmp_path,
+    content,
+    caplog,
+):
     path = tmp_path / "preferences.json"
     path.write_text(content, encoding="utf-8")
-    assert settings.load_preferences(path) == settings.preference_defaults()
+    original = path.read_bytes()
+
+    with caplog.at_level(logging.WARNING, logger="caveviewer"):
+        assert settings.load_preferences(path) == settings.preference_defaults()
+
+    assert "Could not load preferences file preferences.json" in caplog.text
+    assert "using defaults" in caplog.text
+    assert path.read_bytes() == original
+
+
+@pytest.mark.parametrize(
+    ("document", "category"),
+    [
+        (b"\xff", "invalid UTF-8"),
+        (
+            b" " * (settings.MAX_PREFERENCES_FILE_BYTES + 1),
+            "file is too large",
+        ),
+    ],
+    ids=("invalid-utf8", "oversized"),
+)
+def test_unloadable_preferences_use_defaults_without_overwriting_source(
+    tmp_path,
+    caplog,
+    document,
+    category,
+):
+    path = tmp_path / "preferences.json"
+    path.write_bytes(document)
+
+    with caplog.at_level(logging.WARNING, logger="caveviewer"):
+        loaded = settings.load_preferences(path)
+
+    assert loaded == settings.preference_defaults()
+    assert f"preferences.json ({category})" in caplog.text
+    assert path.read_bytes() == document
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_unreadable_preferences_use_defaults_and_log_safe_category(
+    tmp_path,
+    caplog,
+    monkeypatch,
+):
+    path = tmp_path / "preferences.json"
+    path.write_text('{"io_workers": "7"}', encoding="utf-8")
+    original_open = Path.open
+
+    def fail_preferences_open(candidate, *args, **kwargs):
+        if candidate == path:
+            raise PermissionError("private operating-system detail")
+        return original_open(candidate, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", fail_preferences_open)
+    with caplog.at_level(logging.WARNING, logger="caveviewer"):
+        loaded = settings.load_preferences(path)
+
+    assert loaded == settings.preference_defaults()
+    assert "preferences.json (read error)" in caplog.text
+    assert "private operating-system detail" not in caplog.text
 
 
 def test_load_falls_back_only_invalid_saved_fields(tmp_path, caplog):
