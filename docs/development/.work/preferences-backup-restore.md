@@ -48,8 +48,8 @@ PR #324 was merged to `main` at `8f7090b`. Follow-up work continues on
 the per-row “commit pending” labels record their pre-commit checkpoints.
 
 Pre-merge preference coverage commits: Task 8 `856f6ba`; Task 9 `cbcc7a5`;
-Task 10 `f34156c`; Task 11 `96c196b`. Tasks 8–12 are complete and verified;
-Task 12 is ready for its commit.
+Task 10 `f34156c`; Task 11 `96c196b`; Task 12 `3626d45`. Tasks 8–12 are
+complete, verified, and published to the feature branch.
 
 Follow-up presentation adjustment: the supporting label beneath **Import
 preferences** is **Import saved preferences** and does not expose the underlying
