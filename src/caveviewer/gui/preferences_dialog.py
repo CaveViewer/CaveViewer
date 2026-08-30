@@ -1555,8 +1555,8 @@ class PreferencesPanel:
                 "Replace the current form values with CaveViewer defaults? "
                 "The change is not saved until you select Save changes."
             ),
-            confirm_text="Restore defaults",
-            cancel_text="Keep current values",
+            confirm_text="Restore",
+            cancel_text="Cancel",
         )
 
     def _stage_preferences(self, preferences: Preferences, message: str) -> None:

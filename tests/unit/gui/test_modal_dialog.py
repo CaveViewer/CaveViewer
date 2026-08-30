@@ -2,7 +2,21 @@
 
 from __future__ import annotations
 
+import inspect
+
 from caveviewer.gui import modal_dialog
+
+
+def test_standard_modal_geometry_anchors_actions_to_the_bottom():
+    source = inspect.getsource(modal_dialog._show_modal)
+
+    assert modal_dialog.MODAL_MIN_WIDTH == 430
+    assert modal_dialog.MODAL_MIN_HEIGHT == 220
+    assert modal_dialog.MODAL_CONTENT_PAD_X == 28
+    assert modal_dialog.MODAL_CONTENT_PAD_Y == 24
+    assert 'button_row.pack(side="bottom", fill="x")' in source
+    assert "px(MODAL_MIN_WIDTH)" in source
+    assert "px(MODAL_MIN_HEIGHT)" in source
 
 
 def test_confirmation_routes_explicit_actions_through_the_shared_modal(monkeypatch):

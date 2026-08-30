@@ -1023,8 +1023,8 @@ def test_preferences_restore_defaults_uses_app_styled_confirmation(monkeypatch):
 
     assert panel._confirm_restore_defaults() is True
     assert calls[0][0] is panel.dialog
-    assert calls[0][1]["confirm_text"] == "Restore defaults"
-    assert calls[0][1]["cancel_text"] == "Keep current values"
+    assert calls[0][1]["confirm_text"] == "Restore"
+    assert calls[0][1]["cancel_text"] == "Cancel"
 
 
 def _directory_picker_panel(

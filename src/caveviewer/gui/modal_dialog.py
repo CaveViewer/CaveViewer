@@ -13,6 +13,10 @@ from caveviewer.gui.tk_typography import create_tk_typography
 
 
 MessageKind = Literal["info", "warning", "error"]
+MODAL_MIN_WIDTH = 430
+MODAL_MIN_HEIGHT = 220
+MODAL_CONTENT_PAD_X = 28
+MODAL_CONTENT_PAD_Y = 24
 
 
 def _center_dialog(dialog, parent, *, width: int, height: int) -> None:
@@ -68,7 +72,12 @@ def _show_modal(
 
     result = False
     content = tk.Frame(dialog, bg=DARK_THEME.background)
-    content.pack(fill="both", expand=True, padx=px(28), pady=px(24))
+    content.pack(
+        fill="both",
+        expand=True,
+        padx=px(MODAL_CONTENT_PAD_X),
+        pady=px(MODAL_CONTENT_PAD_Y),
+    )
     title_color = (
         DARK_THEME.error_text if kind == "error" else DARK_THEME.title
     )
@@ -91,7 +100,7 @@ def _show_modal(
         wraplength=px(380),
     ).pack(fill="x", pady=(px(8), px(20)))
     button_row = tk.Frame(content, bg=DARK_THEME.background)
-    button_row.pack(fill="x")
+    button_row.pack(side="bottom", fill="x")
 
     def close(*, accepted: bool = False) -> None:
         nonlocal result
@@ -129,8 +138,8 @@ def _show_modal(
     dialog.bind("<Escape>", lambda _event: close())
     dialog.protocol("WM_DELETE_WINDOW", close)
     dialog.update_idletasks()
-    width = max(px(430), dialog.winfo_reqwidth())
-    height = max(px(210), dialog.winfo_reqheight())
+    width = max(px(MODAL_MIN_WIDTH), dialog.winfo_reqwidth())
+    height = max(px(MODAL_MIN_HEIGHT), dialog.winfo_reqheight())
     _center_dialog(dialog, parent, width=width, height=height)
     dialog.deiconify()
     dialog.lift(parent)

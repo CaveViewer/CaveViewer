@@ -85,6 +85,12 @@ from caveviewer.gui.map_library_workflow import (
 from caveviewer.gui.map_selection import (
     validate_selected_map_folder as _validate_selected_map_folder,
 )
+from caveviewer.gui.modal_dialog import (
+    MODAL_CONTENT_PAD_X,
+    MODAL_CONTENT_PAD_Y,
+    MODAL_MIN_HEIGHT,
+    MODAL_MIN_WIDTH,
+)
 from caveviewer.gui.platform.directory_selection import (
     choose_authorized_directory,
     directory_selection_preflight,
@@ -989,7 +995,12 @@ def _show_unsaved_preferences_dialog(
     _set_tk_window_icon(dialog)
 
     content = tk.Frame(dialog, bg=_BG_COLOR)
-    content.pack(fill="both", expand=True, padx=px(28), pady=px(24))
+    content.pack(
+        fill="both",
+        expand=True,
+        padx=px(MODAL_CONTENT_PAD_X),
+        pady=px(MODAL_CONTENT_PAD_Y),
+    )
     tk.Label(
         content,
         text="Save changes to preferences?",
@@ -1013,7 +1024,7 @@ def _show_unsaved_preferences_dialog(
     ).pack(fill="x", pady=(px(8), px(20)))
 
     button_row = tk.Frame(content, bg=_BG_COLOR)
-    button_row.pack(fill="x")
+    button_row.pack(side="bottom", fill="x")
 
     def _close_dialog(_event=None):
         if dialog_ref[0] is dialog:
@@ -1066,9 +1077,9 @@ def _show_unsaved_preferences_dialog(
         button.bind("<Leave>", lambda _event: button.config(bg=normal_bg))
         return button
 
-    save_button = _make_button("Save changes", _save, primary=True)
-    discard_button = _make_button("Discard changes", _discard, primary=False)
-    keep_button = _make_button("Keep editing", _close_dialog, primary=False)
+    save_button = _make_button("Save", _save, primary=True)
+    discard_button = _make_button("Discard", _discard, primary=False)
+    keep_button = _make_button("Keep", _close_dialog, primary=False)
     save_button.pack(side="right")
     discard_button.pack(side="right", padx=(0, px(8)))
     keep_button.pack(side="right", padx=(0, px(8)))
@@ -1076,8 +1087,8 @@ def _show_unsaved_preferences_dialog(
     dialog.bind("<Escape>", _close_dialog)
     dialog.protocol("WM_DELETE_WINDOW", _close_dialog)
     dialog.update_idletasks()
-    dialog_width = max(px(430), dialog.winfo_reqwidth())
-    dialog_height = max(px(220), dialog.winfo_reqheight())
+    dialog_width = max(px(MODAL_MIN_WIDTH), dialog.winfo_reqwidth())
+    dialog_height = max(px(MODAL_MIN_HEIGHT), dialog.winfo_reqheight())
     try:
         screen_width = dialog.winfo_screenwidth()
         screen_height = dialog.winfo_screenheight()

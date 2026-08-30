@@ -944,9 +944,12 @@ def test_splash_navigation_selection_uses_type_and_color_without_a_fill():
 def test_unsaved_preferences_dialog_offers_three_explicit_close_choices():
     source = inspect.getsource(splash_screen._show_unsaved_preferences_dialog)
 
-    assert '_make_button("Save changes"' in source
-    assert '_make_button("Discard changes"' in source
-    assert '_make_button("Keep editing"' in source
+    assert '_make_button("Save"' in source
+    assert '_make_button("Discard"' in source
+    assert '_make_button("Keep"' in source
+    assert 'button_row.pack(side="bottom", fill="x")' in source
+    assert "MODAL_MIN_WIDTH" in source
+    assert "MODAL_MIN_HEIGHT" in source
     assert "if not on_save():" in source
     assert 'dialog.bind("<Escape>", _close_dialog)' in source
     assert 'dialog.protocol("WM_DELETE_WINDOW", _close_dialog)' in source
