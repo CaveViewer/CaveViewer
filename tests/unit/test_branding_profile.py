@@ -37,6 +37,9 @@ def test_bundled_default_profile_uses_original_mark_for_windows_and_about():
         "about_mark"
     )
     assert profile.asset_for("loading_mark").path.name == "loading-progress-mark.png"
+    assert profile.asset_for("loading_progress_mask").path.name == (
+        "loading-progress-rim-mask.png"
+    )
     assert profile.asset_for("loading_mark") is not profile.asset_for(
         "windows_app_icon"
     )

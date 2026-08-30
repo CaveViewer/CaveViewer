@@ -43,6 +43,7 @@ RUNTIME_ROLE_SIZES = {
     "application_mark": 512,
     "about_mark": 512,
     "loading_mark": 256,
+    "loading_progress_mask": 256,
     "windows_app_icon": 256,
     "macos_app_icon": 1024,
     "linux_app_icon": 512,

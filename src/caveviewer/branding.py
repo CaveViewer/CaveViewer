@@ -24,6 +24,7 @@ REQUIRED_ROLES = frozenset(
         "application_mark",
         "about_mark",
         "loading_mark",
+        "loading_progress_mask",
         "windows_app_icon",
         "macos_app_icon",
         "linux_app_icon",
@@ -81,6 +82,7 @@ class BrandingAssets:
     application_mark: Path
     about_mark: Path
     loading_mark: Path
+    loading_progress_mask: Path
     windows_app_icon: Path
     macos_app_icon: Path
     linux_app_icon: Path
@@ -160,6 +162,7 @@ def branding_assets_from_profile(profile: BrandingProfile) -> BrandingAssets:
         application_mark=profile.asset_for("application_mark").path,
         about_mark=profile.asset_for("about_mark").path,
         loading_mark=profile.asset_for("loading_mark").path,
+        loading_progress_mask=profile.asset_for("loading_progress_mask").path,
         windows_app_icon=profile.asset_for("windows_app_icon").path,
         macos_app_icon=profile.asset_for("macos_app_icon").path,
         linux_app_icon=profile.asset_for("linux_app_icon").path,

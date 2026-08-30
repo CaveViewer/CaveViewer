@@ -85,6 +85,8 @@ def test_progress_ring_shader_uses_profile_colors_without_logo_color_filtering()
     assert "vec3 track_rgb =" not in source
     assert "vec3 fill_rgb =" not in source
     assert "is_amber" not in source
+    assert "uniform sampler2D u_rim_mask;" in source
+    assert "rim_mask_alpha" in source
 
 
 def test_hex_brand_color_conversion_matches_shader_values():
@@ -105,6 +107,9 @@ def test_failed_loading_mark_decode_falls_back_to_transparent_ring_texture(
         def release(self):
             self.released = True
 
+        def build_mipmaps(self):
+            return None
+
     class FakeContext:
         def __init__(self):
             self.calls = []
@@ -121,6 +126,7 @@ def test_failed_loading_mark_decode_falls_back_to_transparent_ring_texture(
         application_mark=branding_assets.application_mark,
         about_mark=branding_assets.about_mark,
         loading_mark=tmp_path / "missing.png",
+        loading_progress_mask=branding_assets.loading_progress_mask,
         windows_app_icon=branding_assets.windows_app_icon,
         macos_app_icon=branding_assets.macos_app_icon,
         linux_app_icon=branding_assets.linux_app_icon,
@@ -135,7 +141,9 @@ def test_failed_loading_mark_decode_falls_back_to_transparent_ring_texture(
     assert panel._logo_available is False
     assert panel._logo_aspect == 1.0
     assert panel._logo_texture is not None
-    assert panel.ctx.calls == [((1, 1), 4, b"\x00\x00\x00\x00")]
+    assert panel.ctx.calls[0] == ((1, 1), 4, b"\x00\x00\x00\x00")
+    assert panel.ctx.calls[1][:2] == ((1024, 1024), 4)
+    assert panel._rim_mask_available is True
 
 
 def test_failed_loading_mark_upload_retries_with_ring_only_texture():
@@ -164,5 +172,7 @@ def test_failed_loading_mark_upload_retries_with_ring_only_texture():
 
     assert panel._logo_available is False
     assert panel._logo_texture is not None
-    assert len(panel.ctx.calls) == 2
+    assert len(panel.ctx.calls) == 3
     assert panel.ctx.calls[1] == ((1, 1), 4, 4)
+    assert panel.ctx.calls[2][:2] == ((1024, 1024), 4)
+    assert panel._rim_mask_available is True

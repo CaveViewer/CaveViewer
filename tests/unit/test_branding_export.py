@@ -31,10 +31,17 @@ def test_export_produces_every_runtime_and_platform_artifact(tmp_path):
     for role, size in RUNTIME_ROLE_SIZES.items():
         _assert_rgba_png(destination / "runtime" / f"{role}.png", size)
     with Image.open(destination / "runtime" / "loading_mark.png") as loading_mark:
-        alpha_bounds = loading_mark.getchannel("A").getbbox()
-        assert alpha_bounds is not None
-        assert alpha_bounds[2] - alpha_bounds[0] <= 170
-        assert alpha_bounds[3] - alpha_bounds[1] <= 170
+        mark_bounds = loading_mark.getchannel("A").getbbox()
+        assert mark_bounds is not None
+        assert mark_bounds[2] - mark_bounds[0] <= 170
+        assert mark_bounds[3] - mark_bounds[1] <= 170
+    with Image.open(
+        destination / "runtime" / "loading_progress_mask.png"
+    ) as loading_mask:
+        mask_bounds = loading_mask.getchannel("A").getbbox()
+        assert mask_bounds is not None
+        assert mark_bounds[0] <= mask_bounds[0] < mask_bounds[2] <= mark_bounds[2]
+        assert mark_bounds[1] <= mask_bounds[1] < mask_bounds[3] <= mark_bounds[3]
     for filename, size in MACOS_ICONSET_OUTPUTS:
         _assert_rgba_png(destination / "macos" / "CaveViewer.iconset" / filename, size)
     for size in LINUX_ICON_SIZES:

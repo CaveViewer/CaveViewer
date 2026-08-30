@@ -18,7 +18,7 @@ The branding system may control these roles:
 - application mark;
 - Windows, macOS, and Linux application-icon overrides;
 - About-page mark;
-- loading-indicator mark;
+- loading-indicator mark and progress mask;
 - bounded loading-ring presentation tokens; and
 - optional DMG volume or background artwork.
 
@@ -32,7 +32,7 @@ Tk, OpenGL, or platform packaging tools.
 | Platform or area | User-visible surface | Semantic input | Derived or inherited output | Owner |
 | --- | --- | --- | --- | --- |
 | All desktop platforms | About page | About mark | Runtime RGBA image | GUI composition |
-| All desktop platforms | Import/loading progress | Loading mark and ring tokens | Texture, ring, text-only, or ring-only fallback | GUI presentation |
+| All desktop platforms | Import/loading progress | Loading mark, progress mask, and ring tokens | Static mark plus masked progress rim; circular ring, text-only, or ring-only failure fallback | GUI presentation |
 | Windows | Window upper-left icon, taskbar, title bar, native dialogs | Windows application icon | Runtime PNG and inherited window icon | GUI/platform adapter |
 | Windows | Executable, installer, Start menu, shortcuts, pinned taskbar, Installed Apps and uninstaller | Windows application icon | Multi-frame ICO embedded by PyInstaller and Inno Setup | Windows packaging |
 | macOS | Application windows, Dock, Command-Tab, Finder and Applications | macOS application icon | Complete iconset and ICNS in the application bundle | macOS packaging |
@@ -127,7 +127,10 @@ Omitting it selects the bundled `default` profile.
 - `profile_id` and `provenance` identify and license the source.
 - `assets` declares relative paths, SHA-256 hashes, minimum dimensions, alpha,
   square geometry, and safe-area inset.
-- `roles` maps application, About, loading, and platform icon semantics.
+- `roles` maps application, About, loading mark/mask, and platform icon
+  semantics. The loading progress mask is an alpha-only source aligned with the
+  loading mark; its non-transparent pixels define the brand shape that receives
+  track and fill colors.
 - `loading_ring` selects `text_only`, `ring_only`, or `ring_with_mark` and
   supplies validated fill and track colors.
 

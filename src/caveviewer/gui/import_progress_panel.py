@@ -60,6 +60,7 @@ void main() {
 _LOGO_FRAG_SRC = """
 #version 330
 uniform sampler2D u_texture;
+uniform sampler2D u_rim_mask;
 uniform float u_alpha;
 uniform float u_progress;
 uniform float u_indeterminate;
@@ -67,11 +68,16 @@ uniform float u_spinner_phase;
 uniform float u_logo_alpha;
 uniform vec3 u_track_rgb;
 uniform vec3 u_fill_rgb;
+uniform float u_use_rim_mask;
 in vec2 v_uv;
 out vec4 f_color;
 
 void main() {
     vec4 tex_color = texture(u_texture, v_uv);
+    float rim_mask_alpha = 0.0;
+    if (u_use_rim_mask > 0.5) {
+        rim_mask_alpha = texture(u_rim_mask, v_uv).a;
+    }
     tex_color.a *= u_logo_alpha;
 
     vec2 centered = v_uv - vec2(0.5, 0.5);
@@ -83,7 +89,12 @@ void main() {
     float edge = clamp(fwidth(dist), 0.00075, 0.010);
     float outer_mask = 1.0 - smoothstep(ring_outer - edge, ring_outer + edge, dist);
     float inner_mask = smoothstep(ring_inner - edge, ring_inner + edge, dist);
-    float ring_alpha = outer_mask * inner_mask;
+    float circular_ring_alpha = outer_mask * inner_mask;
+    float ring_alpha = mix(
+        circular_ring_alpha,
+        rim_mask_alpha,
+        step(0.5, u_use_rim_mask)
+    );
 
     float angle = atan(centered.x, centered.y);
     if (angle < 0.0) {
@@ -116,16 +127,13 @@ void main() {
         fill_strength = arc_mask * mix(0.48, 1.0, leading_taper);
     }
 
-    vec4 ring_color = vec4(mix(u_track_rgb, u_fill_rgb, fill_strength), ring_alpha * mix(0.58, 1.0, fill_strength));
+    vec4 ring_color = vec4(
+        mix(u_track_rgb, u_fill_rgb, fill_strength),
+        ring_alpha
+    );
 
     float out_alpha = tex_color.a + ring_color.a * (1.0 - tex_color.a);
-    vec3 out_rgb = vec3(0.0);
-    if (out_alpha > 0.0) {
-        out_rgb = (
-            tex_color.rgb * tex_color.a +
-            ring_color.rgb * ring_color.a * (1.0 - tex_color.a)
-        ) / out_alpha;
-    }
+    vec3 out_rgb = mix(tex_color.rgb, ring_color.rgb, ring_color.a);
     f_color = vec4(out_rgb, out_alpha * u_alpha);
 }
 """
@@ -175,8 +183,10 @@ class ImportProgressPanel:
             self.logo_program, [(self._logo_vbo, "2f 2f", "in_pos", "in_uv")]
         )
         self._logo_texture = None
+        self._rim_mask_texture = None
         self._logo_aspect = 1.0
         self._logo_available = False
+        self._rim_mask_available = False
         self._load_logo_texture()
 
         self._display_fraction = 0.0
@@ -207,8 +217,36 @@ class ImportProgressPanel:
             except Exception:
                 self._logo_texture = None
 
+        mask_texture = None
+        try:
+            with Image.open(self._branding_assets.loading_progress_mask) as image:
+                mask = image.convert("RGBA")
+            mask_texture = self.ctx.texture(mask.size, 4, mask.tobytes())
+            mask_texture.build_mipmaps()
+            self._rim_mask_texture = mask_texture
+            self._rim_mask_available = True
+        except Exception:
+            if mask_texture is not None:
+                try:
+                    mask_texture.release()
+                except Exception:
+                    pass
+            self._rim_mask_available = False
+            try:
+                self._rim_mask_texture = self.ctx.texture(
+                    (1, 1), 4, b"\x00\x00\x00\x00"
+                )
+            except Exception:
+                self._rim_mask_texture = None
+
     def release(self) -> None:
-        for attr in ("_logo_texture", "_logo_vao", "_logo_vbo", "logo_program"):
+        for attr in (
+            "_logo_texture",
+            "_rim_mask_texture",
+            "_logo_vao",
+            "_logo_vbo",
+            "logo_program",
+        ):
             obj = getattr(self, attr, None)
             if obj is not None and hasattr(obj, "release"):
                 try:
@@ -343,7 +381,13 @@ class ImportProgressPanel:
         data = np.array(vertices, dtype=np.float32)
         self._logo_vbo.write(data.tobytes())
         self._logo_texture.use(location=0)
+        if self._rim_mask_texture is not None:
+            self._rim_mask_texture.use(location=1)
         self.logo_program["u_texture"].value = 0
+        self.logo_program["u_rim_mask"].value = 1
+        self.logo_program["u_use_rim_mask"].value = (
+            1.0 if self._rim_mask_available else 0.0
+        )
         self.logo_program["u_alpha"].value = alpha
         self.logo_program["u_progress"].value = (
             0.0 if progress is None else max(0.0, min(1.0, progress))

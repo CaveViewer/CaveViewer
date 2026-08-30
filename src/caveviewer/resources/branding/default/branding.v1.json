@@ -39,12 +39,21 @@
       "minimum_height": 1024,
       "alpha": "required",
       "safe_area_inset": 0.0
+    },
+    "loading_progress_rim_mask": {
+      "path": "loading-progress-rim-mask.png",
+      "sha256": "f52a965e6cb716cda2925607340baf7a055af58b49ba64f4a401cc805e500ba0",
+      "minimum_width": 1024,
+      "minimum_height": 1024,
+      "alpha": "required",
+      "safe_area_inset": 0.0
     }
   },
   "roles": {
     "application_mark": "caveviewer_mark",
     "about_mark": "caveviewer_mark",
     "loading_mark": "loading_progress_mark",
+    "loading_progress_mask": "loading_progress_rim_mask",
     "windows_app_icon": "windows_small_mark",
     "macos_app_icon": "cookie",
     "linux_app_icon": "cookie"
