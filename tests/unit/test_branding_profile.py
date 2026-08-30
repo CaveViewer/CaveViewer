@@ -20,7 +20,7 @@ from caveviewer.branding import (
 )
 
 
-def test_bundled_default_profile_is_complete_and_uses_approved_cookie():
+def test_bundled_default_profile_uses_original_mark_for_windows_and_about():
     profile = resolve_branding_profile(environ={}, frozen=False)
 
     assert profile.profile_id == "default"
@@ -29,6 +29,11 @@ def test_bundled_default_profile_is_complete_and_uses_approved_cookie():
     assert profile.asset_for("application_mark").height >= 1024
     assert profile.asset_for("application_mark").alpha_required is True
     assert profile.asset_for("about_mark") is profile.asset_for("application_mark")
+    assert profile.asset_for("application_mark").path.name == "caveviewer-mark.png"
+    assert profile.asset_for("windows_app_icon") is profile.asset_for(
+        "application_mark"
+    )
+    assert profile.asset_for("loading_mark").path.name == "application-mark.png"
     assert profile.loading_ring.fill_color == "#FFB000"
     assert profile.loading_ring.track_color == "#3B3428"
     assert profile.loading_ring.mode == "ring_with_mark"
@@ -153,7 +158,10 @@ def _copy_default_profile(tmp_path: Path) -> Path:
     profile_dir.mkdir()
     manifest = default_branding_manifest_path()
     shutil.copy2(manifest, profile_dir / manifest.name)
-    shutil.copy2(manifest.parent / "application-mark.png", profile_dir)
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    for asset in payload["assets"].values():
+        source = manifest.parent / asset["path"]
+        shutil.copy2(source, profile_dir / source.name)
     return profile_dir
 
 

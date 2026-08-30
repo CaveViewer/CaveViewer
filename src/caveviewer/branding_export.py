@@ -162,10 +162,13 @@ def _save_png(image: Image.Image, destination: Path) -> None:
 
 
 def _write_contact_sheet(profile: BrandingProfile, destination: Path) -> None:
-    scale = 5
+    # Keep the largest exact-size preview wholly inside its cell. The previous
+    # 5x enlargement clipped 32-pixel artwork and gave a misleading impression
+    # of the icon's safe area during brand review.
+    scale = 4
     margin = 20
     cell_width = 160
-    cell_height = 120
+    cell_height = 180
     backgrounds = (("light", (245, 243, 237, 255)), ("dark", (24, 24, 22, 255)))
     sheet = Image.new(
         "RGBA",

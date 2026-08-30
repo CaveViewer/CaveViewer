@@ -1,11 +1,11 @@
 {
   "schema_version": 1,
   "profile_id": "default",
-  "display_name": "CaveViewer Cookie",
+  "display_name": "CaveViewer Original Mark",
   "provenance": {
     "creator": "CaveViewer project",
     "license": "CaveViewer project artwork",
-    "source": "Approved faceted cookie hue V6 concept"
+    "source": "Monochromatic amber cave-map concept derived from the original CaveViewer app mark; approved faceted cookie hue V6 retained for loading and non-Windows platform roles"
   },
   "assets": {
     "cookie": {
@@ -15,13 +15,21 @@
       "minimum_height": 1024,
       "alpha": "required",
       "safe_area_inset": 0.02
+    },
+    "caveviewer_mark": {
+      "path": "caveviewer-mark.png",
+      "sha256": "3385effc97b1f7cc8203fd63c080be7f8e1adb0c931530b5273bfe8491424edc",
+      "minimum_width": 2048,
+      "minimum_height": 2048,
+      "alpha": "required",
+      "safe_area_inset": 0.0
     }
   },
   "roles": {
-    "application_mark": "cookie",
-    "about_mark": "cookie",
+    "application_mark": "caveviewer_mark",
+    "about_mark": "caveviewer_mark",
     "loading_mark": "cookie",
-    "windows_app_icon": "cookie",
+    "windows_app_icon": "caveviewer_mark",
     "macos_app_icon": "cookie",
     "linux_app_icon": "cookie"
   },

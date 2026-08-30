@@ -107,6 +107,7 @@ def test_cli_validates_exports_and_writes_contact_sheet(tmp_path, capsys):
     with Image.open(contact_sheet) as image:
         assert image.mode == "RGBA"
         assert image.width > max(PREVIEW_ICON_SIZES)
+        assert image.height >= (max(PREVIEW_ICON_SIZES) * 4 + 40) * 2
 
 
 def _assert_rgba_png(path: Path, size: int) -> None:
