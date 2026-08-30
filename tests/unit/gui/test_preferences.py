@@ -1263,6 +1263,10 @@ def test_preferences_panel_uses_compact_tabbed_pages():
     assert "_render_guided_dive_disclaimer" not in module_source
     assert "compact_path = value_type in {" in render_field_source
     assert "ipady=_COMPACT_PATH_CONTROL_PAD_Y" in render_field_source
+    assert "self.field_compound_controls[key] = entry_parent" in render_field_source
+    assert "browse_button.configure(borderwidth=0, highlightthickness=0)" in render_field_source
+    assert 'padx=(1, 1)' in render_field_source
+    assert 'pady=1' in render_field_source
     assert "grid_remove()" in show_page_source
     assert "candidate_page.tkraise()" not in show_page_source
     assert "self._ensure_page(page_key)" in show_page_source
@@ -1379,6 +1383,56 @@ def test_preferences_page_switch_maps_only_the_selected_page():
     assert panel._page_scroll_region is None
     assert panel._scrollbar_layout_state is None
     assert layout_requests == [True]
+
+
+def test_preferences_compound_path_control_preserves_focus_and_invalid_borders():
+    from caveviewer.gui import preferences_dialog
+
+    colors = []
+    shell = SimpleNamespace(configure=lambda **options: colors.append(options["bg"]))
+    panel = object.__new__(preferences_dialog.PreferencesPanel)
+    panel.field_compound_controls = {"recording_dir": shell}
+    panel.rendered_invalid_key = None
+
+    panel._set_compound_focus("recording_dir", focused=True)
+    panel._set_compound_focus("recording_dir", focused=False)
+    panel.rendered_invalid_key = "recording_dir"
+    panel._set_compound_focus("recording_dir", focused=False)
+
+    assert colors == [
+        preferences_dialog.DARK_THEME.entry_focus_border,
+        preferences_dialog.DARK_THEME.entry_border,
+        preferences_dialog.DARK_THEME.invalid_border,
+    ]
+
+
+def test_preferences_field_lock_updates_compound_path_border():
+    from caveviewer.gui import preferences_dialog
+
+    entry_updates = []
+    shell_updates = []
+    panel = object.__new__(preferences_dialog.PreferencesPanel)
+    panel.field_entries = {
+        "recording_dir": SimpleNamespace(
+            config=lambda **options: entry_updates.append(options)
+        )
+    }
+    panel.field_entry_states = {"recording_dir": "readonly"}
+    panel.field_compound_controls = {
+        "recording_dir": SimpleNamespace(
+            configure=lambda **options: shell_updates.append(options)
+        )
+    }
+    panel.field_browse_buttons = {}
+
+    panel._set_field_lock("recording_dir")
+    panel._set_field_lock(None)
+
+    assert entry_updates[0]["state"] == "readonly"
+    assert shell_updates == [
+        {"bg": preferences_dialog.DARK_THEME.invalid_border},
+        {"bg": preferences_dialog.DARK_THEME.entry_border},
+    ]
 
 
 def test_preferences_layout_requests_are_coalesced_and_cancelled_on_destroy():

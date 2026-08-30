@@ -275,6 +275,7 @@ class PreferencesPanel:
         self.field_display_vars: dict[str, tk.StringVar] = {}
         self.field_entry_states: dict[str, str] = {}
         self.field_browse_buttons: dict[str, tk.Widget] = {}
+        self.field_compound_controls: dict[str, tk.Frame] = {}
         self.numeric_entry_states: dict[str, tuple] = {}
         self.numeric_placeholder_keys: set[str] = set()
         self.form_ready = False
@@ -615,7 +616,10 @@ class PreferencesPanel:
             )
         self.field_display_vars[key] = entry_var
 
-        entry_parent = tk.Frame(row, bg=_BG_COLOR)
+        entry_parent = tk.Frame(
+            row,
+            bg=DARK_THEME.entry_border if compact_path else _BG_COLOR,
+        )
         if compact_path:
             entry_parent.grid(
                 row=1,
@@ -634,6 +638,8 @@ class PreferencesPanel:
         entry_parent.grid_columnconfigure(0, weight=1)
         if compact_path:
             entry_parent.grid_columnconfigure(1, weight=0)
+            entry_parent.grid_rowconfigure(0, weight=1)
+            self.field_compound_controls[key] = entry_parent
 
         entry = tk.Entry(
             entry_parent,
@@ -647,7 +653,7 @@ class PreferencesPanel:
             ),
             insertbackground=_SUBTITLE_COLOR,
             relief="flat",
-            highlightthickness=1,
+            highlightthickness=0 if compact_path else 1,
             highlightbackground=DARK_THEME.entry_border,
             highlightcolor=DARK_THEME.entry_focus_border,
             width=entry_width,
@@ -711,7 +717,9 @@ class PreferencesPanel:
             entry.grid(
                 row=0,
                 column=0,
-                sticky="ew",
+                sticky="nsew",
+                padx=(1, 0),
+                pady=1,
                 ipady=_COMPACT_PATH_CONTROL_PAD_Y,
             )
         else:
@@ -727,12 +735,31 @@ class PreferencesPanel:
                 padx=10,
             )
             if compact_path:
+                # The parent paints the common border and the one-pixel inset
+                # between the field and action.
+                browse_button.configure(borderwidth=0, highlightthickness=0)
                 browse_button.grid(
                     row=0,
                     column=1,
-                    sticky="e",
-                    padx=(_CONTROL_GAP_X, 0),
+                    sticky="nsew",
+                    padx=(1, 1),
+                    pady=1,
                 )
+                for widget in (entry, browse_button):
+                    widget.bind(
+                        "<FocusIn>",
+                        lambda _event, field_key=key: self._set_compound_focus(
+                            field_key, focused=True
+                        ),
+                        add="+",
+                    )
+                    widget.bind(
+                        "<FocusOut>",
+                        lambda _event, field_key=key: self._set_compound_focus(
+                            field_key, focused=False
+                        ),
+                        add="+",
+                    )
             else:
                 browse_button.pack(side="left", padx=(_CONTROL_GAP_X, 0))
             self.field_browse_buttons[key] = browse_button
@@ -753,6 +780,22 @@ class PreferencesPanel:
         hint_label.pack(anchor="w", fill="x", pady=(3, 0))
         if not single_line_hint:
             self.page_hint_labels.setdefault(field.section, []).append(hint_label)
+
+    def _set_compound_focus(self, key: str, *, focused: bool) -> None:
+        """Paint one focus border around a path field and its Browse action."""
+        shell = getattr(self, "field_compound_controls", {}).get(key)
+        if shell is not None:
+            shell.configure(
+                bg=(
+                    DARK_THEME.invalid_border
+                    if key == self.rendered_invalid_key
+                    else (
+                        DARK_THEME.entry_focus_border
+                        if focused
+                        else DARK_THEME.entry_border
+                    )
+                )
+            )
 
     @staticmethod
     def _sync_hint_wraplength(label, available_width: int) -> bool:
@@ -1237,6 +1280,17 @@ class PreferencesPanel:
                     else DARK_THEME.entry_focus_border
                 ),
             )
+            compound_control = getattr(
+                self, "field_compound_controls", {}
+            ).get(key)
+            if compound_control is not None:
+                compound_control.configure(
+                    bg=(
+                        DARK_THEME.invalid_border
+                        if key == invalid_key
+                        else DARK_THEME.entry_border
+                    )
+                )
         for key, browse_button in self.field_browse_buttons.items():
             set_dialog_action_button(
                 browse_button,
