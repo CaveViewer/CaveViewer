@@ -362,6 +362,26 @@ def test_settings_save_and_load_round_trip(valid_preferences, tmp_path):
     assert json.loads(path.read_text(encoding="utf-8"))["io_workers"] == "7"
 
 
+def test_valid_preferences_file_loads_every_supported_setting_and_logs_filename(
+    valid_preferences,
+    tmp_path,
+    caplog,
+):
+    path = tmp_path / "preferences.json"
+    snapshot = settings.require_validated_preferences(valid_preferences)
+    path.write_text(json.dumps(snapshot.as_dict()), encoding="utf-8")
+
+    with caplog.at_level(logging.INFO, logger="caveviewer"):
+        loaded = settings.load_preferences(path)
+
+    assert loaded == snapshot
+    assert set(loaded.as_dict()) == {
+        field.key for field in settings.PREFERENCE_FIELDS
+    }
+    assert "Loaded preferences from preferences.json." in caplog.text
+    assert str(tmp_path) not in caplog.text
+
+
 def test_default_settings_path_uses_xdg_config_not_state(
     valid_preferences, tmp_path, monkeypatch
 ):

@@ -101,7 +101,10 @@ def load_saved_preference_values(
         if not isinstance(exc, FileNotFoundError):
             _LOG.warning("Could not load preferences from %s: %s", path, exc)
         payload = None
-    return dict(payload) if isinstance(payload, Mapping) else {}
+    if isinstance(payload, Mapping):
+        _LOG.info("Loaded preferences from %s.", path.name)
+        return dict(payload)
+    return {}
 
 
 def save_preferences(
