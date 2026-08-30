@@ -31,6 +31,7 @@ import moderngl
 import moderngl_window as mglw
 from moderngl_window.context.base import KeyModifiers
 
+from caveviewer.branding import BrandingAssets, resolve_branding_assets
 from caveviewer.core.chunking import builder as chunker
 from caveviewer.core.map import slicing as map_slicing
 from caveviewer.core.hardware import gpu_memory, memory_targets, system_memory
@@ -135,7 +136,7 @@ from caveviewer.gui.platform.window_backend import (
     WindowBackendAdapter,
     create_window_backend_adapter,
 )
-from caveviewer.resources import image_path, resource_path
+from caveviewer.resources import resource_path
 from caveviewer.version import APP_NAME, APP_VERSION
 
 if TYPE_CHECKING:
@@ -539,13 +540,26 @@ def _recording_process_adapter_for_runtime(
     return create_recording_process_adapter()
 
 
-def _runtime_app_icon_path(presentation_profile: PresentationProfile) -> str:
-    filenames = (presentation_profile.splash_layout.app_icon_resource_name,)
-    for filename in filenames:
-        path = image_path(filename)
-        if path.exists():
-            return str(path)
-    return str(image_path(filenames[0]))
+def _branding_assets_for_runtime(
+    platform_runtime: PlatformRuntime | None,
+) -> BrandingAssets:
+    """Return the process snapshot, preserving direct viewer test callers."""
+    assets = (
+        getattr(platform_runtime, "branding_assets", None)
+        if platform_runtime is not None
+        else None
+    )
+    return assets or resolve_branding_assets(environ={})
+
+
+def _runtime_app_icon_path(platform_runtime: PlatformRuntime | None) -> str:
+    assets = _branding_assets_for_runtime(platform_runtime)
+    platform_name = (
+        platform_runtime.profile.platform_name
+        if platform_runtime is not None
+        else get_presentation_profile().platform_name
+    )
+    return str(assets.application_icon_for(platform_name))
 
 
 _UI_PANEL_VERT_SRC = """
@@ -707,6 +721,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         )
         self._window_setup_complete = False
         self._platform_runtime = CaveViewerWindow.cave_platform_runtime
+        self._branding_assets = _branding_assets_for_runtime(self._platform_runtime)
         self._runtime_settings = (
             CaveViewerWindow.cave_runtime_settings
             or getattr(self._platform_runtime, "runtime_settings", None)
@@ -796,7 +811,10 @@ class CaveViewerWindow(mglw.WindowConfig):
         self.import_progress_panel = None
         self._pending_import_splash_rendered = False
         if have_pending_import:
-            self.import_progress_panel = ImportProgressPanel(self.ctx)
+            self.import_progress_panel = ImportProgressPanel(
+                self.ctx,
+                branding_assets=self._branding_assets,
+            )
             self._pending_import_splash_rendered = (
                 self._present_pending_import_splash_now()
             )
@@ -1081,7 +1099,10 @@ class CaveViewerWindow(mglw.WindowConfig):
         # active during normal viewing, so it has no on/off state of its
         # own the way the other overlays do.
         if self.import_progress_panel is None:
-            self.import_progress_panel = ImportProgressPanel(self.ctx)
+            self.import_progress_panel = ImportProgressPanel(
+                self.ctx,
+                branding_assets=self._branding_assets,
+            )
         self.controls_overlay.set_logo_renderer(self.import_progress_panel)
 
         self.ctx.enable(moderngl.DEPTH_TEST)
@@ -1582,7 +1603,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         icon_path = (
             viewer_settings.app_icon
             if viewer_settings is not None and viewer_settings.app_icon
-            else _runtime_app_icon_path(self._active_presentation_profile())
+            else _runtime_app_icon_path(getattr(self, "_platform_runtime", None))
         )
         if not os.path.exists(icon_path):
             _LOG.warning(f"viewer window icon asset not found: {icon_path}")

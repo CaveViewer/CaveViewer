@@ -130,6 +130,7 @@ from caveviewer.gui.update_manager import (
 from caveviewer.resources import image_path
 
 if TYPE_CHECKING:
+    from caveviewer.branding import BrandingAssets
     from caveviewer.gui.platform.runtime import PlatformRuntime
 
 
@@ -139,14 +140,11 @@ def _resolve_asset_path(filename: str) -> str | None:
     return str(path) if path.is_file() else None
 
 
-# Resolve this once at import time -- same asset already used for the
-# in-program loading-screen logo, reused here rather than shipping a
-# second copy of the same image.
-_LOGO_PATH = _resolve_asset_path("app_mark_transparent.png")
+_LOGO_PATH: str | None = None
 _SPLASH_BACKGROUND_PATH = _resolve_asset_path("splash_ginnie_dark.jpg")
 _PRESENTATION_PROFILE = get_presentation_profile()
 _SPLASH_LAYOUT_POLICY = _PRESENTATION_PROFILE.splash_layout
-_APP_ICON_PATH = _resolve_asset_path(_SPLASH_LAYOUT_POLICY.app_icon_resource_name)
+_APP_ICON_PATH: str | None = None
 
 
 def _last_browse_path_file() -> str:
@@ -304,6 +302,22 @@ def _presentation_profile_for_runtime(
     return profile or get_presentation_profile()
 
 
+def _branding_assets_for_runtime(
+    platform_runtime: PlatformRuntime | None,
+) -> BrandingAssets:
+    """Return injected brand assets, with a default for direct GUI callers."""
+    assets = (
+        getattr(platform_runtime, "branding_assets", None)
+        if platform_runtime is not None
+        else None
+    )
+    if assets is not None:
+        return assets
+    from caveviewer.branding import resolve_branding_assets
+
+    return resolve_branding_assets(environ={})
+
+
 def _presentation_actions_adapter_for_runtime(
     platform_runtime: PlatformRuntime | None,
 ) -> PresentationActionsAdapter:
@@ -351,7 +365,9 @@ def _refresh_tk_font_tokens() -> None:
 def _activate_presentation_profile(
     profile: PresentationProfile,
     *,
-    app_icon_path: str | None = None,
+    branding_assets: BrandingAssets,
+    app_icon_path_override: str | None = None,
+    platform_name: str,
 ) -> None:
     """Apply a runtime profile to legacy splash rendering tokens.
 
@@ -360,7 +376,7 @@ def _activate_presentation_profile(
     any widgets. This keeps static presentation choices out of the broad
     platform adapter while preserving the existing callback structure.
     """
-    global _PRESENTATION_PROFILE, _SPLASH_LAYOUT_POLICY, _APP_ICON_PATH
+    global _PRESENTATION_PROFILE, _SPLASH_LAYOUT_POLICY, _APP_ICON_PATH, _LOGO_PATH
     global _WINDOWS_SPLASH_LAYOUT, _LINUX_SPLASH_LAYOUT
     global _UI_FONT_FAMILY, _TK_TEXT_SCALE
     global _SPLASH_WINDOW_WIDTH, _SPLASH_WINDOW_MIN_HEIGHT
@@ -368,9 +384,10 @@ def _activate_presentation_profile(
 
     _PRESENTATION_PROFILE = profile
     _SPLASH_LAYOUT_POLICY = profile.splash_layout
-    _APP_ICON_PATH = app_icon_path or _resolve_asset_path(
-        _SPLASH_LAYOUT_POLICY.app_icon_resource_name
+    _APP_ICON_PATH = app_icon_path_override or str(
+        branding_assets.application_icon_for(platform_name)
     )
+    _LOGO_PATH = str(branding_assets.about_mark)
     _WINDOWS_SPLASH_LAYOUT = _SPLASH_LAYOUT_POLICY.windows_layout
     _LINUX_SPLASH_LAYOUT = _SPLASH_LAYOUT_POLICY.linux_layout
     _UI_FONT_FAMILY = profile.ui_font_family
@@ -1343,12 +1360,21 @@ def show_splash_screen(
         else None
     )
     presentation_profile = _presentation_profile_for_runtime(platform_runtime)
+    branding_assets = _branding_assets_for_runtime(platform_runtime)
     presentation_actions_adapter = _presentation_actions_adapter_for_runtime(
         platform_runtime
     )
     _activate_presentation_profile(
         presentation_profile,
-        app_icon_path=(viewer_settings.app_icon if viewer_settings is not None else None),
+        branding_assets=branding_assets,
+        app_icon_path_override=(
+            viewer_settings.app_icon if viewer_settings is not None else None
+        ),
+        platform_name=(
+            platform_runtime.profile.platform_name
+            if platform_runtime is not None
+            else presentation_profile.platform_name
+        ),
     )
 
     record_startup_stage("splash_root_create_begin")

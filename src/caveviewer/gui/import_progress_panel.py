@@ -22,8 +22,8 @@ import moderngl
 import numpy as np
 from PIL import Image
 
+from caveviewer.branding import BrandingAssets, resolve_branding_assets
 from caveviewer.gui import bitmap_font
-from caveviewer.resources import image_path
 
 
 _VERT_SRC = """
@@ -144,9 +144,6 @@ void main() {
 }
 """
 
-_LOGO_PATH = str(image_path("app_mark_transparent.png"))
-
-
 class ImportProgressPanel:
     LOGO_SIZE = 172.0
     TITLE_TEXT_SIZE = 2.1
@@ -158,8 +155,14 @@ class ImportProgressPanel:
     _STAGE_TEXT_RGBA = (0.8000, 0.8039, 0.8392, 1.0)
     _NOTE_TEXT_RGBA = (0.690, 0.720, 0.750, 0.92)
 
-    def __init__(self, ctx: moderngl.Context):
+    def __init__(
+        self,
+        ctx: moderngl.Context,
+        *,
+        branding_assets: BrandingAssets | None = None,
+    ):
         self.ctx = ctx
+        self._branding_assets = branding_assets or resolve_branding_assets(environ={})
         self.program = ctx.program(vertex_shader=_VERT_SRC, fragment_shader=_FRAG_SRC)
 
         self._max_verts = 4000
@@ -182,7 +185,7 @@ class ImportProgressPanel:
 
     def _load_logo_texture(self) -> None:
         try:
-            img = Image.open(_LOGO_PATH).convert("RGBA")
+            img = Image.open(self._branding_assets.loading_mark).convert("RGBA")
             self._logo_aspect = img.size[0] / img.size[1]
             self._logo_texture = self.ctx.texture(img.size, 4, img.tobytes())
             self._logo_texture.build_mipmaps()

@@ -832,7 +832,10 @@ def main():
         selected_path = sys.argv.pop(1).strip()
         _run_map_session(
             selected_path,
-            platform_runtime=create_platform_runtime(runtime_settings=runtime_settings),
+            platform_runtime=create_platform_runtime(
+                runtime_settings=runtime_settings,
+                environment=os.environ,
+            ),
             runtime_settings=runtime_settings,
         )
         return
@@ -857,7 +860,10 @@ def main():
     record_startup_stage("update_manager_import_complete")
 
     record_startup_stage("platform_runtime_create_begin")
-    platform_runtime = create_platform_runtime(runtime_settings=runtime_settings)
+    platform_runtime = create_platform_runtime(
+        runtime_settings=runtime_settings,
+        environment=os.environ,
+    )
     record_startup_stage("platform_runtime_create_complete")
     record_startup_stage("update_manager_create_begin")
     update_manager = UpdateManager(

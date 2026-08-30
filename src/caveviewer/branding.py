@@ -70,6 +70,28 @@ class LoadingRingTokens:
 
 
 @dataclass(frozen=True)
+class BrandingAssets:
+    """Resolved runtime paths and tokens injected into presentation consumers."""
+
+    profile_id: str
+    application_mark: Path
+    about_mark: Path
+    loading_mark: Path
+    windows_app_icon: Path
+    macos_app_icon: Path
+    linux_app_icon: Path
+    loading_ring: LoadingRingTokens
+
+    def application_icon_for(self, platform_name: str) -> Path:
+        """Return the semantic app icon for one Python platform name."""
+        if platform_name == "win32":
+            return self.windows_app_icon
+        if platform_name == "darwin":
+            return self.macos_app_icon
+        return self.linux_app_icon
+
+
+@dataclass(frozen=True)
 class BrandingProfile:
     """Immutable semantic branding snapshot resolved from one manifest."""
 
@@ -114,6 +136,31 @@ def resolve_branding_profile(
     if override and not is_frozen:
         return load_branding_profile(_manifest_path(Path(override)))
     return load_branding_profile(default_branding_manifest_path())
+
+
+def resolve_branding_assets(
+    *,
+    environ: Mapping[str, str] | None = None,
+    frozen: bool | None = None,
+) -> BrandingAssets:
+    """Resolve one immutable runtime snapshot from the selected profile."""
+    return branding_assets_from_profile(
+        resolve_branding_profile(environ=environ, frozen=frozen)
+    )
+
+
+def branding_assets_from_profile(profile: BrandingProfile) -> BrandingAssets:
+    """Convert a validated profile into concrete semantic runtime paths."""
+    return BrandingAssets(
+        profile_id=profile.profile_id,
+        application_mark=profile.asset_for("application_mark").path,
+        about_mark=profile.asset_for("about_mark").path,
+        loading_mark=profile.asset_for("loading_mark").path,
+        windows_app_icon=profile.asset_for("windows_app_icon").path,
+        macos_app_icon=profile.asset_for("macos_app_icon").path,
+        linux_app_icon=profile.asset_for("linux_app_icon").path,
+        loading_ring=profile.loading_ring,
+    )
 
 
 def load_branding_profile(manifest_path: str | os.PathLike[str]) -> BrandingProfile:

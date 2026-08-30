@@ -18,7 +18,6 @@ from dataclasses import dataclass, replace
 class SplashLayoutPolicy:
     """Immutable platform-specific splash-window presentation decisions."""
 
-    app_icon_resource_name: str
     reuse_existing_root: bool
     destroy_root_on_close: bool
     windows_layout: bool
@@ -191,7 +190,6 @@ _DEFAULT_PRESENTATION_PROFILE = PresentationProfile(
     font_candidates=_DEFAULT_FONT_CANDIDATES,
     uses_fontconfig_fallback=False,
     splash_layout=SplashLayoutPolicy(
-        app_icon_resource_name="app_icon_macos.png",
         reuse_existing_root=False,
         destroy_root_on_close=True,
         windows_layout=False,
@@ -261,7 +259,6 @@ def select_presentation_profile(*, platform_name: str) -> PresentationProfile:
             ui_font_family="Helvetica Neue",
             font_candidates=_MACOS_FONT_CANDIDATES,
             splash_layout=SplashLayoutPolicy(
-                app_icon_resource_name="app_icon_macos.png",
                 reuse_existing_root=True,
                 destroy_root_on_close=False,
                 windows_layout=False,
@@ -318,7 +315,6 @@ def select_presentation_profile(*, platform_name: str) -> PresentationProfile:
             platform_name="windows",
             font_candidates=_WINDOWS_FONT_CANDIDATES,
             splash_layout=SplashLayoutPolicy(
-                app_icon_resource_name="app_icon_windows.png",
                 reuse_existing_root=False,
                 destroy_root_on_close=True,
                 windows_layout=True,
@@ -366,7 +362,6 @@ def select_presentation_profile(*, platform_name: str) -> PresentationProfile:
             font_candidates=_LINUX_FONT_CANDIDATES,
             uses_fontconfig_fallback=True,
             splash_layout=SplashLayoutPolicy(
-                app_icon_resource_name="app_icon_macos.png",
                 reuse_existing_root=False,
                 destroy_root_on_close=True,
                 windows_layout=False,

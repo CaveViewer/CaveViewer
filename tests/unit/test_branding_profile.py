@@ -15,6 +15,7 @@ from caveviewer.branding import (
     BrandingProfileError,
     default_branding_manifest_path,
     load_branding_profile,
+    resolve_branding_assets,
     resolve_branding_profile,
 )
 
@@ -30,6 +31,17 @@ def test_bundled_default_profile_is_complete_and_uses_approved_cookie():
     assert profile.asset_for("about_mark") is profile.asset_for("application_mark")
     assert profile.loading_ring.fill_color == "#FFB000"
     assert profile.loading_ring.track_color == "#3B3428"
+
+
+def test_runtime_snapshot_resolves_semantic_paths_and_platform_icons():
+    assets = resolve_branding_assets(environ={})
+
+    assert assets.profile_id == "default"
+    assert assets.about_mark.is_file()
+    assert assets.loading_mark.is_file()
+    assert assets.application_icon_for("win32") == assets.windows_app_icon
+    assert assets.application_icon_for("darwin") == assets.macos_app_icon
+    assert assets.application_icon_for("linux") == assets.linux_app_icon
 
 
 def test_developer_override_accepts_a_profile_directory(tmp_path):
