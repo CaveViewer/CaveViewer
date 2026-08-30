@@ -95,7 +95,9 @@ class TroubleshootingLogController:
             )
         return TroubleshootingLogState(
             latest_log=state.latest_log,
-            status_text="Opened the log folder and selected the latest log.",
+            # The selected file in the opened browser is sufficient success
+            # feedback; reserve this line for actionable reveal failures.
+            status_text="",
             error_excerpt=state.error_excerpt,
             error_status_text=state.error_status_text,
         )
