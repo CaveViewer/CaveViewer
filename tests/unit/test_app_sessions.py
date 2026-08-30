@@ -963,6 +963,8 @@ def test_system_exit_code_normalizes_supported_exit_values(value, expected):
 
 @pytest.mark.parametrize("dialog_fails", [False, True])
 def test_run_logs_fatal_error_and_uses_best_effort_dialog(monkeypatch, dialog_fails):
+    from caveviewer.gui import notifications
+
     recorder = _LogRecorder()
     configured = []
     dialog_calls = []
@@ -987,8 +989,10 @@ def test_run_logs_fatal_error_and_uses_best_effort_dialog(monkeypatch, dialog_fa
         return FakeRoot()
 
     tkinter.Tk = create_root
-    tkinter.messagebox = SimpleNamespace(
-        showerror=lambda *args, **kwargs: dialog_calls.append((args, kwargs))
+    monkeypatch.setattr(
+        notifications,
+        "show_error",
+        lambda message, *, parent: dialog_calls.append((message, parent)),
     )
     monkeypatch.setitem(sys.modules, "tkinter", tkinter)
 
@@ -1004,8 +1008,8 @@ def test_run_logs_fatal_error_and_uses_best_effort_dialog(monkeypatch, dialog_fa
         assert dialog_calls == []
     else:
         assert dialog_calls[0] == "withdraw"
-        args, kwargs = dialog_calls[1]
-        assert args[0] == app.APP_NAME
-        assert "startup exploded" in args[1]
-        assert "Traceback:" not in args[1]
-        assert kwargs["parent"].__class__ is FakeRoot
+        message, parent = dialog_calls[1]
+        assert app.APP_NAME in message
+        assert "startup exploded" in message
+        assert "Traceback:" not in message
+        assert parent.__class__ is FakeRoot

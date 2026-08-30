@@ -48,6 +48,7 @@ from caveviewer.gui.scrollable_content import (
     CanvasScrollbarStyle,
     CanvasVerticalScrollbar,
 )
+from caveviewer.gui.modal_dialog import ask_confirmation
 from caveviewer.gui.top_tab_strip import (
     TopTab,
     TopTabbedContentSurface,
@@ -1547,15 +1548,15 @@ class PreferencesPanel:
     def _confirm_restore_defaults(self) -> bool:
         if self.confirm_restore is not None:
             return bool(self.confirm_restore())
-        from tkinter import messagebox
-
-        return bool(
-            messagebox.askyesno(
-                "Restore default preferences?",
+        return ask_confirmation(
+            self.dialog,
+            title="Restore default preferences?",
+            message=(
                 "Replace the current form values with CaveViewer defaults? "
-                "The change is not saved until you select Save changes.",
-                parent=self.dialog,
-            )
+                "The change is not saved until you select Save changes."
+            ),
+            confirm_text="Restore defaults",
+            cancel_text="Keep current values",
         )
 
     def _stage_preferences(self, preferences: Preferences, message: str) -> None:

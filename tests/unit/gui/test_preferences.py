@@ -1006,6 +1006,27 @@ def test_preferences_panel_restore_defaults_requires_confirmation():
     assert "not saved until" not in staged[0][1]
 
 
+def test_preferences_restore_defaults_uses_app_styled_confirmation(monkeypatch):
+    from caveviewer.gui import preferences_dialog
+
+    calls = []
+    monkeypatch.setattr(
+        preferences_dialog,
+        "ask_confirmation",
+        lambda parent, **options: calls.append((parent, options)) or True,
+    )
+    panel = preferences_dialog.PreferencesPanel.__new__(
+        preferences_dialog.PreferencesPanel
+    )
+    panel.confirm_restore = None
+    panel.dialog = object()
+
+    assert panel._confirm_restore_defaults() is True
+    assert calls[0][0] is panel.dialog
+    assert calls[0][1]["confirm_text"] == "Restore defaults"
+    assert calls[0][1]["cancel_text"] == "Keep current values"
+
+
 def _directory_picker_panel(
     preferences_dialog,
     *,
