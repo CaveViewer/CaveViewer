@@ -304,6 +304,17 @@ echo "Verifying Pillow installation..."
 
 cd "$repo_root"
 mkdir -p "$dist_app_dir" "$work_dir"
+branding_export_dir="$repo_root/build/branding/linux"
+branding_profile="${CAVEVIEWER_BRAND_PROFILE:-$repo_root/src/caveviewer/resources/branding/default}"
+"$python_exe" -m caveviewer.branding_export \
+  --profile "$branding_profile" export \
+  --output "$branding_export_dir" --replace
+branding_summary="$branding_export_dir/export-summary.v1.json"
+if [ -d "$branding_profile" ]; then
+  branding_profile_dir="$branding_profile"
+else
+  branding_profile_dir="$(dirname "$branding_profile")"
+fi
 
 # Run PyInstaller with --onedir for AppImage bundling
 # Don't use the macOS spec file; generate a Linux-specific onedir build
@@ -326,6 +337,8 @@ CAVEVIEWER_APP_ICON="" \
   --add-data "$repo_root/src/caveviewer/resources/release_signing_recovery_public_key.pem:caveviewer/resources" \
   --add-data "$repo_root/src/caveviewer/resources/release_signing_legacy_public_key.pem:caveviewer/resources" \
   --add-data "$repo_root/src/caveviewer/resources/cave_metadata_catalog.v1.json:caveviewer/resources" \
+  --add-data "$branding_profile_dir:caveviewer/resources/branding/default" \
+  --add-data "$branding_summary:caveviewer/resources/branding" \
   --add-data "$release_metadata_path:caveviewer/resources" \
   --add-data "$repo_root/LICENSE:." \
   --add-data "$repo_root/THIRD_PARTY_NOTICES.md:." \
@@ -342,6 +355,10 @@ if [ -z "$bundled_release_metadata" ]; then
   exit 1
 fi
 cv_verify_release_metadata "$bundled_release_metadata" "$(cv_release_channel)"
+if ! find "$app_dir" -type f -path '*caveviewer/resources/branding/export-summary.v1.json' -print -quit | grep -q .; then
+  echo "Error: Linux app bundle is missing branding provenance." >&2
+  exit 1
+fi
 
 echo "Build complete: $app_dir"
 echo "Note: CaveViewer/ is an intermediate build artifact."

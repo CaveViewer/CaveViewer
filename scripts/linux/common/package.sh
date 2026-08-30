@@ -11,7 +11,7 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../../.." && pwd)"
 source "$repo_root/scripts/common/artifacts.sh"
 source "$repo_root/scripts/common/release_channel.sh"
-icon_src="$repo_root/src/caveviewer/resources/images/app_icon_macos.png"
+branding_linux_dir="$repo_root/build/branding/linux/linux"
 
 print_usage() {
   cat <<'EOF'
@@ -221,44 +221,12 @@ fi
 
 icon_hicolor_dir="$appdir/usr/share/icons/hicolor"
 icon_root="$appdir/${APPLICATION_ID}.png"
-linux_arch_tag=""
-case "$(uname -m)" in
-  x86_64) linux_arch_tag="amd64" ;;
-esac
-linux_venv_default="$repo_root/.venv-linux-build"
-if [ -n "$linux_arch_tag" ]; then
-  linux_venv_default="$repo_root/.venv-linux-build-$linux_arch_tag"
+if [ ! -d "$branding_linux_dir/hicolor" ] || [ ! -f "$branding_linux_dir/${APPLICATION_ID}.png" ]; then
+  echo "Error: shared Linux branding export is missing: $branding_linux_dir" >&2
+  exit 1
 fi
-icon_python="${CAVEVIEWER_LINUX_BUILD_VENV:-$linux_venv_default}/bin/python"
-if [ -x "$icon_python" ]; then
-  "$icon_python" -c '
-import pathlib
-import sys
-from PIL import Image
-
-src = pathlib.Path(sys.argv[1])
-icon_dir = pathlib.Path(sys.argv[2])
-root_dest = pathlib.Path(sys.argv[3])
-sizes = (48, 64, 128, 256, 512)
-
-img = Image.open(src).convert("RGBA")
-for size in sizes:
-    resized = img.copy()
-    resized.thumbnail((size, size), Image.LANCZOS)
-    canvas = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    canvas.alpha_composite(resized, ((size - resized.width) // 2, (size - resized.height) // 2))
-    dest = icon_dir / f"{size}x{size}" / "apps" / (root_dest.stem + ".png")
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    canvas.save(dest)
-
-root_256 = icon_dir / "256x256" / "apps" / (root_dest.stem + ".png")
-root_dest.write_bytes(root_256.read_bytes())
-' "$icon_src" "$icon_hicolor_dir" "$icon_root"
-else
-  mkdir -p "$icon_hicolor_dir/256x256/apps"
-  cp "$icon_src" "$icon_hicolor_dir/256x256/apps/${APPLICATION_ID}.png"
-  cp "$icon_src" "$icon_root"
-fi
+cp -R "$branding_linux_dir/hicolor/." "$icon_hicolor_dir/"
+cp "$branding_linux_dir/${APPLICATION_ID}.png" "$icon_root"
 
 desktop_root="$appdir/${APPLICATION_ID}.desktop"
 sed 's|@EXEC@|AppRun|' "$desktop_template" > "$desktop_root"

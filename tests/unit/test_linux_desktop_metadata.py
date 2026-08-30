@@ -24,6 +24,21 @@ requires_executable_shell_scripts = pytest.mark.skipif(
 )
 
 
+def test_linux_package_uses_shared_branding_export_without_macos_reuse():
+    builder = (REPOSITORY_ROOT / "scripts/linux/common/build.sh").read_text(
+        encoding="utf-8"
+    )
+    packager = PACKAGE_SCRIPT.read_text(encoding="utf-8")
+
+    assert "caveviewer.branding_export" in builder
+    assert "CAVEVIEWER_BRAND_PROFILE" in builder
+    assert "branding/export-summary.v1.json" in builder
+    assert "build/branding/linux/linux" in packager
+    assert "app_icon_macos.png" not in packager
+    assert "from PIL import Image" not in packager
+    assert 'cp -R "$branding_linux_dir/hicolor/."' in packager
+
+
 def _generated_apprun_script() -> str:
     package_script = PACKAGE_SCRIPT.read_text(encoding="utf-8")
     marker = 'cat > "$appdir/AppRun" <<\'APP_RUN_EOF\'\n'
