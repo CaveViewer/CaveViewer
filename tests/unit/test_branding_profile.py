@@ -30,8 +30,11 @@ def test_bundled_default_profile_uses_original_mark_for_windows_and_about():
     assert profile.asset_for("application_mark").alpha_required is True
     assert profile.asset_for("about_mark") is profile.asset_for("application_mark")
     assert profile.asset_for("application_mark").path.name == "caveviewer-mark.png"
-    assert profile.asset_for("windows_app_icon") is profile.asset_for(
-        "application_mark"
+    assert profile.asset_for("windows_app_icon").path.name == (
+        "windows-small-mark.png"
+    )
+    assert profile.asset_for("windows_app_icon") is not profile.asset_for(
+        "about_mark"
     )
     assert profile.asset_for("loading_mark").path.name == "application-mark.png"
     assert profile.loading_ring.fill_color == "#FFB000"

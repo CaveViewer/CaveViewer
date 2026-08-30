@@ -18,9 +18,17 @@
     },
     "caveviewer_mark": {
       "path": "caveviewer-mark.png",
-      "sha256": "3385effc97b1f7cc8203fd63c080be7f8e1adb0c931530b5273bfe8491424edc",
+      "sha256": "e659d88fe044cef77d280de39880e9749211b6e607f236bb1f6b6d961e2cb554",
       "minimum_width": 2048,
       "minimum_height": 2048,
+      "alpha": "required",
+      "safe_area_inset": 0.0
+    },
+    "windows_small_mark": {
+      "path": "windows-small-mark.png",
+      "sha256": "09f732cea5c8e219353c62758ec98764e58a9e999531dc143a8c1025c939e7f8",
+      "minimum_width": 1024,
+      "minimum_height": 1024,
       "alpha": "required",
       "safe_area_inset": 0.0
     }
@@ -29,7 +37,7 @@
     "application_mark": "caveviewer_mark",
     "about_mark": "caveviewer_mark",
     "loading_mark": "cookie",
-    "windows_app_icon": "caveviewer_mark",
+    "windows_app_icon": "windows_small_mark",
     "macos_app_icon": "cookie",
     "linux_app_icon": "cookie"
   },

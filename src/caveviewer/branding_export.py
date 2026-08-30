@@ -177,7 +177,9 @@ def _write_contact_sheet(profile: BrandingProfile, destination: Path) -> None:
         (38, 36, 32, 255),
     )
     draw = ImageDraw.Draw(sheet)
-    asset = profile.asset_for("application_mark")
+    # Preview the role actually used for shell/taskbar icon frames. About and
+    # other large presentation marks may intentionally use richer artwork.
+    asset = profile.asset_for("windows_app_icon")
     for row, (label, background) in enumerate(backgrounds):
         for column, size in enumerate(PREVIEW_ICON_SIZES):
             left = margin + column * cell_width
