@@ -1,3 +1,6 @@
 # Update signatures cover exact manifest bytes. Force LF on every platform so
 # Git cannot rewrite a signed JSON file during staging or checkout.
 updates/**/*.json text eol=lf
+# Branding manifests authenticate the exact source bytes. SVG artwork is text,
+# but its digest must not change when Git checks it out on Windows.
+src/caveviewer/resources/branding/**/*.svg text eol=lf

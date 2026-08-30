@@ -71,3 +71,9 @@ def test_branding_package_data_and_native_smoke_contracts_are_tracked():
     assert "CFBundleIconFile" in macos_smoke
     assert "hicolor" in linux_package and ".DirIcon" in linux_package
     assert "SetupIconFile" in windows_package
+
+
+def test_hashed_branding_svg_sources_have_stable_checkout_bytes():
+    attributes = (REPOSITORY_ROOT / ".gitattributes").read_text(encoding="utf-8")
+
+    assert "src/caveviewer/resources/branding/**/*.svg text eol=lf" in attributes
