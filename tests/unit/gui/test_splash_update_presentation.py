@@ -848,7 +848,7 @@ def test_splash_navigation_actions_are_keyboard_accessible_without_fallthrough()
     assert "splash_controller.schedule_idle(_reveal_composed_main_surface)" in source
     reveal_source = source[
         source.index("def _reveal_composed_main_surface() -> None:") : source.index(
-            "# Honor one total minimum duration"
+            "def _animate_launch_progress() -> None:"
         )
     ]
     assert "if not readiness_gate.ready:" in reveal_source
@@ -857,7 +857,10 @@ def test_splash_navigation_actions_are_keyboard_accessible_without_fallthrough()
     assert "after_idle(" not in reveal_source
     assert "schedule_after(" not in reveal_source
     assert "if show_launch_overlay" in source
-    assert "else 0" in source
+    assert "else:\n        splash_controller.schedule_idle" in source
+    assert "readiness_gate.visual_progress(now)" in source
+    assert "_LAUNCH_PROGRESS_INTERVAL_MS" in source
+    assert "splash_controller.schedule(50, _reveal_composed_main_surface)" in source
     assert "def _show_about_surface() -> None:" in source
     assert "def _ensure_help_panel() -> HelpPanel:" in source
     assert "def _show_help_surface() -> None:" in source

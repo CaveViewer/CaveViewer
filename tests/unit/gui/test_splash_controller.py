@@ -98,3 +98,23 @@ def test_startup_readiness_gate_progress_is_monotonic_and_caps_before_ready():
 
     assert gate.progress == pytest.approx(1.0)
     assert gate.ready is True
+
+
+def test_startup_visual_progress_animates_but_waits_for_readiness_to_complete():
+    gate = StartupReadinessGate(visible_at=10.0)
+
+    assert gate.visual_progress(10.0) == pytest.approx(0.08)
+    assert gate.visual_progress(11.5) == pytest.approx(0.53)
+    assert gate.visual_progress(13.0) == pytest.approx(0.98)
+    gate.mark_ready()
+
+    assert gate.visual_progress(12.0) < 1.0
+    assert gate.visual_progress(13.0) == pytest.approx(1.0)
+
+
+def test_slow_startup_milestone_can_lead_animation_without_completing():
+    gate = StartupReadinessGate(visible_at=10.0)
+    gate.advance(0.7)
+
+    assert gate.visual_progress(10.5) == pytest.approx(0.7)
+    assert gate.visual_progress(14.0) == pytest.approx(0.98)

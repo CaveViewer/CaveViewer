@@ -38,6 +38,18 @@ class StartupReadinessGate:
         """Return whether readiness and minimum visible duration are both met."""
         return self.ready and self.remaining_delay_ms(now) == 0
 
+    def visual_progress(self, now: float) -> float:
+        """Blend real milestones with a smooth time-based launch presentation."""
+        duration_ms = max(1, self.minimum_ms)
+        elapsed_ms = max(0.0, (float(now) - float(self.visible_at)) * 1_000.0)
+        time_fraction = min(1.0, elapsed_ms / duration_ms)
+        animated = 0.08 + (0.90 * time_fraction)
+        if self.ready and time_fraction >= 1.0:
+            return 1.0
+        # Real work may move the bar ahead, but only the combined time/readiness
+        # gate may display completion.
+        return min(0.98, max(min(self.progress, 0.94), animated))
+
 
 @dataclass(frozen=True, slots=True)
 class SplashScheduler:

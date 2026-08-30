@@ -229,6 +229,7 @@ _TK_TEXT_SCALE = 1.0
 _CACHE_REBUILD_CLOSE_PAUSE_ATTEMPTS = 25
 _UPDATE_READY_ACTION_DELAY_MS = 3_000
 _MIN_LAUNCH_SPLASH_MS = 3_000
+_LAUNCH_PROGRESS_INTERVAL_MS = 40
 _LAUNCH_PROGRESS_WIDTH = 280
 _LAUNCH_PROGRESS_HEIGHT = 5
 
@@ -2415,7 +2416,7 @@ def show_splash_screen(
 
     _create_map_library_panel(map_library_surface)
     map_library_surface.tkraise()
-    _advance_launch_progress(0.58)
+    _advance_launch_progress(0.18)
 
     # Keep deferred navigation surfaces out of the initial Tk geometry pass.
     # Preferences creates only its active tab on first use and coalesces the
@@ -2437,17 +2438,9 @@ def show_splash_screen(
     # already owns its final mapped width. Fixed settlement passes drain only
     # geometry work; width/size guards prevent callbacks from cascading.
     _ensure_preferences_panel()
-    _advance_launch_progress(0.88)
+    _advance_launch_progress(0.30)
     _settle_launch_layout(root, passes=3)
     readiness_gate.mark_ready()
-    if launch_indicator is not None:
-        launch_indicator._cv_launch_progress = readiness_gate.progress
-        _render_launch_content(
-            launch_indicator,
-            progress=readiness_gate.progress,
-            px=px,
-        )
-        root.update_idletasks()
 
     def _reveal_composed_main_surface() -> None:
         """Reveal the fully painted main surface in one non-repeating handoff."""
@@ -2478,17 +2471,28 @@ def show_splash_screen(
                 200, lambda: root.attributes("-topmost", False)
             )
 
-    # Honor one total minimum duration measured from the first visible launch
-    # frame. Fast builds wait only for the remaining time; slow builds reveal
-    # on the next idle paint. Neither path polls or reschedules itself.
-    remaining_launch_ms = (
-        readiness_gate.remaining_delay_ms(time.monotonic())
-        if show_launch_overlay
-        else 0
-    )
-    if remaining_launch_ms:
+    def _animate_launch_progress() -> None:
+        """Advance the visible bar smoothly until readiness permits handoff."""
+        if launch_indicator is None or splash_controller.closing:
+            return
+        now = time.monotonic()
+        progress = readiness_gate.visual_progress(now)
+        launch_indicator._cv_launch_progress = progress
+        _render_launch_content(launch_indicator, progress=progress, px=px)
+        if readiness_gate.can_reveal(now):
+            # Leave the completed frame visible briefly instead of replacing it
+            # in the same event-loop turn that first paints 100 percent.
+            splash_controller.schedule(50, _reveal_composed_main_surface)
+            return
         splash_controller.schedule(
-            remaining_launch_ms, _reveal_composed_main_surface
+            _LAUNCH_PROGRESS_INTERVAL_MS,
+            _animate_launch_progress,
+        )
+
+    if show_launch_overlay:
+        splash_controller.schedule(
+            _LAUNCH_PROGRESS_INTERVAL_MS,
+            _animate_launch_progress,
         )
     else:
         splash_controller.schedule_idle(_reveal_composed_main_surface)
