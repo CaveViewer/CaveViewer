@@ -59,6 +59,9 @@ Branch `feat/preferences-unsaved-changes` is published to `origin`; draft pull
 request [#325](https://github.com/CaveViewer/CaveViewer/pull/325) is open against
 `main` with Tasks 5–12 complete and ready for review.
 
+Task 13 fixes stale rendered unsaved indicators after a successful save in
+commit `d6544d5`; it is complete, verified, and included in PR #325.
+
 Follow-up presentation adjustment: the supporting label beneath **Import
 preferences** is **Import saved preferences** and does not expose the underlying
 filename.
