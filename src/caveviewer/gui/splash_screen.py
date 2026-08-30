@@ -30,6 +30,7 @@ manual reveal-only.
 from __future__ import annotations
 
 import enum
+import math
 import os
 import time
 from dataclasses import dataclass
@@ -740,6 +741,21 @@ def _settle_launch_layout(root, *, passes: int = 3) -> None:
     """Run a fixed, bounded number of Tk geometry-only settlement passes."""
     for _pass in range(max(0, int(passes))):
         root.update_idletasks()
+
+
+def _navigation_gear_points(center: float, px) -> tuple[tuple[float, float], ...]:
+    """Return the alternating outer/inner vertices for the Preferences gear."""
+    return tuple(
+        (
+            center
+            + math.cos(math.radians(index * 22.5 - 90))
+            * px(11 if index % 2 == 0 else 8),
+            center
+            + math.sin(math.radians(index * 22.5 - 90))
+            * px(11 if index % 2 == 0 else 8),
+        )
+        for index in range(16)
+    )
 
 
 def _build_themed_about_content(
@@ -2054,17 +2070,7 @@ def show_splash_screen(
             elif icon_name == "preferences":
                 polygons = (
                     VectorPolygon(
-                        points=tuple(
-                            (
-                                center
-                                + math.cos(math.radians(index * 22.5 - 90))
-                                * px(11 if index % 2 == 0 else 8),
-                                center
-                                + math.sin(math.radians(index * 22.5 - 90))
-                                * px(11 if index % 2 == 0 else 8),
-                            )
-                            for index in range(16)
-                        ),
+                        points=_navigation_gear_points(center, px),
                         outline_color=foreground,
                         outline_width=stroke,
                     ),

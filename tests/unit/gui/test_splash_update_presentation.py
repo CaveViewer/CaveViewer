@@ -695,6 +695,14 @@ def test_launch_layout_settlement_is_fixed_and_bounded():
     assert calls == [True, True, True]
 
 
+def test_preferences_navigation_gear_geometry_executes_during_startup():
+    points = splash_screen._navigation_gear_points(16.0, lambda value: value)
+
+    assert len(points) == 16
+    assert points[0] == pytest.approx((16.0, 5.0))
+    assert points[8] == pytest.approx((16.0, 27.0))
+
+
 def test_launch_splash_waits_only_for_the_remaining_minimum_duration():
     from caveviewer.gui.splash_controller import StartupReadinessGate
 
