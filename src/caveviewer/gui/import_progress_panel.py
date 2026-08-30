@@ -315,7 +315,7 @@ class ImportProgressPanel:
         bar_cx = w / 2.0
         # Keep the active stage where it was, but place progress after it in
         # reading order and before the explanatory note.
-        bar_cy = panel_y0 + panel_h * 0.50 + 58.0
+        bar_cy = panel_y0 + panel_h * 0.50 + 70.0
         bar_x0 = bar_cx - self.PROGRESS_BAR_WIDTH / 2.0
         bar_x1 = bar_cx + self.PROGRESS_BAR_WIDTH / 2.0
         bar_y0 = bar_cy - self.PROGRESS_BAR_HEIGHT / 2.0
@@ -405,9 +405,9 @@ class ImportProgressPanel:
             center_x=center_x,
             window_width=window_width,
             title=title,
-            title_y=center_y - 112.0,
+            title_y=center_y - 124.0,
             stage=stage,
-            stage_y=center_y - 30.0,
+            stage_y=center_y - 42.0,
             note=note,
             note_y=center_y + 30.0,
         )

@@ -96,8 +96,8 @@ def test_bar_labels_use_compact_progress_layout(monkeypatch):
     )
 
     assert text_calls == [
-        ("Preparing Map", 188.0, ImportProgressPanel.TITLE_TEXT_SIZE),
-        ("Building map chunksâ€¦", 270.0, ImportProgressPanel.STAGE_TEXT_SIZE),
+        ("Preparing Map", 176.0, ImportProgressPanel.TITLE_TEXT_SIZE),
+        ("Building map chunksâ€¦", 258.0, ImportProgressPanel.STAGE_TEXT_SIZE),
         (
             "First-time setup in progress.",
             330.0,
