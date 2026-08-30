@@ -122,7 +122,9 @@ def load_branding_profile(manifest_path: str | os.PathLike[str]) -> BrandingProf
     try:
         raw = path.read_bytes()
     except OSError as exc:
-        raise BrandingProfileError(f"cannot read branding manifest {path}: {exc}") from exc
+        raise BrandingProfileError(
+            f"cannot read branding manifest {path}: {exc}"
+        ) from exc
     if len(raw) > MAX_BRANDING_MANIFEST_BYTES:
         raise BrandingProfileError(
             f"branding manifest exceeds {MAX_BRANDING_MANIFEST_BYTES} bytes: {path}"
@@ -130,7 +132,9 @@ def load_branding_profile(manifest_path: str | os.PathLike[str]) -> BrandingProf
     try:
         payload = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise BrandingProfileError(f"branding manifest is not valid UTF-8 JSON: {path}") from exc
+        raise BrandingProfileError(
+            f"branding manifest is not valid UTF-8 JSON: {path}"
+        ) from exc
     if not isinstance(payload, dict):
         raise BrandingProfileError("branding manifest must contain a JSON object")
     unknown_keys = set(payload) - _ALLOWED_TOP_LEVEL_KEYS
@@ -210,20 +214,27 @@ def _load_asset(profile_root: Path, asset_id: str, payload) -> BrandingAsset:
     relative_text = _non_empty_text(value.get("path"), f"assets.{asset_id}.path")
     relative_path = Path(relative_text)
     if relative_path.is_absolute() or ".." in relative_path.parts:
-        raise BrandingProfileError(f"asset {asset_id} path must stay inside its profile")
+        raise BrandingProfileError(
+            f"asset {asset_id} path must stay inside its profile"
+        )
     asset_path = (profile_root / relative_path).resolve()
     try:
         asset_path.relative_to(profile_root.resolve())
     except ValueError as exc:
-        raise BrandingProfileError(f"asset {asset_id} path escapes its profile") from exc
+        raise BrandingProfileError(
+            f"asset {asset_id} path escapes its profile"
+        ) from exc
     expected_hash = _sha256(value.get("sha256"), f"assets.{asset_id}.sha256")
     try:
         file_hash = hashlib.sha256(asset_path.read_bytes()).hexdigest()
     except OSError as exc:
-        raise BrandingProfileError(f"cannot read branding asset {asset_path}: {exc}") from exc
+        raise BrandingProfileError(
+            f"cannot read branding asset {asset_path}: {exc}"
+        ) from exc
     if file_hash != expected_hash:
         raise BrandingProfileError(
-            f"branding asset {asset_id} SHA-256 mismatch: expected {expected_hash}, got {file_hash}"
+            f"branding asset {asset_id} SHA-256 mismatch: expected "
+            f"{expected_hash}, got {file_hash}"
         )
 
     width, height, has_alpha = _read_png_header(asset_path)
@@ -246,7 +257,9 @@ def _load_asset(profile_root: Path, asset_id: str, payload) -> BrandingAsset:
             f"assets.{asset_id}.alpha must be 'required' or 'optional'"
         )
     if alpha_required and not has_alpha:
-        raise BrandingProfileError(f"branding asset {asset_id} requires an alpha channel")
+        raise BrandingProfileError(
+            f"branding asset {asset_id} requires an alpha channel"
+        )
     safe_area = value.get("safe_area_inset")
     if isinstance(safe_area, bool) or not isinstance(safe_area, (int, float)):
         raise BrandingProfileError(
@@ -292,16 +305,22 @@ def _non_empty_text(value, field: str) -> str:
 
 def _identifier(value, field: str) -> str:
     text = _non_empty_text(value, field)
-    if not all(character.islower() or character.isdigit() or character in "-_" for character in text):
+    if not all(
+        character.islower() or character.isdigit() or character in "-_"
+        for character in text
+    ):
         raise BrandingProfileError(
-            f"{field} must contain only lowercase letters, digits, hyphens, or underscores"
+            f"{field} must contain only lowercase letters, digits, hyphens, "
+            "or underscores"
         )
     return text
 
 
 def _sha256(value, field: str) -> str:
     text = _non_empty_text(value, field)
-    if len(text) != 64 or any(character not in "0123456789abcdef" for character in text):
+    if len(text) != 64 or any(
+        character not in "0123456789abcdef" for character in text
+    ):
         raise BrandingProfileError(f"{field} must be a lowercase SHA-256 digest")
     return text
 
