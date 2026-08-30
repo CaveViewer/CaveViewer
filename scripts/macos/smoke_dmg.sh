@@ -235,6 +235,20 @@ cv_verify_release_metadata "$bundled_release_metadata" "$release_channel"
 /usr/libexec/PlistBuddy -c "Print :CFBundleDisplayName" "$info" | grep -Fx "CaveViewer"
 /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$info" | grep -Fx "$version"
 /usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$info" | grep -Fx "$version"
+bundle_icon_name="$(/usr/libexec/PlistBuddy -c "Print :CFBundleIconFile" "$info")"
+case "$bundle_icon_name" in
+  *.icns) ;;
+  *) bundle_icon_name="${bundle_icon_name}.icns" ;;
+esac
+if [ ! -f "$app/Contents/Resources/$bundle_icon_name" ]; then
+  echo "Error: CFBundleIconFile does not resolve inside the app bundle: $bundle_icon_name" >&2
+  exit 1
+fi
+bundled_branding_summary="$(find "$app" -type f -path '*caveviewer/resources/branding/export-summary.v1.json' -print -quit)"
+if [ -z "$bundled_branding_summary" ]; then
+  echo "Error: mounted app bundle is missing branding provenance." >&2
+  exit 1
+fi
 
 if ! lipo -archs "$executable" | tr ' ' '\n' | grep -Fxq "$macos_arch"; then
   echo "Error: main executable does not contain $macos_arch code." >&2
