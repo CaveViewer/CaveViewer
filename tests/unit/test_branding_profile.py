@@ -36,7 +36,10 @@ def test_bundled_default_profile_uses_original_mark_for_windows_and_about():
     assert profile.asset_for("windows_app_icon") is not profile.asset_for(
         "about_mark"
     )
-    assert profile.asset_for("loading_mark").path.name == "application-mark.png"
+    assert profile.asset_for("loading_mark").path.name == "loading-progress-mark.png"
+    assert profile.asset_for("loading_mark") is not profile.asset_for(
+        "windows_app_icon"
+    )
     assert profile.loading_ring.fill_color == "#FFB000"
     assert profile.loading_ring.track_color == "#3B3428"
     assert profile.loading_ring.mode == "ring_with_mark"

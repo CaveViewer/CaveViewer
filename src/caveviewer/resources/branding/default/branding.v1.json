@@ -31,12 +31,20 @@
       "minimum_height": 1024,
       "alpha": "required",
       "safe_area_inset": 0.0
+    },
+    "loading_progress_mark": {
+      "path": "loading-progress-mark.png",
+      "sha256": "c89d056dd2148bd04a4dccdc7f9624d8949ead0b8b01e772ab2b5cd8c0627de4",
+      "minimum_width": 1024,
+      "minimum_height": 1024,
+      "alpha": "required",
+      "safe_area_inset": 0.0
     }
   },
   "roles": {
     "application_mark": "caveviewer_mark",
     "about_mark": "caveviewer_mark",
-    "loading_mark": "cookie",
+    "loading_mark": "loading_progress_mark",
     "windows_app_icon": "windows_small_mark",
     "macos_app_icon": "cookie",
     "linux_app_icon": "cookie"
