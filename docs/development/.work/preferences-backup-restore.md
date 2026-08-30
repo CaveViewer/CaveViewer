@@ -51,6 +51,10 @@ Pre-merge preference coverage commits: Task 8 `856f6ba`; Task 9 `cbcc7a5`;
 Task 10 `f34156c`; Task 11 `96c196b`; Task 12 `3626d45`. Tasks 8–12 are
 complete, verified, and published to the feature branch.
 
+Branch `feat/preferences-unsaved-changes` is published to `origin`; draft pull
+request [#325](https://github.com/CaveViewer/CaveViewer/pull/325) is open against
+`main` with Tasks 5–12 complete and ready for review.
+
 Follow-up presentation adjustment: the supporting label beneath **Import
 preferences** is **Import saved preferences** and does not expose the underlying
 filename.
