@@ -56,6 +56,7 @@ from caveviewer.gui.top_tab_strip import (
     TopTabStripStyle,
 )
 from caveviewer.gui.tk_theme import DARK_THEME
+from caveviewer.gui.tk_feedback import INFO_FEEDBACK_MS, SUCCESS_FEEDBACK_MS
 from caveviewer.gui.tk_typography import TkTypography, create_tk_typography
 
 if TYPE_CHECKING:
@@ -269,6 +270,7 @@ class PreferencesPanel:
 
         self.field_vars: dict[str, tk.StringVar] = {}
         self.field_entries: dict[str, tk.Entry] = {}
+        self.field_title_labels: dict[str, tk.Label] = {}
         self.field_display_vars: dict[str, tk.StringVar] = {}
         self.field_entry_states: dict[str, str] = {}
         self.field_browse_buttons: dict[str, tk.Widget] = {}
@@ -278,6 +280,7 @@ class PreferencesPanel:
         self.rendering_state = False
         self.rendered_invalid_key: str | None = None
         self.apply_button = None
+        self.discard_button = None
         self.tab_strip = None
         self.page_scroll_shell = None
         self.page_canvas = None
@@ -295,6 +298,8 @@ class PreferencesPanel:
         self.button_row = None
         self.error_label = None
         self._feedback_override: tuple[str, str] | None = None
+        self._feedback_override_is_transient = False
+        self._feedback_after_id: str | None = None
         self._page_layout_after_id: str | None = None
         self._pending_page_canvas_width: int | None = None
         self._page_canvas_window_width: int | None = None
@@ -572,14 +577,16 @@ class PreferencesPanel:
             column=0,
             sticky="ew",
         )
-        tk.Label(
+        title_label = tk.Label(
             text_column,
             text=field.label,
             font=self.body_font,
             fg=_SUBTITLE_COLOR,
             bg=_BG_COLOR,
             anchor="w",
-        ).pack(anchor="w")
+        )
+        title_label.pack(anchor="w")
+        self.field_title_labels[key] = title_label
 
         var = tk.StringVar(master=self.dialog, value=self.form.state.values[key])
         self.field_vars[key] = var
@@ -847,6 +854,15 @@ class PreferencesPanel:
             or getattr(self, "rendered_state", None) is None
         ):
             return
+        if (
+            not self.rendered_state.message
+            and self.rendered_state.has_unsaved_changes
+        ):
+            self.error_label.config(
+                text="You have unsaved changes.",
+                fg=_INSTRUCTION_COLOR,
+            )
+            return
         if not self.rendered_state.message and self._feedback_override is not None:
             message, color = self._feedback_override
             self.error_label.config(text=message, fg=color)
@@ -869,10 +885,11 @@ class PreferencesPanel:
         return self._surface_px(self._layout_policy.row_pad_y + 6)
 
     def _on_container_destroy(self, event) -> None:
-        """Cancel the panel-owned idle layout callback during Tk teardown."""
+        """Cancel panel-owned callbacks during Tk teardown."""
         if event.widget is not self.container:
             return
         self._destroyed = True
+        self._cancel_transient_feedback(clear=False)
         after_id = self._page_layout_after_id
         self._page_layout_after_id = None
         if after_id is None:
@@ -1087,16 +1104,16 @@ class PreferencesPanel:
             pady=(self._layout_policy.button_row_top_pad_y, 0),
         )
 
-        cancel_button = self._new_dialog_button(
+        self.discard_button = self._new_dialog_button(
             self.button_row,
-            "Cancel",
-            self.cancel,
+            "Discard changes",
+            self.discard_changes,
             padx=12,
             pady=6,
         )
         self.apply_button = self._new_dialog_button(
             self.button_row,
-            "Apply",
+            "Save changes",
             self.apply,
             kind="primary",
             padx=16,
@@ -1105,7 +1122,7 @@ class PreferencesPanel:
         )
 
         self.apply_button.pack(side="right")
-        cancel_button.pack(side="right", padx=(0, 8))
+        self.discard_button.pack(side="right", padx=(0, 8))
 
         self.feedback_frame = tk.Frame(self.button_row, bg=_BG_COLOR)
         self.feedback_frame.pack(side="left", fill="x", expand=True)
@@ -1181,6 +1198,21 @@ class PreferencesPanel:
     def _set_apply_enabled(self, enabled: bool) -> None:
         set_dialog_action_button(self.apply_button, enabled=enabled)
 
+    def _render_dirty_state(self, state: PreferencesFormState) -> None:
+        """Keep pending changes visible across tab navigation."""
+        has_changes = state.has_unsaved_changes
+        set_dialog_action_button(
+            self.apply_button,
+            enabled=has_changes and state.apply_enabled,
+        )
+        set_dialog_action_button(self.discard_button, enabled=has_changes)
+        if self.tab_strip is not None:
+            self.tab_strip.set_indicated(state.dirty_sections)
+        fields_by_key = {field.key: field for field in PREFERENCE_FIELDS}
+        for key, label in self.field_title_labels.items():
+            suffix = " •" if key in state.dirty_keys else ""
+            label.configure(text=f"{fields_by_key[key].label}{suffix}")
+
     def _set_field_lock(self, invalid_key: str | None) -> None:
         for key, entry in self.field_entries.items():
             enabled = invalid_key is None or key == invalid_key
@@ -1236,7 +1268,7 @@ class PreferencesPanel:
         self.rendered_invalid_key = state.invalid_key
         locked_key = state.invalid_key if state.form_locked else None
         self._set_field_lock(locked_key)
-        self._set_apply_enabled(state.apply_enabled)
+        self._render_dirty_state(state)
         self._sync_feedback_to_current_state()
 
         if state.invalid_key is not None and (
@@ -1256,9 +1288,56 @@ class PreferencesPanel:
     def _on_field_changed(self, key: str) -> None:
         if not self.form_ready or self.rendering_state:
             return
+        self._cancel_transient_feedback(clear=False)
         self._feedback_override = None
+        self._feedback_override_is_transient = False
         state = self.form.change(key, self.field_vars[key].get())
         self._render_form_state(state, preferred_key=key)
+
+    def _cancel_transient_feedback(self, *, clear: bool) -> None:
+        """Cancel an event confirmation and optionally remove its message."""
+        after_id = getattr(self, "_feedback_after_id", None)
+        self._feedback_after_id = None
+        if after_id is not None:
+            try:
+                self.dialog.after_cancel(after_id)
+            except (AttributeError, tk.TclError):
+                pass
+        if clear and getattr(self, "_feedback_override_is_transient", False):
+            self._feedback_override = None
+            self._feedback_override_is_transient = False
+            if not getattr(self, "_destroyed", False):
+                self._sync_feedback_to_current_state()
+
+    def _clear_transient_feedback(self) -> None:
+        """Remove the current event confirmation after its bounded lifetime."""
+        self._feedback_after_id = None
+        if not getattr(self, "_feedback_override_is_transient", False):
+            return
+        self._feedback_override = None
+        self._feedback_override_is_transient = False
+        if not getattr(self, "_destroyed", False):
+            self._sync_feedback_to_current_state()
+
+    def _show_transient_feedback(
+        self,
+        message: str,
+        color: str,
+        *,
+        duration_ms: int,
+    ) -> None:
+        """Show one bounded event confirmation owned by this panel."""
+        self._cancel_transient_feedback(clear=False)
+        self._feedback_override = (message, color)
+        self._feedback_override_is_transient = True
+        self._sync_feedback_to_current_state()
+        try:
+            self._feedback_after_id = self.dialog.after(
+                duration_ms,
+                self._clear_transient_feedback,
+            )
+        except (AttributeError, tk.TclError):
+            self._feedback_after_id = None
 
     def _sync_field_value(self, key: str, value: str) -> None:
         # A lazily constructed tab reads its value directly from the form
@@ -1293,7 +1372,9 @@ class PreferencesPanel:
         self._render_form_state(state, preferred_key=key)
 
     def apply(self) -> bool:
+        self._cancel_transient_feedback(clear=False)
         self._feedback_override = None
+        self._feedback_override_is_transient = False
         state, preferences = self.form.attempt_apply()
         self._render_form_state(state, focus_invalid=True)
         if preferences is None:
@@ -1311,11 +1392,14 @@ class PreferencesPanel:
             self._set_feedback(result.error or "", MessageKind.ERROR)
             return False
         self.preferences = result.preferences
-        self._feedback_override = (
+        if result.preferences is not None:
+            clean_state = self.form.mark_saved(result.preferences)
+            self._render_form_state(clean_state)
+        self._show_transient_feedback(
             "Preferences saved.",
             DARK_THEME.primary_button,
+            duration_ms=SUCCESS_FEEDBACK_MS,
         )
-        self._sync_feedback_to_current_state()
         on_applied = getattr(self, "on_applied", None)
         if on_applied is not None and result.preferences is not None:
             on_applied(result.preferences)
@@ -1347,15 +1431,19 @@ class PreferencesPanel:
                 MessageKind.ERROR,
             )
             return
-        self._feedback_override = (
+        self._show_transient_feedback(
             f"Preferences saved to {selection.path}.",
             DARK_THEME.primary_button,
+            duration_ms=INFO_FEEDBACK_MS,
         )
-        self._sync_feedback_to_current_state()
 
     def import_preferences(self) -> None:
         """Choose and stage a portable snapshot without saving it yet."""
 
+        state, current_preferences = self.form.attempt_apply()
+        self._render_form_state(state, focus_invalid=True)
+        if current_preferences is None:
+            return
         try:
             selection = self.desktop_services.choose_file(
                 title="Load CaveViewer preferences",
@@ -1367,32 +1455,35 @@ class PreferencesPanel:
             return
         if selection is None:
             return
-        result = self.workflow.import_file(selection.path)
+        result = self.workflow.import_file(
+            selection.path,
+            current_preferences,
+        )
         if not result.succeeded or result.preferences is None:
             self._set_feedback(
                 result.error or "Could not import preferences.",
                 MessageKind.ERROR,
             )
             return
-        message = "Preferences loaded. Review the values, then select Apply."
+        message = "Preferences loaded. Review the values, then save changes."
         if result.defaulted_keys:
             count = len(result.defaulted_keys)
             message = (
                 f"Preferences loaded; {count} invalid or missing "
                 f"{'value was' if count == 1 else 'values were'} replaced "
                 f"with {'its' if count == 1 else 'their'} default. "
-                "Review the values, then select Apply."
+                "Review the values, then save changes."
             )
         self._stage_preferences(result.preferences, message)
 
     def restore_defaults(self) -> None:
-        """Confirm and stage defaults while preserving Apply/Cancel semantics."""
+        """Confirm and stage defaults for review before they are saved."""
 
         if not self._confirm_restore_defaults():
             return
         self._stage_preferences(
             Preferences(preference_defaults()),
-            "Default preferences restored. Review the values, then select Apply.",
+            "Default preferences restored. Review the values, then save changes.",
         )
 
     def _confirm_restore_defaults(self) -> bool:
@@ -1404,13 +1495,14 @@ class PreferencesPanel:
             messagebox.askyesno(
                 "Restore default preferences?",
                 "Replace the current form values with CaveViewer defaults? "
-                "The change is not saved until you select Apply.",
+                "The change is not saved until you select Save changes.",
                 parent=self.dialog,
             )
         )
 
     def _stage_preferences(self, preferences: Preferences, message: str) -> None:
-        self.form = PreferencesFormController(preferences)
+        self._cancel_transient_feedback(clear=False)
+        state = self.form.stage(preferences.as_dict())
         self.rendering_state = True
         try:
             for key, value in preferences.items():
@@ -1419,7 +1511,8 @@ class PreferencesPanel:
             self.rendering_state = False
         self.rendered_invalid_key = None
         self._feedback_override = (message, DARK_THEME.primary_button)
-        self._render_form_state(self.form.state)
+        self._feedback_override_is_transient = False
+        self._render_form_state(state)
 
     def cancel(self) -> None:
         self.discard_changes()
@@ -1434,14 +1527,15 @@ class PreferencesPanel:
         form = getattr(self, "form", None)
         if preferences is None or form is None:
             return False
-        return dict(form.state.values) != preferences.as_dict()
+        return form.state.has_unsaved_changes
 
     def discard_changes(self) -> None:
         """Restore the last saved values without destroying this panel."""
+        self._cancel_transient_feedback(clear=False)
         preferences = getattr(self, "preferences", None)
         if preferences is None:
             return
-        self.form = PreferencesFormController(preferences)
+        state = self.form.discard()
         self.rendering_state = True
         try:
             for key, value in preferences.items():
@@ -1450,7 +1544,12 @@ class PreferencesPanel:
             self.rendering_state = False
         self.rendered_invalid_key = None
         self._feedback_override = None
-        self._render_form_state(self.form.state)
+        self._feedback_override_is_transient = False
+        self._render_form_state(state)
+
+    def on_hidden(self) -> None:
+        """Clear obsolete event confirmations when Preferences is left."""
+        self._cancel_transient_feedback(clear=True)
 
     def focus_content(self) -> None:
         """Move keyboard focus into the active embedded Preferences view."""

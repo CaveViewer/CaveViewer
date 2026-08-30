@@ -33,6 +33,7 @@ from caveviewer.core.preferences.schema import (
     validate_preference,
     validate_preferences,
 )
+from caveviewer.core.preferences.transfer import MAX_PREFERENCES_FILE_BYTES
 from caveviewer.core.diagnostics.logging import get_logger
 from caveviewer.gui.preference_paths import (
     migrate_preference_file,
@@ -76,7 +77,25 @@ def preferences_load_file() -> str:
 def load_preferences(
     preferences_path: str | os.PathLike[str] | None = None,
 ) -> Preferences:
-    return resolve_preferences(load_saved_preference_values(preferences_path))
+    path = (
+        Path(preferences_path)
+        if preferences_path is not None
+        else Path(preferences_load_file())
+    )
+    if not path.exists():
+        defaults = resolve_preferences()
+        _LOG.warning(
+            "Preferences file %s was not found; using and saving defaults.",
+            path.name,
+        )
+        try:
+            save_preferences(defaults, path)
+        except PreferencesSaveError:
+            # Saving reports its own warning; startup must still have a valid
+            # in-memory snapshot when the configuration location is unwritable.
+            pass
+        return defaults
+    return resolve_preferences(load_saved_preference_values(path))
 
 
 def load_saved_preference_values(
@@ -95,13 +114,43 @@ def load_saved_preference_values(
         else Path(preferences_load_file())
     )
     try:
-        with path.open("r", encoding="utf-8") as file_obj:
-            payload = json.load(file_obj)
-    except Exception as exc:
-        if not isinstance(exc, FileNotFoundError):
-            _LOG.warning("Could not load preferences from %s: %s", path, exc)
-        payload = None
-    return dict(payload) if isinstance(payload, Mapping) else {}
+        with path.open("rb") as file_obj:
+            document = file_obj.read(MAX_PREFERENCES_FILE_BYTES + 1)
+    except OSError:
+        _LOG.warning(
+            "Could not load preferences file %s (read error); using defaults.",
+            path.name,
+        )
+        return {}
+    if len(document) > MAX_PREFERENCES_FILE_BYTES:
+        _LOG.warning(
+            "Could not load preferences file %s (file is too large); using defaults.",
+            path.name,
+        )
+        return {}
+    try:
+        payload = json.loads(document.decode("utf-8"))
+    except UnicodeDecodeError:
+        _LOG.warning(
+            "Could not load preferences file %s (invalid UTF-8); using defaults.",
+            path.name,
+        )
+        return {}
+    except json.JSONDecodeError:
+        _LOG.warning(
+            "Could not load preferences file %s (malformed JSON); using defaults.",
+            path.name,
+        )
+        return {}
+    if isinstance(payload, Mapping):
+        _LOG.info("Loaded preferences from %s.", path.name)
+        return dict(payload)
+    _LOG.warning(
+        "Could not load preferences file %s (JSON root is not an object); "
+        "using defaults.",
+        path.name,
+    )
+    return {}
 
 
 def save_preferences(

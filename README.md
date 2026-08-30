@@ -196,14 +196,18 @@ preference filenames are not discovered.
   map-library entries.
 - Backup saves a complete `preferences.json`, loads a shared
   file for review, or stages the built-in defaults. Imported and restored
-  values are not saved until you select **Apply**; **Cancel** keeps the
-  previously saved preferences.
+  values are not saved until you select **Save changes**; **Discard changes**
+  restores the previously saved preferences.
+- Leaving Preferences with pending edits offers **Save changes**, **Discard
+  changes**, and **Keep editing** so navigation cannot silently lose changes.
 
 Exports open a native Save dialog in a user-visible location. Imports use the
 native Open dialog and accept UTF-8 JSON objects up to 256 KiB. Missing or
 invalid individual values use the current defaults without discarding other
 valid values; unknown keys are ignored. An unreadable, malformed, or non-object
 file is rejected without changing the form or saved preferences.
+Recording and map-library folders remain unchanged when loading a backup
+because those locations are specific to the destination installation.
 
 The first launch that finds `advanced_settings.json` beside a missing
 `preferences.json` renames it automatically. If both exist, `preferences.json`

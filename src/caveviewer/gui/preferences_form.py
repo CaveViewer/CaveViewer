@@ -31,6 +31,13 @@ class PreferencesFormState:
     message_kind: MessageKind
     apply_enabled: bool
     form_locked: bool
+    dirty_keys: frozenset[str]
+    dirty_sections: frozenset[str]
+
+    @property
+    def has_unsaved_changes(self) -> bool:
+        """Return whether any staged value differs from the saved baseline."""
+        return bool(self.dirty_keys)
 
 
 class PreferencesFormController:
@@ -41,6 +48,7 @@ class PreferencesFormController:
             field.key: field for field in PREFERENCE_FIELDS
         }
         self._values = normalize_preferences(dict(values))
+        self._baseline_values = dict(self._values)
         self._focused_key: str | None = None
         self._state = self._validate()
 
@@ -98,6 +106,39 @@ class PreferencesFormController:
         self._state = self._advisory_state()
         return self._state, result.preferences
 
+    def stage(self, values: Mapping[str, str]) -> PreferencesFormState:
+        """Replace staged values while retaining the saved baseline."""
+        self._values = normalize_preferences(dict(values))
+        self._focused_key = None
+        self._state = self._validate()
+        return self._state
+
+    def mark_saved(self, preferences: Preferences) -> PreferencesFormState:
+        """Establish a successfully persisted snapshot as the clean baseline."""
+        self._values = preferences.as_dict()
+        self._baseline_values = dict(self._values)
+        self._focused_key = None
+        self._state = self._validate()
+        return self._state
+
+    def discard(self) -> PreferencesFormState:
+        """Restore the last successfully persisted preference snapshot."""
+        self._values = dict(self._baseline_values)
+        self._focused_key = None
+        self._state = self._validate()
+        return self._state
+
+    def _dirty_state(self) -> tuple[frozenset[str], frozenset[str]]:
+        dirty_keys = frozenset(
+            key
+            for key, value in self._values.items()
+            if value != self._baseline_values[key]
+        )
+        dirty_sections = frozenset(
+            self._field_specs[key].section for key in dirty_keys
+        )
+        return dirty_keys, dirty_sections
+
     def _require_key(self, key: str) -> PreferenceSpec:
         try:
             return self._field_specs[key]
@@ -112,6 +153,7 @@ class PreferencesFormController:
         )
 
     def _advisory_state(self) -> PreferencesFormState:
+        dirty_keys, dirty_sections = self._dirty_state()
         return PreferencesFormState(
             values=dict(self._values),
             focused_key=self._focused_key,
@@ -120,11 +162,14 @@ class PreferencesFormController:
             message_kind=MessageKind.NONE,
             apply_enabled=not self._has_missing_required_value(),
             form_locked=False,
+            dirty_keys=dirty_keys,
+            dirty_sections=dirty_sections,
         )
 
     def _error_state(
         self, invalid_key: str | None, message: str
     ) -> PreferencesFormState:
+        dirty_keys, dirty_sections = self._dirty_state()
         return PreferencesFormState(
             values=dict(self._values),
             focused_key=self._focused_key,
@@ -133,6 +178,8 @@ class PreferencesFormController:
             message_kind=MessageKind.ERROR,
             apply_enabled=False,
             form_locked=True,
+            dirty_keys=dirty_keys,
+            dirty_sections=dirty_sections,
         )
 
     def _validate(

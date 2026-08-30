@@ -55,6 +55,19 @@ Text hierarchy should come first from role, then from color and spacing.
 Do not create a new font size merely to distinguish a control state; use the
 appropriate weight, color, or interaction treatment instead.
 
+## Feedback lifetimes
+
+Use the semantic constants in `caveviewer.gui.tk_feedback` instead of numeric
+timeouts: success confirmations last 4 seconds, informational statuses 5,
+warnings 7, recoverable errors 9, and short copy confirmations 2. A newer
+action or leaving the owning surface clears transient feedback early.
+
+Progress messages remain until their operation advances, completes, fails, or
+is cancelled. Actionable validation and persistence errors remain until the
+user corrects the value, retries, dismisses the surface, or replaces the
+message; they must not be converted into expiring feedback merely to reuse a
+timeout constant.
+
 ## Navigation rail and application status
 
 The navigation rail deliberately has no repeated app name or logo: native

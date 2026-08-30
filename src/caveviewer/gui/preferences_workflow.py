@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 
 from caveviewer.core.preferences.transfer import (
@@ -18,6 +19,44 @@ from caveviewer.gui.preferences import (
     load_preferences,
     save_preferences,
 )
+from caveviewer.core.diagnostics.logging import get_logger
+
+
+_LOG = get_logger("Preferences")
+
+
+class PreferencesCloseChoice(str, Enum):
+    """Explicit user choice when leaving Preferences with staged changes."""
+
+    SAVE = "save"
+    DISCARD = "discard"
+    KEEP_EDITING = "keep_editing"
+
+
+class PreferencesCloseAction(str, Enum):
+    """Side effect requested by one Preferences close interaction."""
+
+    LEAVE = "leave"
+    PROMPT = "prompt"
+    SAVE = "save"
+    DISCARD = "discard"
+    STAY = "stay"
+
+
+def resolve_preferences_close(
+    has_unsaved_changes: bool,
+    choice: PreferencesCloseChoice | None = None,
+) -> PreferencesCloseAction:
+    """Resolve close intent without performing persistence or Tk operations."""
+    if not has_unsaved_changes:
+        return PreferencesCloseAction.LEAVE
+    if choice is None:
+        return PreferencesCloseAction.PROMPT
+    return {
+        PreferencesCloseChoice.SAVE: PreferencesCloseAction.SAVE,
+        PreferencesCloseChoice.DISCARD: PreferencesCloseAction.DISCARD,
+        PreferencesCloseChoice.KEEP_EDITING: PreferencesCloseAction.STAY,
+    }[choice]
 
 
 @dataclass(frozen=True)
@@ -39,6 +78,7 @@ class PreferencesImportWorkflowResult:
     preferences: Preferences | None
     defaulted_keys: tuple[str, ...] = ()
     ignored_keys: tuple[str, ...] = ()
+    excluded_keys: tuple[str, ...] = ()
     error: str | None = None
 
     @property
@@ -66,9 +106,9 @@ class PreferencesDialogWorkflow:
         *,
         load_preferences_fn: Callable[[], Preferences] = load_preferences,
         save_preferences_fn: Callable[[Preferences], None] = save_preferences,
-        import_preferences_fn: Callable[
-            [str], PreferencesImportResult
-        ] = load_preferences_file,
+        import_preferences_fn: Callable[..., PreferencesImportResult] = (
+            load_preferences_file
+        ),
         export_preferences_fn: Callable[[str, Preferences], None] = (
             save_preferences_file
         ),
@@ -92,20 +132,34 @@ class PreferencesDialogWorkflow:
             self._on_preferences_saved(preferences)
         return PreferencesApplyResult(preferences=preferences)
 
-    def import_file(self, path: str) -> PreferencesImportWorkflowResult:
+    def import_file(
+        self,
+        path: str,
+        current_preferences: Preferences,
+    ) -> PreferencesImportWorkflowResult:
         """Read and resolve an import without changing persisted preferences."""
 
+        _LOG.info("Importing preferences from %s.", Path(path).name)
         try:
-            result = self._import_preferences(path)
+            result = self._import_preferences(
+                path,
+                current_preferences=current_preferences,
+            )
         except PreferencesTransferError as exc:
             return PreferencesImportWorkflowResult(
                 preferences=None,
                 error=str(exc),
             )
+        for key in result.excluded_keys:
+            _LOG.info(
+                "Did not import platform-specific preference %s.",
+                key,
+            )
         return PreferencesImportWorkflowResult(
             preferences=result.preferences,
             defaulted_keys=result.defaulted_keys,
             ignored_keys=result.ignored_keys,
+            excluded_keys=result.excluded_keys,
         )
 
     def export_file(

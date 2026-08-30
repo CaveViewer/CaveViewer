@@ -44,6 +44,10 @@ from caveviewer.core.diagnostics.startup import (
 )
 from caveviewer.core.preferences.runtime_settings import RuntimeSettings
 from caveviewer.gui.preferences_dialog import PreferencesPanel
+from caveviewer.gui.preferences_workflow import (
+    PreferencesCloseAction,
+    resolve_preferences_close,
+)
 from caveviewer.gui.dpi_utils import (
     apply_tk_scaling,
     configure_process_dpi_awareness,
@@ -110,7 +114,11 @@ from caveviewer.gui.splash_visuals import (
     progress_ring_photo,
     vector_icon_photo,
 )
-from caveviewer.gui.tk_feedback import show_feedback
+from caveviewer.gui.tk_feedback import (
+    ERROR_FEEDBACK_MS,
+    SUCCESS_FEEDBACK_MS,
+    show_feedback,
+)
 from caveviewer.gui.tk_shortcuts import bind_primary_shortcut
 from caveviewer.gui.tk_theme import DARK_THEME
 from caveviewer.gui.tk_typography import TkTypography, create_tk_typography
@@ -249,8 +257,8 @@ _LIBRARY_FEATURED_ACTION_HOVER_BG = "#28282e"
 _LIBRARY_METADATA_COLOR = "#5a5d68"
 _LIBRARY_METADATA_STATUS_COLOR = DARK_THEME.secondary_text
 _LIBRARY_METADATA_ERROR_COLOR = DARK_THEME.error_text
-_LIBRARY_METADATA_STATUS_DURATION_MS = 2500
-_LIBRARY_METADATA_ERROR_DURATION_MS = 7000
+_LIBRARY_METADATA_STATUS_DURATION_MS = SUCCESS_FEEDBACK_MS
+_LIBRARY_METADATA_ERROR_DURATION_MS = ERROR_FEEDBACK_MS
 # Match cave-loading progress: a subdued empty track fills with the amber
 # accent as work completes.
 _LIBRARY_PROGRESS_TRACK_COLOR = DARK_THEME.entry_background
@@ -949,14 +957,16 @@ def _show_themed_about_dialog(
         pass
 
 
-def _show_discard_preferences_dialog(
+def _show_unsaved_preferences_dialog(
     root,
     *,
     px,
     dialog_ref: list[object | None],
+    on_save: Callable[[], bool],
     on_discard: Callable[[], None],
+    on_continue: Callable[[], None],
 ) -> None:
-    """Ask before a navigation action discards an embedded form's edits."""
+    """Offer save, discard, or continued editing before leaving Preferences."""
     active_dialog = dialog_ref[0]
     if _tk_root_exists(active_dialog):
         try:
@@ -972,7 +982,7 @@ def _show_discard_preferences_dialog(
     dialog = tk.Toplevel(root)
     dialog_ref[0] = dialog
     dialog.withdraw()
-    dialog.title("Discard unsaved preferences?")
+    dialog.title("Save changes to preferences?")
     dialog.configure(bg=_BG_COLOR)
     dialog.resizable(False, False)
     dialog.transient(root)
@@ -982,7 +992,7 @@ def _show_discard_preferences_dialog(
     content.pack(fill="both", expand=True, padx=px(28), pady=px(24))
     tk.Label(
         content,
-        text="Discard unsaved changes?",
+        text="Save changes to preferences?",
         font=_TYPOGRAPHY.body_strong,
         fg=_TITLE_COLOR,
         bg=_BG_COLOR,
@@ -991,8 +1001,8 @@ def _show_discard_preferences_dialog(
     tk.Label(
         content,
         text=(
-            "Your changes to Preferences have not been applied. "
-            "Discard them and return to the Map Library?"
+            "Your Preferences changes have not been saved. "
+            "Save or discard them before leaving Preferences."
         ),
         font=_TYPOGRAPHY.body,
         fg=_SUBTITLE_COLOR,
@@ -1023,6 +1033,13 @@ def _show_discard_preferences_dialog(
         on_discard()
         return "break"
 
+    def _save(_event=None):
+        if not on_save():
+            return "break"
+        _close_dialog()
+        on_continue()
+        return "break"
+
     def _make_button(text: str, callback, *, primary: bool):
         normal_bg = _BUTTON_BG if primary else DARK_THEME.secondary_button
         hover_bg = (
@@ -1049,9 +1066,11 @@ def _show_discard_preferences_dialog(
         button.bind("<Leave>", lambda _event: button.config(bg=normal_bg))
         return button
 
-    discard_button = _make_button("Discard changes", _discard, primary=True)
+    save_button = _make_button("Save changes", _save, primary=True)
+    discard_button = _make_button("Discard changes", _discard, primary=False)
     keep_button = _make_button("Keep editing", _close_dialog, primary=False)
-    discard_button.pack(side="right")
+    save_button.pack(side="right")
+    discard_button.pack(side="right", padx=(0, px(8)))
     keep_button.pack(side="right", padx=(0, px(8)))
 
     dialog.bind("<Escape>", _close_dialog)
@@ -1074,7 +1093,7 @@ def _show_discard_preferences_dialog(
     dialog.lift(root)
     try:
         dialog.grab_set()
-        keep_button.focus_set()
+        save_button.focus_set()
     except tk.TclError:
         pass
 
@@ -1734,7 +1753,7 @@ def show_splash_screen(
             root,
             "Pausing cache rebuild…",
             kind="info",
-            duration_ms=4000,
+            duration_ms=None,
             font=_TYPOGRAPHY.body,
         )
         attempts = [0]
@@ -1764,7 +1783,7 @@ def show_splash_screen(
             root,
             f"Unable to open this folder: {message}",
             kind="error",
-            duration_ms=9000,
+            duration_ms=ERROR_FEEDBACK_MS,
             font=_TYPOGRAPHY.body,
         )
 
@@ -1837,6 +1856,7 @@ def show_splash_screen(
 
     def _show_map_library_surface() -> None:
         """Reveal the existing Map Library without rebuilding its catalog."""
+        _prepare_surface_change("map_library")
         if active_surface[0] != "map_library":
             map_library_surface.tkraise()
             active_surface[0] = "map_library"
@@ -1854,11 +1874,11 @@ def show_splash_screen(
     def _request_leave_preferences(next_action: Callable[[], None]) -> None:
         """Keep navigation from silently throwing away edited Preferences."""
         panel = preferences_panel_ref[0]
-        if (
-            active_surface[0] != "preferences"
-            or panel is None
-            or not panel.has_unsaved_changes
-        ):
+        preferences_active = active_surface[0] == "preferences" and panel is not None
+        close_action = resolve_preferences_close(
+            bool(preferences_active and panel.has_unsaved_changes)
+        )
+        if close_action is PreferencesCloseAction.LEAVE:
             next_action()
             return
 
@@ -1866,12 +1886,27 @@ def show_splash_screen(
             panel.discard_changes()
             next_action()
 
-        _show_discard_preferences_dialog(
+        _show_unsaved_preferences_dialog(
             root,
             px=px,
             dialog_ref=discard_preferences_dialog_ref,
+            on_save=panel.apply,
             on_discard=_discard_and_continue,
+            on_continue=next_action,
         )
+
+    def _prepare_surface_change(next_surface: str) -> None:
+        """Let the outgoing panel discard transient presentation state."""
+        if active_surface[0] == next_surface:
+            return
+        if active_surface[0] == "preferences":
+            panel = preferences_panel_ref[0]
+            if panel is not None:
+                panel.on_hidden()
+        elif active_surface[0] == "help":
+            panel = help_panel_ref[0]
+            if panel is not None:
+                panel.on_hidden()
 
     def _ensure_preferences_panel() -> PreferencesPanel:
         panel = preferences_panel_ref[0]
@@ -1892,6 +1927,7 @@ def show_splash_screen(
 
     def _show_preferences_surface() -> None:
         panel = _ensure_preferences_panel()
+        _prepare_surface_change("preferences")
         if active_surface[0] != "preferences":
             preferences_surface.tkraise()
             active_surface[0] = "preferences"
@@ -1934,6 +1970,7 @@ def show_splash_screen(
 
     def _show_help_surface() -> None:
         panel = _ensure_help_panel()
+        _prepare_surface_change("help")
         if active_surface[0] != "help":
             help_surface.tkraise()
             active_surface[0] = "help"
@@ -1952,7 +1989,7 @@ def show_splash_screen(
                 root,
                 "Couldn’t open that website.",
                 kind="error",
-                duration_ms=7000,
+                duration_ms=ERROR_FEEDBACK_MS,
                 font=_TYPOGRAPHY.body,
                 max_wraplength=420,
             )
@@ -1974,6 +2011,7 @@ def show_splash_screen(
 
     def _show_about_surface() -> None:
         _ensure_about_surface()
+        _prepare_surface_change("about")
         if active_surface[0] != "about":
             about_surface.tkraise()
             active_surface[0] = "about"
@@ -2276,13 +2314,14 @@ def show_splash_screen(
                 root,
                 "Couldn’t open that source.",
                 kind="error",
-                duration_ms=7000,
+                duration_ms=ERROR_FEEDBACK_MS,
                 font=_TYPOGRAPHY.body,
                 max_wraplength=420,
             )
 
     def _show_cave_metadata(cave: CaveMetadata) -> None:
         """Replace the right surface with one cave's descriptive information."""
+        _prepare_surface_change("cave_metadata")
         for child in cave_metadata_surface.winfo_children():
             child.destroy()
         panel = CaveMetadataPanel(

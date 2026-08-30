@@ -885,8 +885,12 @@ file takes precedence when both exist; a failed rename leaves the old file
 readable for that run and is retried later. `.caveviewer_advanced_settings.json`
 and other older preference filenames are not discovered. Users can create or
 consume portable copies under **Preferences > Backup**. Load and
-restore stage values until Apply, invalid individual values use defaults, and
+restore stage values until Save changes, invalid individual values use defaults, and
 malformed files leave both the form and persisted preferences unchanged.
+Portable loads retain the destination recording and map-library folders;
+schema metadata identifies these settings as installation-specific.
+Leaving Preferences with staged values requires an explicit Save changes,
+Discard changes, or Keep editing decision.
 
 When a Windows build consumes CPU without showing its Tk splash, read
 `%USERPROFILE%\.caveviewer\diagnostics\startup.log`. The file contains the last

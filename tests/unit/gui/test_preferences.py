@@ -294,17 +294,111 @@ def test_map_library_path_expands_home(valid_preferences):
     )
 
 
-def test_load_missing_settings_returns_validated_defaults(tmp_path):
-    loaded = settings.load_preferences(tmp_path / "missing.json")
+def test_load_missing_settings_returns_and_persists_validated_defaults(
+    tmp_path,
+    caplog,
+):
+    path = tmp_path / "preferences.json"
+    with caplog.at_level(logging.WARNING, logger="caveviewer"):
+        loaded = settings.load_preferences(path)
+
     assert isinstance(loaded, settings.Preferences)
     assert loaded == settings.preference_defaults()
+    assert "preferences.json was not found; using and saving defaults" in caplog.text
+    assert json.loads(path.read_text(encoding="utf-8")) == loaded.as_dict()
+
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="caveviewer"):
+        reloaded = settings.load_preferences(path)
+    assert reloaded == loaded
+    assert "Loaded preferences from preferences.json." in caplog.text
+    assert "was not found" not in caplog.text
+
+
+def test_missing_preferences_save_failure_keeps_defaults_without_partial_file(
+    tmp_path,
+    caplog,
+):
+    path = tmp_path / "missing-parent" / "preferences.json"
+
+    with caplog.at_level(logging.WARNING, logger="caveviewer"):
+        loaded = settings.load_preferences(path)
+
+    assert loaded == settings.preference_defaults()
+    assert "was not found; using and saving defaults" in caplog.text
+    assert "Could not save preferences" in caplog.text
+    assert not path.exists()
+    assert not list(tmp_path.rglob("*.tmp"))
 
 
 @pytest.mark.parametrize("content", ["{broken", "[]", "null", '"text"'])
-def test_load_malformed_or_non_object_settings_returns_defaults(tmp_path, content):
+def test_load_malformed_or_non_object_settings_returns_defaults(
+    tmp_path,
+    content,
+    caplog,
+):
     path = tmp_path / "preferences.json"
     path.write_text(content, encoding="utf-8")
-    assert settings.load_preferences(path) == settings.preference_defaults()
+    original = path.read_bytes()
+
+    with caplog.at_level(logging.WARNING, logger="caveviewer"):
+        assert settings.load_preferences(path) == settings.preference_defaults()
+
+    assert "Could not load preferences file preferences.json" in caplog.text
+    assert "using defaults" in caplog.text
+    assert path.read_bytes() == original
+
+
+@pytest.mark.parametrize(
+    ("document", "category"),
+    [
+        (b"\xff", "invalid UTF-8"),
+        (
+            b" " * (settings.MAX_PREFERENCES_FILE_BYTES + 1),
+            "file is too large",
+        ),
+    ],
+    ids=("invalid-utf8", "oversized"),
+)
+def test_unloadable_preferences_use_defaults_without_overwriting_source(
+    tmp_path,
+    caplog,
+    document,
+    category,
+):
+    path = tmp_path / "preferences.json"
+    path.write_bytes(document)
+
+    with caplog.at_level(logging.WARNING, logger="caveviewer"):
+        loaded = settings.load_preferences(path)
+
+    assert loaded == settings.preference_defaults()
+    assert f"preferences.json ({category})" in caplog.text
+    assert path.read_bytes() == document
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_unreadable_preferences_use_defaults_and_log_safe_category(
+    tmp_path,
+    caplog,
+    monkeypatch,
+):
+    path = tmp_path / "preferences.json"
+    path.write_text('{"io_workers": "7"}', encoding="utf-8")
+    original_open = Path.open
+
+    def fail_preferences_open(candidate, *args, **kwargs):
+        if candidate == path:
+            raise PermissionError("private operating-system detail")
+        return original_open(candidate, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", fail_preferences_open)
+    with caplog.at_level(logging.WARNING, logger="caveviewer"):
+        loaded = settings.load_preferences(path)
+
+    assert loaded == settings.preference_defaults()
+    assert "preferences.json (read error)" in caplog.text
+    assert "private operating-system detail" not in caplog.text
 
 
 def test_load_falls_back_only_invalid_saved_fields(tmp_path, caplog):
@@ -325,6 +419,12 @@ def test_load_falls_back_only_invalid_saved_fields(tmp_path, caplog):
     assert loaded["io_workers"] == "2"
     assert loaded["upload_chunks_per_frame"] == "3"
     assert "Ignoring invalid saved io_workers" in caplog.text
+    assert "999" not in caplog.text
+
+    settings.save_preferences(loaded, path)
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert saved["io_workers"] == settings.preference_defaults()["io_workers"]
+    assert saved["upload_chunks_per_frame"] == "3"
 
 
 def test_loaded_settings_snapshot_is_immutable(tmp_path):
@@ -360,6 +460,26 @@ def test_settings_save_and_load_round_trip(valid_preferences, tmp_path):
     loaded = settings.load_preferences(path)
     assert loaded["io_workers"] == "7"
     assert json.loads(path.read_text(encoding="utf-8"))["io_workers"] == "7"
+
+
+def test_valid_preferences_file_loads_every_supported_setting_and_logs_filename(
+    valid_preferences,
+    tmp_path,
+    caplog,
+):
+    path = tmp_path / "preferences.json"
+    snapshot = settings.require_validated_preferences(valid_preferences)
+    path.write_text(json.dumps(snapshot.as_dict()), encoding="utf-8")
+
+    with caplog.at_level(logging.INFO, logger="caveviewer"):
+        loaded = settings.load_preferences(path)
+
+    assert loaded == snapshot
+    assert set(loaded.as_dict()) == {
+        field.key for field in settings.PREFERENCE_FIELDS
+    }
+    assert "Loaded preferences from preferences.json." in caplog.text
+    assert str(tmp_path) not in caplog.text
 
 
 def test_default_settings_path_uses_xdg_config_not_state(
@@ -469,7 +589,7 @@ def test_older_dotfile_settings_are_not_discovered():
     older.write_text('{"io_workers": "6"}', encoding="utf-8")
 
     assert settings.load_preferences()["io_workers"] == "2"
-    assert not Path(settings.preferences_file()).exists()
+    assert Path(settings.preferences_file()).is_file()
 
 
 def test_settings_save_failure_is_reported(valid_preferences, tmp_path, caplog):
@@ -733,6 +853,25 @@ def test_preferences_panel_exposes_backup_and_restore_as_a_separate_tab():
     )
 
 
+def test_preferences_panel_exposes_persistent_unsaved_change_actions():
+    from caveviewer.gui import preferences_dialog
+
+    build_source = inspect.getsource(preferences_dialog.PreferencesPanel._build)
+    dirty_source = inspect.getsource(
+        preferences_dialog.PreferencesPanel._render_dirty_state
+    )
+    feedback_source = inspect.getsource(
+        preferences_dialog.PreferencesPanel._sync_feedback_to_current_state
+    )
+
+    assert '"Save changes"' in build_source
+    assert '"Discard changes"' in build_source
+    assert "state.dirty_sections" in dirty_source
+    assert "state.dirty_keys" in dirty_source
+    assert 'suffix = " •"' in dirty_source
+    assert 'text="You have unsaved changes."' in feedback_source
+
+
 def test_preferences_panel_exports_validated_form_to_selected_file(
     valid_preferences,
     tmp_path,
@@ -789,11 +928,15 @@ def test_preferences_panel_import_stages_values_without_saving(
         choose_file=lambda **_options: SimpleNamespace(path=str(source))
     )
     panel.workflow = SimpleNamespace(
-        import_file=lambda path: PreferencesImportWorkflowResult(
+        import_file=lambda path, current: PreferencesImportWorkflowResult(
             preferences=snapshot,
             defaulted_keys=("io_workers",),
         )
     )
+    panel.form = SimpleNamespace(
+        attempt_apply=lambda: (SimpleNamespace(), snapshot)
+    )
+    panel._render_form_state = lambda *_args, **_kwargs: None
     panel.dialog = object()
     panel._stage_preferences = lambda preferences, message: staged.append(
         (preferences, message)
@@ -810,7 +953,10 @@ def test_preferences_panel_malformed_import_leaves_form_unchanged(tmp_path):
     from caveviewer.gui.preferences_form import MessageKind
     from caveviewer.gui.preferences_workflow import PreferencesImportWorkflowResult
 
-    original_form = object()
+    current = settings.require_validated_preferences(settings.preference_defaults())
+    original_form = SimpleNamespace(
+        attempt_apply=lambda: (SimpleNamespace(), current)
+    )
     feedback = []
     panel = preferences_dialog.PreferencesPanel.__new__(
         preferences_dialog.PreferencesPanel
@@ -822,12 +968,13 @@ def test_preferences_panel_malformed_import_leaves_form_unchanged(tmp_path):
         )
     )
     panel.workflow = SimpleNamespace(
-        import_file=lambda _path: PreferencesImportWorkflowResult(
+        import_file=lambda _path, _current: PreferencesImportWorkflowResult(
             preferences=None,
             error="Preferences file is not valid UTF-8 JSON.",
         )
     )
     panel.dialog = object()
+    panel._render_form_state = lambda *_args, **_kwargs: None
     panel._set_feedback = lambda message, kind: feedback.append((message, kind))
 
     panel.import_preferences()
@@ -1617,6 +1764,62 @@ def test_preferences_panel_tracks_and_discards_unsaved_values(valid_preferences)
     assert panel._feedback_override is None
 
 
+def test_preferences_transient_feedback_times_out_and_replaces_prior_timer():
+    from caveviewer.gui import preferences_dialog
+
+    callbacks = {}
+    cancelled = []
+    panel = preferences_dialog.PreferencesPanel.__new__(
+        preferences_dialog.PreferencesPanel
+    )
+    panel.dialog = SimpleNamespace(
+        after=lambda duration, callback: callbacks.setdefault(duration, callback)
+        or "timer",
+        after_cancel=lambda after_id: cancelled.append(after_id),
+    )
+    panel._feedback_after_id = "old-timer"
+    panel._feedback_override = ("Old", "#fff")
+    panel._feedback_override_is_transient = True
+    panel._destroyed = False
+    synchronized = []
+    panel._sync_feedback_to_current_state = lambda: synchronized.append(
+        panel._feedback_override
+    )
+
+    panel._show_transient_feedback("Preferences saved.", "#0f0", duration_ms=4000)
+
+    assert cancelled == ["old-timer"]
+    assert panel._feedback_override == ("Preferences saved.", "#0f0")
+    assert synchronized[-1] == panel._feedback_override
+    callbacks[4000]()
+    assert panel._feedback_override is None
+    assert synchronized[-1] is None
+
+
+def test_preferences_hidden_clears_only_transient_feedback():
+    from caveviewer.gui import preferences_dialog
+
+    panel = preferences_dialog.PreferencesPanel.__new__(
+        preferences_dialog.PreferencesPanel
+    )
+    panel.dialog = SimpleNamespace(after_cancel=lambda _after_id: None)
+    panel._feedback_after_id = "timer"
+    panel._feedback_override = ("Preferences saved.", "#0f0")
+    panel._feedback_override_is_transient = True
+    panel._destroyed = False
+    panel._sync_feedback_to_current_state = lambda: None
+
+    panel.on_hidden()
+
+    assert panel._feedback_override is None
+    assert panel._feedback_after_id is None
+
+    panel._feedback_override = ("Could not save preferences.", "#f00")
+    panel._feedback_override_is_transient = False
+    panel.on_hidden()
+    assert panel._feedback_override == ("Could not save preferences.", "#f00")
+
+
 def test_preferences_invalid_field_switches_to_containing_page():
     from caveviewer.gui import preferences_dialog
 
@@ -1682,13 +1885,18 @@ def test_preferences_panel_calls_apply_callback_after_success(valid_preferences)
 
     snapshot = settings.require_validated_preferences(valid_preferences)
     applied = []
+    marked_saved = []
+    rendered = []
+    clean_state = SimpleNamespace(has_unsaved_changes=False)
     panel = preferences_dialog.PreferencesPanel.__new__(
         preferences_dialog.PreferencesPanel
     )
     panel.form = SimpleNamespace(
-        attempt_apply=lambda: (SimpleNamespace(), snapshot)
+        attempt_apply=lambda: (SimpleNamespace(), snapshot),
+        mark_saved=lambda preferences: marked_saved.append(preferences)
+        or clean_state,
     )
-    panel._render_form_state = lambda *_args, **_kwargs: None
+    panel._render_form_state = lambda state, **_kwargs: rendered.append(state)
     panel.numeric_entry_states = {}
     panel.workflow = SimpleNamespace(
         apply=lambda preferences: PreferencesApplyResult(
@@ -1701,4 +1909,6 @@ def test_preferences_panel_calls_apply_callback_after_success(valid_preferences)
     panel.apply()
 
     assert applied == [snapshot]
+    assert marked_saved == [snapshot]
+    assert rendered[-1] is clean_state
     assert panel.preferences is snapshot

@@ -32,6 +32,7 @@ from caveviewer.gui.troubleshooting_logs import (
     TroubleshootingLogController,
     TroubleshootingLogState,
 )
+from caveviewer.gui.tk_feedback import COPY_FEEDBACK_MS
 
 
 _CAPTURE_HELP_LAYOUT = (
@@ -251,6 +252,7 @@ class HelpPanel:
         self._copy_error_button = None
         self._copy_feedback = ""
         self._copy_feedback_is_error = False
+        self._copy_feedback_after_id: str | None = None
         self._shell = None
         self._content_canvas = None
         self._scrollbar = None
@@ -434,6 +436,7 @@ class HelpPanel:
             scrollbar.sync_overflow(self._content_height)
 
     def _refresh_troubleshooting(self) -> None:
+        self._cancel_copy_feedback_timer()
         controller = self._troubleshooting_controller
         if controller is not None:
             self._troubleshooting_state = controller.refresh()
@@ -455,6 +458,7 @@ class HelpPanel:
         if excerpt is None or canvas is None:
             return
         copied = copy_error_excerpt_to_clipboard(canvas, excerpt.text)
+        self._cancel_copy_feedback_timer()
         self._copy_feedback = (
             "Copied" if copied else "Couldn’t copy. Select the text manually."
         )
@@ -467,18 +471,54 @@ class HelpPanel:
             )
             if copied:
                 try:
-                    canvas.after(1600, self._reset_copy_button_label)
+                    self._copy_feedback_after_id = canvas.after(
+                        COPY_FEEDBACK_MS,
+                        self._reset_copy_button_label,
+                    )
                 except tk.TclError:
                     pass
         self._render_table(canvas.winfo_width())
 
     def _reset_copy_button_label(self) -> None:
+        self._copy_feedback_after_id = None
+        self._copy_feedback = ""
+        self._copy_feedback_is_error = False
         button = self._copy_error_button
         if button is not None:
             try:
                 set_dialog_action_button(button, text="⧉  Copy")
             except tk.TclError:
                 return
+        canvas = self._content_canvas
+        if canvas is not None:
+            try:
+                self._render_table(canvas.winfo_width())
+            except tk.TclError:
+                pass
+
+    def _cancel_copy_feedback_timer(self) -> None:
+        """Cancel the copy confirmation timer before replacing its state."""
+        after_id = self._copy_feedback_after_id
+        self._copy_feedback_after_id = None
+        canvas = self._content_canvas
+        if after_id is None or canvas is None:
+            return
+        try:
+            canvas.after_cancel(after_id)
+        except tk.TclError:
+            pass
+
+    def on_hidden(self) -> None:
+        """Clear copy feedback when the user leaves Help."""
+        self._cancel_copy_feedback_timer()
+        self._copy_feedback = ""
+        self._copy_feedback_is_error = False
+        button = self._copy_error_button
+        if button is not None:
+            try:
+                set_dialog_action_button(button, text="⧉  Copy")
+            except tk.TclError:
+                pass
 
     def _render_troubleshooting(self, canvas, width: int) -> None:
         """Render the log-reveal action in the shared Help scroll surface."""

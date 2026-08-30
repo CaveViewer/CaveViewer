@@ -32,6 +32,7 @@ class PreferencesImportResult:
     preferences: Preferences
     defaulted_keys: tuple[str, ...]
     ignored_keys: tuple[str, ...]
+    excluded_keys: tuple[str, ...] = ()
 
 
 def encode_preferences(preferences: Preferences) -> bytes:
@@ -52,6 +53,7 @@ def decode_preferences(
     document: bytes,
     *,
     max_bytes: int = MAX_PREFERENCES_FILE_BYTES,
+    current_preferences: Preferences | None = None,
 ) -> PreferencesImportResult:
     """Parse a bounded document and default invalid or missing fields."""
 
@@ -70,10 +72,21 @@ def decode_preferences(
         raise PreferencesTransferError("Preferences file must contain a JSON object.")
 
     defaults = preference_defaults()
+    destination = (
+        current_preferences.as_dict()
+        if current_preferences is not None
+        else defaults
+    )
     resolved: dict[str, str] = {}
     defaulted_keys: list[str] = []
+    excluded_keys: list[str] = []
     declared_keys = {field.key for field in PREFERENCE_FIELDS}
     for field in PREFERENCE_FIELDS:
+        if not field.portable:
+            resolved[field.key] = destination[field.key]
+            if field.key in payload:
+                excluded_keys.append(field.key)
+            continue
         if field.key not in payload:
             resolved[field.key] = defaults[field.key]
             defaulted_keys.append(field.key)
@@ -92,6 +105,7 @@ def decode_preferences(
         preferences=Preferences(resolved),
         defaulted_keys=tuple(defaulted_keys),
         ignored_keys=ignored_keys,
+        excluded_keys=tuple(excluded_keys),
     )
 
 
@@ -99,6 +113,7 @@ def load_preferences_file(
     path: str | os.PathLike[str],
     *,
     max_bytes: int = MAX_PREFERENCES_FILE_BYTES,
+    current_preferences: Preferences | None = None,
 ) -> PreferencesImportResult:
     """Read no more than the configured bound from a portable file."""
 
@@ -111,7 +126,11 @@ def load_preferences_file(
         raise PreferencesTransferError(
             f"Could not read preferences from {source}."
         ) from exc
-    return decode_preferences(document, max_bytes=limit)
+    return decode_preferences(
+        document,
+        max_bytes=limit,
+        current_preferences=current_preferences,
+    )
 
 
 def save_preferences_file(
