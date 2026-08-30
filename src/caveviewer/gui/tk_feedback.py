@@ -16,6 +16,15 @@ from caveviewer.gui.tk_theme import DARK_THEME
 
 FeedbackKind = Literal["info", "warning", "error"]
 
+# Transient feedback uses semantic durations so equivalent messages behave
+# consistently across panels. Progress and actionable form errors remain
+# state-driven and intentionally do not use these timeout constants.
+SUCCESS_FEEDBACK_MS = 4_000
+INFO_FEEDBACK_MS = 5_000
+WARNING_FEEDBACK_MS = 7_000
+ERROR_FEEDBACK_MS = 9_000
+COPY_FEEDBACK_MS = 2_000
+
 _FEEDBACK_ATTR = "_caveviewer_inline_feedback"
 
 
@@ -54,7 +63,7 @@ def show_feedback(
     message: str,
     *,
     kind: FeedbackKind = "info",
-    duration_ms: int | None = 7000,
+    duration_ms: int | None = INFO_FEEDBACK_MS,
     font: tuple | None = None,
     max_wraplength: int = 520,
 ) -> "TkInlineFeedback":
@@ -93,7 +102,7 @@ class TkInlineFeedback:
         message: str,
         *,
         kind: FeedbackKind = "info",
-        duration_ms: int | None = 7000,
+        duration_ms: int | None = INFO_FEEDBACK_MS,
         font: tuple | None = None,
         max_wraplength: int = 520,
     ) -> None:

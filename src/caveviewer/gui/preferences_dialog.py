@@ -56,6 +56,7 @@ from caveviewer.gui.top_tab_strip import (
     TopTabStripStyle,
 )
 from caveviewer.gui.tk_theme import DARK_THEME
+from caveviewer.gui.tk_feedback import INFO_FEEDBACK_MS, SUCCESS_FEEDBACK_MS
 from caveviewer.gui.tk_typography import TkTypography, create_tk_typography
 
 if TYPE_CHECKING:
@@ -1397,7 +1398,7 @@ class PreferencesPanel:
         self._show_transient_feedback(
             "Preferences saved.",
             DARK_THEME.primary_button,
-            duration_ms=4000,
+            duration_ms=SUCCESS_FEEDBACK_MS,
         )
         on_applied = getattr(self, "on_applied", None)
         if on_applied is not None and result.preferences is not None:
@@ -1433,7 +1434,7 @@ class PreferencesPanel:
         self._show_transient_feedback(
             f"Preferences saved to {selection.path}.",
             DARK_THEME.primary_button,
-            duration_ms=5000,
+            duration_ms=INFO_FEEDBACK_MS,
         )
 
     def import_preferences(self) -> None:

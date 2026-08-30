@@ -70,10 +70,16 @@ request [#325](https://github.com/CaveViewer/CaveViewer/pull/325) is open agains
 Task 13 fixes stale rendered unsaved indicators after a successful save in
 commit `d6544d5`; it is complete, verified, and included in PR #325.
 
-Task 14 is complete pending commit: focused Preferences, Help, feedback,
+Task 14 is complete in commit `1f5fe04`: focused Preferences, Help, feedback,
 splash, and map-library tests passed (250 passed); the complete applicable
 Windows suite passed (2,008 passed, 23 skipped, 1 symlink-privilege
 deselection); compileall and `git diff --check` passed.
+
+Task 15 is complete pending commit: focused feedback-policy and affected-panel
+tests passed (303 passed); the complete applicable Windows suite passed (2,009
+passed, 23 skipped, 1 symlink-privilege deselection); compileall and
+`git diff --check` passed. The planned-status labels in rows 14 and 15 record
+their pre-implementation checkpoint; these completion records are authoritative.
 
 Follow-up presentation adjustment: the supporting label beneath **Import
 preferences** is **Import saved preferences** and does not expose the underlying

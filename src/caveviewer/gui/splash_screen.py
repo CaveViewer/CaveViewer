@@ -114,7 +114,11 @@ from caveviewer.gui.splash_visuals import (
     progress_ring_photo,
     vector_icon_photo,
 )
-from caveviewer.gui.tk_feedback import show_feedback
+from caveviewer.gui.tk_feedback import (
+    ERROR_FEEDBACK_MS,
+    SUCCESS_FEEDBACK_MS,
+    show_feedback,
+)
 from caveviewer.gui.tk_shortcuts import bind_primary_shortcut
 from caveviewer.gui.tk_theme import DARK_THEME
 from caveviewer.gui.tk_typography import TkTypography, create_tk_typography
@@ -253,8 +257,8 @@ _LIBRARY_FEATURED_ACTION_HOVER_BG = "#28282e"
 _LIBRARY_METADATA_COLOR = "#5a5d68"
 _LIBRARY_METADATA_STATUS_COLOR = DARK_THEME.secondary_text
 _LIBRARY_METADATA_ERROR_COLOR = DARK_THEME.error_text
-_LIBRARY_METADATA_STATUS_DURATION_MS = 2500
-_LIBRARY_METADATA_ERROR_DURATION_MS = 7000
+_LIBRARY_METADATA_STATUS_DURATION_MS = SUCCESS_FEEDBACK_MS
+_LIBRARY_METADATA_ERROR_DURATION_MS = ERROR_FEEDBACK_MS
 # Match cave-loading progress: a subdued empty track fills with the amber
 # accent as work completes.
 _LIBRARY_PROGRESS_TRACK_COLOR = DARK_THEME.entry_background
@@ -1749,7 +1753,7 @@ def show_splash_screen(
             root,
             "Pausing cache rebuild…",
             kind="info",
-            duration_ms=4000,
+            duration_ms=None,
             font=_TYPOGRAPHY.body,
         )
         attempts = [0]
@@ -1779,7 +1783,7 @@ def show_splash_screen(
             root,
             f"Unable to open this folder: {message}",
             kind="error",
-            duration_ms=9000,
+            duration_ms=ERROR_FEEDBACK_MS,
             font=_TYPOGRAPHY.body,
         )
 
@@ -1985,7 +1989,7 @@ def show_splash_screen(
                 root,
                 "Couldn’t open that website.",
                 kind="error",
-                duration_ms=7000,
+                duration_ms=ERROR_FEEDBACK_MS,
                 font=_TYPOGRAPHY.body,
                 max_wraplength=420,
             )
@@ -2310,7 +2314,7 @@ def show_splash_screen(
                 root,
                 "Couldn’t open that source.",
                 kind="error",
-                duration_ms=7000,
+                duration_ms=ERROR_FEEDBACK_MS,
                 font=_TYPOGRAPHY.body,
                 max_wraplength=420,
             )

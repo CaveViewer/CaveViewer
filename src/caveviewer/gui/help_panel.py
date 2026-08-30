@@ -32,6 +32,7 @@ from caveviewer.gui.troubleshooting_logs import (
     TroubleshootingLogController,
     TroubleshootingLogState,
 )
+from caveviewer.gui.tk_feedback import COPY_FEEDBACK_MS
 
 
 _CAPTURE_HELP_LAYOUT = (
@@ -471,7 +472,7 @@ class HelpPanel:
             if copied:
                 try:
                     self._copy_feedback_after_id = canvas.after(
-                        1600,
+                        COPY_FEEDBACK_MS,
                         self._reset_copy_button_label,
                     )
                 except tk.TclError:

@@ -78,6 +78,7 @@ from caveviewer.gui.standard_library_download import (
     safe_desktop_inhibit,
     start_standard_library_download_worker,
 )
+from caveviewer.gui.tk_feedback import ERROR_FEEDBACK_MS, INFO_FEEDBACK_MS
 from caveviewer.gui.standard_library_maps import (
     DownloadCancelled,
     bootstrap_managed_standard_library_map_installs,
@@ -496,7 +497,7 @@ class MapLibraryWorkflow:
             self._show_info(
                 "The map library folder change will be used after the current "
                 "download finishes.",
-                duration_ms=7000,
+                duration_ms=INFO_FEEDBACK_MS,
                 max_wraplength=360,
             )
             return
@@ -775,7 +776,7 @@ class MapLibraryWorkflow:
         if self.cache_rebuild_controller.active:
             self._show_info(
                 "Finish or pause the current cache rebuild before starting another.",
-                duration_ms=7000,
+                duration_ms=INFO_FEEDBACK_MS,
                 max_wraplength=360,
             )
             return
@@ -783,7 +784,7 @@ class MapLibraryWorkflow:
             self._show_info(
                 "Finish or stop the current map library download before "
                 "rebuilding a cache.",
-                duration_ms=7000,
+                duration_ms=INFO_FEEDBACK_MS,
                 max_wraplength=380,
             )
             return
@@ -1054,7 +1055,7 @@ class MapLibraryWorkflow:
             return False
         self._show_info(
             "Wait for the cache rebuild to finish or pause before opening another map.",
-            duration_ms=7000,
+            duration_ms=INFO_FEEDBACK_MS,
             max_wraplength=380,
         )
         return True
@@ -1159,7 +1160,7 @@ class MapLibraryWorkflow:
         if self.cache_rebuild_controller.active:
             self._show_info(
                 "Cache actions are unavailable while a rebuild is running.",
-                duration_ms=7000,
+                duration_ms=INFO_FEEDBACK_MS,
                 max_wraplength=360,
             )
             return
@@ -1191,7 +1192,7 @@ class MapLibraryWorkflow:
         if self.cache_rebuild_controller.active:
             self._show_info(
                 "Map files cannot be removed while a cache rebuild is running.",
-                duration_ms=7000,
+                duration_ms=INFO_FEEDBACK_MS,
                 max_wraplength=360,
             )
             return
@@ -1500,7 +1501,7 @@ class MapLibraryWorkflow:
             self._show_info(
                 "Finish or stop the current map library download before "
                 "starting another.",
-                duration_ms=7000,
+                duration_ms=INFO_FEEDBACK_MS,
                 max_wraplength=360,
             )
             return
@@ -1813,7 +1814,7 @@ class MapLibraryWorkflow:
             self._show_info(
                 "Finish or stop the current map library download before "
                 "starting another.",
-                duration_ms=7000,
+                duration_ms=INFO_FEEDBACK_MS,
                 max_wraplength=360,
             )
             return
@@ -1869,7 +1870,7 @@ class MapLibraryWorkflow:
         self,
         message: str,
         *,
-        duration_ms: int = 9000,
+        duration_ms: int = ERROR_FEEDBACK_MS,
         max_wraplength: int | None = None,
     ) -> None:
         self.show_feedback(
@@ -1883,7 +1884,7 @@ class MapLibraryWorkflow:
         self,
         message: str,
         *,
-        duration_ms: int = 7000,
+        duration_ms: int = INFO_FEEDBACK_MS,
         max_wraplength: int | None = None,
     ) -> None:
         self.show_feedback(
