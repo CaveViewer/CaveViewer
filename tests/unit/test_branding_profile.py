@@ -1,0 +1,150 @@
+"""Validate semantic branding profiles and developer-only selection."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+import shutil
+
+import pytest
+
+from caveviewer.branding import (
+    BRANDING_PROFILE_ENVIRONMENT_VARIABLE,
+    REQUIRED_ROLES,
+    BrandingProfileError,
+    default_branding_manifest_path,
+    load_branding_profile,
+    resolve_branding_profile,
+)
+
+
+def test_bundled_default_profile_is_complete_and_uses_approved_cookie():
+    profile = resolve_branding_profile(environ={}, frozen=False)
+
+    assert profile.profile_id == "default"
+    assert set(profile.roles) == REQUIRED_ROLES
+    assert profile.asset_for("application_mark").width >= 1024
+    assert profile.asset_for("application_mark").height >= 1024
+    assert profile.asset_for("application_mark").alpha_required is True
+    assert profile.asset_for("about_mark") is profile.asset_for("application_mark")
+    assert profile.loading_ring.fill_color == "#FFB000"
+    assert profile.loading_ring.track_color == "#3B3428"
+
+
+def test_developer_override_accepts_a_profile_directory(tmp_path):
+    profile_dir = _copy_default_profile(tmp_path)
+    payload = _read_manifest(profile_dir)
+    payload["profile_id"] = "candidate"
+    payload["display_name"] = "Candidate brand"
+    _write_manifest(profile_dir, payload)
+
+    profile = resolve_branding_profile(
+        environ={BRANDING_PROFILE_ENVIRONMENT_VARIABLE: str(profile_dir)},
+        frozen=False,
+    )
+
+    assert profile.profile_id == "candidate"
+    assert profile.manifest_path.parent == profile_dir.resolve()
+
+
+def test_frozen_application_ignores_external_profile_override(tmp_path):
+    profile_dir = _copy_default_profile(tmp_path)
+    payload = _read_manifest(profile_dir)
+    payload["profile_id"] = "external"
+    _write_manifest(profile_dir, payload)
+
+    profile = resolve_branding_profile(
+        environ={BRANDING_PROFILE_ENVIRONMENT_VARIABLE: str(profile_dir)},
+        frozen=True,
+    )
+
+    assert profile.profile_id == "default"
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected_error"),
+    [
+        (lambda payload: payload.update(schema_version=2), "schema_version"),
+        (
+            lambda payload: payload["roles"].pop("windows_app_icon"),
+            "windows_app_icon",
+        ),
+        (
+            lambda payload: payload["roles"].update(about_mark="missing"),
+            "references unknown asset",
+        ),
+        (
+            lambda payload: payload["assets"]["cookie"].update(path="../outside.png"),
+            "must stay inside",
+        ),
+        (
+            lambda payload: payload["assets"]["cookie"].update(safe_area_inset=0.5),
+            "between 0 and 0.25",
+        ),
+    ],
+)
+def test_profile_rejects_invalid_contracts(tmp_path, mutation, expected_error):
+    profile_dir = _copy_default_profile(tmp_path)
+    payload = _read_manifest(profile_dir)
+    mutation(payload)
+    _write_manifest(profile_dir, payload)
+
+    with pytest.raises(BrandingProfileError, match=expected_error):
+        load_branding_profile(profile_dir / "branding.v1.json")
+
+
+def test_profile_rejects_changed_artwork(tmp_path):
+    profile_dir = _copy_default_profile(tmp_path)
+    artwork = profile_dir / "application-mark.png"
+    artwork.write_bytes(artwork.read_bytes() + b"changed")
+
+    with pytest.raises(BrandingProfileError, match="SHA-256 mismatch"):
+        load_branding_profile(profile_dir / "branding.v1.json")
+
+
+def test_profile_rejects_non_square_png(tmp_path):
+    profile_dir = _copy_default_profile(tmp_path)
+    artwork = profile_dir / "application-mark.png"
+    data = bytearray(artwork.read_bytes())
+    data[20:24] = (1200).to_bytes(4, "big")
+    artwork.write_bytes(data)
+    payload = _read_manifest(profile_dir)
+    payload["assets"]["cookie"]["sha256"] = hashlib.sha256(data).hexdigest()
+    _write_manifest(profile_dir, payload)
+
+    with pytest.raises(BrandingProfileError, match="must be square"):
+        load_branding_profile(profile_dir / "branding.v1.json")
+
+
+def test_profile_rejects_png_without_required_alpha(tmp_path):
+    profile_dir = _copy_default_profile(tmp_path)
+    artwork = profile_dir / "application-mark.png"
+    data = bytearray(artwork.read_bytes())
+    data[25] = 2
+    artwork.write_bytes(data)
+    payload = _read_manifest(profile_dir)
+    payload["assets"]["cookie"]["sha256"] = hashlib.sha256(data).hexdigest()
+    _write_manifest(profile_dir, payload)
+
+    with pytest.raises(BrandingProfileError, match="requires an alpha channel"):
+        load_branding_profile(profile_dir / "branding.v1.json")
+
+
+def _copy_default_profile(tmp_path: Path) -> Path:
+    profile_dir = tmp_path / "profile"
+    profile_dir.mkdir()
+    manifest = default_branding_manifest_path()
+    shutil.copy2(manifest, profile_dir / manifest.name)
+    shutil.copy2(manifest.parent / "application-mark.png", profile_dir)
+    return profile_dir
+
+
+def _read_manifest(profile_dir: Path) -> dict:
+    return json.loads((profile_dir / "branding.v1.json").read_text(encoding="utf-8"))
+
+
+def _write_manifest(profile_dir: Path, payload: dict) -> None:
+    (profile_dir / "branding.v1.json").write_text(
+        json.dumps(payload), encoding="utf-8"
+    )

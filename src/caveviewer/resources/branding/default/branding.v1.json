@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "profile_id": "default",
+  "display_name": "CaveViewer Cookie",
+  "provenance": {
+    "creator": "CaveViewer project",
+    "license": "CaveViewer project artwork",
+    "source": "Approved faceted cookie hue V6 concept"
+  },
+  "assets": {
+    "cookie": {
+      "path": "application-mark.png",
+      "sha256": "d99122de3968541d9f37f1aa2ff435402d02c3b496c28df138c22a5632e4998e",
+      "minimum_width": 1024,
+      "minimum_height": 1024,
+      "alpha": "required",
+      "safe_area_inset": 0.02
+    }
+  },
+  "roles": {
+    "application_mark": "cookie",
+    "about_mark": "cookie",
+    "loading_mark": "cookie",
+    "windows_app_icon": "cookie",
+    "macos_app_icon": "cookie",
+    "linux_app_icon": "cookie"
+  },
+  "loading_ring": {
+    "fill_color": "#FFB000",
+    "track_color": "#3B3428"
+  }
+}
