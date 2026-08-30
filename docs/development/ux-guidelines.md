@@ -52,6 +52,9 @@ primitives remain documented in [design-system.md](design-system.md).
   whitespace and alignment over decorative containers or divider lines.
 - Align repeated labels, fields, actions, and descriptions to stable columns.
   Do not let label length move the beginning of adjacent content.
+- Give tabbed content one primary left edge shared by the tab label, section
+  headings, and the first content column. Use an additional inset only when it
+  communicates real hierarchy consistently across the surface.
 - Size normal desktop windows for their complete primary content, then clamp
   them to the usable display area. Scrolling is the fallback for compact
   displays and accessibility scaling, not the default presentation on an

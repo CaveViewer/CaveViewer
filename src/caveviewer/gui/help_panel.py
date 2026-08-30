@@ -720,7 +720,7 @@ class HelpPanel:
     ) -> int:
         style = self._style
         canvas.create_text(
-            0,
+            self._px(12),
             y,
             text=section.title.upper(),
             font=self._canvas_font("section"),

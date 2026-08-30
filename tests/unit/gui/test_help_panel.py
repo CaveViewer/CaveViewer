@@ -140,6 +140,10 @@ def test_help_panel_uses_standard_section_spacing_without_heading_rules():
     assert "STANDARD_CONTENT_SECTION_SPACING.between_sections_y" in table_source
     assert "top_pad_y=0 if shortcut_index == 0 else None" in table_source
     assert "STANDARD_CONTENT_SECTION_SPACING.heading_to_content_y" in heading_source
+    assert "self._px(12)," in heading_source
+    assert "x=self._px(12)," in inspect.getsource(
+        help_panel.HelpPanel._draw_shortcut_row
+    )
     assert "canvas.create_line(" not in heading_source
 
 
