@@ -928,11 +928,15 @@ def test_preferences_panel_import_stages_values_without_saving(
         choose_file=lambda **_options: SimpleNamespace(path=str(source))
     )
     panel.workflow = SimpleNamespace(
-        import_file=lambda path: PreferencesImportWorkflowResult(
+        import_file=lambda path, current: PreferencesImportWorkflowResult(
             preferences=snapshot,
             defaulted_keys=("io_workers",),
         )
     )
+    panel.form = SimpleNamespace(
+        attempt_apply=lambda: (SimpleNamespace(), snapshot)
+    )
+    panel._render_form_state = lambda *_args, **_kwargs: None
     panel.dialog = object()
     panel._stage_preferences = lambda preferences, message: staged.append(
         (preferences, message)
@@ -949,7 +953,10 @@ def test_preferences_panel_malformed_import_leaves_form_unchanged(tmp_path):
     from caveviewer.gui.preferences_form import MessageKind
     from caveviewer.gui.preferences_workflow import PreferencesImportWorkflowResult
 
-    original_form = object()
+    current = settings.require_validated_preferences(settings.preference_defaults())
+    original_form = SimpleNamespace(
+        attempt_apply=lambda: (SimpleNamespace(), current)
+    )
     feedback = []
     panel = preferences_dialog.PreferencesPanel.__new__(
         preferences_dialog.PreferencesPanel
@@ -961,12 +968,13 @@ def test_preferences_panel_malformed_import_leaves_form_unchanged(tmp_path):
         )
     )
     panel.workflow = SimpleNamespace(
-        import_file=lambda _path: PreferencesImportWorkflowResult(
+        import_file=lambda _path, _current: PreferencesImportWorkflowResult(
             preferences=None,
             error="Preferences file is not valid UTF-8 JSON.",
         )
     )
     panel.dialog = object()
+    panel._render_form_state = lambda *_args, **_kwargs: None
     panel._set_feedback = lambda message, kind: feedback.append((message, kind))
 
     panel.import_preferences()

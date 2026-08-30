@@ -20,7 +20,7 @@ def _preferences(**updates: str) -> Preferences:
     return Preferences(values)
 
 
-def test_portable_preferences_round_trip_all_declared_values(tmp_path):
+def test_portable_preferences_preserve_destination_specific_values(tmp_path):
     unicode_directory = tmp_path / "cavés"
     unicode_directory.mkdir()
     preferences = _preferences(
@@ -29,11 +29,21 @@ def test_portable_preferences_round_trip_all_declared_values(tmp_path):
     )
 
     document = transfer.encode_preferences(preferences)
-    result = transfer.decode_preferences(document)
+    destination = _preferences(
+        recording_dir=str(tmp_path / "destination-recordings"),
+        map_library_dir=str(tmp_path / "destination-maps"),
+    )
+    result = transfer.decode_preferences(
+        document,
+        current_preferences=destination,
+    )
 
-    assert result.preferences == preferences
+    assert result.preferences["io_workers"] == preferences["io_workers"]
+    assert result.preferences["recording_dir"] == destination["recording_dir"]
+    assert result.preferences["map_library_dir"] == destination["map_library_dir"]
     assert result.defaulted_keys == ()
     assert result.ignored_keys == ()
+    assert result.excluded_keys == ("recording_dir", "map_library_dir")
     assert "cavés" in document.decode("utf-8")
 
 
@@ -52,6 +62,14 @@ def test_import_defaults_only_missing_and_invalid_fields():
     assert result.preferences["upload_chunks_per_frame"] == "3"
     assert "io_workers" in result.defaulted_keys
     assert "upload_chunks_per_frame" not in result.defaulted_keys
+
+
+def test_only_schema_fields_marked_portable_are_applied():
+    nonportable = {
+        field.key for field in transfer.PREFERENCE_FIELDS if not field.portable
+    }
+
+    assert nonportable == {"recording_dir", "map_library_dir"}
 
 
 def test_import_ignores_unknown_fields():

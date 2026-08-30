@@ -206,6 +206,8 @@ native Open dialog and accept UTF-8 JSON objects up to 256 KiB. Missing or
 invalid individual values use the current defaults without discarding other
 valid values; unknown keys are ignored. An unreadable, malformed, or non-object
 file is rejected without changing the form or saved preferences.
+Recording and map-library folders remain unchanged when loading a backup
+because those locations are specific to the destination installation.
 
 The first launch that finds `advanced_settings.json` beside a missing
 `preferences.json` renames it automatically. If both exist, `preferences.json`

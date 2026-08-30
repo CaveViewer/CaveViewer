@@ -63,6 +63,7 @@ class PreferenceSpec:
     units: str = ""
     env_to_preference: PreferenceEnvConverter | None = None
     preference_to_env: PreferenceEnvConverter | None = None
+    portable: bool = True
 
     def built_in_default(
         self,
@@ -383,6 +384,7 @@ PREFERENCE_FIELDS = (
         hint="Where saved recordings are stored.",
         value_type=PreferenceValueType.PATH_CREATE,
         default=_recording_directory_default,
+        portable=False,
     ),
     PreferenceSpec(
         section="storage",
@@ -392,6 +394,7 @@ PREFERENCE_FIELDS = (
         hint="Where CaveViewer stores downloaded Map Library maps.",
         value_type=PreferenceValueType.PATH_CREATE,
         default=_map_library_directory_default,
+        portable=False,
     ),
 )
 

@@ -89,34 +89,45 @@ def test_preferences_workflow_does_not_notify_after_save_failure():
     assert applied == []
 
 
-def test_preferences_workflow_import_is_transactional():
+def test_preferences_workflow_import_is_transactional(caplog):
     preferences = settings.load_preferences()
+    imported = []
     workflow = PreferencesDialogWorkflow(
-        import_preferences_fn=lambda path: PreferencesImportResult(
+        import_preferences_fn=lambda path, **kwargs: imported.append(
+            (path, kwargs["current_preferences"])
+        )
+        or PreferencesImportResult(
             preferences=preferences,
             defaulted_keys=("io_workers",),
             ignored_keys=("future",),
+            excluded_keys=("recording_dir", "map_library_dir"),
         )
     )
 
-    result = workflow.import_file("shared.json")
+    with caplog.at_level("INFO", logger="caveviewer"):
+        result = workflow.import_file("shared.json", preferences)
 
     assert result == PreferencesImportWorkflowResult(
         preferences=preferences,
         defaulted_keys=("io_workers",),
         ignored_keys=("future",),
+        excluded_keys=("recording_dir", "map_library_dir"),
     )
+    assert imported == [("shared.json", preferences)]
+    assert "Importing preferences from shared.json." in caplog.text
+    assert "platform-specific preference recording_dir" in caplog.text
+    assert "platform-specific preference map_library_dir" in caplog.text
     assert result.succeeded
 
 
 def test_preferences_workflow_import_failure_has_no_snapshot():
     workflow = PreferencesDialogWorkflow(
-        import_preferences_fn=lambda _path: (_ for _ in ()).throw(
+        import_preferences_fn=lambda _path, **_kwargs: (_ for _ in ()).throw(
             PreferencesTransferError("Malformed preferences file.")
         )
     )
 
-    result = workflow.import_file("broken.json")
+    result = workflow.import_file("broken.json", settings.load_preferences())
 
     assert result == PreferencesImportWorkflowResult(
         preferences=None,

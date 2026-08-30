@@ -1386,6 +1386,10 @@ class PreferencesPanel:
     def import_preferences(self) -> None:
         """Choose and stage a portable snapshot without saving it yet."""
 
+        state, current_preferences = self.form.attempt_apply()
+        self._render_form_state(state, focus_invalid=True)
+        if current_preferences is None:
+            return
         try:
             selection = self.desktop_services.choose_file(
                 title="Load CaveViewer preferences",
@@ -1397,7 +1401,10 @@ class PreferencesPanel:
             return
         if selection is None:
             return
-        result = self.workflow.import_file(selection.path)
+        result = self.workflow.import_file(
+            selection.path,
+            current_preferences,
+        )
         if not result.succeeded or result.preferences is None:
             self._set_feedback(
                 result.error or "Could not import preferences.",
