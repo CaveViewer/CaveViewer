@@ -36,7 +36,7 @@ _HELP_HIDDEN_SHORTCUT_IDS = frozenset(
     {"bookmark-delete-control-shift", "import-pause"}
 )
 _SPACED_KEY_GROUPS = frozenset(
-    {"W A S D", "E Q", "Left Right Up Down", "J L I K", "Z X", "- ="}
+    {"W A S D", "E Q", "← → ↑ ↓", "J L I K", "Z X", "- ="}
 )
 
 
@@ -155,7 +155,7 @@ def keyboard_control_sections(
             shortcuts=(
                 KeyboardShortcut(
                     "look-arrows",
-                    "Left Right Up Down",
+                    "← → ↑ ↓",
                     "Look left, right, up, and down",
                 ),
                 KeyboardShortcut(

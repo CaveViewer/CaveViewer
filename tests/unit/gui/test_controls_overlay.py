@@ -250,7 +250,7 @@ def test_recording_help_copy_is_shortcut_only_and_format_neutral():
     assert rows["Ctrl + C"] == "Start/stop slice"
     assert rows["Escape"] == "Cancel active capture"
     assert rows["Space"] == "Pause/resume recorded dive"
-    assert rows["Left Right Up Down"] == "Look left, right, up, and down"
+    assert rows["← → ↑ ↓"] == "Look left, right, up, and down"
     assert "Arrow keys" not in rows
     assert "Ctrl + Shift + P" not in rows
     assert "Pause active import" not in rows.values()
@@ -297,7 +297,7 @@ def test_grouped_control_section_headings_share_one_left_edge(monkeypatch):
         lambda *_args: None,
         lambda text, x, *_args: text_calls.append((text, x)),
         [
-            ("Look", [("Left Right Up Down", "Look left, right, up, and down")]),
+            ("Look", [("← → ↑ ↓", "Look left, right, up, and down")]),
             ("Capture", [("Ctrl + R", "Start recording")]),
         ],
         x=20.0,
