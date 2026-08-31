@@ -748,6 +748,10 @@ class ControlsOverlay:
 
         desc_x = x + key_col_width + key_desc_gap
 
+        # Sections share their key and description columns, so their headings
+        # must share one left edge too.  Centering each heading over its own
+        # content makes a shorter section such as Capture drift left of Look.
+        section_layouts = []
         for heading, rows in sections:
             heading_text = heading.upper()
             heading_w = bitmap_font.text_width_px(heading_text, heading_size)
@@ -759,7 +763,25 @@ class ControlsOverlay:
                 heading_w,
                 key_col_width + key_desc_gap + section_desc_width,
             )
-            heading_x = x + (section_content_width - heading_w) / 2.0
+            section_layouts.append(
+                (heading_text, rows, heading_w, section_content_width)
+        )
+        anchor_heading_w, anchor_content_width = max(
+            (
+                (heading_w, content_width)
+                for _, _, heading_w, content_width in section_layouts
+            ),
+            key=lambda layout: layout[1],
+            default=(0.0, 0.0),
+        )
+        heading_x = x + (anchor_content_width - anchor_heading_w) / 2.0
+
+        for (
+            heading_text,
+            rows,
+            _heading_w,
+            _section_content_width,
+        ) in section_layouts:
             add_text(heading_text, heading_x, y, heading_size, _SPLASH_TITLE_RGBA)
             y += heading_height + heading_gap
 

@@ -150,6 +150,48 @@ def test_controls_overlay_uses_the_shared_keyboard_catalog():
     assert '"Start/stop slice"' not in source
 
 
+def test_grouped_control_section_headings_share_one_left_edge(monkeypatch):
+    overlay = controls_overlay.ControlsOverlay.__new__(controls_overlay.ControlsOverlay)
+    overlay._measure_keycap_sequence = lambda label, *_args: len(label) * 10.0
+    overlay._draw_keycap_sequence = lambda *_args: None
+    monkeypatch.setattr(
+        controls_overlay.bitmap_font,
+        "text_width_px",
+        lambda text, _size: len(text) * 10.0,
+    )
+    monkeypatch.setattr(
+        controls_overlay.bitmap_font,
+        "text_height_px",
+        lambda _size: 10.0,
+    )
+    text_calls = []
+
+    overlay._draw_control_column(
+        lambda *_args: None,
+        lambda text, x, *_args: text_calls.append((text, x)),
+        [
+            ("Look", [("Arrow keys", "Look left, right, up, and down")]),
+            ("Capture", [("Ctrl + R", "Start recording")]),
+        ],
+        x=20.0,
+        top_y=10.0,
+        key_col_width=100.0,
+        heading_size=1.0,
+        key_size=1.0,
+        desc_size=1.0,
+        row_height=20.0,
+        heading_gap=5.0,
+        section_gap=10.0,
+        key_pad_x=4.0,
+        key_pad_y=3.0,
+        key_desc_gap=12.0,
+    )
+
+    heading_x = {text: x for text, x in text_calls if text in {"LOOK", "CAPTURE"}}
+
+    assert heading_x["CAPTURE"] == heading_x["LOOK"]
+
+
 def _control_rows_for_profile(profile) -> dict[str, str]:
     return {
         key: description
