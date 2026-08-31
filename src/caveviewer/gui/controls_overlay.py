@@ -142,7 +142,7 @@ def _get_platform_control_sections(
     movement = catalog_rows("movement")
     movement.append(("Scroll", "Adjust fly speed"))
     look = [*visual_look_rows, *catalog_rows("view")]
-    navigate = catalog_rows("bookmarks", "map")
+    navigate = catalog_rows("bookmarks")
     navigate.extend(
         [
             ("Minimap click", "Jump to that spot"),

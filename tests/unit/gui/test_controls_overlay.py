@@ -333,7 +333,8 @@ def test_control_help_copy_uses_profile_for_macos_shortcuts():
     assert rows["Option + left click + mouse"] == "Look around (alternative)"
     assert rows["Cmd + 0"] == "Reset view (level horizon)"
     assert rows["Cmd + 1–9"] == "Save camera bookmark"
-    assert rows["Cmd + O"] == "Open another map"
+    assert "Cmd + O" not in rows
+    assert "Open another map" not in rows.values()
     assert rows["Escape"] == "Cancel active capture"
     assert "Cmd + W" not in rows
     assert rows["Cmd + R"] == "Start/stop recording"
@@ -354,7 +355,8 @@ def test_control_help_copy_uses_profile_for_control_shortcuts():
     assert rows["Ctrl + 0"] == "Reset view (level horizon)"
     assert rows["Ctrl + 1–9"] == "Save camera bookmark"
     assert "Ctrl + A" not in rows
-    assert rows["Ctrl + O"] == "Open another map"
+    assert "Ctrl + O" not in rows
+    assert "Open another map" not in rows.values()
     assert "Open button" not in rows
     assert "Switch to a different map" not in rows.values()
     assert rows["Escape"] == "Cancel active capture"
