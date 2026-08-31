@@ -161,8 +161,9 @@ class ImportProgressPanel:
     PROGRESS_BAR_WIDTH = 300.0
     PROGRESS_BAR_HEIGHT = 4.0
     INDETERMINATE_SEGMENT_FRACTION = 0.28
-    TITLE_TEXT_SIZE = 2.1
-    STAGE_TEXT_SIZE = 2.65
+    # Match the established full-screen “Press Space to begin” prompt.
+    TITLE_TEXT_SIZE = 2.55
+    STAGE_TEXT_SIZE = 2.55
     NOTE_TEXT_SIZE = 1.94
 
     _BACKDROP_RGBA = (0.0039, 0.0078, 0.0118, 0.88)  # near-black blue
@@ -419,9 +420,9 @@ class ImportProgressPanel:
             center_x=center_x,
             window_width=window_width,
             title=title,
-            title_y=center_y - 124.0 * layout_scale,
+            title_y=center_y - 136.0 * layout_scale,
             stage=stage,
-            stage_y=center_y - 42.0 * layout_scale,
+            stage_y=center_y - 60.0 * layout_scale,
             note=note,
             note_y=center_y + 30.0 * layout_scale,
             layout_scale=layout_scale,

@@ -61,7 +61,7 @@ def test_ring_labels_share_the_import_title_stage_note_layout(monkeypatch):
         ("Building map chunks…", 416.0, ImportProgressPanel.STAGE_TEXT_SIZE),
         (
             "First-time setup in progress.",
-            pytest.approx(440.65),
+            pytest.approx(440.55),
             ImportProgressPanel.NOTE_TEXT_SIZE,
         ),
     ]
@@ -96,8 +96,8 @@ def test_bar_labels_use_compact_progress_layout(monkeypatch):
     )
 
     assert text_calls == [
-        ("Preparing Map", 176.0, ImportProgressPanel.TITLE_TEXT_SIZE),
-        ("Building map chunksâ€¦", 258.0, ImportProgressPanel.STAGE_TEXT_SIZE),
+        ("Preparing Map", 164.0, ImportProgressPanel.TITLE_TEXT_SIZE),
+        ("Building map chunksâ€¦", 240.0, ImportProgressPanel.STAGE_TEXT_SIZE),
         (
             "First-time setup in progress.",
             330.0,
@@ -138,8 +138,8 @@ def test_compact_progress_layout_scales_labels_and_spacing(monkeypatch):
     )
 
     assert text_calls == [
-        ("Opening map", pytest.approx(151.2), pytest.approx(2.52)),
-        ("Building map chunks", pytest.approx(249.6), pytest.approx(3.18)),
+        ("Opening map", pytest.approx(136.8), pytest.approx(3.06)),
+        ("Building map chunks", pytest.approx(228.0), pytest.approx(3.06)),
         (
             "First-time setup in progress.",
             pytest.approx(336.0),
