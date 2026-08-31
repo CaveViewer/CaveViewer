@@ -55,7 +55,7 @@ def test_keycap_tiers_share_widths_while_descriptive_controls_fit_labels(
         "Space": 30.0,
         "Escape": 42.0,
         "Delete": 38.0,
-        "Arrow keys": 64.0,
+        "Minimap click": 64.0,
     }
     monkeypatch.setattr(
         controls_overlay.bitmap_font,
@@ -72,7 +72,7 @@ def test_keycap_tiers_share_widths_while_descriptive_controls_fit_labels(
     assert overlay._keycap_width("Space", 1.0, 4.0) == 50.0
     assert overlay._keycap_width("Escape", 1.0, 4.0) == 50.0
     assert overlay._keycap_width("Delete", 1.0, 4.0) == 50.0
-    assert overlay._keycap_width("Arrow keys", 1.0, 4.0) == 72.0
+    assert overlay._keycap_width("Minimap click", 1.0, 4.0) == 72.0
 
 
 def test_single_keycap_glyph_is_centered_in_its_shared_width(monkeypatch):
@@ -250,7 +250,8 @@ def test_recording_help_copy_is_shortcut_only_and_format_neutral():
     assert rows["Ctrl + C"] == "Start/stop slice"
     assert rows["Escape"] == "Cancel active capture"
     assert rows["Space"] == "Pause/resume recorded dive"
-    assert rows["Arrow keys"] == "Look left, right, up, and down"
+    assert rows["Left Right Up Down"] == "Look left, right, up, and down"
+    assert "Arrow keys" not in rows
     assert "Ctrl + Shift + P" not in rows
     assert "Pause active import" not in rows.values()
     assert "Ctrl + Shift + 1–9" not in rows
@@ -296,7 +297,7 @@ def test_grouped_control_section_headings_share_one_left_edge(monkeypatch):
         lambda *_args: None,
         lambda text, x, *_args: text_calls.append((text, x)),
         [
-            ("Look", [("Arrow keys", "Look left, right, up, and down")]),
+            ("Look", [("Left Right Up Down", "Look left, right, up, and down")]),
             ("Capture", [("Ctrl + R", "Start recording")]),
         ],
         x=20.0,

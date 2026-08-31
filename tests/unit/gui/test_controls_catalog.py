@@ -79,7 +79,7 @@ def test_keyboard_catalog_uses_direct_control_bindings_and_capture_standard():
     assert rows["capture-cancel"].shortcut == "Escape"
     assert rows["capture-cancel"].action == "Cancel active capture"
     assert rows["import-pause"].shortcut == "Ctrl + Shift + P"
-    assert rows["look-arrows"].shortcut == "Arrow keys"
+    assert rows["look-arrows"].shortcut == "Left Right Up Down"
     assert rows["recorded-dive-space"].action == "Pause/resume recorded dive"
 
 
@@ -118,4 +118,9 @@ def test_keycap_parts_keep_compound_shortcuts_readable():
         "+",
         "P",
     )
-    assert shortcut_keycap_parts("Arrow keys") == ("Arrow keys",)
+    assert shortcut_keycap_parts("Left Right Up Down") == (
+        "Left",
+        "Right",
+        "Up",
+        "Down",
+    )
