@@ -1247,9 +1247,11 @@ def test_runtime_tls_adapter_is_passed_to_default_update_download(
         environment={},
     )
     calls = []
+    download_started = threading.Event()
 
     def download_update(_url, _expected_size, destination, **kwargs):
         calls.append(kwargs)
+        download_started.set()
         Path(destination).write_bytes(b"payload")
         kwargs["phase_cb"]("verifying")
 
@@ -1268,7 +1270,8 @@ def test_runtime_tls_adapter_is_passed_to_default_update_download(
         assert manager.check_for_updates()
         assert manager.wait_for_background_task(1)
         assert manager.start_download()
-        assert manager.wait_for_background_task(1)
+        assert download_started.wait(5)
+        assert manager.wait_for_background_task(5)
     finally:
         manager.shutdown()
 
