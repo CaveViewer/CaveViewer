@@ -71,6 +71,8 @@ _FULLSCREEN_BASE_WINDOW_SIZE = (1536, 864)
 _FULLSCREEN_LAYOUT_SCALE_MAX = 1.32
 _FULLSCREEN_SUBTITLE_TEXT_SIZE = 2.55
 _CONTROL_KEYCAP_ROW_GAP = 4.0
+_MEDIUM_NAMED_KEYCAPS = frozenset({"Cmd", "Ctrl", "Scroll", "Shift"})
+_WIDE_NAMED_KEYCAPS = frozenset({"Delete", "Escape", "Space"})
 
 
 def _fullscreen_layout_scale(window_size: tuple[int, int]) -> float:
@@ -837,18 +839,25 @@ class ControlsOverlay:
 
     @staticmethod
     def _keycap_width(part: str, key_size: float, key_pad_x: float) -> float:
-        """Keep individual shortcut keys visually consistent across glyphs."""
+        """Return a semantic keycap width while preserving descriptive controls."""
         content_width = bitmap_font.text_width_px(part, key_size) + key_pad_x * 2.0
         if len(part) == 1:
             # Use W as the shared single-key reference because it is the
             # widest standard Latin key glyph in the overlay's bitmap font.
             return bitmap_font.text_width_px("W", key_size) + key_pad_x * 2.0
-        if part in {"Space", "Escape"}:
-            # These companion Capture controls share the same cap width while
-            # the draw path below keeps each label centered within that space.
+        if part in _MEDIUM_NAMED_KEYCAPS:
+            # Compact named controls form one visual family, so minor glyph
+            # differences (such as Shift versus Scroll) do not create noise.
             return max(
-                bitmap_font.text_width_px("Space", key_size),
-                bitmap_font.text_width_px("Escape", key_size),
+                bitmap_font.text_width_px(reference, key_size)
+                for reference in _MEDIUM_NAMED_KEYCAPS
+            ) + key_pad_x * 2.0
+        if part in _WIDE_NAMED_KEYCAPS:
+            # These standalone actions need a wider shared cap. The draw path
+            # below centers every label, including shorter Space, within it.
+            return max(
+                bitmap_font.text_width_px(reference, key_size)
+                for reference in _WIDE_NAMED_KEYCAPS
             ) + key_pad_x * 2.0
         return content_width
 

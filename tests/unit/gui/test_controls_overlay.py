@@ -40,7 +40,7 @@ def test_minimum_control_row_height_reserves_space_between_keycaps(monkeypatch):
     assert row_height == 32.0
 
 
-def test_single_and_capture_keycaps_share_widths_while_named_keys_fit_labels(
+def test_keycap_tiers_share_widths_while_descriptive_controls_fit_labels(
     monkeypatch,
 ):
     overlay = controls_overlay.ControlsOverlay.__new__(controls_overlay.ControlsOverlay)
@@ -48,9 +48,14 @@ def test_single_and_capture_keycaps_share_widths_while_named_keys_fit_labels(
         "W": 16.0,
         "A": 10.0,
         "-": 4.0,
+        "Cmd": 22.0,
         "Ctrl": 24.0,
+        "Shift": 32.0,
+        "Scroll": 36.0,
         "Space": 30.0,
         "Escape": 42.0,
+        "Delete": 38.0,
+        "Arrow keys": 64.0,
     }
     monkeypatch.setattr(
         controls_overlay.bitmap_font,
@@ -61,9 +66,13 @@ def test_single_and_capture_keycaps_share_widths_while_named_keys_fit_labels(
     assert overlay._keycap_width("W", 1.0, 4.0) == 24.0
     assert overlay._keycap_width("A", 1.0, 4.0) == 24.0
     assert overlay._keycap_width("-", 1.0, 4.0) == 24.0
-    assert overlay._keycap_width("Ctrl", 1.0, 4.0) == 32.0
+    assert overlay._keycap_width("Ctrl", 1.0, 4.0) == 44.0
+    assert overlay._keycap_width("Shift", 1.0, 4.0) == 44.0
+    assert overlay._keycap_width("Scroll", 1.0, 4.0) == 44.0
     assert overlay._keycap_width("Space", 1.0, 4.0) == 50.0
     assert overlay._keycap_width("Escape", 1.0, 4.0) == 50.0
+    assert overlay._keycap_width("Delete", 1.0, 4.0) == 50.0
+    assert overlay._keycap_width("Arrow keys", 1.0, 4.0) == 72.0
 
 
 def test_single_keycap_glyph_is_centered_in_its_shared_width(monkeypatch):
