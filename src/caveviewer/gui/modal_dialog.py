@@ -17,6 +17,9 @@ MODAL_MIN_WIDTH = 430
 MODAL_MIN_HEIGHT = 220
 MODAL_CONTENT_PAD_X = 28
 MODAL_CONTENT_PAD_Y = 24
+# Keep copy confirmations visually paired with their action wherever they
+# appear, including inline controls outside modal dialogs.
+COPY_CONFIRMATION_GAP = 12
 
 
 def _center_dialog(dialog, parent, *, width: int, height: int) -> None:
@@ -367,7 +370,7 @@ def _show_modal(
         )
         cancel_button.pack(side="right", padx=(0, px(8)))
         if copy_details is not None:
-            copy_feedback.pack(side="right", padx=(0, px(12)))
+            copy_feedback.pack(side="right", padx=(0, px(COPY_CONFIRMATION_GAP)))
 
     dialog.bind("<Escape>", lambda _event: close())
     dialog.protocol("WM_DELETE_WINDOW", close)

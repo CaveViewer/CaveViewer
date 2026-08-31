@@ -17,6 +17,10 @@ from caveviewer.gui.dialog_style import (
     create_dialog_action_button,
     set_dialog_action_button,
 )
+from caveviewer.gui.modal_dialog import (
+    COPY_CONFIRMATION_GAP,
+    create_confirmation_mark,
+)
 from caveviewer.gui.section_spacing import STANDARD_CONTENT_SECTION_SPACING
 from caveviewer.gui.scrollable_content import (
     CanvasScrollbarStyle,
@@ -251,6 +255,8 @@ class HelpPanel:
         )
         self._troubleshooting_button = None
         self._copy_error_button = None
+        self._copy_confirmation_mark = None
+        self._copy_confirmation_visible = False
         self._copy_feedback = ""
         self._copy_feedback_is_error = False
         self._copy_feedback_after_id: str | None = None
@@ -333,6 +339,11 @@ class HelpPanel:
             pady=self._px(5),
         )
         self._copy_error_button._cv_accessible_name = "Copy last error"
+        self._copy_confirmation_mark = create_confirmation_mark(
+            canvas,
+            px=self._px,
+            background=style.background_color,
+        )
 
         self._scrollbar = CanvasVerticalScrollbar(
             content_shell,
@@ -441,6 +452,7 @@ class HelpPanel:
         controller = self._troubleshooting_controller
         if controller is not None:
             self._troubleshooting_state = controller.refresh()
+        self._copy_confirmation_visible = False
         self._copy_feedback = ""
         self._copy_feedback_is_error = False
 
@@ -460,36 +472,26 @@ class HelpPanel:
             return
         copied = copy_error_excerpt_to_clipboard(canvas, excerpt.text)
         self._cancel_copy_feedback_timer()
-        self._copy_feedback = (
-            "Copied" if copied else "Couldn’t copy. Select the text manually."
-        )
+        self._copy_confirmation_visible = copied
+        self._copy_feedback = "" if copied else "Couldn’t copy. Select the text manually."
         self._copy_feedback_is_error = not copied
-        button = self._copy_error_button
-        if button is not None:
-            set_dialog_action_button(
-                button,
-                text="Copied" if copied else "⧉  Copy",
-            )
-            if copied:
-                try:
-                    self._copy_feedback_after_id = canvas.after(
-                        COPY_FEEDBACK_MS,
-                        self._reset_copy_button_label,
-                    )
-                except tk.TclError:
-                    pass
+        if copied:
+            try:
+                self._copy_feedback_after_id = canvas.after(
+                    COPY_FEEDBACK_MS,
+                    self._clear_copy_feedback,
+                )
+            except tk.TclError:
+                pass
         self._render_table(canvas.winfo_width())
 
-    def _reset_copy_button_label(self) -> None:
+    def _clear_copy_feedback(self) -> None:
+        """Hide the transient copy confirmation while keeping Copy available."""
+
         self._copy_feedback_after_id = None
+        self._copy_confirmation_visible = False
         self._copy_feedback = ""
         self._copy_feedback_is_error = False
-        button = self._copy_error_button
-        if button is not None:
-            try:
-                set_dialog_action_button(button, text="⧉  Copy")
-            except tk.TclError:
-                return
         canvas = self._content_canvas
         if canvas is not None:
             try:
@@ -512,14 +514,9 @@ class HelpPanel:
     def on_hidden(self) -> None:
         """Clear copy feedback when the user leaves Help."""
         self._cancel_copy_feedback_timer()
+        self._copy_confirmation_visible = False
         self._copy_feedback = ""
         self._copy_feedback_is_error = False
-        button = self._copy_error_button
-        if button is not None:
-            try:
-                set_dialog_action_button(button, text="⧉  Copy")
-            except tk.TclError:
-                pass
 
     def _render_troubleshooting(self, canvas, width: int) -> None:
         """Render the log-reveal action in the shared Help scroll surface."""
@@ -659,19 +656,31 @@ class HelpPanel:
                     command=self._copy_last_error,
                     enabled=True,
                 )
+                copy_y = y
                 canvas.create_window(
                     content_x,
-                    y,
+                    copy_y,
                     window=copy_button,
                     anchor="nw",
                     tags="help-content",
                 )
                 try:
                     copy_button.update_idletasks()
+                    copy_width = copy_button.winfo_reqwidth()
                     copy_height = max(self._px(36), copy_button.winfo_reqheight())
                 except tk.TclError:
+                    copy_width = self._px(104)
                     copy_height = self._px(36)
                 y += copy_height + self._px(10)
+                confirmation_mark = self._copy_confirmation_mark
+                if confirmation_mark is not None and self._copy_confirmation_visible:
+                    canvas.create_window(
+                        content_x + copy_width + self._px(COPY_CONFIRMATION_GAP),
+                        copy_y + (copy_height // 2),
+                        window=confirmation_mark,
+                        anchor="w",
+                        tags="help-content",
+                    )
         elif state.error_status_text:
             empty_item = canvas.create_text(
                 content_x,
