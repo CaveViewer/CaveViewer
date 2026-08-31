@@ -13,12 +13,16 @@ class FakeLogger:
     def __init__(self):
         self.info_messages = []
         self.warning_messages = []
+        self.error_messages = []
 
     def info(self, message, *args):
         self.info_messages.append(message % args if args else str(message))
 
     def warning(self, message, *args):
         self.warning_messages.append(message % args if args else str(message))
+
+    def error(self, message, *args):
+        self.error_messages.append(message % args if args else str(message))
 
 
 class FakeThread:
@@ -214,3 +218,31 @@ def test_done_message_loads_map_with_original_source_dir():
     ]
     assert controller.active is False
     assert controller.source_dir is None
+
+
+def test_startup_import_failure_is_reported_before_the_empty_viewer_closes():
+    calls = []
+    owner = SimpleNamespace(
+        wnd=SimpleNamespace(close=lambda: calls.append("close")),
+    )
+    controller, logger, _terminate_calls = _controller()
+    controller._owner = owner
+    controller._report_startup_failure = (
+        lambda message, suggestion: calls.append((message, suggestion))
+    )
+    controller.is_startup = True
+    controller.active = True
+    controller.event_queue = queue.Queue()
+    controller.event_queue.put(
+        ("error", "cache build already active", "", "wait, then retry")
+    )
+
+    controller.drain_queue()
+
+    assert calls == [
+        ("cache build already active", "wait, then retry"),
+        "close",
+    ]
+    assert logger.error_messages[-1] == (
+        "Closing -- no map to show without a successful import."
+    )

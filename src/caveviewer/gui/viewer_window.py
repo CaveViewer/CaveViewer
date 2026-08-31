@@ -583,6 +583,15 @@ void main() {
 """
 
 
+@dataclass(frozen=True)
+class ViewerSessionOutcome:
+    """Describe why one native viewer session returned to its owner."""
+
+    kind: str = "window_closed"
+    message: str = ""
+    suggestion: str = ""
+
+
 class CaveViewerWindow(mglw.WindowConfig):
     gl_version = (3, 3)
     title = APP_NAME
@@ -613,6 +622,7 @@ class CaveViewerWindow(mglw.WindowConfig):
     cave_recorded_dive_trace: recorded_dive.RecordedDiveTrace | None = None
     cave_platform_runtime: PlatformRuntime | None = None
     cave_runtime_settings: RuntimeSettings | None = None
+    cave_session_outcome = ViewerSessionOutcome()
 
     # Alternative to the three attributes above: set THIS instead when the
     # map needs first-time import/chunking (no cache built yet) -- a dict
@@ -1290,9 +1300,18 @@ class CaveViewerWindow(mglw.WindowConfig):
                 release_inhibitor=lambda: _release_desktop_inhibitor,
                 perf_counter=lambda: time.perf_counter(),
                 monotonic=lambda: time.monotonic(),
+                report_startup_failure=self._record_startup_import_failure,
             )
             self.__dict__["_import_controller"] = controller
         return controller
+
+    def _record_startup_import_failure(self, message: str, suggestion: str) -> None:
+        """Preserve a recoverable failure across native-window teardown."""
+        type(self).cave_session_outcome = ViewerSessionOutcome(
+            kind="import_failed",
+            message=str(message),
+            suggestion=str(suggestion),
+        )
 
     def _ensure_recording_controller(self) -> RecordingStateController:
         controller = self.__dict__.get("_recording_controller")
@@ -7988,21 +8007,35 @@ def run_viewer_with_pending_import(
         "model_descriptor": model_descriptor,
         "textures_dir": textures_dir,
     }
+    CaveViewerWindow.cave_session_outcome = ViewerSessionOutcome()
 
     try:
         _launch_viewer_window()
-    except RuntimeError as e:
+    except BaseException as error:
+        outcome = CaveViewerWindow.cave_session_outcome
+        # Some native backends surface a programmatic window close as
+        # SystemExit. Suppress it only after the import controller has recorded
+        # the recoverable startup failure that requested that close.
+        if isinstance(error, SystemExit) and outcome.kind == "import_failed":
+            _LOG.info("Viewer returned to the library after startup import failure.")
+            return outcome
         # Suppress the known "no initial map" runtime error that can occur
         # when the viewer is launched without a preloaded map and the GUI
         # is closed; let other RuntimeErrors propagate.
-        msg = str(e)
-        if "Neither CaveViewerWindow.cave_cache_dir" in msg and "must be set" in msg:
+        msg = str(error)
+        if isinstance(error, RuntimeError) and (
+            "Neither CaveViewerWindow.cave_cache_dir" in msg and "must be set" in msg
+        ):
             # Clean exit without a traceback
             _LOG.info("Viewer exited without a preloaded map.")
-            return
+            return outcome
         raise
+    else:
+        return CaveViewerWindow.cave_session_outcome
     finally:
+        CaveViewerWindow.cave_pending_import = None
         CaveViewerWindow.cave_platform_runtime = None
         CaveViewerWindow.cave_runtime_settings = None
+        CaveViewerWindow.cave_session_outcome = ViewerSessionOutcome()
         CaveViewerWindow.vsync = True
         bitmap_font.clear_runtime_style()

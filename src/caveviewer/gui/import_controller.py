@@ -43,6 +43,7 @@ class MapImportController:
         release_inhibitor: Callable[[], Callable[[Any], None]],
         perf_counter: Callable[[], float],
         monotonic: Callable[[], float],
+        report_startup_failure: Callable[[str, str], None] | None = None,
     ) -> None:
         self._owner = owner
         self._logger = logger
@@ -53,6 +54,9 @@ class MapImportController:
         self._release_inhibitor = release_inhibitor
         self._perf_counter = perf_counter
         self._monotonic = monotonic
+        self._report_startup_failure = report_startup_failure or (
+            lambda _message, _suggestion: None
+        )
 
         self.active: bool = False
         self.is_startup: bool = False
@@ -447,6 +451,7 @@ class MapImportController:
         except Exception as exc:
             self.log.error("Failed to load imported map manifest: %s", exc)
             if self.is_startup:
+                self._report_startup_failure(str(exc), "")
                 self.log.error("Closing -- no map to show without a valid cache manifest.")
                 self._close_window_if_possible()
             return
@@ -469,6 +474,7 @@ class MapImportController:
         if error_trace:
             self.log.error("Import process traceback:\n%s", error_trace)
         if self.is_startup:
+            self._report_startup_failure(error_msg, error_suggestion)
             self.log.error("Closing -- no map to show without a successful import.")
             self._close_window_if_possible()
 

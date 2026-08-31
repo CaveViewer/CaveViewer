@@ -712,17 +712,21 @@ def _run_map_session(
                 cache_dir=None,
                 map_root=folder,
             )
-            run_viewer_with_pending_import(model_descriptor, **viewer_kwargs)
+            session_outcome = run_viewer_with_pending_import(
+                model_descriptor,
+                **viewer_kwargs,
+            )
             _record_application_event(
                 "viewer_session_returned",
-                outcome="window_closed",
+                outcome=getattr(session_outcome, "kind", "window_closed"),
                 cache_dir=None,
             )
             record_runtime_stage(
                 "viewer_session_returned",
-                outcome="window_closed",
+                outcome=getattr(session_outcome, "kind", "window_closed"),
                 cache_dir=None,
             )
+            return session_outcome
         except Exception as e:
             _record_application_exception(
                 "viewer_session_exception",

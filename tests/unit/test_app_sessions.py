@@ -267,6 +267,19 @@ def test_map_session_opens_uncached_glb_with_pending_import(tmp_path, monkeypatc
     assert opened == [((descriptor,), {"textures_dir": str(tmp_path)})]
 
 
+def test_map_session_returns_pending_import_failure_to_gui_loop(tmp_path, monkeypatch):
+    descriptor = {"format": "glb", "glb_path": str(tmp_path / "map.glb")}
+    outcome = SimpleNamespace(kind="import_failed")
+    monkeypatch.setattr(app, "find_model_file", lambda _folder: descriptor)
+    monkeypatch.setattr(chunker, "cache_is_valid", lambda _path: False)
+    _install_viewer_module(
+        monkeypatch,
+        run_pending=lambda *_args, **_kwargs: outcome,
+    )
+
+    assert app._run_map_session(str(tmp_path)) is outcome
+
+
 def test_map_session_opens_uncached_direct_glb_file_with_parent_texture_dir(
     tmp_path, monkeypatch
 ):
