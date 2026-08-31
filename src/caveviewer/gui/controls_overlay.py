@@ -109,6 +109,49 @@ def _minimum_control_row_height(
     )
 
 
+def _balanced_control_columns(control_sections):
+    """Pair related control sections into the approved two-column layout."""
+    return [
+        [control_sections[0], control_sections[2]],
+        [control_sections[1], control_sections[3]],
+    ]
+
+
+def _paired_section_offsets(
+    columns,
+    heading_size: float,
+    row_height: float,
+    heading_gap: float,
+    section_gap: float,
+) -> tuple[list[float], float]:
+    """Return shared vertical starts and total height for paired sections."""
+    heading_height = bitmap_font.text_height_px(heading_size)
+    slot_count = max((len(column) for column in columns), default=0)
+    slot_heights = []
+    for slot_index in range(slot_count):
+        slot_heights.append(
+            max(
+                (
+                    heading_height
+                    + heading_gap
+                    + len(column[slot_index][1]) * row_height
+                    for column in columns
+                    if slot_index < len(column)
+                ),
+                default=0.0,
+            )
+        )
+
+    offsets = []
+    cursor_y = 0.0
+    for slot_index, slot_height in enumerate(slot_heights):
+        offsets.append(cursor_y)
+        cursor_y += slot_height
+        if slot_index < len(slot_heights) - 1:
+            cursor_y += section_gap
+    return offsets, cursor_y
+
+
 def _get_platform_control_sections(
     presentation_profile: PresentationProfile | None = None,
 ) -> list[tuple[str, list[tuple[str, str]]]]:
@@ -138,7 +181,7 @@ def _get_platform_control_sections(
             ("Option + left click + mouse", "Look around (alternative)")
         )
     else:  # left
-        visual_look_rows.append(("Left click + mouse", "Look around"))
+        visual_look_rows.append(("Left-drag", "Look around"))
 
     movement = catalog_rows("movement")
     movement.append(("Scroll", "Adjust fly speed"))
@@ -528,7 +571,7 @@ class ControlsOverlay:
         layout_scale = _fullscreen_layout_scale(window_size)
 
         # Dim the 3D view heavily while the controls reference is shown.
-        add_quad_px(0, 0, w, h, (0.001, 0.002, 0.005, 0.96))
+        add_quad_px(0, 0, w, h, (0.001, 0.002, 0.005, 1.0))
 
         # Manual help has a title; startup help is intentionally lighter:
         # the map is already visually loading, so the only text needed
@@ -571,9 +614,9 @@ class ControlsOverlay:
             fill_x1 = bar_x0 + self._progress_fraction * bar_w
             if fill_x1 > bar_x0:
                 add_quad_px(bar_x0, bar_y0, fill_x1, bar_y1, _SPLASH_PROGRESS_FILL_RGBA)
-            table_start_offset = 126.0 * layout_scale
+            table_start_offset = 82.0 * layout_scale
         else:
-            table_start_offset = 126.0 * layout_scale
+            table_start_offset = 96.0 * layout_scale
 
         table_top_y = bar_bottom_y + table_start_offset
         self._draw_grouped_controls(
@@ -628,12 +671,12 @@ class ControlsOverlay:
     ):
         w, h = window_size
 
-        heading_size = 1.68 * layout_scale
-        key_size = 1.76 * layout_scale
-        desc_size = 1.80 * layout_scale
-        row_height = 31.0 * layout_scale
-        heading_gap = 13.0 * layout_scale
-        section_gap = 58.0 * layout_scale
+        heading_size = 1.82 * layout_scale
+        key_size = 1.96 * layout_scale
+        desc_size = 1.98 * layout_scale
+        row_height = 35.0 * layout_scale
+        heading_gap = 15.0 * layout_scale
+        section_gap = 52.0 * layout_scale
         key_pad_x = 8.0 * layout_scale
         key_pad_y = 4.0 * layout_scale
         keycap_row_gap = _CONTROL_KEYCAP_ROW_GAP * layout_scale
@@ -667,12 +710,8 @@ class ControlsOverlay:
 
         row_height = ensure_text_fits_row(row_height)
 
-        columns = [
-            [self._control_sections[0]],
-            [self._control_sections[1], self._control_sections[3]],
-            [self._control_sections[2]],
-        ]
-        column_gap = max(34.0, min(72.0, w * 0.035))
+        columns = _balanced_control_columns(self._control_sections)
+        column_gap = max(72.0, min(140.0, w * 0.07))
 
         def measure_columns():
             return [
@@ -684,7 +723,13 @@ class ControlsOverlay:
             ]
 
         metrics = measure_columns()
-        max_height = max((metric["height"] for metric in metrics), default=0.0)
+        section_offsets, max_height = _paired_section_offsets(
+            columns,
+            heading_size,
+            row_height,
+            heading_gap,
+            section_gap,
+        )
         total_width = sum(metric["width"] for metric in metrics) + column_gap * max(0, len(columns) - 1)
         available_width = max(240.0, w - 80.0)
         if max_height > available_height or total_width > available_width:
@@ -704,6 +749,13 @@ class ControlsOverlay:
             column_gap = max(28.0, column_gap * fit_ratio)
             row_height = ensure_text_fits_row(row_height)
             metrics = measure_columns()
+            section_offsets, _ = _paired_section_offsets(
+                columns,
+                heading_size,
+                row_height,
+                heading_gap,
+                section_gap,
+            )
 
         total_width = sum(metric["width"] for metric in metrics) + column_gap * max(0, len(columns) - 1)
 
@@ -723,6 +775,7 @@ class ControlsOverlay:
                 key_pad_x=key_pad_x,
                 key_pad_y=key_pad_y,
                 key_desc_gap=key_desc_gap,
+                section_top_ys=[top_y + offset for offset in section_offsets],
             )
             x += metric["width"] + column_gap
 
@@ -761,7 +814,7 @@ class ControlsOverlay:
     def _draw_control_column(
         self, add_quad_px, add_text, sections, x, top_y, key_col_width,
         heading_size, key_size, desc_size, row_height, heading_gap, section_gap,
-        key_pad_x, key_pad_y, key_desc_gap
+        key_pad_x, key_pad_y, key_desc_gap, section_top_ys=None,
     ):
         y = top_y
         heading_height = bitmap_font.text_height_px(heading_size)
@@ -770,41 +823,13 @@ class ControlsOverlay:
 
         desc_x = x + key_col_width + key_desc_gap
 
-        # Sections share their key and description columns, so their headings
-        # must share one left edge too.  Centering each heading over its own
-        # content makes a shorter section such as Capture drift left of Look.
-        section_layouts = []
-        for heading, rows in sections:
-            heading_text = heading.upper()
-            heading_w = bitmap_font.text_width_px(heading_text, heading_size)
-            section_desc_width = max(
-                (bitmap_font.text_width_px(desc, desc_size) for _, desc in rows),
-                default=0.0,
-            )
-            section_content_width = max(
-                heading_w,
-                key_col_width + key_desc_gap + section_desc_width,
-            )
-            section_layouts.append(
-                (heading_text, rows, heading_w, section_content_width)
-        )
-        anchor_heading_w, anchor_content_width = max(
-            (
-                (heading_w, content_width)
-                for _, _, heading_w, content_width in section_layouts
-            ),
-            key=lambda layout: layout[1],
-            default=(0.0, 0.0),
-        )
-        heading_x = x + (anchor_content_width - anchor_heading_w) / 2.0
-
-        for (
-            heading_text,
-            rows,
-            _heading_w,
-            _section_content_width,
-        ) in section_layouts:
-            add_text(heading_text, heading_x, y, heading_size, _SPLASH_TITLE_RGBA)
+        # Headings, right-aligned shortcut lanes, and descriptions each share
+        # a stable guide within the column. Paired section starts keep Navigate
+        # and Capture on the same horizontal row.
+        for section_index, (heading, rows) in enumerate(sections):
+            if section_top_ys is not None:
+                y = section_top_ys[section_index]
+            add_text(heading.upper(), x, y, heading_size, _SPLASH_TITLE_RGBA)
             y += heading_height + heading_gap
             compound_grid = self._compound_keycap_grid(
                 rows,
@@ -844,8 +869,8 @@ class ControlsOverlay:
                 desc_y = y + (row_height - desc_text_height) / 2.0
                 add_text(desc, desc_x, desc_y, desc_size, _SPLASH_SUBTITLE_RGBA)
                 y += row_height
-
-            y += section_gap
+            if section_top_ys is None:
+                y += section_gap
 
     def _keycap_parts(self, label: str) -> list[str]:
         return list(shortcut_keycap_parts(label))
@@ -922,6 +947,11 @@ class ControlsOverlay:
                 bitmap_font.text_width_px(reference, key_size)
                 for reference in _WIDE_NAMED_KEYCAPS
             ) + key_pad_x * 2.0
+        if part == "Left-drag":
+            # Match the complete four-arrow row immediately below this
+            # gesture while preserving their shared trailing edge.
+            unit_width = self._keycap_width("W", key_size, key_pad_x)
+            return unit_width * 4.0 + _KEYCAP_SEQUENCE_GAP * 3.0
         if part == "Minimap click":
             # Align the standalone minimap control with the compound bookmark
             # delete shortcut immediately above it in the Navigate section.

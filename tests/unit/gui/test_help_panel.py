@@ -220,14 +220,18 @@ def test_troubleshooting_aligns_and_places_copy_below_available_error_details():
     assert "enabled=state.error_excerpt is not None" not in render_source
 
 
-def test_help_copy_confirmation_reuses_the_modal_mark_and_standard_gap():
+def test_help_copy_confirmation_reuses_the_shared_mark_and_standard_gap():
     render_source = inspect.getsource(help_panel.HelpPanel._render_troubleshooting)
     copy_source = inspect.getsource(help_panel.HelpPanel._copy_last_error)
 
     assert "create_confirmation_mark" in inspect.getsource(help_panel)
-    assert "COPY_CONFIRMATION_GAP" in render_source
+    assert "ACTION_CONFIRMATION_GAP" in render_source
     assert "self._copy_confirmation_visible" in render_source
     assert 'self._copy_feedback = "" if copied else' in copy_source
+    assert "confirmation.show()" in copy_source
+    assert 'accessible_name="Error details copied"' in inspect.getsource(
+        help_panel.HelpPanel.create
+    )
     assert 'text="Copied"' not in copy_source
 
 
@@ -260,29 +264,15 @@ def test_copy_error_excerpt_reports_clipboard_failure():
     )
 
 
-def test_help_copy_confirmation_clears_on_timeout_and_leave():
-    cancelled = []
-    rendered = []
-    canvas = SimpleNamespace(
-        after_cancel=lambda after_id: cancelled.append(after_id),
-        winfo_width=lambda: 640,
-    )
+def test_help_copy_confirmation_clears_when_panel_is_left():
+    cleared = []
     panel = help_panel.HelpPanel.__new__(help_panel.HelpPanel)
-    panel._copy_feedback_after_id = "copy-timer"
-    panel._copy_feedback = "Copied"
+    panel._copy_confirmation = SimpleNamespace(clear=lambda: cleared.append(True))
+    panel._copy_feedback = "Couldn’t copy. Select the text manually."
     panel._copy_feedback_is_error = False
-    panel._copy_error_button = None
-    panel._content_canvas = canvas
-    panel._render_table = lambda width: rendered.append(width)
 
-    panel._clear_copy_feedback()
-
-    assert panel._copy_feedback == ""
-    assert panel._copy_feedback_after_id is None
-    assert rendered == [640]
-
-    panel._copy_feedback_after_id = "second-timer"
-    panel._copy_feedback = "Copied"
     panel.on_hidden()
-    assert cancelled == ["second-timer"]
+
+    assert cleared == [True]
     assert panel._copy_feedback == ""
+    assert panel._copy_feedback_is_error is False

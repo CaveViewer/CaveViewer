@@ -40,6 +40,69 @@ def test_minimum_control_row_height_reserves_space_between_keycaps(monkeypatch):
     assert row_height == 32.0
 
 
+def test_balanced_control_columns_pair_related_sections():
+    sections = [
+        ("Move", []),
+        ("Look", []),
+        ("Navigate", []),
+        ("Capture", []),
+    ]
+
+    columns = controls_overlay._balanced_control_columns(sections)
+
+    assert [[heading for heading, _rows in column] for column in columns] == [
+        ["Move", "Navigate"],
+        ["Look", "Capture"],
+    ]
+
+
+def test_paired_control_sections_share_vertical_starts(monkeypatch):
+    monkeypatch.setattr(
+        controls_overlay.bitmap_font,
+        "text_height_px",
+        lambda _size: 10.0,
+    )
+    columns = [
+        [("Move", [("W", "Move")] * 6), ("Navigate", [("1", "Go")] * 4)],
+        [("Look", [("J", "Look")] * 5), ("Capture", [("R", "Record")] * 5)],
+    ]
+
+    offsets, total_height = controls_overlay._paired_section_offsets(
+        columns,
+        heading_size=1.0,
+        row_height=20.0,
+        heading_gap=5.0,
+        section_gap=30.0,
+    )
+
+    assert offsets == [0.0, 165.0]
+    assert total_height == 280.0
+
+
+def test_fullscreen_controls_use_opaque_backdrop_and_spaced_prompt_gap():
+    overlay = controls_overlay.ControlsOverlay.__new__(
+        controls_overlay.ControlsOverlay
+    )
+    overlay._manual_mode = False
+    overlay._ready_to_begin = True
+    overlay._progress_fraction = 0.0
+    overlay._draw_begin_prompt = lambda *_args: 100.0
+    grouped_calls = []
+    overlay._draw_grouped_controls = (
+        lambda *_args, **kwargs: grouped_calls.append(kwargs)
+    )
+    quad_calls = []
+
+    overlay._build_fullscreen(
+        lambda *args: quad_calls.append(args),
+        lambda *_args: None,
+        (1536, 864),
+    )
+
+    assert quad_calls[0][-1][-1] == 1.0
+    assert grouped_calls[0]["top_y"] == 182.0
+
+
 def test_keycap_tiers_share_widths_while_descriptive_controls_fit_labels(
     monkeypatch,
 ):
@@ -56,6 +119,11 @@ def test_keycap_tiers_share_widths_while_descriptive_controls_fit_labels(
         "Escape": 42.0,
         "Del": 20.0,
         "1–9": 34.0,
+        "←": 10.0,
+        "→": 10.0,
+        "↑": 10.0,
+        "↓": 10.0,
+        "Left-drag": 58.0,
         "Minimap click": 64.0,
     }
     monkeypatch.setattr(
@@ -73,6 +141,11 @@ def test_keycap_tiers_share_widths_while_descriptive_controls_fit_labels(
     assert overlay._keycap_width("Space", 1.0, 4.0) == 50.0
     assert overlay._keycap_width("Escape", 1.0, 4.0) == 50.0
     assert overlay._keycap_width("Del", 1.0, 4.0) == 44.0
+    assert overlay._keycap_width("Left-drag", 1.0, 4.0) == 111.0
+    assert (
+        overlay._keycap_width("Left-drag", 1.0, 4.0)
+        == overlay._measure_keycap_sequence("← → ↑ ↓", 1.0, 4.0)
+    )
     assert overlay._keycap_width("Minimap click", 1.0, 4.0) == 120.0
     assert (
         overlay._keycap_width("Minimap click", 1.0, 4.0)
@@ -414,6 +487,53 @@ def test_grouped_control_section_headings_share_one_left_edge(monkeypatch):
     assert heading_x["CAPTURE"] == heading_x["LOOK"]
 
 
+def test_control_column_uses_shared_description_edge_and_section_starts(monkeypatch):
+    overlay = controls_overlay.ControlsOverlay.__new__(
+        controls_overlay.ControlsOverlay
+    )
+    overlay._measure_keycap_sequence = lambda _label, *_args: 30.0
+    overlay._draw_keycap_sequence = lambda *_args: None
+    monkeypatch.setattr(
+        controls_overlay.bitmap_font,
+        "text_width_px",
+        lambda text, _size: len(text) * 10.0,
+    )
+    monkeypatch.setattr(
+        controls_overlay.bitmap_font,
+        "text_height_px",
+        lambda _size: 10.0,
+    )
+    text_calls = []
+
+    overlay._draw_control_column(
+        lambda *_args: None,
+        lambda text, x, y, *_args: text_calls.append((text, x, y)),
+        [
+            ("Move", [("W", "Move forward")]),
+            ("Navigate", [("1", "Recall bookmark")]),
+        ],
+        x=20.0,
+        top_y=10.0,
+        key_col_width=100.0,
+        heading_size=1.0,
+        key_size=1.0,
+        desc_size=1.0,
+        row_height=20.0,
+        heading_gap=5.0,
+        section_gap=10.0,
+        key_pad_x=4.0,
+        key_pad_y=3.0,
+        key_desc_gap=12.0,
+        section_top_ys=[10.0, 80.0],
+    )
+
+    positions = {text: (x, y) for text, x, y in text_calls}
+    assert positions["MOVE"] == (20.0, 10.0)
+    assert positions["NAVIGATE"] == (20.0, 80.0)
+    assert positions["Move forward"][0] == 132.0
+    assert positions["Recall bookmark"][0] == 132.0
+
+
 def _control_rows_for_profile(profile) -> dict[str, str]:
     return {
         key: description
@@ -448,7 +568,8 @@ def test_control_help_copy_uses_profile_for_control_shortcuts():
     assert rows["-"] == "Decrease fly speed"
     assert rows["="] == "Increase fly speed"
     assert rows["Scroll"] == "Adjust fly speed"
-    assert rows["Left click + mouse"] == "Look around"
+    assert rows["Left-drag"] == "Look around"
+    assert "Left click + mouse" not in rows
     assert "Right click + mouse" not in rows
     assert rows["Ctrl + 0"] == "Reset view (level horizon)"
     assert rows["Ctrl + 1–9"] == "Save camera bookmark"

@@ -75,7 +75,6 @@ def test_feedback_duration_policy_uses_semantic_bounded_values():
     assert tk_feedback.INFO_FEEDBACK_MS == 5_000
     assert tk_feedback.WARNING_FEEDBACK_MS == 7_000
     assert tk_feedback.ERROR_FEEDBACK_MS == 9_000
-    assert tk_feedback.COPY_FEEDBACK_MS == 2_000
 
 
 def test_show_feedback_reuses_parent_overlay_and_dismisses_previous(monkeypatch):

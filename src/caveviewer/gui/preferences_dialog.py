@@ -57,7 +57,7 @@ from caveviewer.gui.top_tab_strip import (
     TopTabStripStyle,
 )
 from caveviewer.gui.tk_theme import DARK_THEME
-from caveviewer.gui.tk_feedback import INFO_FEEDBACK_MS, SUCCESS_FEEDBACK_MS
+from caveviewer.gui.tk_feedback import INFO_FEEDBACK_MS
 from caveviewer.gui.tk_typography import TkTypography, create_tk_typography
 
 if TYPE_CHECKING:
@@ -904,15 +904,6 @@ class PreferencesPanel:
             or getattr(self, "rendered_state", None) is None
         ):
             return
-        if (
-            not self.rendered_state.message
-            and self.rendered_state.has_unsaved_changes
-        ):
-            self.error_label.config(
-                text="You have unsaved changes.",
-                fg=_INSTRUCTION_COLOR,
-            )
-            return
         if not self.rendered_state.message and self._feedback_override is not None:
             message, color = self._feedback_override
             self.error_label.config(text=message, fg=color)
@@ -1456,11 +1447,6 @@ class PreferencesPanel:
         if result.preferences is not None:
             clean_state = self.form.mark_saved(result.preferences)
             self._render_form_state(clean_state)
-        self._show_transient_feedback(
-            "Preferences saved.",
-            DARK_THEME.primary_button,
-            duration_ms=SUCCESS_FEEDBACK_MS,
-        )
         on_applied = getattr(self, "on_applied", None)
         if on_applied is not None and result.preferences is not None:
             on_applied(result.preferences)
