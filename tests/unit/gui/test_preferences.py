@@ -1006,6 +1006,27 @@ def test_preferences_panel_restore_defaults_requires_confirmation():
     assert "not saved until" not in staged[0][1]
 
 
+def test_preferences_restore_defaults_uses_app_styled_confirmation(monkeypatch):
+    from caveviewer.gui import preferences_dialog
+
+    calls = []
+    monkeypatch.setattr(
+        preferences_dialog,
+        "ask_confirmation",
+        lambda parent, **options: calls.append((parent, options)) or True,
+    )
+    panel = preferences_dialog.PreferencesPanel.__new__(
+        preferences_dialog.PreferencesPanel
+    )
+    panel.confirm_restore = None
+    panel.dialog = object()
+
+    assert panel._confirm_restore_defaults() is True
+    assert calls[0][0] is panel.dialog
+    assert calls[0][1]["confirm_text"] == "Restore"
+    assert calls[0][1]["cancel_text"] == "Cancel"
+
+
 def _directory_picker_panel(
     preferences_dialog,
     *,
@@ -1141,10 +1162,10 @@ def test_preferences_directory_browse_blocks_disabled_route_before_chooser(tmp_p
     ]
 
 
-def test_preferences_directory_browse_uses_legacy_compatible_service(tmp_path):
+def test_preferences_directory_browse_keeps_compatible_service_feedback_quiet(
+    tmp_path,
+):
     from caveviewer.gui import preferences_dialog
-    from caveviewer.gui.preferences_form import MessageKind
-
     selected_dir = tmp_path / "selected"
     selected_dir.mkdir()
     chooser_calls = []
@@ -1165,12 +1186,7 @@ def test_preferences_directory_browse_uses_legacy_compatible_service(tmp_path):
 
     assert len(chooser_calls) == 1
     assert values.value == str(selected_dir)
-    assert feedback == [
-        (
-            "Directory selection is available through this desktop service.",
-            MessageKind.WARNING,
-        )
-    ]
+    assert feedback == []
 
 
 def test_preferences_directory_browse_reports_desktop_action_failure(tmp_path):
@@ -1243,6 +1259,9 @@ def test_preferences_panel_uses_compact_tabbed_pages():
     render_field_source = inspect.getsource(
         preferences_dialog.PreferencesPanel._render_field
     )
+    section_pack_source = inspect.getsource(
+        preferences_dialog.PreferenceSectionContainer.pack
+    )
     page_keys = [page[0] for page in preferences_dialog._PREFERENCE_PAGES]
     page_labels = [page[1] for page in preferences_dialog._PREFERENCE_PAGES]
     field_sections = {
@@ -1262,7 +1281,11 @@ def test_preferences_panel_uses_compact_tabbed_pages():
     assert "Guided Dive" not in module_source
     assert "_render_guided_dive_disclaimer" not in module_source
     assert "compact_path = value_type in {" in render_field_source
-    assert "entry.grid(row=0, column=0, sticky=\"ew\")" in render_field_source
+    assert "ipady=_COMPACT_PATH_CONTROL_PAD_Y" in render_field_source
+    assert "self.field_compound_controls[key] = entry_parent" in render_field_source
+    assert "browse_button.configure(borderwidth=0, highlightthickness=0)" in render_field_source
+    assert 'padx=(1, 1)' in render_field_source
+    assert 'pady=1' in render_field_source
     assert "grid_remove()" in show_page_source
     assert "candidate_page.tkraise()" not in show_page_source
     assert "self._ensure_page(page_key)" in show_page_source
@@ -1272,6 +1295,7 @@ def test_preferences_panel_uses_compact_tabbed_pages():
     assert "self.button_row.pack(" in source
     assert "self.page_scroll_shell.pack(side=\"top\", fill=\"both\", expand=True)" in source
     assert "TopTabbedContentSurface(" in source
+    assert "padx=(self._px(TABBED_CONTENT_ALIGNMENT_INSET), 0)" in section_pack_source
     assert "on_selected=self._show_page" in source
     assert "self.tab_strip.select(page_key, notify=False)" in show_page_source
     assert "CanvasVerticalScrollbar(" in source
@@ -1379,6 +1403,56 @@ def test_preferences_page_switch_maps_only_the_selected_page():
     assert panel._page_scroll_region is None
     assert panel._scrollbar_layout_state is None
     assert layout_requests == [True]
+
+
+def test_preferences_compound_path_control_preserves_focus_and_invalid_borders():
+    from caveviewer.gui import preferences_dialog
+
+    colors = []
+    shell = SimpleNamespace(configure=lambda **options: colors.append(options["bg"]))
+    panel = object.__new__(preferences_dialog.PreferencesPanel)
+    panel.field_compound_controls = {"recording_dir": shell}
+    panel.rendered_invalid_key = None
+
+    panel._set_compound_focus("recording_dir", focused=True)
+    panel._set_compound_focus("recording_dir", focused=False)
+    panel.rendered_invalid_key = "recording_dir"
+    panel._set_compound_focus("recording_dir", focused=False)
+
+    assert colors == [
+        preferences_dialog.DARK_THEME.entry_focus_border,
+        preferences_dialog.DARK_THEME.entry_border,
+        preferences_dialog.DARK_THEME.invalid_border,
+    ]
+
+
+def test_preferences_field_lock_updates_compound_path_border():
+    from caveviewer.gui import preferences_dialog
+
+    entry_updates = []
+    shell_updates = []
+    panel = object.__new__(preferences_dialog.PreferencesPanel)
+    panel.field_entries = {
+        "recording_dir": SimpleNamespace(
+            config=lambda **options: entry_updates.append(options)
+        )
+    }
+    panel.field_entry_states = {"recording_dir": "readonly"}
+    panel.field_compound_controls = {
+        "recording_dir": SimpleNamespace(
+            configure=lambda **options: shell_updates.append(options)
+        )
+    }
+    panel.field_browse_buttons = {}
+
+    panel._set_field_lock("recording_dir")
+    panel._set_field_lock(None)
+
+    assert entry_updates[0]["state"] == "readonly"
+    assert shell_updates == [
+        {"bg": preferences_dialog.DARK_THEME.invalid_border},
+        {"bg": preferences_dialog.DARK_THEME.entry_border},
+    ]
 
 
 def test_preferences_layout_requests_are_coalesced_and_cancelled_on_destroy():

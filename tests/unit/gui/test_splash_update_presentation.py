@@ -493,11 +493,12 @@ def test_library_recent_maps_use_open_history_not_last_browse(
     assert splash_screen._load_library_recent_map_paths() == [str(recent_map)]
 
 
-def test_splash_root_reuses_existing_macos_tk_root(monkeypatch):
+@pytest.mark.parametrize("platform_name", ["darwin", "win32"])
+def test_splash_root_reuses_existing_retained_tk_root(monkeypatch, platform_name):
     monkeypatch.setattr(
         splash_screen,
         "_SPLASH_LAYOUT_POLICY",
-        select_presentation_profile(platform_name="darwin").splash_layout,
+        select_presentation_profile(platform_name=platform_name).splash_layout,
     )
     destroyed_children = []
 
@@ -522,13 +523,42 @@ def test_splash_root_reuses_existing_macos_tk_root(monkeypatch):
         {
             "_default_root": root,
             "Tk": lambda **_options: (_ for _ in ()).throw(
-                AssertionError("macOS splash must reuse the kept-alive root")
+                AssertionError("retained-root platform must reuse the Tk root")
             ),
         },
     )
 
     assert splash_screen._create_splash_root(tk_module) is root
     assert destroyed_children == ["old-logo", "old-button"]
+
+
+def test_recovered_map_error_is_presented_after_library_reveal():
+    source = inspect.getsource(splash_screen.show_splash_screen)
+    reveal_start = source.index("def _reveal_composed_main_surface")
+    reveal_end = source.index("def _animate_launch_progress", reveal_start)
+    reveal_source = source[reveal_start:reveal_end]
+
+    assert reveal_source.index("root.deiconify()") < reveal_source.index(
+        "root.update_idletasks()"
+    )
+    assert reveal_source.index("root.update_idletasks()") < reveal_source.index(
+        "show_copyable_error("
+    )
+    assert 'title="Couldn’t open map"' in reveal_source
+    assert (
+        'message="CaveViewer could not open this map due to an error."'
+        in reveal_source
+    )
+
+
+def test_three_action_preferences_modal_uses_shared_warning_heading():
+    source = inspect.getsource(splash_screen._show_unsaved_preferences_dialog)
+
+    heading = source.index("create_semantic_heading(")
+    description = source.index('text=(\n            "Your Preferences changes')
+    assert heading < description
+    assert 'kind="warning"' in source[heading:description]
+    assert 'background=_BG_COLOR' in source[heading:description]
 
 
 def test_splash_root_creates_new_tk_when_no_macos_root(monkeypatch):
@@ -695,25 +725,38 @@ def test_launch_layout_settlement_is_fixed_and_bounded():
     assert calls == [True, True, True]
 
 
-def test_launch_splash_waits_only_for_the_remaining_minimum_duration():
-    remaining = splash_screen._remaining_launch_delay_ms
+def test_preferences_navigation_gear_geometry_executes_during_startup():
+    points = splash_screen._navigation_gear_points(16.0, lambda value: value)
 
-    assert splash_screen._MIN_LAUNCH_SPLASH_MS == 5_000
-    assert remaining(visible_at=10.0, now=10.0) == 5_000
-    assert remaining(visible_at=10.0, now=11.25) == 3_750
-    assert remaining(visible_at=10.0, now=15.0) == 0
-    assert remaining(visible_at=10.0, now=16.0) == 0
+    assert len(points) == 16
+    assert points[0] == pytest.approx((16.0, 5.0))
+    assert points[8] == pytest.approx((16.0, 27.0))
+
+
+def test_launch_splash_waits_only_for_the_remaining_minimum_duration():
+    from caveviewer.gui.splash_controller import StartupReadinessGate
+
+    gate = StartupReadinessGate(
+        visible_at=10.0,
+        minimum_ms=splash_screen._MIN_LAUNCH_SPLASH_MS,
+    )
+    assert splash_screen._MIN_LAUNCH_SPLASH_MS == 3_000
+    assert gate.remaining_delay_ms(10.0) == 3_000
+    assert gate.remaining_delay_ms(11.25) == 1_750
+    assert gate.remaining_delay_ms(13.0) == 0
+    assert gate.remaining_delay_ms(16.0) == 0
 
 
 def test_launch_splash_uses_the_loading_exploration_tagline():
     source = inspect.getsource(splash_screen._render_launch_content)
 
-    assert 'text="Preparing to explore what lies beneath…"' in source
+    assert 'text="Preparing to explore what lies beneath..."' in source
+    assert "program_name" not in source
     assert 'text="Starting…"' not in source
 
 
-def test_launch_indicator_uses_the_anti_aliased_progress_ring_renderer(monkeypatch):
-    source = inspect.getsource(splash_screen._draw_launch_indicator_frame)
+def test_launch_surface_uses_a_flat_milestone_progress_bar():
+    source = inspect.getsource(splash_screen._render_launch_content)
     calls = []
 
     class _Canvas:
@@ -726,40 +769,25 @@ def test_launch_indicator_uses_the_anti_aliased_progress_ring_renderer(monkeypat
         def delete(self, tag):
             calls.append(("delete", tag))
 
-        def create_image(self, *coordinates, **options):
-            calls.append(("image", coordinates, options))
+        def create_text(self, *coordinates, **options):
+            calls.append(("text", coordinates, options))
 
-    def _progress_ring_photo(canvas, **options):
-        calls.append(("ring", canvas, options))
-        return "ring-photo"
+        def create_rectangle(self, *coordinates, **options):
+            calls.append(("rectangle", coordinates, options))
 
-    monkeypatch.setattr(splash_screen, "progress_ring_photo", _progress_ring_photo)
-
-    splash_screen._draw_launch_indicator_frame(
+    splash_screen._render_launch_content(
         _Canvas(),
-        phase_degrees=24,
+        progress=0.5,
         px=lambda value: int(value),
     )
 
-    assert "progress_ring_photo(" in source
+    assert "create_rectangle(" in source
     assert "create_oval(" not in source
     assert "create_arc(" not in source
-    assert calls[0] == ("delete", "launch_indicator")
-    assert calls[1][0] == "ring"
-    assert calls[1][2] == {
-        "image_size": 95,
-        "ring_diameter": 91,
-        "stroke_width": 2,
-        "track_color": splash_screen.DARK_THEME.entry_border,
-        "fill_color": splash_screen._BUTTON_BG,
-        "start_degrees": 66.0,
-        "extent_degrees": -splash_screen._LAUNCH_INDICATOR_ARC_DEGREES,
-    }
-    assert calls[2] == (
-        "image",
-        (66.0, 66.0),
-        {"image": "ring-photo", "tags": "launch_indicator"},
-    )
+    assert calls[0] == ("delete", "launch_content")
+    assert calls[1][0] == "text"
+    assert calls[1][2]["text"] == "Preparing to explore what lies beneath..."
+    assert [call[0] for call in calls].count("rectangle") == 2
 
 
 def test_launch_logo_suppresses_only_amber_pixels_like_the_map_loader():
@@ -783,12 +811,13 @@ def test_launch_logo_suppresses_only_amber_pixels_like_the_map_loader():
     ]
 
 
-def test_launch_surface_replaces_the_logo_amber_with_one_indicator_ring():
+def test_launch_surface_uses_dark_background_without_a_logo_or_ring():
     source = inspect.getsource(splash_screen._build_launch_surface)
     content_source = inspect.getsource(splash_screen._render_launch_content)
 
-    assert "suppress_amber=True" in source
-    assert "_draw_launch_indicator_frame(" in content_source
+    assert "_load_brand_logo(" not in source
+    assert "progress_ring_photo(" not in content_source
+    assert "program_name" not in content_source
     assert "_render_launch_background(" in source
 
 
@@ -840,32 +869,46 @@ def test_splash_navigation_actions_are_keyboard_accessible_without_fallthrough()
     assert "root.after_idle(_ensure_preferences_panel)" not in source
     assert "_build_launch_surface(" in source
     assert "_settle_launch_layout(root, passes=3)" in source
-    assert "def _advance_launch_indicator() -> None:" in source
-    assert "_LAUNCH_INDICATOR_INTERVAL_MS" in source
-    indicator_start = source.index("def _advance_launch_indicator() -> None:")
-    indicator_source = source[
-        indicator_start : source.index(
-            "\n\n    # The splash is organized",
-            indicator_start,
-        )
-    ]
-    assert indicator_source.count("splash_controller.schedule(") == 1
-    assert "if show_launch_overlay:" in indicator_source
-    assert "_advance_launch_indicator()" in indicator_source
+    assert "readiness_gate = StartupReadinessGate(" in source
+    assert "def _advance_launch_progress(fraction: float) -> None:" in source
+    assert "readiness_gate.advance(fraction)" in source
+    assert "readiness_gate.mark_ready()" in source
     assert "def _reveal_composed_main_surface() -> None:" in source
     assert "splash_controller.schedule(" in source
-    assert "splash_controller.schedule_idle(_reveal_composed_main_surface)" in source
+    return_session_reveal = source[
+        source.index("if show_launch_overlay:", source.index("def _animate_launch_progress")) :
+        source.index("# The app-owned manager survives", source.index("def _animate_launch_progress"))
+    ]
+    assert "else:\n        # Returning from a native viewer" in return_session_reveal
+    assert "_reveal_composed_main_surface()" in return_session_reveal
+    assert "schedule_idle" not in return_session_reveal
+    assert source.index("_reveal_composed_main_surface()", source.index("else:")) < source.index(
+        "root.mainloop()"
+    )
     reveal_source = source[
         source.index("def _reveal_composed_main_surface() -> None:") : source.index(
-            "# Honor one total minimum duration"
+            "def _animate_launch_progress() -> None:"
         )
     ]
-    assert "launch_indicator_active[0] = False" in reveal_source
+    assert "if not readiness_gate.ready:" in reveal_source
+    assert "readiness_gate.remaining_delay_ms(time.monotonic())" in reveal_source
     assert "launch_surface.destroy()" in reveal_source
+    assert "root.resizable(" not in reveal_source
     assert "after_idle(" not in reveal_source
     assert "schedule_after(" not in reveal_source
+    assert source.count("root.resizable(True, True)") == 1
+    assert source.index("root.resizable(True, True)") < source.index("root.deiconify()")
+    assert "root.resizable(False, False)" not in source
+    assert "available_width = max(1, screen_w - display_margin)" in source
+    assert "available_height = max(1, screen_h - display_margin)" in source
+    assert "root.minsize(" in source
+    assert "min(px(_SPLASH_RESIZE_MIN_WIDTH), available_width)" in source
+    assert "min(px(_SPLASH_RESIZE_MIN_HEIGHT), available_height)" in source
+    assert "final_height = min(final_height, available_height)" in source
     assert "if show_launch_overlay" in source
-    assert "else 0" in source
+    assert "readiness_gate.visual_progress(now)" in source
+    assert "_LAUNCH_PROGRESS_INTERVAL_MS" in source
+    assert "splash_controller.schedule(50, _reveal_composed_main_surface)" in source
     assert "def _show_about_surface() -> None:" in source
     assert "def _ensure_help_panel() -> HelpPanel:" in source
     assert "def _show_help_surface() -> None:" in source
@@ -949,9 +992,12 @@ def test_splash_navigation_selection_uses_type_and_color_without_a_fill():
 def test_unsaved_preferences_dialog_offers_three_explicit_close_choices():
     source = inspect.getsource(splash_screen._show_unsaved_preferences_dialog)
 
-    assert '_make_button("Save changes"' in source
-    assert '_make_button("Discard changes"' in source
-    assert '_make_button("Keep editing"' in source
+    assert '_make_button("Save"' in source
+    assert '_make_button("Discard"' in source
+    assert '_make_button("Keep"' in source
+    assert 'button_row.pack(side="bottom", fill="x")' in source
+    assert "MODAL_MIN_WIDTH" in source
+    assert "MODAL_MIN_HEIGHT" in source
     assert "if not on_save():" in source
     assert 'dialog.bind("<Escape>", _close_dialog)' in source
     assert 'dialog.protocol("WM_DELETE_WINDOW", _close_dialog)' in source
@@ -1016,7 +1062,7 @@ def test_splash_navigation_uses_a_quiet_rail_and_lower_app_status():
     assert 'justify="left"' in source
 
 
-def test_themed_about_content_reuses_the_splash_identity_in_both_hosts():
+def test_themed_about_content_owns_the_brand_identity_while_launch_stays_quiet():
     content_source = inspect.getsource(splash_screen._build_themed_about_content)
     logo_source = inspect.getsource(splash_screen._load_brand_logo)
     launch_source = inspect.getsource(splash_screen._build_launch_surface)
@@ -1028,7 +1074,7 @@ def test_themed_about_content_reuses_the_splash_identity_in_both_hosts():
     assert "dialog.grab_set()" in dialog_source
     assert "_LOGO_PATH" in logo_source
     assert "_load_brand_logo(" in content_source
-    assert "_load_brand_logo(" in launch_source
+    assert "_load_brand_logo(" not in launch_source
     assert "_CREDITS_TEXT.strip()" in content_source
     assert "_ABOUT_WEBSITE_LINKS" in content_source
     assert "www.caveviewer.com" in inspect.getsource(splash_screen)

@@ -3118,6 +3118,76 @@ def test_run_viewer_forwards_map_root_to_the_deferred_window_load(
     assert viewer_window.CaveViewerWindow.cave_map_root is None
 
 
+def test_pending_import_failure_suppresses_only_its_native_close_signal(monkeypatch):
+    descriptor = {"format": "glb", "glb_path": "/maps/cave.glb"}
+
+    def fail_after_recording_outcome():
+        viewer_window.CaveViewerWindow.cave_session_outcome = (
+            viewer_window.ViewerSessionOutcome(
+                kind="import_failed",
+                message="cache build already active",
+                suggestion="wait, then retry",
+            )
+        )
+        raise SystemExit(1)
+
+    monkeypatch.setattr(
+        viewer_window,
+        "_launch_viewer_window",
+        fail_after_recording_outcome,
+    )
+
+    outcome = viewer_window.run_viewer_with_pending_import(descriptor, "/maps")
+
+    assert outcome == viewer_window.ViewerSessionOutcome(
+        kind="import_failed",
+        message="cache build already active",
+        suggestion="wait, then retry",
+    )
+    assert viewer_window.CaveViewerWindow.cave_pending_import is None
+    assert viewer_window.CaveViewerWindow.cave_session_outcome == (
+        viewer_window.ViewerSessionOutcome()
+    )
+
+
+def test_pending_import_does_not_suppress_unrelated_native_exit(monkeypatch):
+    descriptor = {"format": "glb", "glb_path": "/maps/cave.glb"}
+    monkeypatch.setattr(
+        viewer_window,
+        "_launch_viewer_window",
+        lambda: (_ for _ in ()).throw(SystemExit(7)),
+    )
+
+    with pytest.raises(SystemExit) as raised:
+        viewer_window.run_viewer_with_pending_import(descriptor, "/maps")
+
+    assert raised.value.code == 7
+
+
+def test_pending_import_failure_does_not_hide_an_unrelated_viewer_exception(
+    monkeypatch,
+):
+    descriptor = {"format": "glb", "glb_path": "/maps/cave.glb"}
+
+    def fail_after_recording_outcome():
+        viewer_window.CaveViewerWindow.cave_session_outcome = (
+            viewer_window.ViewerSessionOutcome(
+                kind="import_failed",
+                message="cache build already active",
+            )
+        )
+        raise ValueError("renderer teardown failed")
+
+    monkeypatch.setattr(
+        viewer_window,
+        "_launch_viewer_window",
+        fail_after_recording_outcome,
+    )
+
+    with pytest.raises(ValueError, match="renderer teardown failed"):
+        viewer_window.run_viewer_with_pending_import(descriptor, "/maps")
+
+
 def test_run_viewer_benchmark_records_scenario_and_cache_identity(tmp_path, monkeypatch):
     cache_dir = tmp_path / "cache"
     cache_dir.mkdir()

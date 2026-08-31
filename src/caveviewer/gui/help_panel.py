@@ -23,6 +23,7 @@ from caveviewer.gui.scrollable_content import (
     CanvasVerticalScrollbar,
 )
 from caveviewer.gui.top_tab_strip import (
+    TABBED_CONTENT_ALIGNMENT_INSET,
     TopTab,
     TopTabbedContentSurface,
     TopTabbedContentSurfaceStyle,
@@ -720,7 +721,7 @@ class HelpPanel:
     ) -> int:
         style = self._style
         canvas.create_text(
-            0,
+            self._px(TABBED_CONTENT_ALIGNMENT_INSET),
             y,
             text=section.title.upper(),
             font=self._canvas_font("section"),
@@ -798,7 +799,7 @@ class HelpPanel:
         keycap_height = self._keycap_height(shortcut.shortcut)
         self._draw_keycap_sequence(
             canvas,
-            x=self._px(12),
+            x=self._px(TABBED_CONTENT_ALIGNMENT_INSET),
             y=(
                 y
                 + resolved_top_pad_y

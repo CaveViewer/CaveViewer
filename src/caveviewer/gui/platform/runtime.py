@@ -8,6 +8,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Mapping
 
+from caveviewer.branding import BrandingAssets, resolve_branding_assets
 from caveviewer.core.capabilities import (
     CapabilityResult,
     CapabilityStatus,
@@ -252,6 +253,7 @@ class PlatformRuntime:
 
     profile: PlatformProfile
     runtime_settings: RuntimeSettings | None
+    branding_assets: BrandingAssets
     presentation_profile: PresentationProfile
     presentation_actions_adapter: PresentationActionsAdapter
     desktop_services: DesktopServices
@@ -425,6 +427,7 @@ def create_platform_runtime(
     tls_trust_adapter: TlsTrustAdapter | None = None,
     window_backend_adapter: WindowBackendAdapter | None = None,
     runtime_settings: RuntimeSettings | None = None,
+    branding_assets: BrandingAssets | None = None,
     environment: Mapping[str, str] | None = None,
     platform_name: str | None = None,
     machine: str | None = None,
@@ -439,6 +442,9 @@ def create_platform_runtime(
     resolved_presentation_profile = (
         presentation_profile
         or select_presentation_profile(platform_name=resolved_platform_name)
+    )
+    resolved_branding_assets = branding_assets or resolve_branding_assets(
+        environ={} if environment is None else environment
     )
     resolved_desktop_services = desktop_services or get_desktop_services(
         platform_name=resolved_platform_name
@@ -536,6 +542,7 @@ def create_platform_runtime(
     return PlatformRuntime(
         profile=profile,
         runtime_settings=runtime_settings,
+        branding_assets=resolved_branding_assets,
         presentation_profile=resolved_presentation_profile,
         presentation_actions_adapter=resolved_presentation_actions_adapter,
         desktop_services=resolved_desktop_services,

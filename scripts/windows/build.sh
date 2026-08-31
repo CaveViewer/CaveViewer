@@ -80,17 +80,18 @@ fi
 
 version_file="$repo_root/src/caveviewer/version.py"
 spec_file="$repo_root/packaging/pyinstaller/CaveViewer.spec"
-icon_file="$repo_root/scripts/windows/icon/caveviewer.ico"
 venv_dir="${CAVEVIEWER_WINDOWS_BUILD_VENV:-$repo_root/.venv-windows-build}"
 dist_app_dir="$repo_root/dist/windows/app"
 payload_dir="$dist_app_dir/CaveViewer"
 work_dir="$repo_root/build/pyinstaller/windows"
+branding_export_dir="$repo_root/build/branding/windows"
+branding_profile="${CAVEVIEWER_BRAND_PROFILE:-$repo_root/src/caveviewer/resources/branding/default}"
 build_python="${CAVEVIEWER_WINDOWS_BUILD_PYTHON:-}"
 
 cv_prepare_release_metadata "$repo_root" >/dev/null
 release_metadata_path="$CAVEVIEWER_RELEASE_METADATA_PATH"
 
-for required_path in "$version_file" "$spec_file" "$icon_file"; do
+for required_path in "$version_file" "$spec_file"; do
   if [ ! -f "$required_path" ]; then
     echo "Error: required Windows build input is missing: $required_path" >&2
     exit 1
@@ -112,12 +113,34 @@ fi
 
 "$build_python" -m pip install --upgrade pip
 "$build_python" -m pip install -r "$repo_root/requirements.txt"
+"$build_python" -m pip install --no-deps -e "$(windows_path "$repo_root")"
 "$build_python" -m pip install "pyinstaller==6.21.0"
+
+"$build_python" -m caveviewer.branding_export \
+  --profile "$(windows_path "$branding_profile")" \
+  export \
+  --output "$(windows_path "$branding_export_dir")" \
+  --replace
+icon_file="$branding_export_dir/windows/caveviewer.ico"
+branding_summary="$branding_export_dir/export-summary.v1.json"
+if [ -d "$branding_profile" ]; then
+  branding_profile_dir="$branding_profile"
+else
+  branding_profile_dir="$(dirname "$branding_profile")"
+fi
+for required_path in "$icon_file" "$branding_summary" "$branding_profile_dir/branding.v1.json"; do
+  if [ ! -f "$required_path" ]; then
+    echo "Error: required branding export input is missing: $required_path" >&2
+    exit 1
+  fi
+done
 
 rm -rf "$payload_dir" "$work_dir"
 mkdir -p "$dist_app_dir" "$work_dir"
 
 CAVEVIEWER_APP_ICON="$(windows_path "$icon_file")" \
+CAVEVIEWER_BRAND_PROFILE_DIR="$(windows_path "$branding_profile_dir")" \
+CAVEVIEWER_BRANDING_EXPORT_SUMMARY="$(windows_path "$branding_summary")" \
 CAVEVIEWER_RELEASE_METADATA_PATH="$(windows_path "$release_metadata_path")" \
 "$build_python" -m PyInstaller --clean --noconfirm \
   --distpath "$(windows_path "$dist_app_dir")" \
@@ -151,5 +174,12 @@ if [ -z "$bundled_release_metadata" ]; then
   exit 1
 fi
 cv_verify_release_metadata "$bundled_release_metadata" "$(cv_release_channel)"
+bundled_branding_manifest="$(find "$payload_dir" -type f -path '*caveviewer/resources/branding/default/branding.v1.json' -print -quit)"
+bundled_branding_summary="$(find "$payload_dir" -type f -path '*caveviewer/resources/branding/export-summary.v1.json' -print -quit)"
+if [ -z "$bundled_branding_manifest" ] || [ -z "$bundled_branding_summary" ]; then
+  echo "Error: frozen payload is missing selected branding inputs or provenance." >&2
+  exit 1
+fi
 
 echo "Built frozen Windows payload: $payload_dir"
+echo "Branding export summary: $branding_summary"

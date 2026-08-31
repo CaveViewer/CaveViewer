@@ -29,6 +29,7 @@ caveviewer = "caveviewer.__main__:run"
 caveviewer-benchmark = "caveviewer.benchmark:run"
 caveviewer-map-benchmark = "caveviewer.benchmarking.map_runner:run"
 caveviewer-chunker = "caveviewer.chunker:main"
+caveviewer-branding = "caveviewer.branding_export:run"
 
 [tool.setuptools.dynamic]
 version = {attr = "caveviewer.version.APP_VERSION"}
@@ -42,6 +43,9 @@ where = ["src"]
     "images/*.jpg",
     "images/ui/*.svg",
     "images/ui/*.png",
+    "branding/**/*.json",
+    "branding/**/*.png",
+    "branding/**/*.svg",
     "shaders/*.frag",
     "shaders/*.vert",
     "*.pem",

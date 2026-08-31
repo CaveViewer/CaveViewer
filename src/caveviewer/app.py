@@ -22,6 +22,7 @@ Workflow:
 import logging
 import os
 import sys
+from datetime import datetime
 
 from caveviewer.core.diagnostics.application import (
     ApplicationDiagnostics,
@@ -130,6 +131,30 @@ def _runtime_diagnostics_hint() -> str:
     if diagnostics is None:
         return ""
     return f"\n\nDiagnostic log:\n{diagnostics.path}"
+
+
+def _format_map_open_failure_details(
+    outcome,
+    *,
+    map_path: str,
+    occurred_at: datetime | None = None,
+    diagnostic_path: str | None = None,
+) -> str:
+    """Build the concise diagnostic bundle copied from a recovered-error modal."""
+    timestamp = occurred_at or datetime.now().astimezone()
+    lines = [
+        f"{APP_NAME} map-open error",
+        f"Version: {__version__}",
+        f"Time: {timestamp.isoformat(timespec='seconds')}",
+        f"Map: {os.path.abspath(map_path)}",
+        f"Error: {getattr(outcome, 'message', '') or 'Unknown map-open error'}",
+    ]
+    suggestion = str(getattr(outcome, "suggestion", "") or "").strip()
+    if suggestion:
+        lines.append(f"Suggestion: {suggestion}")
+    if diagnostic_path:
+        lines.append(f"Diagnostic log: {diagnostic_path}")
+    return "\n".join(lines)
 
 
 def _show_viewer_launch_error(error: BaseException) -> None:
@@ -712,17 +737,21 @@ def _run_map_session(
                 cache_dir=None,
                 map_root=folder,
             )
-            run_viewer_with_pending_import(model_descriptor, **viewer_kwargs)
+            session_outcome = run_viewer_with_pending_import(
+                model_descriptor,
+                **viewer_kwargs,
+            )
             _record_application_event(
                 "viewer_session_returned",
-                outcome="window_closed",
+                outcome=getattr(session_outcome, "kind", "window_closed"),
                 cache_dir=None,
             )
             record_runtime_stage(
                 "viewer_session_returned",
-                outcome="window_closed",
+                outcome=getattr(session_outcome, "kind", "window_closed"),
                 cache_dir=None,
             )
+            return session_outcome
         except Exception as e:
             _record_application_exception(
                 "viewer_session_exception",
@@ -832,7 +861,10 @@ def main():
         selected_path = sys.argv.pop(1).strip()
         _run_map_session(
             selected_path,
-            platform_runtime=create_platform_runtime(runtime_settings=runtime_settings),
+            platform_runtime=create_platform_runtime(
+                runtime_settings=runtime_settings,
+                environment=os.environ,
+            ),
             runtime_settings=runtime_settings,
         )
         return
@@ -857,7 +889,10 @@ def main():
     record_startup_stage("update_manager_import_complete")
 
     record_startup_stage("platform_runtime_create_begin")
-    platform_runtime = create_platform_runtime(runtime_settings=runtime_settings)
+    platform_runtime = create_platform_runtime(
+        runtime_settings=runtime_settings,
+        environment=os.environ,
+    )
     record_startup_stage("platform_runtime_create_complete")
     record_startup_stage("update_manager_create_begin")
     update_manager = UpdateManager(
@@ -865,6 +900,7 @@ def main():
         platform_runtime=platform_runtime,
     )
     first_library_session = True
+    pending_map_open_error_details: str | None = None
     record_startup_stage("update_manager_create_complete")
     try:
         while True:
@@ -878,18 +914,29 @@ def main():
                 runtime_settings_provider=lambda: runtime_settings_session.snapshot,
                 on_preferences_saved=runtime_settings_session.replace_preferences,
                 show_launch_overlay=first_library_session,
+                map_open_error_details=pending_map_open_error_details,
             )
             first_library_session = False
+            pending_map_open_error_details = None
 
             if not folder:
                 _LOG.info("No folder selected. Exiting.")
                 return
 
-            _run_map_session(
+            session_outcome = _run_map_session(
                 folder,
                 platform_runtime=platform_runtime,
                 runtime_settings=runtime_settings_session.snapshot,
             )
+            if getattr(session_outcome, "kind", "") == "import_failed":
+                diagnostics = get_active_runtime_diagnostics()
+                pending_map_open_error_details = _format_map_open_failure_details(
+                    session_outcome,
+                    map_path=folder,
+                    diagnostic_path=(
+                        str(diagnostics.path) if diagnostics is not None else None
+                    ),
+                )
             # Viewer closed -- rebuild the library off-screen without replaying
             # the startup-only launch overlay. The process-owned update state
             # and any in-progress download survive both UI sessions.

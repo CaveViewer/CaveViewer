@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import sys
-from types import ModuleType, SimpleNamespace
-
 from caveviewer.gui import notifications
 from caveviewer.version import APP_NAME
 
@@ -13,21 +10,32 @@ def test_all_notification_levels_use_caveviewer_title_and_preserve_parent(
     monkeypatch,
 ):
     calls = []
-    tkinter = ModuleType("tkinter")
-    tkinter.messagebox = SimpleNamespace(
-        showinfo=lambda *args, **kwargs: calls.append(("info", args, kwargs)),
-        showwarning=lambda *args, **kwargs: calls.append(("warning", args, kwargs)),
-        showerror=lambda *args, **kwargs: calls.append(("error", args, kwargs)),
+    monkeypatch.setattr(
+        notifications,
+        "show_message",
+        lambda parent, **options: calls.append((parent, options)),
     )
-    monkeypatch.setitem(sys.modules, "tkinter", tkinter)
     parent = object()
 
-    notifications.show_info("ready")
+    notifications.show_info("ready", parent=parent)
     notifications.show_warning("careful", parent=parent)
     notifications.show_error("failed", parent=parent)
 
     assert calls == [
-        ("info", (APP_NAME, "ready"), {}),
-        ("warning", (APP_NAME, "careful"), {"parent": parent}),
-        ("error", (APP_NAME, "failed"), {"parent": parent}),
+        (parent, {"title": APP_NAME, "message": "ready", "kind": "info"}),
+        (parent, {"title": APP_NAME, "message": "careful", "kind": "warning"}),
+        (parent, {"title": APP_NAME, "message": "failed", "kind": "error"}),
     ]
+
+
+def test_notification_does_not_create_a_second_tk_root(monkeypatch):
+    import tkinter as tk
+
+    monkeypatch.setattr(tk, "_default_root", None)
+
+    try:
+        notifications.show_error("failed")
+    except RuntimeError as exc:
+        assert "application window" in str(exc)
+    else:
+        raise AssertionError("notification unexpectedly created a Tk root")

@@ -5,6 +5,8 @@ IDE/shell setup, tests, variables, storage locations, and troubleshooting.
 Cross-layer contracts live in [Architecture](architecture.md), while setting
 ownership and precedence live in
 [Runtime configuration](runtime-configuration.md).
+Visual experiments use the developer-only profile selection and exporter in
+[Branding](branding.md); branding is not a saved user preference.
 
 Scope:
 

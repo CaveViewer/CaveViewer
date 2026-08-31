@@ -40,10 +40,10 @@ venv_python="$venv_dir/bin/python"
 spec_file="$repo_root/packaging/pyinstaller/CaveViewer.spec"
 dist_app_dir="$repo_root/dist/macos/app"
 work_dir="$repo_root/build/pyinstaller"
-logo_png="$repo_root/src/caveviewer/resources/images/app_icon_macos.png"
-icon_work_dir="$work_dir/iconset"
-iconset_dir="$icon_work_dir/CaveViewer.iconset"
-icon_icns="$icon_work_dir/CaveViewer.icns"
+branding_export_dir="$repo_root/build/branding/macos"
+branding_profile="${CAVEVIEWER_BRAND_PROFILE:-$repo_root/src/caveviewer/resources/branding/default}"
+iconset_dir="$branding_export_dir/macos/CaveViewer.iconset"
+icon_icns="$branding_export_dir/macos/CaveViewer.icns"
 
 cv_prepare_release_metadata "$repo_root" >/dev/null
 release_metadata_path="$CAVEVIEWER_RELEASE_METADATA_PATH"
@@ -69,16 +69,6 @@ if [ ! -x "$venv_python" ] || ! cv_python_is_supported "$venv_python"; then
   "$python_bin" -m venv "$venv_dir"
 fi
 
-if [ ! -f "$logo_png" ]; then
-  echo "Error: app logo source not found at $logo_png"
-  exit 1
-fi
-
-if ! command -v sips >/dev/null 2>&1; then
-  echo "Error: required macOS tool not found: sips"
-  exit 1
-fi
-
 if ! command -v iconutil >/dev/null 2>&1; then
   echo "Error: required macOS tool not found: iconutil"
   exit 1
@@ -86,34 +76,35 @@ fi
 
 echo "Using venv: $venv_dir"
 "$venv_python" -m pip install --upgrade -r "$repo_root/requirements.txt"
+"$venv_python" -m pip install --no-deps -e "$repo_root"
 "$venv_python" -m pip install --upgrade "pyinstaller==6.21.0"
 
 cd "$repo_root"
 mkdir -p "$dist_app_dir" "$work_dir"
-rm -rf "$iconset_dir"
-mkdir -p "$iconset_dir"
-
-make_icon_png() {
-  local size="$1"
-  local out_name="$2"
-  sips -z "$size" "$size" "$logo_png" --out "$iconset_dir/$out_name" >/dev/null
-}
-
-make_icon_png 16 icon_16x16.png
-make_icon_png 32 icon_16x16@2x.png
-make_icon_png 32 icon_32x32.png
-make_icon_png 64 icon_32x32@2x.png
-make_icon_png 128 icon_128x128.png
-make_icon_png 256 icon_128x128@2x.png
-make_icon_png 256 icon_256x256.png
-make_icon_png 512 icon_256x256@2x.png
-make_icon_png 512 icon_512x512.png
-make_icon_png 1024 icon_512x512@2x.png
+"$venv_python" -m caveviewer.branding_export \
+  --profile "$branding_profile" \
+  export \
+  --output "$branding_export_dir" \
+  --replace
+branding_summary="$branding_export_dir/export-summary.v1.json"
+if [ -d "$branding_profile" ]; then
+  branding_profile_dir="$branding_profile"
+else
+  branding_profile_dir="$(dirname "$branding_profile")"
+fi
+for required_path in "$iconset_dir/icon_512x512@2x.png" "$branding_summary" "$branding_profile_dir/branding.v1.json"; do
+  if [ ! -f "$required_path" ]; then
+    echo "Error: required macOS branding output is missing: $required_path" >&2
+    exit 1
+  fi
+done
 
 rm -f "$icon_icns"
 iconutil -c icns "$iconset_dir" -o "$icon_icns"
 
 CAVEVIEWER_APP_ICON="$icon_icns" \
+CAVEVIEWER_BRAND_PROFILE_DIR="$branding_profile_dir" \
+CAVEVIEWER_BRANDING_EXPORT_SUMMARY="$branding_summary" \
 CAVEVIEWER_RELEASE_METADATA_PATH="$release_metadata_path" \
 "$venv_dir/bin/python" -m PyInstaller --clean --noconfirm \
   --distpath "$dist_app_dir" \
@@ -131,9 +122,15 @@ if [ -z "$bundled_release_metadata" ]; then
   exit 1
 fi
 cv_verify_release_metadata "$bundled_release_metadata" "$(cv_release_channel)"
+bundled_branding_manifest="$(find "$app_path" -type f -path '*caveviewer/resources/branding/default/branding.v1.json' -print -quit)"
+bundled_branding_summary="$(find "$app_path" -type f -path '*caveviewer/resources/branding/export-summary.v1.json' -print -quit)"
+if [ -z "$bundled_branding_manifest" ] || [ -z "$bundled_branding_summary" ]; then
+  echo "Error: macOS app bundle is missing selected branding inputs or provenance." >&2
+  exit 1
+fi
 
 echo "Build complete: $app_path"
-echo "App icon source: $logo_png"
+echo "Branding export summary: $branding_summary"
 echo "Generated app icon: $icon_icns"
 echo "Note: CaveViewer.app is an intermediate build artifact."
 echo "Run ./scripts/macos/package.sh to generate the distributable DMG in dist/macos/packages/."

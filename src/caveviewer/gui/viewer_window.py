@@ -31,6 +31,7 @@ import moderngl
 import moderngl_window as mglw
 from moderngl_window.context.base import KeyModifiers
 
+from caveviewer.branding import BrandingAssets, resolve_branding_assets
 from caveviewer.core.chunking import builder as chunker
 from caveviewer.core.map import slicing as map_slicing
 from caveviewer.core.hardware import gpu_memory, memory_targets, system_memory
@@ -135,7 +136,7 @@ from caveviewer.gui.platform.window_backend import (
     WindowBackendAdapter,
     create_window_backend_adapter,
 )
-from caveviewer.resources import image_path, resource_path
+from caveviewer.resources import resource_path
 from caveviewer.version import APP_NAME, APP_VERSION
 
 if TYPE_CHECKING:
@@ -539,13 +540,26 @@ def _recording_process_adapter_for_runtime(
     return create_recording_process_adapter()
 
 
-def _runtime_app_icon_path(presentation_profile: PresentationProfile) -> str:
-    filenames = (presentation_profile.splash_layout.app_icon_resource_name,)
-    for filename in filenames:
-        path = image_path(filename)
-        if path.exists():
-            return str(path)
-    return str(image_path(filenames[0]))
+def _branding_assets_for_runtime(
+    platform_runtime: PlatformRuntime | None,
+) -> BrandingAssets:
+    """Return the process snapshot, preserving direct viewer test callers."""
+    assets = (
+        getattr(platform_runtime, "branding_assets", None)
+        if platform_runtime is not None
+        else None
+    )
+    return assets or resolve_branding_assets(environ={})
+
+
+def _runtime_app_icon_path(platform_runtime: PlatformRuntime | None) -> str:
+    assets = _branding_assets_for_runtime(platform_runtime)
+    platform_name = (
+        platform_runtime.profile.platform_name
+        if platform_runtime is not None
+        else get_presentation_profile().platform_name
+    )
+    return str(assets.application_icon_for(platform_name))
 
 
 _UI_PANEL_VERT_SRC = """
@@ -567,6 +581,15 @@ void main() {
     f_color = v_color;
 }
 """
+
+
+@dataclass(frozen=True)
+class ViewerSessionOutcome:
+    """Describe why one native viewer session returned to its owner."""
+
+    kind: str = "window_closed"
+    message: str = ""
+    suggestion: str = ""
 
 
 class CaveViewerWindow(mglw.WindowConfig):
@@ -599,6 +622,7 @@ class CaveViewerWindow(mglw.WindowConfig):
     cave_recorded_dive_trace: recorded_dive.RecordedDiveTrace | None = None
     cave_platform_runtime: PlatformRuntime | None = None
     cave_runtime_settings: RuntimeSettings | None = None
+    cave_session_outcome = ViewerSessionOutcome()
 
     # Alternative to the three attributes above: set THIS instead when the
     # map needs first-time import/chunking (no cache built yet) -- a dict
@@ -707,6 +731,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         )
         self._window_setup_complete = False
         self._platform_runtime = CaveViewerWindow.cave_platform_runtime
+        self._branding_assets = _branding_assets_for_runtime(self._platform_runtime)
         self._runtime_settings = (
             CaveViewerWindow.cave_runtime_settings
             or getattr(self._platform_runtime, "runtime_settings", None)
@@ -796,7 +821,10 @@ class CaveViewerWindow(mglw.WindowConfig):
         self.import_progress_panel = None
         self._pending_import_splash_rendered = False
         if have_pending_import:
-            self.import_progress_panel = ImportProgressPanel(self.ctx)
+            self.import_progress_panel = ImportProgressPanel(
+                self.ctx,
+                branding_assets=self._branding_assets,
+            )
             self._pending_import_splash_rendered = (
                 self._present_pending_import_splash_now()
             )
@@ -1081,7 +1109,10 @@ class CaveViewerWindow(mglw.WindowConfig):
         # active during normal viewing, so it has no on/off state of its
         # own the way the other overlays do.
         if self.import_progress_panel is None:
-            self.import_progress_panel = ImportProgressPanel(self.ctx)
+            self.import_progress_panel = ImportProgressPanel(
+                self.ctx,
+                branding_assets=self._branding_assets,
+            )
         self.controls_overlay.set_logo_renderer(self.import_progress_panel)
 
         self.ctx.enable(moderngl.DEPTH_TEST)
@@ -1269,9 +1300,18 @@ class CaveViewerWindow(mglw.WindowConfig):
                 release_inhibitor=lambda: _release_desktop_inhibitor,
                 perf_counter=lambda: time.perf_counter(),
                 monotonic=lambda: time.monotonic(),
+                report_startup_failure=self._record_startup_import_failure,
             )
             self.__dict__["_import_controller"] = controller
         return controller
+
+    def _record_startup_import_failure(self, message: str, suggestion: str) -> None:
+        """Preserve a recoverable failure across native-window teardown."""
+        type(self).cave_session_outcome = ViewerSessionOutcome(
+            kind="import_failed",
+            message=str(message),
+            suggestion=str(suggestion),
+        )
 
     def _ensure_recording_controller(self) -> RecordingStateController:
         controller = self.__dict__.get("_recording_controller")
@@ -1582,7 +1622,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         icon_path = (
             viewer_settings.app_icon
             if viewer_settings is not None and viewer_settings.app_icon
-            else _runtime_app_icon_path(self._active_presentation_profile())
+            else _runtime_app_icon_path(getattr(self, "_platform_runtime", None))
         )
         if not os.path.exists(icon_path):
             _LOG.warning(f"viewer window icon asset not found: {icon_path}")
@@ -7967,21 +8007,35 @@ def run_viewer_with_pending_import(
         "model_descriptor": model_descriptor,
         "textures_dir": textures_dir,
     }
+    CaveViewerWindow.cave_session_outcome = ViewerSessionOutcome()
 
     try:
         _launch_viewer_window()
-    except RuntimeError as e:
+    except BaseException as error:
+        outcome = CaveViewerWindow.cave_session_outcome
+        # Some native backends surface a programmatic window close as
+        # SystemExit. Suppress it only after the import controller has recorded
+        # the recoverable startup failure that requested that close.
+        if isinstance(error, SystemExit) and outcome.kind == "import_failed":
+            _LOG.info("Viewer returned to the library after startup import failure.")
+            return outcome
         # Suppress the known "no initial map" runtime error that can occur
         # when the viewer is launched without a preloaded map and the GUI
         # is closed; let other RuntimeErrors propagate.
-        msg = str(e)
-        if "Neither CaveViewerWindow.cave_cache_dir" in msg and "must be set" in msg:
+        msg = str(error)
+        if isinstance(error, RuntimeError) and (
+            "Neither CaveViewerWindow.cave_cache_dir" in msg and "must be set" in msg
+        ):
             # Clean exit without a traceback
             _LOG.info("Viewer exited without a preloaded map.")
-            return
+            return outcome
         raise
+    else:
+        return CaveViewerWindow.cave_session_outcome
     finally:
+        CaveViewerWindow.cave_pending_import = None
         CaveViewerWindow.cave_platform_runtime = None
         CaveViewerWindow.cave_runtime_settings = None
+        CaveViewerWindow.cave_session_outcome = ViewerSessionOutcome()
         CaveViewerWindow.vsync = True
         bitmap_font.clear_runtime_style()

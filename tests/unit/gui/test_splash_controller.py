@@ -2,7 +2,11 @@
 
 import pytest
 
-from caveviewer.gui.splash_controller import SplashController, SplashScheduler
+from caveviewer.gui.splash_controller import (
+    SplashController,
+    SplashScheduler,
+    StartupReadinessGate,
+)
 
 
 class _Scheduler:
@@ -64,3 +68,53 @@ def test_controller_cannot_schedule_before_start_or_after_close():
     controller.close()
     with pytest.raises(RuntimeError):
         controller.schedule(1, lambda: None)
+
+
+def test_startup_readiness_gate_requires_time_and_composition_readiness():
+    gate = StartupReadinessGate(visible_at=10.0)
+
+    assert gate.can_reveal(13.0) is False
+    gate.mark_ready()
+    assert gate.can_reveal(12.999) is False
+    assert gate.can_reveal(13.0) is True
+
+
+def test_startup_readiness_gate_extends_for_slow_composition():
+    gate = StartupReadinessGate(visible_at=10.0)
+
+    gate.mark_ready()
+
+    assert gate.can_reveal(15.0) is True
+    assert gate.remaining_delay_ms(15.0) == 0
+
+
+def test_startup_readiness_gate_progress_is_monotonic_and_caps_before_ready():
+    gate = StartupReadinessGate(visible_at=0.0)
+
+    assert gate.advance(0.6) == pytest.approx(0.6)
+    assert gate.advance(0.2) == pytest.approx(0.6)
+    assert gate.advance(2.0) == pytest.approx(0.99)
+    gate.mark_ready()
+
+    assert gate.progress == pytest.approx(1.0)
+    assert gate.ready is True
+
+
+def test_startup_visual_progress_animates_but_waits_for_readiness_to_complete():
+    gate = StartupReadinessGate(visible_at=10.0)
+
+    assert gate.visual_progress(10.0) == pytest.approx(0.08)
+    assert gate.visual_progress(11.5) == pytest.approx(0.53)
+    assert gate.visual_progress(13.0) == pytest.approx(0.98)
+    gate.mark_ready()
+
+    assert gate.visual_progress(12.0) < 1.0
+    assert gate.visual_progress(13.0) == pytest.approx(1.0)
+
+
+def test_slow_startup_milestone_can_lead_animation_without_completing():
+    gate = StartupReadinessGate(visible_at=10.0)
+    gate.advance(0.7)
+
+    assert gate.visual_progress(10.5) == pytest.approx(0.7)
+    assert gate.visual_progress(14.0) == pytest.approx(0.98)

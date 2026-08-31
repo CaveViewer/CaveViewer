@@ -85,6 +85,12 @@ from caveviewer.gui.map_library_workflow import (
 from caveviewer.gui.map_selection import (
     validate_selected_map_folder as _validate_selected_map_folder,
 )
+from caveviewer.gui.modal_dialog import (
+    MODAL_CONTENT_PAD_X,
+    MODAL_CONTENT_PAD_Y,
+    MODAL_MIN_HEIGHT,
+    MODAL_MIN_WIDTH,
+)
 from caveviewer.gui.platform.directory_selection import (
     choose_authorized_directory,
     directory_selection_preflight,
@@ -104,14 +110,17 @@ from caveviewer.gui.platform.presentation_actions import (
     create_presentation_actions_adapter,
 )
 from caveviewer.gui.preference_paths import migrate_state_file, write_text_atomic
-from caveviewer.gui.splash_controller import SplashController, SplashScheduler
+from caveviewer.gui.splash_controller import (
+    SplashController,
+    SplashScheduler,
+    StartupReadinessGate,
+)
 from caveviewer.gui.splash_visuals import (
     VectorEllipse,
     VectorPath,
     VectorPolygon,
     fit_splash_background,
     progress_control_photo,
-    progress_ring_photo,
     vector_icon_photo,
 )
 from caveviewer.gui.tk_feedback import (
@@ -130,6 +139,7 @@ from caveviewer.gui.update_manager import (
 from caveviewer.resources import image_path
 
 if TYPE_CHECKING:
+    from caveviewer.branding import BrandingAssets
     from caveviewer.gui.platform.runtime import PlatformRuntime
 
 
@@ -139,14 +149,11 @@ def _resolve_asset_path(filename: str) -> str | None:
     return str(path) if path.is_file() else None
 
 
-# Resolve this once at import time -- same asset already used for the
-# in-program loading-screen logo, reused here rather than shipping a
-# second copy of the same image.
-_LOGO_PATH = _resolve_asset_path("app_mark_transparent.png")
+_LOGO_PATH: str | None = None
 _SPLASH_BACKGROUND_PATH = _resolve_asset_path("splash_ginnie_dark.jpg")
 _PRESENTATION_PROFILE = get_presentation_profile()
 _SPLASH_LAYOUT_POLICY = _PRESENTATION_PROFILE.splash_layout
-_APP_ICON_PATH = _resolve_asset_path(_SPLASH_LAYOUT_POLICY.app_icon_resource_name)
+_APP_ICON_PATH: str | None = None
 
 
 def _last_browse_path_file() -> str:
@@ -185,9 +192,9 @@ def _create_splash_root(
     """
     Return the process Tk root for the splash screen.
 
-    macOS keeps the root alive after a viewer launch so the global app menu
-    stays attached to a valid Tk application.  Reuse that root on the next
-    splash cycle instead of creating another Tk root in the same process.
+    Retained-root platforms keep the Tk application alive while the native
+    viewer runs. Reuse it on the next library cycle instead of creating a
+    second Tk interpreter in the same process.
     """
     layout = (
         presentation_profile.splash_layout
@@ -227,9 +234,10 @@ _UI_FONT_FAMILY = _PRESENTATION_PROFILE.ui_font_family
 _TK_TEXT_SCALE = 1.0
 _CACHE_REBUILD_CLOSE_PAUSE_ATTEMPTS = 25
 _UPDATE_READY_ACTION_DELAY_MS = 3_000
-_MIN_LAUNCH_SPLASH_MS = 5_000
-_LAUNCH_INDICATOR_INTERVAL_MS = 50
-_LAUNCH_INDICATOR_ARC_DEGREES = 92
+_MIN_LAUNCH_SPLASH_MS = 3_000
+_LAUNCH_PROGRESS_INTERVAL_MS = 40
+_LAUNCH_PROGRESS_WIDTH = 280
+_LAUNCH_PROGRESS_HEIGHT = 5
 
 _TYPOGRAPHY: TkTypography = create_tk_typography(
     _UI_FONT_FAMILY,
@@ -237,6 +245,8 @@ _TYPOGRAPHY: TkTypography = create_tk_typography(
 )
 _SPLASH_WINDOW_WIDTH = _SPLASH_LAYOUT_POLICY.window_width
 _SPLASH_WINDOW_MIN_HEIGHT = _SPLASH_LAYOUT_POLICY.min_height
+_SPLASH_RESIZE_MIN_WIDTH = _SPLASH_LAYOUT_POLICY.resize_min_width
+_SPLASH_RESIZE_MIN_HEIGHT = _SPLASH_LAYOUT_POLICY.resize_min_height
 _SPLASH_WINDOW_EXTRA_BOTTOM_SLACK = _SPLASH_LAYOUT_POLICY.extra_bottom_slack
 _CREDITS_TEXT = (
     "Concept by Brian Deatherage and Zsolt Szabo of\n"
@@ -304,6 +314,22 @@ def _presentation_profile_for_runtime(
     return profile or get_presentation_profile()
 
 
+def _branding_assets_for_runtime(
+    platform_runtime: PlatformRuntime | None,
+) -> BrandingAssets:
+    """Return injected brand assets, with a default for direct GUI callers."""
+    assets = (
+        getattr(platform_runtime, "branding_assets", None)
+        if platform_runtime is not None
+        else None
+    )
+    if assets is not None:
+        return assets
+    from caveviewer.branding import resolve_branding_assets
+
+    return resolve_branding_assets(environ={})
+
+
 def _presentation_actions_adapter_for_runtime(
     platform_runtime: PlatformRuntime | None,
 ) -> PresentationActionsAdapter:
@@ -351,7 +377,9 @@ def _refresh_tk_font_tokens() -> None:
 def _activate_presentation_profile(
     profile: PresentationProfile,
     *,
-    app_icon_path: str | None = None,
+    branding_assets: BrandingAssets,
+    app_icon_path_override: str | None = None,
+    platform_name: str,
 ) -> None:
     """Apply a runtime profile to legacy splash rendering tokens.
 
@@ -360,23 +388,27 @@ def _activate_presentation_profile(
     any widgets. This keeps static presentation choices out of the broad
     platform adapter while preserving the existing callback structure.
     """
-    global _PRESENTATION_PROFILE, _SPLASH_LAYOUT_POLICY, _APP_ICON_PATH
+    global _PRESENTATION_PROFILE, _SPLASH_LAYOUT_POLICY, _APP_ICON_PATH, _LOGO_PATH
     global _WINDOWS_SPLASH_LAYOUT, _LINUX_SPLASH_LAYOUT
     global _UI_FONT_FAMILY, _TK_TEXT_SCALE
     global _SPLASH_WINDOW_WIDTH, _SPLASH_WINDOW_MIN_HEIGHT
+    global _SPLASH_RESIZE_MIN_WIDTH, _SPLASH_RESIZE_MIN_HEIGHT
     global _SPLASH_WINDOW_EXTRA_BOTTOM_SLACK
 
     _PRESENTATION_PROFILE = profile
     _SPLASH_LAYOUT_POLICY = profile.splash_layout
-    _APP_ICON_PATH = app_icon_path or _resolve_asset_path(
-        _SPLASH_LAYOUT_POLICY.app_icon_resource_name
+    _APP_ICON_PATH = app_icon_path_override or str(
+        branding_assets.application_icon_for(platform_name)
     )
+    _LOGO_PATH = str(branding_assets.about_mark)
     _WINDOWS_SPLASH_LAYOUT = _SPLASH_LAYOUT_POLICY.windows_layout
     _LINUX_SPLASH_LAYOUT = _SPLASH_LAYOUT_POLICY.linux_layout
     _UI_FONT_FAMILY = profile.ui_font_family
     _TK_TEXT_SCALE = 1.0
     _SPLASH_WINDOW_WIDTH = _SPLASH_LAYOUT_POLICY.window_width
     _SPLASH_WINDOW_MIN_HEIGHT = _SPLASH_LAYOUT_POLICY.min_height
+    _SPLASH_RESIZE_MIN_WIDTH = _SPLASH_LAYOUT_POLICY.resize_min_width
+    _SPLASH_RESIZE_MIN_HEIGHT = _SPLASH_LAYOUT_POLICY.resize_min_height
     _SPLASH_WINDOW_EXTRA_BOTTOM_SLACK = _SPLASH_LAYOUT_POLICY.extra_bottom_slack
     _refresh_tk_font_tokens()
 
@@ -643,71 +675,47 @@ def _render_launch_background(canvas, *, source_image, size: tuple[int, int]) ->
         _LOG.warning("Could not render launch splash background: %s", exc)
 
 
-def _draw_launch_indicator_frame(canvas, *, phase_degrees: float, px) -> None:
-    """Draw one anti-aliased launch ring around the brand mark."""
-    canvas.delete("launch_indicator")
-    width, height = _launch_canvas_dimensions(canvas)
-    center_x, center_y = getattr(
-        canvas,
-        "_cv_launch_indicator_center",
-        (width / 2, height / 2),
-    )
-    ring_diameter = min(max(1, px(91)), width, height)
-    stroke_width = max(1, px(2))
-    ring_photo = progress_ring_photo(
-        canvas,
-        image_size=ring_diameter + stroke_width * 2,
-        ring_diameter=ring_diameter,
-        stroke_width=stroke_width,
-        track_color=DARK_THEME.entry_border,
-        fill_color=_BUTTON_BG,
-        start_degrees=90 - float(phase_degrees),
-        extent_degrees=-_LAUNCH_INDICATOR_ARC_DEGREES,
-    )
-    canvas._cv_launch_indicator_photo = ring_photo
-    canvas.create_image(
-        center_x,
-        center_y,
-        image=ring_photo,
-        tags="launch_indicator",
-    )
-
-
-def _render_launch_content(canvas, *, program_name: str, px) -> None:
-    """Center the logo, indicator, and launch copy over the cave background."""
+def _render_launch_content(canvas, *, progress: float, px) -> None:
+    """Center the launch copy and flat milestone bar over the cave background."""
     width, height = _launch_canvas_dimensions(canvas)
     center_x = width / 2
-    indicator_center_y = height * 0.46
+    label_y = height * 0.50
     canvas.delete("launch_content")
-    logo_photo = getattr(canvas, "_cv_launch_logo_photo", None)
-    if logo_photo is not None:
-        canvas.create_image(
-            center_x,
-            indicator_center_y,
-            image=logo_photo,
-            tags="launch_content",
-        )
     canvas.create_text(
         center_x,
-        indicator_center_y + px(90),
-        text=program_name,
+        label_y,
+        text="Preparing to explore what lies beneath...",
         font=_TYPOGRAPHY.heading,
         fill=_TITLE_COLOR,
         tags="launch_content",
     )
-    canvas.create_text(
-        center_x,
-        indicator_center_y + px(118),
-        text="Preparing to explore what lies beneath…",
-        font=_TYPOGRAPHY.supporting,
-        fill=_SUBTITLE_COLOR,
+    bar_width = min(px(_LAUNCH_PROGRESS_WIDTH), max(1, width - px(80)))
+    bar_height = max(1, px(_LAUNCH_PROGRESS_HEIGHT))
+    bar_left = center_x - bar_width / 2
+    bar_top = label_y + px(34)
+    canvas.create_rectangle(
+        bar_left,
+        bar_top,
+        bar_left + bar_width,
+        bar_top + bar_height,
+        fill=_LIBRARY_PROGRESS_TRACK_COLOR,
+        outline="",
         tags="launch_content",
     )
-    canvas._cv_launch_indicator_center = (center_x, indicator_center_y)
-    _draw_launch_indicator_frame(canvas, phase_degrees=0, px=px)
+    bounded_progress = max(0.0, min(1.0, float(progress)))
+    if bounded_progress > 0.0:
+        canvas.create_rectangle(
+            bar_left,
+            bar_top,
+            bar_left + bar_width * bounded_progress,
+            bar_top + bar_height,
+            fill=_LIBRARY_PROGRESS_FILL_COLOR,
+            outline="",
+            tags="launch_content",
+        )
 
 
-def _build_launch_surface(parent, *, program_name: str, px):
+def _build_launch_surface(parent, *, px):
     """Build the branded, dark-cave launch surface and return its canvas."""
     import tkinter as tk
 
@@ -721,12 +729,7 @@ def _build_launch_surface(parent, *, program_name: str, px):
     )
     launch_canvas.pack(fill="both", expand=True)
     launch_canvas._cv_launch_background_image = _load_launch_background_image()
-    launch_canvas._cv_launch_logo_photo = _load_brand_logo(
-        launch_canvas,
-        px=px,
-        max_dimension=108,
-        suppress_amber=True,
-    )
+    launch_canvas._cv_launch_progress = 0.0
 
     def _refresh_launch_surface(_event=None) -> None:
         size = _launch_canvas_dimensions(launch_canvas)
@@ -735,7 +738,11 @@ def _build_launch_surface(parent, *, program_name: str, px):
             source_image=launch_canvas._cv_launch_background_image,
             size=size,
         )
-        _render_launch_content(launch_canvas, program_name=program_name, px=px)
+        _render_launch_content(
+            launch_canvas,
+            progress=launch_canvas._cv_launch_progress,
+            px=px,
+        )
 
     launch_canvas.bind("<Configure>", _refresh_launch_surface, add="+")
     _refresh_launch_surface()
@@ -748,15 +755,19 @@ def _settle_launch_layout(root, *, passes: int = 3) -> None:
         root.update_idletasks()
 
 
-def _remaining_launch_delay_ms(
-    *,
-    visible_at: float,
-    now: float,
-    minimum_ms: int = _MIN_LAUNCH_SPLASH_MS,
-) -> int:
-    """Return the one-shot delay needed to honor the minimum splash duration."""
-    elapsed_ms = max(0.0, (float(now) - float(visible_at)) * 1_000.0)
-    return max(0, int(math.ceil(max(0, int(minimum_ms)) - elapsed_ms)))
+def _navigation_gear_points(center: float, px) -> tuple[tuple[float, float], ...]:
+    """Return the alternating outer/inner vertices for the Preferences gear."""
+    return tuple(
+        (
+            center
+            + math.cos(math.radians(index * 22.5 - 90))
+            * px(11 if index % 2 == 0 else 8),
+            center
+            + math.sin(math.radians(index * 22.5 - 90))
+            * px(11 if index % 2 == 0 else 8),
+        )
+        for index in range(16)
+    )
 
 
 def _build_themed_about_content(
@@ -978,6 +989,7 @@ def _show_unsaved_preferences_dialog(
         return
 
     import tkinter as tk
+    from caveviewer.gui.modal_dialog import create_semantic_heading
 
     dialog = tk.Toplevel(root)
     dialog_ref[0] = dialog
@@ -989,14 +1001,19 @@ def _show_unsaved_preferences_dialog(
     _set_tk_window_icon(dialog)
 
     content = tk.Frame(dialog, bg=_BG_COLOR)
-    content.pack(fill="both", expand=True, padx=px(28), pady=px(24))
-    tk.Label(
+    content.pack(
+        fill="both",
+        expand=True,
+        padx=px(MODAL_CONTENT_PAD_X),
+        pady=px(MODAL_CONTENT_PAD_Y),
+    )
+    create_semantic_heading(
         content,
-        text="Save changes to preferences?",
+        title="Save changes to preferences?",
+        kind="warning",
+        px=px,
         font=_TYPOGRAPHY.body_strong,
-        fg=_TITLE_COLOR,
-        bg=_BG_COLOR,
-        anchor="w",
+        background=_BG_COLOR,
     ).pack(fill="x")
     tk.Label(
         content,
@@ -1013,7 +1030,7 @@ def _show_unsaved_preferences_dialog(
     ).pack(fill="x", pady=(px(8), px(20)))
 
     button_row = tk.Frame(content, bg=_BG_COLOR)
-    button_row.pack(fill="x")
+    button_row.pack(side="bottom", fill="x")
 
     def _close_dialog(_event=None):
         if dialog_ref[0] is dialog:
@@ -1066,9 +1083,9 @@ def _show_unsaved_preferences_dialog(
         button.bind("<Leave>", lambda _event: button.config(bg=normal_bg))
         return button
 
-    save_button = _make_button("Save changes", _save, primary=True)
-    discard_button = _make_button("Discard changes", _discard, primary=False)
-    keep_button = _make_button("Keep editing", _close_dialog, primary=False)
+    save_button = _make_button("Save", _save, primary=True)
+    discard_button = _make_button("Discard", _discard, primary=False)
+    keep_button = _make_button("Keep", _close_dialog, primary=False)
     save_button.pack(side="right")
     discard_button.pack(side="right", padx=(0, px(8)))
     keep_button.pack(side="right", padx=(0, px(8)))
@@ -1076,8 +1093,8 @@ def _show_unsaved_preferences_dialog(
     dialog.bind("<Escape>", _close_dialog)
     dialog.protocol("WM_DELETE_WINDOW", _close_dialog)
     dialog.update_idletasks()
-    dialog_width = max(px(430), dialog.winfo_reqwidth())
-    dialog_height = max(px(220), dialog.winfo_reqheight())
+    dialog_width = max(px(MODAL_MIN_WIDTH), dialog.winfo_reqwidth())
+    dialog_height = max(px(MODAL_MIN_HEIGHT), dialog.winfo_reqheight())
     try:
         screen_width = dialog.winfo_screenwidth()
         screen_height = dialog.winfo_screenheight()
@@ -1282,6 +1299,7 @@ def show_splash_screen(
     runtime_settings_provider: Callable[[], RuntimeSettings] | None = None,
     on_preferences_saved: Callable[[object], object] | None = None,
     show_launch_overlay: bool = True,
+    map_open_error_details: str | None = None,
 ) -> str | None:
     """
     Builds the Map Library and blocks until the person either picks a folder
@@ -1343,12 +1361,21 @@ def show_splash_screen(
         else None
     )
     presentation_profile = _presentation_profile_for_runtime(platform_runtime)
+    branding_assets = _branding_assets_for_runtime(platform_runtime)
     presentation_actions_adapter = _presentation_actions_adapter_for_runtime(
         platform_runtime
     )
     _activate_presentation_profile(
         presentation_profile,
-        app_icon_path=(viewer_settings.app_icon if viewer_settings is not None else None),
+        branding_assets=branding_assets,
+        app_icon_path_override=(
+            viewer_settings.app_icon if viewer_settings is not None else None
+        ),
+        platform_name=(
+            platform_runtime.profile.platform_name
+            if platform_runtime is not None
+            else presentation_profile.platform_name
+        ),
     )
 
     record_startup_stage("splash_root_create_begin")
@@ -1394,12 +1421,13 @@ def show_splash_screen(
     root.withdraw()
     root.title(program_name)
     root.configure(bg=_BG_COLOR)
-    root.resizable(False, False)
+    # Establish the final native frame style before the first reveal. Toggling
+    # resize capability during the launch-to-library handoff makes Windows
+    # rebuild its non-client frame and produces a visible flash.
+    root.resizable(True, True)
     _set_tk_window_icon(root)
 
     presentation_actions_adapter.install_about_handler(root, program_name, version)
-
-    window_w, window_h = px(_SPLASH_WINDOW_WIDTH), px(_SPLASH_WINDOW_MIN_HEIGHT)
 
     # Center the window on screen rather than letting the OS place it
     # arbitrarily -- a first-launch splash screen appearing somewhere
@@ -1407,6 +1435,17 @@ def show_splash_screen(
     root.update_idletasks()
     screen_w = root.winfo_screenwidth()
     screen_h = root.winfo_screenheight()
+    display_margin = px(80)
+    available_width = max(1, screen_w - display_margin)
+    available_height = max(1, screen_h - display_margin)
+    window_w = min(px(_SPLASH_WINDOW_WIDTH), available_width)
+    window_h = min(px(_SPLASH_WINDOW_MIN_HEIGHT), available_height)
+    # Compact displays must never receive a minimum larger than the initial
+    # display-clamped window. Normal displays retain the shared shell minimum.
+    root.minsize(
+        min(px(_SPLASH_RESIZE_MIN_WIDTH), available_width),
+        min(px(_SPLASH_RESIZE_MIN_HEIGHT), available_height),
+    )
     pos_x = (screen_w - window_w) // 2
     pos_y = (screen_h - window_h) // 3  # slightly above true vertical center, reads better
     root.geometry(f"{window_w}x{window_h}+{pos_x}+{pos_y}")
@@ -1421,7 +1460,6 @@ def show_splash_screen(
         launch_surface.grid(row=0, column=0, sticky="nsew")
         launch_indicator = _build_launch_surface(
             launch_surface,
-            program_name=program_name,
             px=px,
         )
 
@@ -1445,35 +1483,22 @@ def show_splash_screen(
         )
         _settle_launch_layout(root, passes=1)
 
-    launch_indicator_active = [True]
-    launch_indicator_phase = [0.0]
+    readiness_gate = StartupReadinessGate(
+        visible_at=launch_visible_at,
+        minimum_ms=_MIN_LAUNCH_SPLASH_MS,
+    )
 
-    def _advance_launch_indicator() -> None:
-        """Advance one owned frame while the launch surface remains visible."""
-        if (
-            launch_indicator is None
-            or not launch_indicator_active[0]
-            or splash_controller.closing
-        ):
+    def _advance_launch_progress(fraction: float) -> None:
+        """Paint one monotonic composition milestone while startup is visible."""
+        progress = readiness_gate.advance(fraction)
+        if launch_indicator is None:
             return
-        try:
-            if not launch_indicator.winfo_exists():
-                return
-        except Exception:
-            return
-        _draw_launch_indicator_frame(
-            launch_indicator,
-            phase_degrees=launch_indicator_phase[0],
-            px=px,
-        )
-        launch_indicator_phase[0] = (launch_indicator_phase[0] + 12.0) % 360.0
-        splash_controller.schedule(
-            _LAUNCH_INDICATOR_INTERVAL_MS,
-            _advance_launch_indicator,
-        )
+        launch_indicator._cv_launch_progress = progress
+        _render_launch_content(launch_indicator, progress=progress, px=px)
+        root.update_idletasks()
 
     if show_launch_overlay:
-        _advance_launch_indicator()
+        _advance_launch_progress(0.08)
 
     # The splash is organized as a stable navigation rail beside an active
     # content surface. Keeping the rail a fixed width prevents map-library
@@ -2076,17 +2101,7 @@ def show_splash_screen(
             elif icon_name == "preferences":
                 polygons = (
                     VectorPolygon(
-                        points=tuple(
-                            (
-                                center
-                                + math.cos(math.radians(index * 22.5 - 90))
-                                * px(11 if index % 2 == 0 else 8),
-                                center
-                                + math.sin(math.radians(index * 22.5 - 90))
-                                * px(11 if index % 2 == 0 else 8),
-                            )
-                            for index in range(16)
-                        ),
+                        points=_navigation_gear_points(center, px),
                         outline_color=foreground,
                         outline_width=stroke,
                     ),
@@ -2431,6 +2446,7 @@ def show_splash_screen(
 
     _create_map_library_panel(map_library_surface)
     map_library_surface.tkraise()
+    _advance_launch_progress(0.18)
 
     # Keep deferred navigation surfaces out of the initial Tk geometry pass.
     # Preferences creates only its active tab on first use and coalesces the
@@ -2443,8 +2459,7 @@ def show_splash_screen(
         px(_SPLASH_WINDOW_MIN_HEIGHT),
         root.winfo_reqheight() + px(_SPLASH_WINDOW_EXTRA_BOTTOM_SLACK),
     )
-    max_height = max(px(360), root.winfo_screenheight() - px(80))
-    final_height = min(final_height, max_height)
+    final_height = min(final_height, available_height)
     pos_y = (screen_h - final_height) // 3
     root.geometry(f"{window_w}x{final_height}+{pos_x}+{pos_y}")
 
@@ -2452,11 +2467,25 @@ def show_splash_screen(
     # already owns its final mapped width. Fixed settlement passes drain only
     # geometry work; width/size guards prevent callbacks from cascading.
     _ensure_preferences_panel()
+    _advance_launch_progress(0.30)
     _settle_launch_layout(root, passes=3)
+    readiness_gate.mark_ready()
+
+    map_open_error_presented = [False]
 
     def _reveal_composed_main_surface() -> None:
         """Reveal the fully painted main surface in one non-repeating handoff."""
-        launch_indicator_active[0] = False
+        if not readiness_gate.ready:
+            return
+        remaining_ms = readiness_gate.remaining_delay_ms(time.monotonic())
+        if remaining_ms:
+            # Tk should not dispatch an ``after`` callback early, but guard the
+            # boundary so coarse platform clocks cannot bypass the 3 s policy.
+            splash_controller.schedule(
+                remaining_ms,
+                _reveal_composed_main_surface,
+            )
+            return
         content_frame.tkraise()
         if launch_surface is not None:
             launch_surface.destroy()
@@ -2472,24 +2501,49 @@ def show_splash_screen(
             splash_controller.schedule(
                 200, lambda: root.attributes("-topmost", False)
             )
+        if map_open_error_details and not map_open_error_presented[0]:
+            # The library must be mapped before its owned modal starts a nested
+            # Tk wait loop, otherwise the recovered application appears absent.
+            map_open_error_presented[0] = True
+            root.update_idletasks()
+            from caveviewer.gui.modal_dialog import show_copyable_error
 
-    # Honor one total minimum duration measured from the first visible launch
-    # frame. Fast builds wait only for the remaining time; slow builds reveal
-    # on the next idle paint. Neither path polls or reschedules itself.
-    remaining_launch_ms = (
-        _remaining_launch_delay_ms(
-            visible_at=launch_visible_at,
-            now=time.monotonic(),
-        )
-        if show_launch_overlay
-        else 0
-    )
-    if remaining_launch_ms:
+            show_copyable_error(
+                root,
+                title="Couldn’t open map",
+                message="CaveViewer could not open this map due to an error.",
+                details=map_open_error_details,
+            )
+
+    def _animate_launch_progress() -> None:
+        """Advance the visible bar smoothly until readiness permits handoff."""
+        if launch_indicator is None or splash_controller.closing:
+            return
+        now = time.monotonic()
+        progress = readiness_gate.visual_progress(now)
+        launch_indicator._cv_launch_progress = progress
+        _render_launch_content(launch_indicator, progress=progress, px=px)
+        if readiness_gate.can_reveal(now):
+            # Leave the completed frame visible briefly instead of replacing it
+            # in the same event-loop turn that first paints 100 percent.
+            splash_controller.schedule(50, _reveal_composed_main_surface)
+            return
         splash_controller.schedule(
-            remaining_launch_ms, _reveal_composed_main_surface
+            _LAUNCH_PROGRESS_INTERVAL_MS,
+            _animate_launch_progress,
+        )
+
+    if show_launch_overlay:
+        splash_controller.schedule(
+            _LAUNCH_PROGRESS_INTERVAL_MS,
+            _animate_launch_progress,
         )
     else:
-        splash_controller.schedule_idle(_reveal_composed_main_surface)
+        # Returning from a native viewer already occurs after the replacement
+        # shell is fully composed. Reveal it before entering Tk's mainloop;
+        # deferring the first map of a withdrawn root can leave Windows with no
+        # visible application window after the viewer closes.
+        _reveal_composed_main_surface()
     # The app-owned manager survives this Tk window and any intervening viewer.
     # Polling immutable snapshots keeps every widget mutation on the Tk thread.
     splash_controller.schedule(50, _refresh_update_presentation)

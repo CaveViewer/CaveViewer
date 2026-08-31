@@ -24,6 +24,27 @@ requires_executable_shell_scripts = pytest.mark.skipif(
 )
 
 
+def test_linux_package_uses_shared_branding_export_without_macos_reuse():
+    builder = (REPOSITORY_ROOT / "scripts/linux/common/build.sh").read_text(
+        encoding="utf-8"
+    )
+    packager = PACKAGE_SCRIPT.read_text(encoding="utf-8")
+    branding_export = (
+        REPOSITORY_ROOT / "src/caveviewer/branding_export.py"
+    ).read_text(encoding="utf-8")
+
+    assert "caveviewer.branding_export" in builder
+    assert "CAVEVIEWER_BRAND_PROFILE" in builder
+    assert "branding/export-summary.v1.json" in builder
+    assert "build/branding/linux/linux" in packager
+    assert "$icon_src" not in packager
+    assert "app_icon_macos.png" not in packager
+    assert "from PIL import Image" not in packager
+    assert 'cp -R "$branding_linux_dir/hicolor/."' in packager
+    assert 'profile.asset_for("linux_scalable_icon")' in branding_export
+    assert 'profile.asset_for("linux_symbolic_icon")' in branding_export
+
+
 def _generated_apprun_script() -> str:
     package_script = PACKAGE_SCRIPT.read_text(encoding="utf-8")
     marker = 'cat > "$appdir/AppRun" <<\'APP_RUN_EOF\'\n'
@@ -127,9 +148,17 @@ def test_generated_apprun_install_and_uninstall_modes_manage_xdg_metadata(tmp_pa
     applications_source = appdir / "usr" / "share" / "applications"
     metainfo_source = appdir / "usr" / "share" / "metainfo"
     icon_source = appdir / "usr" / "share" / "icons" / "hicolor" / "256x256" / "apps"
+    scalable_source = (
+        appdir / "usr" / "share" / "icons" / "hicolor" / "scalable" / "apps"
+    )
+    symbolic_source = (
+        appdir / "usr" / "share" / "icons" / "hicolor" / "symbolic" / "apps"
+    )
     applications_source.mkdir(parents=True)
     metainfo_source.mkdir(parents=True)
     icon_source.mkdir(parents=True)
+    scalable_source.mkdir(parents=True)
+    symbolic_source.mkdir(parents=True)
 
     desktop_template = LINUX_PACKAGING / f"{APPLICATION_ID}.desktop.in"
     (applications_source / f"{APPLICATION_ID}.desktop").write_text(
@@ -143,6 +172,10 @@ def test_generated_apprun_install_and_uninstall_modes_manage_xdg_metadata(tmp_pa
         encoding="utf-8",
     )
     (icon_source / f"{APPLICATION_ID}.png").write_bytes(b"fake icon")
+    (scalable_source / f"{APPLICATION_ID}.svg").write_bytes(b"fake scalable icon")
+    (symbolic_source / f"{APPLICATION_ID}-symbolic.svg").write_bytes(
+        b"fake symbolic icon"
+    )
 
     apprun = appdir / "AppRun"
     apprun.write_text(_generated_apprun_script(), encoding="utf-8")
@@ -186,6 +219,22 @@ def test_generated_apprun_install_and_uninstall_modes_manage_xdg_metadata(tmp_pa
         / "apps"
         / f"{APPLICATION_ID}.png"
     )
+    installed_scalable_icon = (
+        xdg_data_home
+        / "icons"
+        / "hicolor"
+        / "scalable"
+        / "apps"
+        / f"{APPLICATION_ID}.svg"
+    )
+    installed_symbolic_icon = (
+        xdg_data_home
+        / "icons"
+        / "hicolor"
+        / "symbolic"
+        / "apps"
+        / f"{APPLICATION_ID}-symbolic.svg"
+    )
 
     assert "[CaveViewer AppRun] Desktop integration smoke mode complete." in result.stdout
     assert f"[CaveViewer AppRun] Desktop file: {installed_desktop}" in result.stdout
@@ -193,6 +242,8 @@ def test_generated_apprun_install_and_uninstall_modes_manage_xdg_metadata(tmp_pa
     assert installed_desktop.is_file()
     assert installed_metainfo.is_file()
     assert installed_icon.read_bytes() == b"fake icon"
+    assert installed_scalable_icon.read_bytes() == b"fake scalable icon"
+    assert installed_symbolic_icon.read_bytes() == b"fake symbolic icon"
     assert f'Exec="{appimage}" %f' in installed_desktop.read_text(encoding="utf-8")
     installed_entry = _desktop_entry(installed_desktop.read_text(encoding="utf-8"))
     assert {
@@ -234,6 +285,8 @@ def test_generated_apprun_install_and_uninstall_modes_manage_xdg_metadata(tmp_pa
     assert not installed_desktop.exists()
     assert not installed_metainfo.exists()
     assert not installed_icon.exists()
+    assert not installed_scalable_icon.exists()
+    assert not installed_symbolic_icon.exists()
     assert not legacy_desktop.exists()
     assert unrelated_icon.read_bytes() == b"keep"
 

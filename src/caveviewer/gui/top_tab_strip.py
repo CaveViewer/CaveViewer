@@ -8,6 +8,7 @@ from typing import Callable, Iterable
 
 
 TABBED_CONTENT_TOP_GAP = 26
+TABBED_CONTENT_ALIGNMENT_INSET = 12
 
 
 @dataclass(frozen=True)

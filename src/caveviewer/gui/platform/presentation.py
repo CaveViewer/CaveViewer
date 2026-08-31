@@ -18,13 +18,14 @@ from dataclasses import dataclass, replace
 class SplashLayoutPolicy:
     """Immutable platform-specific splash-window presentation decisions."""
 
-    app_icon_resource_name: str
     reuse_existing_root: bool
     destroy_root_on_close: bool
     windows_layout: bool
     linux_layout: bool
     window_width: int
     min_height: int
+    resize_min_width: int
+    resize_min_height: int
     extra_bottom_slack: int
     secondary_link_row_bottom_gap: int
     footer_credits_bottom_pad: int
@@ -191,13 +192,17 @@ _DEFAULT_PRESENTATION_PROFILE = PresentationProfile(
     font_candidates=_DEFAULT_FONT_CANDIDATES,
     uses_fontconfig_fallback=False,
     splash_layout=SplashLayoutPolicy(
-        app_icon_resource_name="app_icon_macos.png",
         reuse_existing_root=False,
         destroy_root_on_close=True,
         windows_layout=False,
         linux_layout=False,
-        window_width=940,
-        min_height=740,
+        window_width=1160,
+        # Keep the embedded Preferences form visible without its overflow
+        # scrollbar on ordinary desktop displays. Splash composition still
+        # clamps this preferred height to the usable screen area.
+        min_height=820,
+        resize_min_width=940,
+        resize_min_height=680,
         extra_bottom_slack=0,
         secondary_link_row_bottom_gap=36,
         footer_credits_bottom_pad=36,
@@ -261,13 +266,14 @@ def select_presentation_profile(*, platform_name: str) -> PresentationProfile:
             ui_font_family="Helvetica Neue",
             font_candidates=_MACOS_FONT_CANDIDATES,
             splash_layout=SplashLayoutPolicy(
-                app_icon_resource_name="app_icon_macos.png",
                 reuse_existing_root=True,
                 destroy_root_on_close=False,
                 windows_layout=False,
                 linux_layout=False,
-                window_width=1100,
-                min_height=740,
+                window_width=1160,
+                min_height=820,
+                resize_min_width=940,
+                resize_min_height=680,
                 extra_bottom_slack=36,
                 secondary_link_row_bottom_gap=28,
                 footer_credits_bottom_pad=24,
@@ -318,13 +324,16 @@ def select_presentation_profile(*, platform_name: str) -> PresentationProfile:
             platform_name="windows",
             font_candidates=_WINDOWS_FONT_CANDIDATES,
             splash_layout=SplashLayoutPolicy(
-                app_icon_resource_name="app_icon_windows.png",
-                reuse_existing_root=False,
-                destroy_root_on_close=True,
+                # Keep the process-owned Tk interpreter withdrawn while pyglet
+                # owns the viewer, then rebuild the library on the same root.
+                reuse_existing_root=True,
+                destroy_root_on_close=False,
                 windows_layout=True,
                 linux_layout=False,
-                window_width=940,
-                min_height=740,
+                window_width=1160,
+                min_height=820,
+                resize_min_width=940,
+                resize_min_height=680,
                 extra_bottom_slack=0,
                 secondary_link_row_bottom_gap=36,
                 footer_credits_bottom_pad=36,
@@ -366,13 +375,14 @@ def select_presentation_profile(*, platform_name: str) -> PresentationProfile:
             font_candidates=_LINUX_FONT_CANDIDATES,
             uses_fontconfig_fallback=True,
             splash_layout=SplashLayoutPolicy(
-                app_icon_resource_name="app_icon_macos.png",
                 reuse_existing_root=False,
                 destroy_root_on_close=True,
                 windows_layout=False,
                 linux_layout=True,
-                window_width=940,
-                min_height=740,
+                window_width=1160,
+                min_height=820,
+                resize_min_width=940,
+                resize_min_height=680,
                 extra_bottom_slack=0,
                 secondary_link_row_bottom_gap=36,
                 footer_credits_bottom_pad=36,

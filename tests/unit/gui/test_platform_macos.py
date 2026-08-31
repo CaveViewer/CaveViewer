@@ -15,5 +15,7 @@ def test_macos_tk_text_scale_has_readability_floor():
 def test_macos_splash_policy_uses_desktop_readability_size():
     policy = select_presentation_profile(platform_name="darwin").splash_layout
 
-    assert policy.window_width == 1100
-    assert policy.min_height == 740
+    assert policy.window_width == 1160
+    assert policy.min_height == 820
+    assert policy.resize_min_width == 940
+    assert policy.resize_min_height == 680

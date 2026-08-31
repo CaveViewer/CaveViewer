@@ -57,8 +57,18 @@ def test_presentation_profile_selects_static_platform_conventions(
         2.0 * overlay_scale
     )
     assert profile.viewer_uses_glfw_native_initial_size is uses_glfw_size
-    assert profile.splash_layout.min_height == 740
+    assert profile.splash_layout.window_width == 1160
+    assert profile.splash_layout.min_height == 820
+    assert profile.splash_layout.resize_min_width == 940
+    assert profile.splash_layout.resize_min_height == 680
     assert profile.font_candidates
+
+
+def test_windows_profile_retains_one_tk_root_across_viewer_sessions():
+    profile = select_presentation_profile(platform_name="win32")
+
+    assert profile.splash_layout.reuse_existing_root is True
+    assert profile.splash_layout.destroy_root_on_close is False
 
 
 def test_macos_profile_keeps_its_static_layout_and_input_fallbacks():

@@ -211,6 +211,13 @@ tests and review.
   artifacts and must stay untracked.
 - Keep root `README.md`, `CHANGELOG.md`, `LICENSE`, and third-party notices.
 
+Visual branding is replaceable without moving or renaming stable external
+identity. In particular, `com.caveviewer.CaveViewer`,
+`io.github.caveviewer.caveviewer`, the desktop icon basename and
+`StartupWMClass`, executable and installer names, update paths, and application
+storage roots remain stable. The semantic inputs and derived-output ownership
+are defined in [branding.md](branding.md).
+
 ## Completed migration sequence
 
 1. **Governance:** add the repository map, architecture/testing standards, and

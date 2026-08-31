@@ -12,6 +12,7 @@ contract is documented in [repository-layout.md](repository-layout.md).
 | Platform adapter routes and native behavior | [`platform-adapters.md`](../../src/caveviewer/gui/platform/platform-adapters.md) | Link back here for the general boundary. |
 | Commands, environment reference, and troubleshooting | [Source setup](source-setup.md) | Avoid restating architecture mechanics. |
 | Releases, channels, and workflow sequencing | [Releases](releases.md) | Link to the update boundary here when needed. |
+| Visual-branding roles and platform outputs | [Branding](branding.md) | Preserve the stable product-identity boundary. |
 | Directory-local instructions | Nearest `AGENTS.md` | Link to development docs instead of copying narrative. |
 
 Focused documents own subsystem mechanics; this page owns allowed dependency,
@@ -50,6 +51,13 @@ depend on reusable core navigation/streaming policy, but it must not own viewer
 presentation or render-thread OpenGL resources. `viewer_window.py` adapts a
 `BenchmarkController` into the real render loop when the benchmark CLI launches
 the viewer.
+
+Visual branding follows the same composition direction. A GUI-free resolver
+may validate semantic profile inputs, while the application composition
+boundary creates one immutable branding snapshot for GUI consumers. Tk,
+OpenGL, Pillow-backed exports, and native packaging tools remain outside core
+domain policy. The complete surface and stable-identity contracts live in
+[Branding](branding.md).
 
 ## Runtime settings
 

@@ -25,7 +25,6 @@ from caveviewer.gui.preferences_form import (
     MessageKind,
 )
 from caveviewer.gui.section_spacing import STANDARD_CONTENT_SECTION_SPACING
-from caveviewer.gui.features import FeatureState
 from caveviewer.gui.dialog_style import (
     DIALOG_BODY_PAD_Y,
     create_dialog_action_button,
@@ -49,7 +48,9 @@ from caveviewer.gui.scrollable_content import (
     CanvasScrollbarStyle,
     CanvasVerticalScrollbar,
 )
+from caveviewer.gui.modal_dialog import ask_confirmation
 from caveviewer.gui.top_tab_strip import (
+    TABBED_CONTENT_ALIGNMENT_INSET,
     TopTab,
     TopTabbedContentSurface,
     TopTabbedContentSurfaceStyle,
@@ -75,6 +76,7 @@ _SCROLLBAR_GUTTER_X = 18
 _PLACEHOLDER_COLOR = DARK_THEME.placeholder_text
 _INLINE_FEEDBACK_PAD_X = 10
 _CONTROL_GAP_X = 10
+_COMPACT_PATH_CONTROL_PAD_Y = 5
 _BACKUP_ACTION_BUTTON_WIDTH = 10
 _MIN_HINT_WRAP_LENGTH = 200
 _HINT_WRAP_INSET = 4
@@ -182,6 +184,7 @@ class PreferenceSectionContainer:
         """Place this group with the standard preceding-section separation."""
         self.widget.pack(
             fill="x",
+            padx=(self._px(TABBED_CONTENT_ALIGNMENT_INSET), 0),
             pady=(
                 0
                 if first
@@ -274,6 +277,7 @@ class PreferencesPanel:
         self.field_display_vars: dict[str, tk.StringVar] = {}
         self.field_entry_states: dict[str, str] = {}
         self.field_browse_buttons: dict[str, tk.Widget] = {}
+        self.field_compound_controls: dict[str, tk.Frame] = {}
         self.numeric_entry_states: dict[str, tuple] = {}
         self.numeric_placeholder_keys: set[str] = set()
         self.form_ready = False
@@ -614,7 +618,10 @@ class PreferencesPanel:
             )
         self.field_display_vars[key] = entry_var
 
-        entry_parent = tk.Frame(row, bg=_BG_COLOR)
+        entry_parent = tk.Frame(
+            row,
+            bg=DARK_THEME.entry_border if compact_path else _BG_COLOR,
+        )
         if compact_path:
             entry_parent.grid(
                 row=1,
@@ -633,6 +640,8 @@ class PreferencesPanel:
         entry_parent.grid_columnconfigure(0, weight=1)
         if compact_path:
             entry_parent.grid_columnconfigure(1, weight=0)
+            entry_parent.grid_rowconfigure(0, weight=1)
+            self.field_compound_controls[key] = entry_parent
 
         entry = tk.Entry(
             entry_parent,
@@ -646,7 +655,7 @@ class PreferencesPanel:
             ),
             insertbackground=_SUBTITLE_COLOR,
             relief="flat",
-            highlightthickness=1,
+            highlightthickness=0 if compact_path else 1,
             highlightbackground=DARK_THEME.entry_border,
             highlightcolor=DARK_THEME.entry_focus_border,
             width=entry_width,
@@ -705,7 +714,16 @@ class PreferencesPanel:
             add="+",
         )
         if compact_path:
-            entry.grid(row=0, column=0, sticky="ew")
+            # Match the Browse action's vertical padding so the read-only path
+            # and its action read as one deliberate control row.
+            entry.grid(
+                row=0,
+                column=0,
+                sticky="nsew",
+                padx=(1, 0),
+                pady=1,
+                ipady=_COMPACT_PATH_CONTROL_PAD_Y,
+            )
         else:
             entry.pack(side="left")
 
@@ -719,12 +737,31 @@ class PreferencesPanel:
                 padx=10,
             )
             if compact_path:
+                # The parent paints the common border and the one-pixel inset
+                # between the field and action.
+                browse_button.configure(borderwidth=0, highlightthickness=0)
                 browse_button.grid(
                     row=0,
                     column=1,
-                    sticky="e",
-                    padx=(_CONTROL_GAP_X, 0),
+                    sticky="nsew",
+                    padx=(1, 1),
+                    pady=1,
                 )
+                for widget in (entry, browse_button):
+                    widget.bind(
+                        "<FocusIn>",
+                        lambda _event, field_key=key: self._set_compound_focus(
+                            field_key, focused=True
+                        ),
+                        add="+",
+                    )
+                    widget.bind(
+                        "<FocusOut>",
+                        lambda _event, field_key=key: self._set_compound_focus(
+                            field_key, focused=False
+                        ),
+                        add="+",
+                    )
             else:
                 browse_button.pack(side="left", padx=(_CONTROL_GAP_X, 0))
             self.field_browse_buttons[key] = browse_button
@@ -745,6 +782,22 @@ class PreferencesPanel:
         hint_label.pack(anchor="w", fill="x", pady=(3, 0))
         if not single_line_hint:
             self.page_hint_labels.setdefault(field.section, []).append(hint_label)
+
+    def _set_compound_focus(self, key: str, *, focused: bool) -> None:
+        """Paint one focus border around a path field and its Browse action."""
+        shell = getattr(self, "field_compound_controls", {}).get(key)
+        if shell is not None:
+            shell.configure(
+                bg=(
+                    DARK_THEME.invalid_border
+                    if key == self.rendered_invalid_key
+                    else (
+                        DARK_THEME.entry_focus_border
+                        if focused
+                        else DARK_THEME.entry_border
+                    )
+                )
+            )
 
     @staticmethod
     def _sync_hint_wraplength(label, available_width: int) -> bool:
@@ -825,9 +878,6 @@ class PreferencesPanel:
         if not decision.allows_execution:
             self._set_feedback(decision.explanation, MessageKind.WARNING)
             return
-        if decision.state is FeatureState.DEGRADED:
-            self._set_feedback(decision.explanation, MessageKind.WARNING)
-
         var = self.field_vars[key]
         initial_dir = os.path.expanduser(var.get().strip() or "~")
         if not os.path.isdir(initial_dir):
@@ -1229,6 +1279,17 @@ class PreferencesPanel:
                     else DARK_THEME.entry_focus_border
                 ),
             )
+            compound_control = getattr(
+                self, "field_compound_controls", {}
+            ).get(key)
+            if compound_control is not None:
+                compound_control.configure(
+                    bg=(
+                        DARK_THEME.invalid_border
+                        if key == invalid_key
+                        else DARK_THEME.entry_border
+                    )
+                )
         for key, browse_button in self.field_browse_buttons.items():
             set_dialog_action_button(
                 browse_button,
@@ -1489,15 +1550,15 @@ class PreferencesPanel:
     def _confirm_restore_defaults(self) -> bool:
         if self.confirm_restore is not None:
             return bool(self.confirm_restore())
-        from tkinter import messagebox
-
-        return bool(
-            messagebox.askyesno(
-                "Restore default preferences?",
+        return ask_confirmation(
+            self.dialog,
+            title="Restore default preferences?",
+            message=(
                 "Replace the current form values with CaveViewer defaults? "
-                "The change is not saved until you select Save changes.",
-                parent=self.dialog,
-            )
+                "The change is not saved until you select Save changes."
+            ),
+            confirm_text="Restore",
+            cancel_text="Cancel",
         )
 
     def _stage_preferences(self, preferences: Preferences, message: str) -> None:

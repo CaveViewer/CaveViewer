@@ -6,6 +6,7 @@ import json
 import os
 import sys
 import traceback
+from datetime import datetime, timezone
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
@@ -265,6 +266,19 @@ def test_map_session_opens_uncached_glb_with_pending_import(tmp_path, monkeypatc
     app._run_map_session(str(tmp_path))
 
     assert opened == [((descriptor,), {"textures_dir": str(tmp_path)})]
+
+
+def test_map_session_returns_pending_import_failure_to_gui_loop(tmp_path, monkeypatch):
+    descriptor = {"format": "glb", "glb_path": str(tmp_path / "map.glb")}
+    outcome = SimpleNamespace(kind="import_failed")
+    monkeypatch.setattr(app, "find_model_file", lambda _folder: descriptor)
+    monkeypatch.setattr(chunker, "cache_is_valid", lambda _path: False)
+    _install_viewer_module(
+        monkeypatch,
+        run_pending=lambda *_args, **_kwargs: outcome,
+    )
+
+    assert app._run_map_session(str(tmp_path)) is outcome
 
 
 def test_map_session_opens_uncached_direct_glb_file_with_parent_texture_dir(
@@ -678,6 +692,50 @@ def test_main_reopens_library_without_launch_overlay_after_map_session(monkeypat
     assert managers[0].shutdown_calls == 1
 
 
+def test_main_forwards_recoverable_map_error_to_next_library(monkeypatch):
+    _recorder, _configured = _prepare_main(monkeypatch)
+    selections = iter(("/maps/failed", ""))
+    splash_calls = []
+    outcome = SimpleNamespace(
+        kind="import_failed",
+        message="cache busy",
+        suggestion="wait and retry",
+    )
+    monkeypatch.setattr(app.sys, "argv", ["caveviewer", " "])
+    monkeypatch.setattr(app, "_run_map_session", lambda *_args, **_kwargs: outcome)
+    _install_splash_module(
+        monkeypatch,
+        lambda **kwargs: splash_calls.append(kwargs) or next(selections),
+    )
+
+    app.main()
+
+    assert splash_calls[0]["map_open_error_details"] is None
+    details = splash_calls[1]["map_open_error_details"]
+    assert "Error: cache busy" in details
+    assert "Suggestion: wait and retry" in details
+    assert "Map:" in details and "failed" in details
+
+
+def test_map_open_failure_details_are_complete_and_copy_ready(tmp_path):
+    details = app._format_map_open_failure_details(
+        SimpleNamespace(message="cache busy", suggestion="wait and retry"),
+        map_path=str(tmp_path / "map"),
+        occurred_at=datetime(2026, 8, 30, 20, 45, tzinfo=timezone.utc),
+        diagnostic_path=str(tmp_path / "viewer.log"),
+    )
+
+    assert details.splitlines() == [
+        "CaveViewer map-open error",
+        f"Version: {app.__version__}",
+        "Time: 2026-08-30T20:45:00+00:00",
+        f"Map: {os.path.abspath(tmp_path / 'map')}",
+        "Error: cache busy",
+        "Suggestion: wait and retry",
+        f"Diagnostic log: {tmp_path / 'viewer.log'}",
+    ]
+
+
 def test_run_returns_normally_when_main_succeeds(monkeypatch):
     called = []
     monkeypatch.setattr(app, "main", lambda: called.append(True))
@@ -963,6 +1021,8 @@ def test_system_exit_code_normalizes_supported_exit_values(value, expected):
 
 @pytest.mark.parametrize("dialog_fails", [False, True])
 def test_run_logs_fatal_error_and_uses_best_effort_dialog(monkeypatch, dialog_fails):
+    from caveviewer.gui import notifications
+
     recorder = _LogRecorder()
     configured = []
     dialog_calls = []
@@ -987,8 +1047,10 @@ def test_run_logs_fatal_error_and_uses_best_effort_dialog(monkeypatch, dialog_fa
         return FakeRoot()
 
     tkinter.Tk = create_root
-    tkinter.messagebox = SimpleNamespace(
-        showerror=lambda *args, **kwargs: dialog_calls.append((args, kwargs))
+    monkeypatch.setattr(
+        notifications,
+        "show_error",
+        lambda message, *, parent: dialog_calls.append((message, parent)),
     )
     monkeypatch.setitem(sys.modules, "tkinter", tkinter)
 
@@ -1004,8 +1066,8 @@ def test_run_logs_fatal_error_and_uses_best_effort_dialog(monkeypatch, dialog_fa
         assert dialog_calls == []
     else:
         assert dialog_calls[0] == "withdraw"
-        args, kwargs = dialog_calls[1]
-        assert args[0] == app.APP_NAME
-        assert "startup exploded" in args[1]
-        assert "Traceback:" not in args[1]
-        assert kwargs["parent"].__class__ is FakeRoot
+        message, parent = dialog_calls[1]
+        assert app.APP_NAME in message
+        assert "startup exploded" in message
+        assert "Traceback:" not in message
+        assert parent.__class__ is FakeRoot

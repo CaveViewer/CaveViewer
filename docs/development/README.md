@@ -10,6 +10,8 @@
   and the completed migration sequence.
 - [Coding standards](coding-standards.md): implementation conventions and
   safety rules.
+- [UX guidelines](ux-guidelines.md): interaction, layout, forms, dialogs,
+  feedback, progress, accessibility, and platform-integration standards.
 - [Testing](testing.md): test placement, commands, markers, and coverage policy.
 - [Viewer benchmarking](benchmarking.md): automated FPS regression benchmark
   design, artifacts, workflow inputs, and calibration policy.
@@ -25,6 +27,8 @@
   override, and naming rules.
 - [Design system](design-system.md): shared Tk typography roles, scaling, and
   presentation rules.
+- [Branding](branding.md): replaceable visual surfaces, derived platform
+  artifacts, and the stable product-identity boundary.
 - [Source setup](source-setup.md): source setup, runtime configuration, and
   detailed environment variables.
 - [Runtime configuration](runtime-configuration.md): settings ownership,

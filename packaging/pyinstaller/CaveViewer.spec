@@ -66,6 +66,46 @@ else:
     )
 _load_release_metadata(release_metadata_path)
 
+branding_profile_value = os.environ.get('CAVEVIEWER_BRAND_PROFILE_DIR', '').strip()
+branding_profile_dir = (
+    Path(branding_profile_value)
+    if branding_profile_value
+    else resources_root / 'branding' / 'default'
+)
+branding_manifest_path = branding_profile_dir / 'branding.v1.json'
+if not branding_manifest_path.is_file():
+    raise RuntimeError(
+        'CAVEVIEWER_BRAND_PROFILE_DIR does not contain branding.v1.json: '
+        f'{branding_profile_dir}'
+    )
+branding_datas = [
+    (
+        str(path),
+        str(
+            Path('caveviewer/resources/branding/default')
+            / path.relative_to(branding_profile_dir).parent
+        ),
+    )
+    for path in sorted(branding_profile_dir.rglob('*'))
+    if path.is_file()
+]
+branding_summary_value = os.environ.get(
+    'CAVEVIEWER_BRANDING_EXPORT_SUMMARY', ''
+).strip()
+if branding_summary_value:
+    branding_summary_path = Path(branding_summary_value)
+    if not branding_summary_path.is_file():
+        raise RuntimeError(
+            'CAVEVIEWER_BRANDING_EXPORT_SUMMARY does not name a file: '
+            f'{branding_summary_path}'
+        )
+    branding_datas.append(
+        (
+            str(branding_summary_path),
+            'caveviewer/resources/branding',
+        )
+    )
+
 hidden_imports = ['PIL._tkinter_finder', 'tkinter']
 extra_binaries = []
 extra_datas = []
@@ -105,6 +145,7 @@ a = Analysis(
             'caveviewer/resources',
         ),
         (str(release_metadata_path), 'caveviewer/resources'),
+        *branding_datas,
         (str(project_root / 'LICENSE'), '.'),
         (str(project_root / 'THIRD_PARTY_NOTICES.md'), '.'),
     ] + extra_datas,

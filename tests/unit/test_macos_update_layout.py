@@ -73,3 +73,23 @@ def test_macos_release_scripts_use_architecture_specific_contracts():
     assert "updates/macos/$macos_arch/$channel.json" in manifest_writer
     assert '"$repo_root/scripts/write_update_manifest.py"' in manifest_writer
     assert '--architecture "$macos_arch"' in manifest_writer
+
+
+def test_macos_build_uses_shared_branding_export_and_native_icns_container():
+    builder = (
+        REPOSITORY_ROOT / "scripts" / "macos" / "build.sh"
+    ).read_text(encoding="utf-8")
+    smoke = (
+        REPOSITORY_ROOT / "scripts" / "macos" / "smoke_dmg.sh"
+    ).read_text(encoding="utf-8")
+
+    assert "caveviewer.branding_export" in builder
+    assert "CAVEVIEWER_BRAND_PROFILE" in builder
+    assert "CAVEVIEWER_BRAND_PROFILE_DIR" in builder
+    assert "CAVEVIEWER_BRANDING_EXPORT_SUMMARY" in builder
+    assert "macos/CaveViewer.iconset" in builder
+    assert 'iconutil -c icns "$iconset_dir" -o "$icon_icns"' in builder
+    assert "sips" not in builder
+    assert "app_icon_macos.png" not in builder
+    assert "CFBundleIconFile" in smoke
+    assert "branding/export-summary.v1.json" in smoke

@@ -22,8 +22,8 @@ import moderngl
 import numpy as np
 from PIL import Image
 
+from caveviewer.branding import BrandingAssets, resolve_branding_assets
 from caveviewer.gui import bitmap_font
-from caveviewer.resources import image_path
 
 
 _VERT_SRC = """
@@ -60,29 +60,23 @@ void main() {
 _LOGO_FRAG_SRC = """
 #version 330
 uniform sampler2D u_texture;
+uniform sampler2D u_rim_mask;
 uniform float u_alpha;
 uniform float u_progress;
 uniform float u_indeterminate;
 uniform float u_spinner_phase;
 uniform float u_logo_alpha;
+uniform vec3 u_track_rgb;
+uniform vec3 u_fill_rgb;
+uniform float u_use_rim_mask;
 in vec2 v_uv;
 out vec4 f_color;
 
-bool is_amber(vec4 color) {
-    return (
-        color.a > 0.05 &&
-        color.r > 0.45 &&
-        color.g > 0.26 &&
-        color.b < 0.22 &&
-        color.r > color.b * 2.2 &&
-        color.g > color.b * 1.6
-    );
-}
-
 void main() {
     vec4 tex_color = texture(u_texture, v_uv);
-    if (is_amber(tex_color)) {
-        tex_color.a = 0.0;
+    float rim_mask_alpha = 0.0;
+    if (u_use_rim_mask > 0.5) {
+        rim_mask_alpha = texture(u_rim_mask, v_uv).a;
     }
     tex_color.a *= u_logo_alpha;
 
@@ -95,7 +89,12 @@ void main() {
     float edge = clamp(fwidth(dist), 0.00075, 0.010);
     float outer_mask = 1.0 - smoothstep(ring_outer - edge, ring_outer + edge, dist);
     float inner_mask = smoothstep(ring_inner - edge, ring_inner + edge, dist);
-    float ring_alpha = outer_mask * inner_mask;
+    float circular_ring_alpha = outer_mask * inner_mask;
+    float ring_alpha = mix(
+        circular_ring_alpha,
+        rim_mask_alpha,
+        step(0.5, u_use_rim_mask)
+    );
 
     float angle = atan(centered.x, centered.y);
     if (angle < 0.0) {
@@ -128,27 +127,28 @@ void main() {
         fill_strength = arc_mask * mix(0.48, 1.0, leading_taper);
     }
 
-    vec3 track_rgb = vec3(0.315, 0.325, 0.360);
-    vec3 fill_rgb = vec3(0.8980, 0.6314, 0.1216);
-    vec4 ring_color = vec4(mix(track_rgb, fill_rgb, fill_strength), ring_alpha * mix(0.58, 1.0, fill_strength));
+    vec4 ring_color = vec4(
+        mix(u_track_rgb, u_fill_rgb, fill_strength),
+        ring_alpha
+    );
 
     float out_alpha = tex_color.a + ring_color.a * (1.0 - tex_color.a);
-    vec3 out_rgb = vec3(0.0);
-    if (out_alpha > 0.0) {
-        out_rgb = (
-            tex_color.rgb * tex_color.a +
-            ring_color.rgb * ring_color.a * (1.0 - tex_color.a)
-        ) / out_alpha;
-    }
+    vec3 out_rgb = mix(tex_color.rgb, ring_color.rgb, ring_color.a);
     f_color = vec4(out_rgb, out_alpha * u_alpha);
 }
 """
 
-_LOGO_PATH = str(image_path("app_mark_transparent.png"))
+
+def _hex_color_rgb(color: str) -> tuple[float, float, float]:
+    """Convert a validated six-digit brand color to shader RGB values."""
+    return tuple(int(color[index : index + 2], 16) / 255.0 for index in (1, 3, 5))
 
 
 class ImportProgressPanel:
     LOGO_SIZE = 172.0
+    PROGRESS_BAR_WIDTH = 300.0
+    PROGRESS_BAR_HEIGHT = 4.0
+    INDETERMINATE_SEGMENT_FRACTION = 0.28
     TITLE_TEXT_SIZE = 2.1
     STAGE_TEXT_SIZE = 2.65
     NOTE_TEXT_SIZE = 1.94
@@ -158,8 +158,14 @@ class ImportProgressPanel:
     _STAGE_TEXT_RGBA = (0.8000, 0.8039, 0.8392, 1.0)
     _NOTE_TEXT_RGBA = (0.690, 0.720, 0.750, 0.92)
 
-    def __init__(self, ctx: moderngl.Context):
+    def __init__(
+        self,
+        ctx: moderngl.Context,
+        *,
+        branding_assets: BrandingAssets | None = None,
+    ):
         self.ctx = ctx
+        self._branding_assets = branding_assets or resolve_branding_assets(environ={})
         self.program = ctx.program(vertex_shader=_VERT_SRC, fragment_shader=_FRAG_SRC)
 
         self._max_verts = 4000
@@ -169,29 +175,89 @@ class ImportProgressPanel:
         )
 
         self.logo_program = ctx.program(vertex_shader=_LOGO_VERT_SRC, fragment_shader=_LOGO_FRAG_SRC)
+        self.logo_program["u_track_rgb"].value = _hex_color_rgb(
+            self._branding_assets.loading_ring.track_color
+        )
+        self.logo_program["u_fill_rgb"].value = _hex_color_rgb(
+            self._branding_assets.loading_ring.fill_color
+        )
+        self._progress_track_rgba = (
+            *_hex_color_rgb(self._branding_assets.loading_ring.track_color),
+            1.0,
+        )
+        self._progress_fill_rgba = (
+            *_hex_color_rgb(self._branding_assets.loading_ring.fill_color),
+            1.0,
+        )
         self._logo_vbo = ctx.buffer(reserve=6 * 4 * 4)
         self._logo_vao = ctx.vertex_array(
             self.logo_program, [(self._logo_vbo, "2f 2f", "in_pos", "in_uv")]
         )
         self._logo_texture = None
+        self._rim_mask_texture = None
         self._logo_aspect = 1.0
+        self._logo_available = False
+        self._rim_mask_available = False
         self._load_logo_texture()
 
         self._display_fraction = 0.0
         self._progress_token = None
 
     def _load_logo_texture(self) -> None:
+        texture = None
         try:
-            img = Image.open(_LOGO_PATH).convert("RGBA")
+            with Image.open(self._branding_assets.loading_mark) as image:
+                img = image.convert("RGBA")
             self._logo_aspect = img.size[0] / img.size[1]
-            self._logo_texture = self.ctx.texture(img.size, 4, img.tobytes())
-            self._logo_texture.build_mipmaps()
+            texture = self.ctx.texture(img.size, 4, img.tobytes())
+            texture.build_mipmaps()
+            self._logo_texture = texture
+            self._logo_available = True
         except Exception:
-            self._logo_texture = None
+            if texture is not None:
+                try:
+                    texture.release()
+                except Exception:
+                    pass
             self._logo_aspect = 1.0
+            self._logo_available = False
+            try:
+                self._logo_texture = self.ctx.texture(
+                    (1, 1), 4, b"\x00\x00\x00\x00"
+                )
+            except Exception:
+                self._logo_texture = None
+
+        mask_texture = None
+        try:
+            with Image.open(self._branding_assets.loading_progress_mask) as image:
+                mask = image.convert("RGBA")
+            mask_texture = self.ctx.texture(mask.size, 4, mask.tobytes())
+            mask_texture.build_mipmaps()
+            self._rim_mask_texture = mask_texture
+            self._rim_mask_available = True
+        except Exception:
+            if mask_texture is not None:
+                try:
+                    mask_texture.release()
+                except Exception:
+                    pass
+            self._rim_mask_available = False
+            try:
+                self._rim_mask_texture = self.ctx.texture(
+                    (1, 1), 4, b"\x00\x00\x00\x00"
+                )
+            except Exception:
+                self._rim_mask_texture = None
 
     def release(self) -> None:
-        for attr in ("_logo_texture", "_logo_vao", "_logo_vbo", "logo_program"):
+        for attr in (
+            "_logo_texture",
+            "_rim_mask_texture",
+            "_logo_vao",
+            "_logo_vbo",
+            "logo_program",
+        ):
             obj = getattr(self, attr, None)
             if obj is not None and hasattr(obj, "release"):
                 try:
@@ -246,12 +312,32 @@ class ImportProgressPanel:
         if not indeterminate:
             self._display_fraction = max(self._display_fraction, fraction_clamped)
 
-        logo_cx = w / 2.0
-        logo_cy = panel_y0 + panel_h * 0.50
-        self._add_ring_labels(
+        bar_cx = w / 2.0
+        # Keep the active stage where it was, but place progress after it in
+        # reading order and before the explanatory note.
+        bar_cy = panel_y0 + panel_h * 0.50 + 70.0
+        bar_x0 = bar_cx - self.PROGRESS_BAR_WIDTH / 2.0
+        bar_x1 = bar_cx + self.PROGRESS_BAR_WIDTH / 2.0
+        bar_y0 = bar_cy - self.PROGRESS_BAR_HEIGHT / 2.0
+        bar_y1 = bar_cy + self.PROGRESS_BAR_HEIGHT / 2.0
+        add_quad_px(bar_x0, bar_y0, bar_x1, bar_y1, self._progress_track_rgba)
+        for fill_x0, fill_x1 in self._progress_bar_fill_bounds(
+            bar_x0,
+            bar_x1,
+            None if indeterminate else self._display_fraction,
+            (time.perf_counter() * 0.72) % 1.0,
+        ):
+            add_quad_px(
+                fill_x0,
+                bar_y0,
+                fill_x1,
+                bar_y1,
+                self._progress_fill_rgba,
+            )
+        self._add_bar_labels(
             add_quad_px=add_quad_px,
-            center_x=logo_cx,
-            center_y=logo_cy,
+            center_x=bar_cx,
+            center_y=bar_cy,
             window_width=w,
             title=title,
             stage=self._stage_label(stage),
@@ -274,15 +360,57 @@ class ImportProgressPanel:
         self.ctx.disable(moderngl.DEPTH_TEST)
         self.ctx.enable(moderngl.BLEND)
         self._vao.render(moderngl.TRIANGLES, vertices=len(verts))
-        self._render_logo(
-            logo_cx,
-            logo_cy,
-            window_size,
-            None if indeterminate else self._display_fraction,
-        )
         self.ctx.disable(moderngl.BLEND)
         self.ctx.enable(moderngl.DEPTH_TEST)
         self.ctx.enable(moderngl.CULL_FACE)
+
+    @classmethod
+    def _progress_bar_fill_bounds(
+        cls,
+        left: float,
+        right: float,
+        progress: float | None,
+        phase: float,
+    ) -> tuple[tuple[float, float], ...]:
+        """Return determinate fill or a wrapping indeterminate segment."""
+        width = max(0.0, right - left)
+        if width == 0.0:
+            return ()
+        if progress is not None:
+            fill_right = left + width * max(0.0, min(1.0, progress))
+            return () if fill_right <= left else ((left, fill_right),)
+
+        segment_width = width * cls.INDETERMINATE_SEGMENT_FRACTION
+        start = left + (width + segment_width) * (phase % 1.0) - segment_width
+        end = start + segment_width
+        bounds = []
+        if end > left and start < right:
+            bounds.append((max(left, start), min(right, end)))
+        return tuple(bounds)
+
+    def _add_bar_labels(
+        self,
+        *,
+        add_quad_px,
+        center_x: float,
+        center_y: float,
+        window_width: float,
+        title: str | None = None,
+        stage: str | None = None,
+        note: str | None = None,
+    ) -> None:
+        """Append the import title, stage, and note around the flat progress bar."""
+        self._add_labels(
+            add_quad_px=add_quad_px,
+            center_x=center_x,
+            window_width=window_width,
+            title=title,
+            title_y=center_y - 124.0,
+            stage=stage,
+            stage_y=center_y - 42.0,
+            note=note,
+            note_y=center_y + 30.0,
+        )
 
     def _render_logo(
         self,
@@ -293,8 +421,11 @@ class ImportProgressPanel:
         alpha: float = 1.0,
         logo_alpha: float = 1.0,
     ) -> None:
-        if self._logo_texture is None:
+        mode = self._branding_assets.loading_ring.mode
+        if self._logo_texture is None or mode == "text_only":
             return
+        if mode == "ring_only" or not self._logo_available:
+            logo_alpha = 0.0
 
         size_px = self.LOGO_SIZE
         if self._logo_aspect >= 1.0:
@@ -323,7 +454,13 @@ class ImportProgressPanel:
         data = np.array(vertices, dtype=np.float32)
         self._logo_vbo.write(data.tobytes())
         self._logo_texture.use(location=0)
+        if self._rim_mask_texture is not None:
+            self._rim_mask_texture.use(location=1)
         self.logo_program["u_texture"].value = 0
+        self.logo_program["u_rim_mask"].value = 1
+        self.logo_program["u_use_rim_mask"].value = (
+            1.0 if self._rim_mask_available else 0.0
+        )
         self.logo_program["u_alpha"].value = alpha
         self.logo_program["u_progress"].value = (
             0.0 if progress is None else max(0.0, min(1.0, progress))
@@ -528,6 +665,35 @@ class ImportProgressPanel:
         fixed_text_scale: float | None = None,
     ) -> None:
         """Append labels using the shared title, stage, and note hierarchy."""
+        self._add_labels(
+            add_quad_px=add_quad_px,
+            center_x=center_x,
+            window_width=window_width,
+            title=title,
+            title_y=center_y - (self.LOGO_SIZE / 2.0) - 42.0,
+            stage=stage,
+            stage_y=center_y + (self.LOGO_SIZE / 2.0) + 30.0,
+            note=note,
+            alpha=alpha,
+            fixed_text_scale=fixed_text_scale,
+        )
+
+    def _add_labels(
+        self,
+        *,
+        add_quad_px,
+        center_x: float,
+        window_width: float,
+        title: str | None,
+        title_y: float,
+        stage: str | None,
+        stage_y: float,
+        note: str | None,
+        note_y: float | None = None,
+        alpha: float = 1.0,
+        fixed_text_scale: float | None = None,
+    ) -> None:
+        """Append title, stage, and note at caller-selected vertical anchors."""
         def add_centered_text(
             text: str | None,
             y: float,
@@ -571,17 +737,16 @@ class ImportProgressPanel:
                 )
             return text_height
 
-        title_y = center_y - (self.LOGO_SIZE / 2.0) - 42.0
         add_centered_text(title, title_y, self.TITLE_TEXT_SIZE, self._TITLE_TEXT_RGBA)
 
-        stage_y = center_y + (self.LOGO_SIZE / 2.0) + 30.0
         stage_height = add_centered_text(
             stage,
             stage_y,
             self.STAGE_TEXT_SIZE,
             self._STAGE_TEXT_RGBA,
         )
-        note_y = stage_y if stage_height == 0.0 else stage_y + stage_height + 22.0
+        if note_y is None:
+            note_y = stage_y if stage_height == 0.0 else stage_y + stage_height + 22.0
         add_centered_text(note, note_y, self.NOTE_TEXT_SIZE, self._NOTE_TEXT_RGBA)
 
     def _stage_label(self, stage: str) -> str:
