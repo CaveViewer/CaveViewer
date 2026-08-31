@@ -114,6 +114,45 @@ def test_obj_pause_support_normalizes_the_descriptor_format():
     ) == "obj"
 
 
+def test_resuming_import_message_returns_to_normal_progress_after_three_seconds():
+    controller, _logger, _calls = _controller()
+    clock = [10.0]
+    controller._perf_counter = lambda: clock[0]
+
+    controller.update_progress_message_for_stage("resuming import")
+
+    assert controller.progress_title == "Resuming import"
+    assert controller.progress_note == "Using saved work from the previous session."
+
+    clock[0] = 13.0
+    controller.update_progress_message_for_stage("resuming import")
+
+    assert controller.progress_title == ""
+    assert controller.progress_note == controller.default_progress_note()
+
+
+def test_close_after_paused_import_releases_the_viewer_without_a_notice():
+    calls = []
+    owner = SimpleNamespace(
+        _has_map_loaded=False,
+        _complete_window_close=lambda: calls.append("close_viewer"),
+    )
+    controller, logger, _terminate_calls = _controller()
+    controller._owner = owner
+    controller.active = True
+    controller.is_startup = True
+    controller.map_name = "cave.obj"
+    controller._close_pause_deadline = 13.0
+    controller.event_queue = queue.Queue()
+    controller.event_queue.put(("paused", "/cache/.cave.resume-123"))
+
+    controller.drain_queue()
+
+    assert calls == ["close_viewer"]
+    assert controller.pause_notice_until is None
+    assert "Resume checkpoint saved; closing viewer." in logger.info_messages
+
+
 def test_shutdown_joins_live_relay_and_clears_import_references():
     process = object()
     controller, _logger, calls = _controller()

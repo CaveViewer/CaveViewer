@@ -27,7 +27,7 @@ _IMPORT_HEARTBEAT_LOG_SECONDS = 30.0
 _IMPORT_SHUTDOWN_TIMEOUT_SECONDS = 2.0
 _IMPORT_STALE_LOG_SECONDS = 30.0
 _IMPORT_CLOSE_PAUSE_TIMEOUT_SECONDS = 3.0
-_IMPORT_CLOSE_PAUSE_NOTICE_SECONDS = 1.0
+_IMPORT_RESUME_NOTICE_SECONDS = 3.0
 
 
 class MapImportController:
@@ -77,6 +77,7 @@ class MapImportController:
         self.progress_title: str = ""
         self.progress_note: str = ""
         self.resuming_from_checkpoint: bool = False
+        self._resume_status_until: float | None = None
         self.pause_notice_until: float | None = None
         self.pause_notice_close_after: bool = False
         self.pause_notice_map_name: str = ""
@@ -109,15 +110,22 @@ class MapImportController:
 
     def update_progress_message_for_stage(self, stage: str) -> None:
         normalized = " ".join(str(stage or "").strip().lower().split())
-        if normalized == "resuming import":
+        if normalized == "resuming import" and not self.resuming_from_checkpoint:
             self.resuming_from_checkpoint = True
+            self._resume_status_until = (
+                self._perf_counter() + _IMPORT_RESUME_NOTICE_SECONDS
+            )
 
         if self.pause_requested or normalized == "pausing import":
             self.set_progress_message(
                 "Pausing import",
                 "Saving a resume point.",
             )
-        elif self.resuming_from_checkpoint:
+        elif (
+            self.resuming_from_checkpoint
+            and self._resume_status_until is not None
+            and self._perf_counter() < self._resume_status_until
+        ):
             self.set_progress_message(
                 "Resuming import",
                 "Using saved work from the previous session.",
@@ -226,6 +234,7 @@ class MapImportController:
         self.pause_requested = False
         self.model_format = self.import_model_format_from_descriptor(model_descriptor)
         self.resuming_from_checkpoint = False
+        self._resume_status_until = None
         self.set_progress_message("", self.default_progress_note())
         self.clear_pause_notice()
 
@@ -498,7 +507,10 @@ class MapImportController:
         if resume_dir:
             self.log.info("Import paused. Resume checkpoint: %s", resume_dir)
         self.log.info("Open this map again to resume the import.")
-        if self._owner._has_map_loaded and not close_after_pause:
+        if close_after_pause:
+            self.log.info("Resume checkpoint saved; closing viewer.")
+            self._close_owner_if_possible()
+        elif self._owner._has_map_loaded:
             self._owner._show_capture_status(
                 "Import paused",
                 "Resume point saved. Open this map again to continue.",
@@ -509,9 +521,9 @@ class MapImportController:
             self.show_pause_notice(
                 map_name,
                 close_after=close_after_pause or was_startup_import,
-                duration=_IMPORT_CLOSE_PAUSE_NOTICE_SECONDS if close_after_pause else 6.0,
+                duration=6.0,
             )
-            if close_after_pause or was_startup_import:
+            if was_startup_import:
                 self.log.info(
                     "Viewer will close after showing the paused import message."
                 )
@@ -528,7 +540,16 @@ class MapImportController:
         self.pause_requested = False
         self.model_format = None
         self.resuming_from_checkpoint = False
+        self._resume_status_until = None
         self._close_pause_deadline = None
+
+    def _close_owner_if_possible(self) -> None:
+        """Close through the owner so it releases its render resources first."""
+        close_owner = getattr(self._owner, "_complete_window_close", None)
+        if callable(close_owner):
+            close_owner()
+            return
+        self._close_window_if_possible()
 
     def _discard_queued_events(self) -> None:
         event_queue = self.event_queue
@@ -581,20 +602,12 @@ class MapImportController:
 
     def _abandon_slow_close_pause(self) -> None:
         """Bound Close when an importer cannot reach a checkpoint promptly."""
-        map_name = self.map_name
         self.log.warning(
             "Import pause exceeded %.1fs; stopping the import instead.",
             _IMPORT_CLOSE_PAUSE_TIMEOUT_SECONDS,
         )
-        self.show_pause_notice(
-            map_name,
-            close_after=True,
-            duration=_IMPORT_CLOSE_PAUSE_NOTICE_SECONDS,
-        )
-        self.pause_notice_title = "Import stopped"
-        self.pause_notice_stage = "will restart next time"
-        self.pause_notice_note = "The resume point could not be saved quickly."
         self.shutdown(wait=True, timeout=0.5)
+        self._close_owner_if_possible()
 
     def cancel_active_import(self) -> None:
         """Signal a running import to stop without blocking the GUI thread."""
