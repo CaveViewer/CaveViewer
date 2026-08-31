@@ -106,6 +106,48 @@ def test_bar_labels_use_compact_progress_layout(monkeypatch):
     ]
 
 
+def test_compact_progress_layout_scales_labels_and_spacing(monkeypatch):
+    panel = object.__new__(ImportProgressPanel)
+    text_calls = []
+    monkeypatch.setattr(
+        import_progress_panel.bitmap_font,
+        "text_bounds_px",
+        lambda text, pixel_size: (0.0, 0.0, len(text) * pixel_size, pixel_size),
+    )
+    monkeypatch.setattr(
+        import_progress_panel.bitmap_font,
+        "iter_text_pixels",
+        lambda text, _x, y, pixel_size: text_calls.append((text, y, pixel_size))
+        or (),
+    )
+
+    assert import_progress_panel._compact_progress_layout_scale((1536, 864)) == 1.0
+    assert import_progress_panel._compact_progress_layout_scale(
+        (1280, 720)
+    ) == pytest.approx(1.2)
+
+    panel._add_bar_labels(
+        add_quad_px=lambda *_args: None,
+        center_x=400.0,
+        center_y=300.0,
+        window_width=800.0,
+        title="Opening map",
+        stage="Building map chunks",
+        note="First-time setup in progress.",
+        layout_scale=1.2,
+    )
+
+    assert text_calls == [
+        ("Opening map", pytest.approx(151.2), pytest.approx(2.52)),
+        ("Building map chunks", pytest.approx(249.6), pytest.approx(3.18)),
+        (
+            "First-time setup in progress.",
+            pytest.approx(336.0),
+            pytest.approx(2.328),
+        ),
+    ]
+
+
 def test_progress_bar_fill_bounds_cover_determinate_and_indeterminate_states():
     assert ImportProgressPanel._progress_bar_fill_bounds(100.0, 400.0, 0.0, 0.5) == ()
     assert ImportProgressPanel._progress_bar_fill_bounds(100.0, 400.0, 0.25, 0.5) == (

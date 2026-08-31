@@ -144,6 +144,18 @@ def _hex_color_rgb(color: str) -> tuple[float, float, float]:
     return tuple(int(color[index : index + 2], 16) / 255.0 for index in (1, 3, 5))
 
 
+def _compact_progress_layout_scale(window_size: tuple[int, int]) -> float:
+    """Return bounded label compensation for compact viewer surfaces."""
+    try:
+        width, height = (max(1, int(value)) for value in window_size)
+    except (TypeError, ValueError):
+        return 1.0
+    surface_ratio = min(width / 1536.0, height / 864.0)
+    if surface_ratio >= 1.0:
+        return 1.0
+    return min(1.22, 1.0 / max(0.75, surface_ratio))
+
+
 class ImportProgressPanel:
     LOGO_SIZE = 172.0
     PROGRESS_BAR_WIDTH = 300.0
@@ -342,6 +354,7 @@ class ImportProgressPanel:
             title=title,
             stage=self._stage_label(stage),
             note=note,
+            layout_scale=_compact_progress_layout_scale(window_size),
         )
 
         data = np.array(verts, dtype=np.float32)
@@ -398,6 +411,7 @@ class ImportProgressPanel:
         title: str | None = None,
         stage: str | None = None,
         note: str | None = None,
+        layout_scale: float = 1.0,
     ) -> None:
         """Append the import title, stage, and note around the flat progress bar."""
         self._add_labels(
@@ -405,11 +419,12 @@ class ImportProgressPanel:
             center_x=center_x,
             window_width=window_width,
             title=title,
-            title_y=center_y - 124.0,
+            title_y=center_y - 124.0 * layout_scale,
             stage=stage,
-            stage_y=center_y - 42.0,
+            stage_y=center_y - 42.0 * layout_scale,
             note=note,
-            note_y=center_y + 30.0,
+            note_y=center_y + 30.0 * layout_scale,
+            layout_scale=layout_scale,
         )
 
     def _render_logo(
@@ -692,6 +707,7 @@ class ImportProgressPanel:
         note_y: float | None = None,
         alpha: float = 1.0,
         fixed_text_scale: float | None = None,
+        layout_scale: float = 1.0,
     ) -> None:
         """Append title, stage, and note at caller-selected vertical anchors."""
         def add_centered_text(
@@ -703,6 +719,7 @@ class ImportProgressPanel:
             text = " ".join(str(text or "").split())
             if not text:
                 return 0.0
+            pixel_size *= layout_scale
             if fixed_text_scale is not None:
                 pixel_size = bitmap_font.pixel_size_at_text_scale(
                     pixel_size,
@@ -746,7 +763,11 @@ class ImportProgressPanel:
             self._STAGE_TEXT_RGBA,
         )
         if note_y is None:
-            note_y = stage_y if stage_height == 0.0 else stage_y + stage_height + 22.0
+            note_y = (
+                stage_y
+                if stage_height == 0.0
+                else stage_y + stage_height + 22.0 * layout_scale
+            )
         add_centered_text(note, note_y, self.NOTE_TEXT_SIZE, self._NOTE_TEXT_RGBA)
 
     def _stage_label(self, stage: str) -> str:
