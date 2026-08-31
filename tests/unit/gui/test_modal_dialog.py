@@ -137,7 +137,7 @@ def test_copy_feedback_uses_a_transient_geometric_confirmation_mark():
         'cancel_button.pack(side="right", padx=(0, px(8)))'
     )
     feedback_pack = source.index(
-        'copy_feedback.pack(side="right", padx=(0, px(12)))'
+        'copy_feedback.pack(side="right", padx=(0, px(COPY_CONFIRMATION_GAP)))'
     )
     assert copy_action_pack < feedback_pack
     assert "create_line(" in mark_source

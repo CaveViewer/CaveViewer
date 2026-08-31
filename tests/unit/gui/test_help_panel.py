@@ -177,6 +177,28 @@ def test_help_panel_only_renders_log_action_status_when_present():
     assert "if state.status_text:" in render_source
 
 
+def test_troubleshooting_aligns_and_places_copy_below_available_error_details():
+    render_source = inspect.getsource(help_panel.HelpPanel._render_troubleshooting)
+
+    assert "content_x = self._px(TABBED_CONTENT_ALIGNMENT_INSET)" in render_source
+    assert "content_right = width - self._px(12)" in render_source
+    assert "if copy_button is not None:" in render_source
+    assert "# Copy is an inline utility for the excerpt" in render_source
+    assert "canvas.create_window(\n                    content_x,\n                    copy_y," in render_source
+    assert "enabled=state.error_excerpt is not None" not in render_source
+
+
+def test_help_copy_confirmation_reuses_the_modal_mark_and_standard_gap():
+    render_source = inspect.getsource(help_panel.HelpPanel._render_troubleshooting)
+    copy_source = inspect.getsource(help_panel.HelpPanel._copy_last_error)
+
+    assert "create_confirmation_mark" in inspect.getsource(help_panel)
+    assert "COPY_CONFIRMATION_GAP" in render_source
+    assert "self._copy_confirmation_visible" in render_source
+    assert 'self._copy_feedback = "" if copied else' in copy_source
+    assert 'text="Copied"' not in copy_source
+
+
 def test_copy_error_excerpt_uses_exact_displayed_text():
     class Clipboard:
         def __init__(self):
@@ -221,7 +243,7 @@ def test_help_copy_confirmation_clears_on_timeout_and_leave():
     panel._content_canvas = canvas
     panel._render_table = lambda width: rendered.append(width)
 
-    panel._reset_copy_button_label()
+    panel._clear_copy_feedback()
 
     assert panel._copy_feedback == ""
     assert panel._copy_feedback_after_id is None
