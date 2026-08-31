@@ -6,6 +6,7 @@ import json
 import os
 import sys
 import traceback
+from datetime import datetime, timezone
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
@@ -689,6 +690,50 @@ def test_main_reopens_library_without_launch_overlay_after_map_session(monkeypat
     assert seen_managers == [managers[0], managers[0]]
     assert launch_overlays == [True, False]
     assert managers[0].shutdown_calls == 1
+
+
+def test_main_forwards_recoverable_map_error_to_next_library(monkeypatch):
+    _recorder, _configured = _prepare_main(monkeypatch)
+    selections = iter(("/maps/failed", ""))
+    splash_calls = []
+    outcome = SimpleNamespace(
+        kind="import_failed",
+        message="cache busy",
+        suggestion="wait and retry",
+    )
+    monkeypatch.setattr(app.sys, "argv", ["caveviewer", " "])
+    monkeypatch.setattr(app, "_run_map_session", lambda *_args, **_kwargs: outcome)
+    _install_splash_module(
+        monkeypatch,
+        lambda **kwargs: splash_calls.append(kwargs) or next(selections),
+    )
+
+    app.main()
+
+    assert splash_calls[0]["map_open_error_details"] is None
+    details = splash_calls[1]["map_open_error_details"]
+    assert "Error: cache busy" in details
+    assert "Suggestion: wait and retry" in details
+    assert "Map:" in details and "failed" in details
+
+
+def test_map_open_failure_details_are_complete_and_copy_ready(tmp_path):
+    details = app._format_map_open_failure_details(
+        SimpleNamespace(message="cache busy", suggestion="wait and retry"),
+        map_path=str(tmp_path / "map"),
+        occurred_at=datetime(2026, 8, 30, 20, 45, tzinfo=timezone.utc),
+        diagnostic_path=str(tmp_path / "viewer.log"),
+    )
+
+    assert details.splitlines() == [
+        "CaveViewer map-open error",
+        f"Version: {app.__version__}",
+        "Time: 2026-08-30T20:45:00+00:00",
+        f"Map: {os.path.abspath(tmp_path / 'map')}",
+        "Error: cache busy",
+        "Suggestion: wait and retry",
+        f"Diagnostic log: {tmp_path / 'viewer.log'}",
+    ]
 
 
 def test_run_returns_normally_when_main_succeeds(monkeypatch):

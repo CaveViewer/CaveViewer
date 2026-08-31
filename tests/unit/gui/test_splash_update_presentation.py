@@ -532,6 +532,25 @@ def test_splash_root_reuses_existing_retained_tk_root(monkeypatch, platform_name
     assert destroyed_children == ["old-logo", "old-button"]
 
 
+def test_recovered_map_error_is_presented_after_library_reveal():
+    source = inspect.getsource(splash_screen.show_splash_screen)
+    reveal_start = source.index("def _reveal_composed_main_surface")
+    reveal_end = source.index("def _animate_launch_progress", reveal_start)
+    reveal_source = source[reveal_start:reveal_end]
+
+    assert reveal_source.index("root.deiconify()") < reveal_source.index(
+        "root.update_idletasks()"
+    )
+    assert reveal_source.index("root.update_idletasks()") < reveal_source.index(
+        "show_copyable_error("
+    )
+    assert 'title="Couldn’t open map"' in reveal_source
+    assert (
+        'message="CaveViewer could not open this map due to an error."'
+        in reveal_source
+    )
+
+
 def test_splash_root_creates_new_tk_when_no_macos_root(monkeypatch):
     monkeypatch.setattr(
         splash_screen,

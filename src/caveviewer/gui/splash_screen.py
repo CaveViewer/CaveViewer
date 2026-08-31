@@ -1298,6 +1298,7 @@ def show_splash_screen(
     runtime_settings_provider: Callable[[], RuntimeSettings] | None = None,
     on_preferences_saved: Callable[[object], object] | None = None,
     show_launch_overlay: bool = True,
+    map_open_error_details: str | None = None,
 ) -> str | None:
     """
     Builds the Map Library and blocks until the person either picks a folder
@@ -2469,6 +2470,8 @@ def show_splash_screen(
     _settle_launch_layout(root, passes=3)
     readiness_gate.mark_ready()
 
+    map_open_error_presented = [False]
+
     def _reveal_composed_main_surface() -> None:
         """Reveal the fully painted main surface in one non-repeating handoff."""
         if not readiness_gate.ready:
@@ -2496,6 +2499,19 @@ def show_splash_screen(
             root.attributes("-topmost", True)
             splash_controller.schedule(
                 200, lambda: root.attributes("-topmost", False)
+            )
+        if map_open_error_details and not map_open_error_presented[0]:
+            # The library must be mapped before its owned modal starts a nested
+            # Tk wait loop, otherwise the recovered application appears absent.
+            map_open_error_presented[0] = True
+            root.update_idletasks()
+            from caveviewer.gui.modal_dialog import show_copyable_error
+
+            show_copyable_error(
+                root,
+                title="Couldn’t open map",
+                message="CaveViewer could not open this map due to an error.",
+                details=map_open_error_details,
             )
 
     def _animate_launch_progress() -> None:

@@ -68,3 +68,54 @@ def test_message_dialog_uses_one_close_action(monkeypatch):
 
     assert calls[0][1]["confirm_text"] == "Close"
     assert calls[0][1]["cancel_text"] is None
+
+
+def test_copyable_error_uses_copy_details_and_explicit_dismiss(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        modal_dialog,
+        "_show_modal",
+        lambda parent, **options: calls.append((parent, options)) or False,
+    )
+    parent = object()
+
+    modal_dialog.show_copyable_error(
+        parent,
+        title="Couldn’t open map",
+        message="CaveViewer could not open this map due to an error.",
+        details="Error: cache busy",
+    )
+
+    assert calls == [
+        (
+            parent,
+            {
+                "title": "Couldn’t open map",
+                "message": "CaveViewer could not open this map due to an error.",
+                "confirm_text": "Dismiss",
+                "cancel_text": "Copy details",
+                "kind": "error",
+                "copy_details": "Error: cache busy",
+            },
+        )
+    ]
+
+
+def test_replace_clipboard_reports_success_and_failure():
+    class Clipboard:
+        def __init__(self, *, fail=False):
+            self.fail = fail
+            self.value = None
+
+        def clipboard_clear(self):
+            if self.fail:
+                raise RuntimeError("clipboard unavailable")
+            self.value = ""
+
+        def clipboard_append(self, text):
+            self.value = text
+
+    working = Clipboard()
+    assert modal_dialog._replace_clipboard(working, "details") is True
+    assert working.value == "details"
+    assert modal_dialog._replace_clipboard(Clipboard(fail=True), "details") is False

@@ -5,7 +5,10 @@ from __future__ import annotations
 import tkinter as tk
 from typing import Literal
 
-from caveviewer.gui.dialog_style import create_dialog_action_button
+from caveviewer.gui.dialog_style import (
+    create_dialog_action_button,
+    set_dialog_action_button,
+)
 from caveviewer.gui.dpi_utils import tk_display_scale
 from caveviewer.gui.platform.presentation import get_presentation_profile
 from caveviewer.gui.tk_theme import DARK_THEME
@@ -45,6 +48,16 @@ def _inherit_window_icon(dialog, parent) -> None:
         pass
 
 
+def _replace_clipboard(clipboard, text: str) -> bool:
+    """Replace the Tk clipboard without allowing platform errors to close a modal."""
+    try:
+        clipboard.clipboard_clear()
+        clipboard.clipboard_append(text)
+    except Exception:
+        return False
+    return True
+
+
 def _show_modal(
     parent,
     *,
@@ -53,6 +66,7 @@ def _show_modal(
     confirm_text: str,
     cancel_text: str | None,
     kind: MessageKind,
+    copy_details: str | None = None,
 ) -> bool:
     """Show one branded modal and return whether its primary action was used."""
     profile = get_presentation_profile()
@@ -123,10 +137,25 @@ def _show_modal(
     )
     confirm_button.pack(side="right")
     if cancel_text is not None:
+        def run_secondary_action() -> None:
+            if copy_details is None:
+                close()
+                return
+            copied = _replace_clipboard(dialog, copy_details)
+            set_dialog_action_button(
+                cancel_button,
+                text="Copied" if copied else "Copy failed",
+            )
+            if not copied:
+                try:
+                    dialog.bell()
+                except tk.TclError:
+                    pass
+
         cancel_button = create_dialog_action_button(
             button_row,
             cancel_text,
-            close,
+            run_secondary_action,
             font=typography.body_strong,
             kind="secondary",
             padx=px(14),
@@ -186,4 +215,23 @@ def show_message(
         confirm_text="Close",
         cancel_text=None,
         kind=kind,
+    )
+
+
+def show_copyable_error(
+    parent,
+    *,
+    title: str,
+    message: str,
+    details: str,
+) -> None:
+    """Show a recoverable error with non-dismissing diagnostic copy support."""
+    _show_modal(
+        parent,
+        title=title,
+        message=message,
+        confirm_text="Dismiss",
+        cancel_text="Copy details",
+        kind="error",
+        copy_details=details,
     )

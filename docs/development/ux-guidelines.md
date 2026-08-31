@@ -144,6 +144,10 @@ primitives remain documented in [design-system.md](design-system.md).
 - Treat a failed first-map import as a recoverable viewer-session outcome.
   Close the empty viewer and restore the Map Library so Help, Troubleshooting,
   and retry paths remain available; do not terminate the GUI application.
+- After the Map Library is visibly restored, present the failure with the
+  standard app-owned two-action modal. Use generic user-facing copy for an
+  edge-case failure, **Copy details** for the underlying diagnostic bundle,
+  and **Dismiss** to close; copying must not dismiss the modal.
 - When a replacement main shell is already composed and ready after a native
   viewer returns, reveal it before entering its event loop. Do not leave the
   first mapping of a withdrawn recovery window dependent on an idle callback.
@@ -245,3 +249,7 @@ on a real display when a pure controller, layout token, or presentation contract
 can express the behavior. Native Windows, macOS, Ubuntu, and Fedora smoke checks
 remain necessary for window management, scaling, pickers, focus, and platform
 integration that Tk fakes cannot reproduce faithfully.
+
+UI screenshot concepts must start from a current CaveViewer screenshot supplied
+for the affected surface. Ask for a baseline when none is available; do not
+invent unrelated navigation, content, or surrounding application structure.
