@@ -29,7 +29,10 @@ from caveviewer.core.chunking.staging import (
     ResumeCheckpointUnavailableError,
 )
 from caveviewer.core.diagnostics.logging import configure_logging, get_logger
-from caveviewer.core.map.cache_build_lock import CacheBuildInProgressError
+from caveviewer.core.map.cache_build_lock import (
+    CacheBuildInProgressError,
+    release_abandoned_cache_build_lock,
+)
 from caveviewer.core.preferences.runtime_settings import ImportRuntimeSettings
 from caveviewer.gui.platform.process_priority import lower_current_process_priority
 
@@ -180,7 +183,7 @@ def terminate_import_process(
     try:
         if not process.is_alive():
             if cache_dir:
-                cleanup_import_staging_dirs(cache_dir, process_id=process_id)
+                cleanup_abandoned_import_artifacts(cache_dir, process_id=process_id)
             return
     except Exception:
         return
@@ -210,7 +213,7 @@ def terminate_import_process(
         except Exception:
             alive = False
         if cache_dir and not alive:
-            cleanup_import_staging_dirs(cache_dir, process_id=process_id)
+            cleanup_abandoned_import_artifacts(cache_dir, process_id=process_id)
 
 
 def cleanup_import_staging_dirs(
@@ -259,6 +262,17 @@ def cleanup_import_staging_dirs(
             cache_dir,
         )
     return cleaned
+
+
+def cleanup_abandoned_import_artifacts(
+    cache_dir: str,
+    *,
+    process_id: int | None = None,
+) -> None:
+    """Clean artifacts only after the recorded import child has stopped."""
+    cleanup_import_staging_dirs(cache_dir, process_id=process_id)
+    if release_abandoned_cache_build_lock(cache_dir, owner_pid=process_id):
+        _LOG.info("Removed abandoned cache build lock for %s.", cache_dir)
 
 
 def configure_import_child_runtime(*, nice_increment: int = IMPORT_CHILD_NICE_INCREMENT) -> None:

@@ -15,6 +15,7 @@ from caveviewer.core.diagnostics.logging import get_logger
 
 
 _LOG = get_logger("CacheBuildLock")
+_OWNER_PID_FILENAME = "owner-pid"
 
 
 class CacheBuildInProgressError(RuntimeError):
@@ -33,6 +34,33 @@ def cache_build_lock_path(cache_dir: str | os.PathLike[str]) -> Path:
     """Return the private sibling directory used to lock ``cache_dir``."""
     target = Path(os.path.abspath(os.fspath(cache_dir)))
     return target.with_name(f".{target.name}.build-lock")
+
+
+def _owner_pid_path(cache_dir: str | os.PathLike[str]) -> Path:
+    return cache_build_lock_path(cache_dir) / _OWNER_PID_FILENAME
+
+
+def release_abandoned_cache_build_lock(
+    cache_dir: str | os.PathLike[str],
+    *,
+    owner_pid: int | None,
+) -> bool:
+    """Remove a lock only when its recorded owner is the stopped child."""
+    if owner_pid is None:
+        return False
+    owner_path = _owner_pid_path(cache_dir)
+    try:
+        recorded_pid = int(owner_path.read_text(encoding="ascii").strip())
+    except (FileNotFoundError, OSError, UnicodeError, ValueError):
+        return False
+    if recorded_pid != int(owner_pid):
+        return False
+    try:
+        owner_path.unlink()
+        cache_build_lock_path(cache_dir).rmdir()
+    except (FileNotFoundError, OSError):
+        return False
+    return True
 
 
 def cache_build_is_locked(cache_dir: str | os.PathLike[str]) -> bool:
@@ -69,12 +97,18 @@ class CacheBuildLock:
         except FileExistsError as exc:
             raise CacheBuildInProgressError(self.cache_dir) from exc
         self._owned = True
+        try:
+            _owner_pid_path(self.cache_dir).write_text(str(os.getpid()), encoding="ascii")
+        except OSError:
+            self.release()
+            raise
 
     def release(self) -> None:
         """Release a lock acquired by this instance without deleting strangers."""
         if not self._owned:
             return
         try:
+            _owner_pid_path(self.cache_dir).unlink(missing_ok=True)
             os.rmdir(self.lock_dir)
         except FileNotFoundError:
             self._owned = False

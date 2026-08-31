@@ -7674,6 +7674,9 @@ class CaveViewerWindow(mglw.WindowConfig):
     def on_close(self):
         if self._closing_requested:
             return
+        if self._ensure_import_controller().request_pause_for_close():
+            self._defer_backend_close_request()
+            return
         if self._escape_capture_cancellation_active():
             # Escape owns this shutdown request until discard cleanup and the
             # three-second no-save confirmation have both completed.

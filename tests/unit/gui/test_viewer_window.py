@@ -5474,6 +5474,9 @@ def test_on_close_shutdowns_active_import_before_releasing_resources():
     class FakeImportController:
         active = True
 
+        def request_pause_for_close(self):
+            return False
+
         def shutdown(self):
             calls.append("shutdown_import")
             self.active = False

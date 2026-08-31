@@ -91,6 +91,23 @@ def test_cancel_active_import_uses_zero_timeout_cleanup_without_relay():
     assert calls == [(process, {"timeout": 0.0, "cache_dir": "/cache/cave"})]
 
 
+def test_close_requests_obj_checkpoint_with_a_bounded_deadline():
+    controller, logger, _calls = _controller()
+    controller.active = True
+    controller.model_format = "obj"
+    controller.command_queue = queue.Queue()
+    controller._perf_counter = lambda: 10.0
+
+    assert controller.request_pause_for_close() is True
+    assert controller.command_queue.get_nowait() == ("pause",)
+    assert controller._close_pause_deadline == 13.0
+    assert controller.progress_title == "Pausing import"
+    assert controller.progress_note == "Saving a resume point."
+    assert logger.info_messages == [
+        "Import pause requested; waiting for the current safe checkpoint."
+    ]
+
+
 def test_shutdown_joins_live_relay_and_clears_import_references():
     process = object()
     controller, _logger, calls = _controller()
