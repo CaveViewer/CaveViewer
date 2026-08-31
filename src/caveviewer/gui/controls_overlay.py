@@ -144,7 +144,6 @@ def _get_platform_control_sections(
     navigate.extend(
         [
             ("Minimap click", "Jump to that spot"),
-            ("Open button", "Switch to a different map"),
         ]
     )
     capture = catalog_rows("capture", "map-import")
