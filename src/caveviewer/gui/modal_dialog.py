@@ -277,7 +277,6 @@ def _show_modal(
     copy_confirmation_after_id = None
     if copy_details is not None:
         copy_feedback = tk.Frame(button_row, bg=DARK_THEME.background)
-        copy_feedback.pack(side="left")
         copy_confirmation = create_confirmation_mark(copy_feedback, px=px)
         copy_status = tk.Label(
             copy_feedback,
@@ -367,6 +366,8 @@ def _show_modal(
             dialog_layout=profile.dialog_layout,
         )
         cancel_button.pack(side="right", padx=(0, px(8)))
+        if copy_details is not None:
+            copy_feedback.pack(side="right", padx=(0, px(12)))
 
     dialog.bind("<Escape>", lambda _event: close())
     dialog.protocol("WM_DELETE_WINDOW", close)

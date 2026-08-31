@@ -133,6 +133,13 @@ def test_copy_feedback_uses_a_transient_geometric_confirmation_mark():
     assert "3000" in source
     assert "dialog.after_cancel(" in source
     assert "copy_confirmation.pack_forget()" in source
+    copy_action_pack = source.index(
+        'cancel_button.pack(side="right", padx=(0, px(8)))'
+    )
+    feedback_pack = source.index(
+        'copy_feedback.pack(side="right", padx=(0, px(12)))'
+    )
+    assert copy_action_pack < feedback_pack
     assert "create_line(" in mark_source
     assert 'mark._cv_accessible_name = "Copied"' in mark_source
     assert "tk.Label" not in mark_source
