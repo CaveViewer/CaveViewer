@@ -324,8 +324,10 @@ def select_presentation_profile(*, platform_name: str) -> PresentationProfile:
             platform_name="windows",
             font_candidates=_WINDOWS_FONT_CANDIDATES,
             splash_layout=SplashLayoutPolicy(
-                reuse_existing_root=False,
-                destroy_root_on_close=True,
+                # Keep the process-owned Tk interpreter withdrawn while pyglet
+                # owns the viewer, then rebuild the library on the same root.
+                reuse_existing_root=True,
+                destroy_root_on_close=False,
                 windows_layout=True,
                 linux_layout=False,
                 window_width=1160,

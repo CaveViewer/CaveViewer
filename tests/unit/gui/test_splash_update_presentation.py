@@ -493,11 +493,12 @@ def test_library_recent_maps_use_open_history_not_last_browse(
     assert splash_screen._load_library_recent_map_paths() == [str(recent_map)]
 
 
-def test_splash_root_reuses_existing_macos_tk_root(monkeypatch):
+@pytest.mark.parametrize("platform_name", ["darwin", "win32"])
+def test_splash_root_reuses_existing_retained_tk_root(monkeypatch, platform_name):
     monkeypatch.setattr(
         splash_screen,
         "_SPLASH_LAYOUT_POLICY",
-        select_presentation_profile(platform_name="darwin").splash_layout,
+        select_presentation_profile(platform_name=platform_name).splash_layout,
     )
     destroyed_children = []
 
@@ -522,7 +523,7 @@ def test_splash_root_reuses_existing_macos_tk_root(monkeypatch):
         {
             "_default_root": root,
             "Tk": lambda **_options: (_ for _ in ()).throw(
-                AssertionError("macOS splash must reuse the kept-alive root")
+                AssertionError("retained-root platform must reuse the Tk root")
             ),
         },
     )

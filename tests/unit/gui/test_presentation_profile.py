@@ -64,6 +64,13 @@ def test_presentation_profile_selects_static_platform_conventions(
     assert profile.font_candidates
 
 
+def test_windows_profile_retains_one_tk_root_across_viewer_sessions():
+    profile = select_presentation_profile(platform_name="win32")
+
+    assert profile.splash_layout.reuse_existing_root is True
+    assert profile.splash_layout.destroy_root_on_close is False
+
+
 def test_macos_profile_keeps_its_static_layout_and_input_fallbacks():
     profile = select_presentation_profile(platform_name="darwin")
 

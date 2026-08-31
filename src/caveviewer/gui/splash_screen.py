@@ -192,9 +192,9 @@ def _create_splash_root(
     """
     Return the process Tk root for the splash screen.
 
-    macOS keeps the root alive after a viewer launch so the global app menu
-    stays attached to a valid Tk application.  Reuse that root on the next
-    splash cycle instead of creating another Tk root in the same process.
+    Retained-root platforms keep the Tk application alive while the native
+    viewer runs. Reuse it on the next library cycle instead of creating a
+    second Tk interpreter in the same process.
     """
     layout = (
         presentation_profile.splash_layout
