@@ -153,6 +153,10 @@ primitives remain documented in [design-system.md](design-system.md).
 - Do not communicate severity through color alone. Error dialogs pair their
   heading and error color with a recognizable semantic icon whose shape remains
   meaningful without color perception.
+- Use the same semantic heading structure for two- and three-action dialogs:
+  a deterministic error, warning, or information icon followed by the title on
+  the first row. Begin description text on the next row at the icon’s left edge,
+  not indented beneath the title.
 - When a replacement main shell is already composed and ready after a native
   viewer returns, reveal it before entering its event loop. Do not leave the
   first mapping of a withdrawn recovery window dependent on an idle callback.

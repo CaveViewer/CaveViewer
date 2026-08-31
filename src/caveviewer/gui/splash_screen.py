@@ -989,6 +989,7 @@ def _show_unsaved_preferences_dialog(
         return
 
     import tkinter as tk
+    from caveviewer.gui.modal_dialog import create_semantic_heading
 
     dialog = tk.Toplevel(root)
     dialog_ref[0] = dialog
@@ -1006,13 +1007,13 @@ def _show_unsaved_preferences_dialog(
         padx=px(MODAL_CONTENT_PAD_X),
         pady=px(MODAL_CONTENT_PAD_Y),
     )
-    tk.Label(
+    create_semantic_heading(
         content,
-        text="Save changes to preferences?",
+        title="Save changes to preferences?",
+        kind="warning",
+        px=px,
         font=_TYPOGRAPHY.body_strong,
-        fg=_TITLE_COLOR,
-        bg=_BG_COLOR,
-        anchor="w",
+        background=_BG_COLOR,
     ).pack(fill="x")
     tk.Label(
         content,

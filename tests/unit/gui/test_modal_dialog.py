@@ -131,10 +131,22 @@ def test_copy_feedback_keeps_action_label_stable_and_uses_separate_status():
     assert "copy_status.config(" in source
 
 
-def test_error_icon_is_geometric_and_has_an_accessible_name():
-    source = inspect.getsource(modal_dialog._create_error_icon)
+def test_semantic_icons_are_geometric_and_have_accessible_names():
+    source = inspect.getsource(modal_dialog.create_semantic_icon)
 
+    assert 'if kind == "warning"' in source
+    assert "create_polygon(" in source
     assert "create_oval(" in source
-    assert source.count("create_line(") == 2
-    assert 'icon._cv_accessible_name = "Error"' in source
-    assert "text=" not in source
+    assert '"error": "Error"' in source
+    assert '"warning": "Warning"' in source
+    assert '"info": "Information"' in source
+    assert "tk.Label" not in source
+
+
+def test_standard_modal_uses_shared_heading_before_left_aligned_description():
+    source = inspect.getsource(modal_dialog._show_modal)
+
+    heading = source.index("create_semantic_heading(")
+    description = source.index("text=message")
+    assert heading < description
+    assert ').pack(fill="x")' in source[heading:description]

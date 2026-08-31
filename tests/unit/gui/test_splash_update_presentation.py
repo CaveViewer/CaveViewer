@@ -551,6 +551,16 @@ def test_recovered_map_error_is_presented_after_library_reveal():
     )
 
 
+def test_three_action_preferences_modal_uses_shared_warning_heading():
+    source = inspect.getsource(splash_screen._show_unsaved_preferences_dialog)
+
+    heading = source.index("create_semantic_heading(")
+    description = source.index('text=(\n            "Your Preferences changes')
+    assert heading < description
+    assert 'kind="warning"' in source[heading:description]
+    assert 'background=_BG_COLOR' in source[heading:description]
+
+
 def test_splash_root_creates_new_tk_when_no_macos_root(monkeypatch):
     monkeypatch.setattr(
         splash_screen,
