@@ -843,6 +843,13 @@ class ControlsOverlay:
             # Use W as the shared single-key reference because it is the
             # widest standard Latin key glyph in the overlay's bitmap font.
             return bitmap_font.text_width_px("W", key_size) + key_pad_x * 2.0
+        if part in {"Space", "Escape"}:
+            # These companion Capture controls share the same cap width while
+            # the draw path below keeps each label centered within that space.
+            return max(
+                bitmap_font.text_width_px("Space", key_size),
+                bitmap_font.text_width_px("Escape", key_size),
+            ) + key_pad_x * 2.0
         return content_width
 
     def _draw_keycap_sequence(

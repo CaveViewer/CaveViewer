@@ -40,9 +40,18 @@ def test_minimum_control_row_height_reserves_space_between_keycaps(monkeypatch):
     assert row_height == 32.0
 
 
-def test_single_keycaps_share_a_width_while_named_keys_fit_their_labels(monkeypatch):
+def test_single_and_capture_keycaps_share_widths_while_named_keys_fit_labels(
+    monkeypatch,
+):
     overlay = controls_overlay.ControlsOverlay.__new__(controls_overlay.ControlsOverlay)
-    widths = {"W": 16.0, "A": 10.0, "-": 4.0, "Ctrl": 24.0}
+    widths = {
+        "W": 16.0,
+        "A": 10.0,
+        "-": 4.0,
+        "Ctrl": 24.0,
+        "Space": 30.0,
+        "Escape": 42.0,
+    }
     monkeypatch.setattr(
         controls_overlay.bitmap_font,
         "text_width_px",
@@ -53,6 +62,8 @@ def test_single_keycaps_share_a_width_while_named_keys_fit_their_labels(monkeypa
     assert overlay._keycap_width("A", 1.0, 4.0) == 24.0
     assert overlay._keycap_width("-", 1.0, 4.0) == 24.0
     assert overlay._keycap_width("Ctrl", 1.0, 4.0) == 32.0
+    assert overlay._keycap_width("Space", 1.0, 4.0) == 50.0
+    assert overlay._keycap_width("Escape", 1.0, 4.0) == 50.0
 
 
 def test_single_keycap_glyph_is_centered_in_its_shared_width(monkeypatch):
@@ -83,6 +94,37 @@ def test_single_keycap_glyph_is_centered_in_its_shared_width(monkeypatch):
     )
 
     assert text_calls == [("A", 27.0)]
+
+
+def test_capture_keycap_labels_are_centered_in_their_shared_width(monkeypatch):
+    overlay = controls_overlay.ControlsOverlay.__new__(controls_overlay.ControlsOverlay)
+    overlay._keycap_parts = lambda _label: ["Space", "Escape"]
+    overlay._keycap_width = lambda _part, _size, _pad: 50.0
+    widths = {"Space": 30.0, "Escape": 42.0}
+    monkeypatch.setattr(
+        controls_overlay.bitmap_font,
+        "text_width_px",
+        lambda text, _size: widths[text],
+    )
+    monkeypatch.setattr(
+        controls_overlay.bitmap_font,
+        "text_height_px",
+        lambda _size: 12.0,
+    )
+    text_calls = []
+
+    overlay._draw_keycap_sequence(
+        lambda *_args: None,
+        lambda text, x, *_args: text_calls.append((text, x)),
+        "Space Escape",
+        x=20.0,
+        y=10.0,
+        key_size=1.0,
+        key_pad_x=4.0,
+        key_pad_y=3.0,
+    )
+
+    assert text_calls == [("Space", 30.0), ("Escape", 79.0)]
 
 
 def test_fullscreen_begin_prompt_respects_budget_limited_wanted_count():
