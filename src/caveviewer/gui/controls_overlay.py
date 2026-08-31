@@ -828,14 +828,17 @@ class ControlsOverlay:
     def _measure_keycap_sequence(self, label, key_size, key_pad_x):
         total_w = 0.0
         gap = 5.0
-        plus_gap = 4.0
         for part in self._keycap_parts(label):
             if part == "+":
-                total_w += bitmap_font.text_width_px(part, key_size) + plus_gap * 2.0
+                total_w += self._keycap_separator_width(key_size, key_pad_x)
             else:
                 total_w += self._keycap_width(part, key_size, key_pad_x)
             total_w += gap
         return max(0.0, total_w - gap)
+
+    def _keycap_separator_width(self, key_size: float, key_pad_x: float) -> float:
+        """Reserve a borderless 1u lane for a compound shortcut separator."""
+        return self._keycap_width("W", key_size, key_pad_x)
 
     @staticmethod
     def _keycap_width(part: str, key_size: float, key_pad_x: float) -> float:
@@ -866,13 +869,19 @@ class ControlsOverlay:
     ):
         cursor_x = x
         gap = 5.0
-        plus_gap = 4.0
         key_h = bitmap_font.text_height_px(key_size) + key_pad_y * 2.0
         for part in self._keycap_parts(label):
             part_w = bitmap_font.text_width_px(part, key_size)
             if part == "+":
-                add_text(part, cursor_x + plus_gap, y + key_pad_y, key_size, _SPLASH_INSTRUCTION_RGBA)
-                cursor_x += part_w + plus_gap * 2.0 + gap
+                separator_w = self._keycap_separator_width(key_size, key_pad_x)
+                add_text(
+                    part,
+                    cursor_x + (separator_w - part_w) / 2.0,
+                    y + key_pad_y,
+                    key_size,
+                    _SPLASH_INSTRUCTION_RGBA,
+                )
+                cursor_x += separator_w + gap
                 continue
 
             key_w = self._keycap_width(part, key_size, key_pad_x)

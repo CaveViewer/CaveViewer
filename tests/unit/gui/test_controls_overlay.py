@@ -136,6 +136,38 @@ def test_capture_keycap_labels_are_centered_in_their_shared_width(monkeypatch):
     assert text_calls == [("Space", 30.0), ("Escape", 79.0)]
 
 
+def test_compound_shortcut_plus_uses_one_centered_keycap_unit(monkeypatch):
+    overlay = controls_overlay.ControlsOverlay.__new__(controls_overlay.ControlsOverlay)
+    overlay._keycap_parts = lambda _label: ["Ctrl", "+", "R"]
+    overlay._keycap_width = lambda _part, _size, _pad: 24.0
+    widths = {"Ctrl": 18.0, "+": 8.0, "R": 10.0}
+    monkeypatch.setattr(
+        controls_overlay.bitmap_font,
+        "text_width_px",
+        lambda text, _size: widths[text],
+    )
+    monkeypatch.setattr(
+        controls_overlay.bitmap_font,
+        "text_height_px",
+        lambda _size: 12.0,
+    )
+    text_calls = []
+
+    assert overlay._measure_keycap_sequence("Ctrl + R", 1.0, 4.0) == 82.0
+    overlay._draw_keycap_sequence(
+        lambda *_args: None,
+        lambda text, x, *_args: text_calls.append((text, x)),
+        "Ctrl + R",
+        x=20.0,
+        y=10.0,
+        key_size=1.0,
+        key_pad_x=4.0,
+        key_pad_y=3.0,
+    )
+
+    assert text_calls == [("Ctrl", 23.0), ("+", 57.0), ("R", 85.0)]
+
+
 def test_fullscreen_begin_prompt_respects_budget_limited_wanted_count():
     overlay = controls_overlay.ControlsOverlay.__new__(controls_overlay.ControlsOverlay)
     overlay._active = True
