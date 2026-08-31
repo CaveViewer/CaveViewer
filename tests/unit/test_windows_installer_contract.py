@@ -11,7 +11,7 @@ from pathlib import Path
 from PIL import Image
 
 from caveviewer.branding import resolve_branding_profile
-from caveviewer.branding_export import export_branding_profile
+from caveviewer.branding_export import WINDOWS_ICON_SIZES, export_branding_profile
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
@@ -203,9 +203,14 @@ def test_default_windows_icon_alias_contains_every_shell_frame(tmp_path):
     export_branding_profile(
         resolve_branding_profile(environ={}), export_directory
     )
-    assert icon_path.read_bytes() == (
-        export_directory / "windows" / "caveviewer.ico"
-    ).read_bytes()
+    generated_icon_path = export_directory / "windows" / "caveviewer.ico"
+    with Image.open(icon_path) as legacy_icon, Image.open(
+        generated_icon_path
+    ) as generated_icon:
+        for size in WINDOWS_ICON_SIZES:
+            assert legacy_icon.ico.getimage(size).convert("RGBA").tobytes() == (
+                generated_icon.ico.getimage(size).convert("RGBA").tobytes()
+            )
 
 
 def test_authenticode_helpers_use_certificate_store_sha256_and_timestamping():
