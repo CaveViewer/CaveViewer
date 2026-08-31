@@ -54,7 +54,7 @@ def test_keycap_tiers_share_widths_while_descriptive_controls_fit_labels(
         "Scroll": 36.0,
         "Space": 30.0,
         "Escape": 42.0,
-        "Delete": 38.0,
+        "Del": 20.0,
         "Minimap click": 64.0,
     }
     monkeypatch.setattr(
@@ -71,7 +71,7 @@ def test_keycap_tiers_share_widths_while_descriptive_controls_fit_labels(
     assert overlay._keycap_width("Scroll", 1.0, 4.0) == 44.0
     assert overlay._keycap_width("Space", 1.0, 4.0) == 50.0
     assert overlay._keycap_width("Escape", 1.0, 4.0) == 50.0
-    assert overlay._keycap_width("Delete", 1.0, 4.0) == 50.0
+    assert overlay._keycap_width("Del", 1.0, 4.0) == 44.0
     assert overlay._keycap_width("Minimap click", 1.0, 4.0) == 72.0
 
 

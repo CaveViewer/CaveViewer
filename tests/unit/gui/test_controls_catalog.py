@@ -69,6 +69,7 @@ def test_keyboard_catalog_uses_direct_control_bindings_and_capture_standard():
     assert rows["view-reset"].shortcut == "Ctrl + 0"
     assert rows["bookmark-save"].shortcut == "Ctrl + 1–9"
     assert rows["bookmark-delete-control-shift"].shortcut == "Ctrl + Shift + 1–9"
+    assert rows["bookmark-delete"].shortcut == "Del + 1–9"
     assert rows["map-open"].shortcut == "Ctrl + O"
     assert rows["recording-toggle"].shortcut == "Ctrl + R"
     assert rows["recording-toggle"].action == "Start/stop recording"

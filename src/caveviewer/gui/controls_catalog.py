@@ -106,7 +106,7 @@ def keyboard_control_sections(
         ),
         KeyboardShortcut(
             "bookmark-delete",
-            "Delete + 1–9",
+            "Del + 1–9",
             "Delete camera bookmark",
         ),
         KeyboardShortcut(

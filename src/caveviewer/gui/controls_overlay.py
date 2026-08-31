@@ -71,8 +71,8 @@ _FULLSCREEN_BASE_WINDOW_SIZE = (1536, 864)
 _FULLSCREEN_LAYOUT_SCALE_MAX = 1.32
 _FULLSCREEN_SUBTITLE_TEXT_SIZE = 2.55
 _CONTROL_KEYCAP_ROW_GAP = 4.0
-_MEDIUM_NAMED_KEYCAPS = frozenset({"Cmd", "Ctrl", "Scroll", "Shift"})
-_WIDE_NAMED_KEYCAPS = frozenset({"Delete", "Escape", "Space"})
+_MEDIUM_NAMED_KEYCAPS = frozenset({"Cmd", "Ctrl", "Del", "Scroll", "Shift"})
+_WIDE_NAMED_KEYCAPS = frozenset({"Escape", "Space"})
 
 
 def _fullscreen_layout_scale(window_size: tuple[int, int]) -> float:
