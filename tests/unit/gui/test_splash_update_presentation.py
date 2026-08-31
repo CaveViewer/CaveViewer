@@ -30,6 +30,16 @@ from caveviewer.gui.update_manager import UpdateSnapshot, UpdateState
 
 
 @pytest.mark.parametrize(
+    ("platform_name", "expected"),
+    (("win32", False), ("linux", False), ("darwin", True)),
+)
+def test_returning_library_uses_topmost_only_for_macos(platform_name, expected):
+    profile = SimpleNamespace(platform_name=platform_name)
+
+    assert splash_screen._returning_library_needs_topmost(profile) is expected
+
+
+@pytest.mark.parametrize(
     "module",
     (
         splash_screen,
