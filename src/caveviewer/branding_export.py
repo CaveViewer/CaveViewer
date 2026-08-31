@@ -49,6 +49,7 @@ RUNTIME_ROLE_SIZES = {
     "linux_app_icon": 512,
 }
 LINUX_APPLICATION_ID = "io.github.caveviewer.caveviewer"
+RenderCache = dict[tuple[str, int, float], Image.Image]
 
 
 class BrandingExportError(RuntimeError):
@@ -71,23 +72,30 @@ def export_branding_profile(
     staging = Path(
         tempfile.mkdtemp(prefix=f".{destination.name}-", dir=destination.parent)
     )
+    render_cache: RenderCache = {}
     try:
-        _write_runtime_outputs(profile, staging)
-        _write_windows_outputs(profile, staging)
-        _write_macos_outputs(profile, staging)
-        _write_linux_outputs(profile, staging)
-        _write_contact_sheet(profile, staging / "previews" / "contact-sheet.png")
+        _write_runtime_outputs(profile, staging, render_cache)
+        _write_windows_outputs(profile, staging, render_cache)
+        _write_macos_outputs(profile, staging, render_cache)
+        _write_linux_outputs(profile, staging, render_cache)
+        _write_contact_sheet(
+            profile,
+            staging / "previews" / "contact-sheet.png",
+            render_cache=render_cache,
+        )
         _write_contact_sheet(
             profile,
             staging / "previews" / "macos-contact-sheet.png",
             role="macos_app_icon",
             sizes=(32, 64, 128),
+            render_cache=render_cache,
         )
         _write_contact_sheet(
             profile,
             staging / "previews" / "linux-contact-sheet.png",
             role="linux_app_icon",
             sizes=(32, 64, 128),
+            render_cache=render_cache,
         )
         summary_path = _write_summary(profile, staging)
         if destination.exists():
@@ -114,16 +122,26 @@ def write_contact_sheet(
     return destination
 
 
-def _write_runtime_outputs(profile: BrandingProfile, root: Path) -> None:
+def _write_runtime_outputs(
+    profile: BrandingProfile,
+    root: Path,
+    render_cache: RenderCache,
+) -> None:
     for role, size in RUNTIME_ROLE_SIZES.items():
         _save_png(
-            _render_asset(profile.asset_for(role), size),
+            _render_asset(profile.asset_for(role), size, cache=render_cache),
             root / "runtime" / f"{role}.png",
         )
 
 
-def _write_windows_outputs(profile: BrandingProfile, root: Path) -> None:
-    source = _render_asset(profile.asset_for("windows_app_icon"), 256)
+def _write_windows_outputs(
+    profile: BrandingProfile,
+    root: Path,
+    render_cache: RenderCache,
+) -> None:
+    source = _render_asset(
+        profile.asset_for("windows_app_icon"), 256, cache=render_cache
+    )
     destination = root / "windows" / "caveviewer.ico"
     destination.parent.mkdir(parents=True, exist_ok=True)
     source.save(
@@ -134,14 +152,25 @@ def _write_windows_outputs(profile: BrandingProfile, root: Path) -> None:
     )
 
 
-def _write_macos_outputs(profile: BrandingProfile, root: Path) -> None:
+def _write_macos_outputs(
+    profile: BrandingProfile,
+    root: Path,
+    render_cache: RenderCache,
+) -> None:
     asset = profile.asset_for("macos_app_icon")
     iconset = root / "macos" / "CaveViewer.iconset"
     for filename, size in MACOS_ICONSET_OUTPUTS:
-        _save_png(_render_asset(asset, size), iconset / filename)
+        _save_png(
+            _render_asset(asset, size, cache=render_cache),
+            iconset / filename,
+        )
 
 
-def _write_linux_outputs(profile: BrandingProfile, root: Path) -> None:
+def _write_linux_outputs(
+    profile: BrandingProfile,
+    root: Path,
+    render_cache: RenderCache,
+) -> None:
     asset = profile.asset_for("linux_app_icon")
     for size in LINUX_ICON_SIZES:
         destination = (
@@ -152,8 +181,8 @@ def _write_linux_outputs(profile: BrandingProfile, root: Path) -> None:
             / "apps"
             / f"{LINUX_APPLICATION_ID}.png"
         )
-        _save_png(_render_asset(asset, size), destination)
-    root_icon = _render_asset(asset, 256)
+        _save_png(_render_asset(asset, size, cache=render_cache), destination)
+    root_icon = _render_asset(asset, 256, cache=render_cache)
     _save_png(root_icon, root / "linux" / f"{LINUX_APPLICATION_ID}.png")
     _save_png(root_icon, root / "linux" / ".DirIcon")
     _copy_svg(
@@ -176,7 +205,15 @@ def _write_linux_outputs(profile: BrandingProfile, root: Path) -> None:
     )
 
 
-def _render_asset(asset: BrandingAsset, size: int) -> Image.Image:
+def _render_asset(
+    asset: BrandingAsset,
+    size: int,
+    *,
+    cache: RenderCache | None = None,
+) -> Image.Image:
+    cache_key = (asset.sha256, size, asset.safe_area_inset)
+    if cache is not None and cache_key in cache:
+        return cache[cache_key].copy()
     if asset.path.suffix != ".png":
         raise BrandingExportError(
             f"raster branding role requires PNG artwork: {asset.path}"
@@ -188,12 +225,15 @@ def _render_asset(asset: BrandingAsset, size: int) -> Image.Image:
     canvas = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     offset = ((size - source.width) // 2, (size - source.height) // 2)
     canvas.alpha_composite(source, offset)
+    if cache is not None:
+        cache[cache_key] = canvas.copy()
     return canvas
 
 
 def _save_png(image: Image.Image, destination: Path) -> None:
+    """Write deterministic, lossless PNG assets without release-time overcompression."""
     destination.parent.mkdir(parents=True, exist_ok=True)
-    image.save(destination, format="PNG", optimize=False, compress_level=9)
+    image.save(destination, format="PNG", optimize=False, compress_level=6)
 
 
 def _copy_svg(asset: BrandingAsset, destination: Path) -> None:
@@ -212,6 +252,7 @@ def _write_contact_sheet(
     *,
     role: str = "windows_app_icon",
     sizes: tuple[int, ...] = PREVIEW_ICON_SIZES,
+    render_cache: RenderCache | None = None,
 ) -> None:
     # Keep the largest exact-size preview wholly inside its cell. The previous
     # 5x enlargement clipped 32-pixel artwork and gave a misleading impression
@@ -240,7 +281,7 @@ def _write_contact_sheet(
                 radius=8,
                 fill=background,
             )
-            exact = _render_asset(asset, size)
+            exact = _render_asset(asset, size, cache=render_cache)
             preview = exact.resize(
                 (size * scale, size * scale), Image.Resampling.NEAREST
             )

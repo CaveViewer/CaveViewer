@@ -64,10 +64,6 @@ if [[ "$(uname -s)" != "Linux" ]]; then
   exit 1
 fi
 
-if [ ! -f "$icon_src" ]; then
-  echo "Error: app icon not found at $icon_src"
-  exit 1
-fi
 if [ ! -f "$desktop_template" ] || [ ! -f "$metainfo_src" ]; then
   echo "Error: canonical Linux desktop metadata is missing for $APPLICATION_ID"
   exit 1

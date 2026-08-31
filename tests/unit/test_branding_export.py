@@ -17,6 +17,7 @@ from caveviewer.branding_export import (
     RUNTIME_ROLE_SIZES,
     WINDOWS_ICON_SIZES,
     BrandingExportError,
+    _render_asset,
     export_branding_profile,
     run,
 )
@@ -123,6 +124,20 @@ def test_replace_rebuilds_existing_export(tmp_path):
 
     assert not stale.exists()
     assert (destination / "export-summary.v1.json").is_file()
+
+
+def test_render_cache_reuses_derivative_without_sharing_mutable_image():
+    asset = resolve_branding_profile(environ={}).asset_for("windows_app_icon")
+    cache = {}
+
+    first = _render_asset(asset, 32, cache=cache)
+    second = _render_asset(asset, 32, cache=cache)
+    original_pixel = second.getpixel((0, 0))
+    first.putpixel((0, 0), (1, 2, 3, 4))
+
+    assert len(cache) == 1
+    assert first is not second
+    assert second.getpixel((0, 0)) == original_pixel
 
 
 def test_cli_validates_exports_and_writes_contact_sheet(tmp_path, capsys):
