@@ -243,6 +243,8 @@ def test_recording_help_copy_is_shortcut_only_and_format_neutral():
 
     assert "REC button" not in rows
     assert rows["W A S D"] == "Move forward, left, backward, and right"
+    assert rows["E Q"] == "Move up / down"
+    assert "E / Q" not in rows
     assert rows["Ctrl + R"] == "Start/stop recording"
     assert rows["Ctrl + T"] == "Start/stop manual trace"
     assert rows["Ctrl + C"] == "Start/stop slice"
