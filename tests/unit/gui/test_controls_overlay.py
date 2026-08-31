@@ -196,7 +196,7 @@ def test_recording_help_copy_is_shortcut_only_and_format_neutral():
     assert rows["Ctrl + T"] == "Start/stop manual trace"
     assert rows["Ctrl + C"] == "Start/stop slice"
     assert rows["Escape"] == "Cancel active capture"
-    assert rows["Space"] == "Pause/resume Recorded Dive"
+    assert rows["Space"] == "Pause/resume recorded dive"
     assert rows["Arrow keys"] == "Look left, right, up, and down"
     assert "Ctrl + Shift + P" not in rows
     assert "Pause active import" not in rows.values()
@@ -210,6 +210,17 @@ def test_controls_overlay_uses_the_shared_keyboard_catalog():
     assert '"Start/stop recording"' not in source
     assert '"Start/stop manual trace"' not in source
     assert '"Start/stop slice"' not in source
+
+
+def test_controls_overlay_groups_recorded_dive_with_capture():
+    sections = dict(
+        controls_overlay._get_platform_control_sections(
+            select_presentation_profile(platform_name="unsupported")
+        )
+    )
+
+    assert ("Space", "Pause/resume recorded dive") not in sections["Navigate"]
+    assert ("Space", "Pause/resume recorded dive") in sections["Capture"]
 
 
 def test_grouped_control_section_headings_share_one_left_edge(monkeypatch):

@@ -203,7 +203,7 @@ def keyboard_control_sections(
                 KeyboardShortcut(
                     "recorded-dive-space",
                     "Space",
-                    "Pause/resume Recorded Dive",
+                    "Pause/resume recorded dive",
                 ),
             ),
         ),

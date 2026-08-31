@@ -80,6 +80,7 @@ def test_keyboard_catalog_uses_direct_control_bindings_and_capture_standard():
     assert rows["capture-cancel"].action == "Cancel active capture"
     assert rows["import-pause"].shortcut == "Ctrl + Shift + P"
     assert rows["look-arrows"].shortcut == "Arrow keys"
+    assert rows["recorded-dive-space"].action == "Pause/resume recorded dive"
 
 
 def test_keyboard_catalog_uses_command_labels_and_bookmark_fallback_on_macos():
