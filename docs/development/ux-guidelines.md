@@ -144,6 +144,9 @@ primitives remain documented in [design-system.md](design-system.md).
 - Treat a failed first-map import as a recoverable viewer-session outcome.
   Close the empty viewer and restore the Map Library so Help, Troubleshooting,
   and retry paths remain available; do not terminate the GUI application.
+- When a replacement main shell is already composed and ready after a native
+  viewer returns, reveal it before entering its event loop. Do not leave the
+  first mapping of a withdrawn recovery window dependent on an idle callback.
 - Keep progress feedback until the operation advances, completes, fails, or is
   cancelled. Keep validation and persistence errors until corrected, retried,
   dismissed, or replaced.

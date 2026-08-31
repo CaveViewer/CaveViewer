@@ -2522,7 +2522,11 @@ def show_splash_screen(
             _animate_launch_progress,
         )
     else:
-        splash_controller.schedule_idle(_reveal_composed_main_surface)
+        # Returning from a native viewer already occurs after the replacement
+        # shell is fully composed. Reveal it before entering Tk's mainloop;
+        # deferring the first map of a withdrawn root can leave Windows with no
+        # visible application window after the viewer closes.
+        _reveal_composed_main_surface()
     # The app-owned manager survives this Tk window and any intervening viewer.
     # Polling immutable snapshots keeps every widget mutation on the Tk thread.
     splash_controller.schedule(50, _refresh_update_presentation)
