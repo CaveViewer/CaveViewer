@@ -119,3 +119,22 @@ def test_replace_clipboard_reports_success_and_failure():
     assert modal_dialog._replace_clipboard(working, "details") is True
     assert working.value == "details"
     assert modal_dialog._replace_clipboard(Clipboard(fail=True), "details") is False
+
+
+def test_copy_feedback_keeps_action_label_stable_and_uses_separate_status():
+    source = inspect.getsource(modal_dialog._show_modal)
+
+    assert 'cancel_text="Copy details"' not in source
+    assert '"Details copied."' in source
+    assert '"Couldn’t copy details."' in source
+    assert "set_dialog_action_button" not in source
+    assert "copy_status.config(" in source
+
+
+def test_error_icon_is_geometric_and_has_an_accessible_name():
+    source = inspect.getsource(modal_dialog._create_error_icon)
+
+    assert "create_oval(" in source
+    assert source.count("create_line(") == 2
+    assert 'icon._cv_accessible_name = "Error"' in source
+    assert "text=" not in source

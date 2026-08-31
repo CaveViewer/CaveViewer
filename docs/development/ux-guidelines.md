@@ -148,6 +148,11 @@ primitives remain documented in [design-system.md](design-system.md).
   standard app-owned two-action modal. Use generic user-facing copy for an
   edge-case failure, **Copy details** for the underlying diagnostic bundle,
   and **Dismiss** to close; copying must not dismiss the modal.
+- Keep action labels stable after activation. Present clipboard success or
+  failure as adjacent status text rather than renaming the action control.
+- Do not communicate severity through color alone. Error dialogs pair their
+  heading and error color with a recognizable semantic icon whose shape remains
+  meaningful without color perception.
 - When a replacement main shell is already composed and ready after a native
   viewer returns, reveal it before entering its event loop. Do not leave the
   first mapping of a withdrawn recovery window dependent on an idle callback.

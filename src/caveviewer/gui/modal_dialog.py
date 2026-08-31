@@ -5,10 +5,7 @@ from __future__ import annotations
 import tkinter as tk
 from typing import Literal
 
-from caveviewer.gui.dialog_style import (
-    create_dialog_action_button,
-    set_dialog_action_button,
-)
+from caveviewer.gui.dialog_style import create_dialog_action_button
 from caveviewer.gui.dpi_utils import tk_display_scale
 from caveviewer.gui.platform.presentation import get_presentation_profile
 from caveviewer.gui.tk_theme import DARK_THEME
@@ -58,6 +55,48 @@ def _replace_clipboard(clipboard, text: str) -> bool:
     return True
 
 
+def _create_error_icon(parent, *, px):
+    """Draw a font-independent circled-X error mark for non-color recognition."""
+    size = px(22)
+    inset = px(2)
+    stroke = px(2)
+    arm_inset = px(7)
+    icon = tk.Canvas(
+        parent,
+        width=size,
+        height=size,
+        bg=DARK_THEME.background,
+        highlightthickness=0,
+        takefocus=False,
+    )
+    icon.create_oval(
+        inset,
+        inset,
+        size - inset,
+        size - inset,
+        outline=DARK_THEME.error_text,
+        width=stroke,
+    )
+    icon.create_line(
+        arm_inset,
+        arm_inset,
+        size - arm_inset,
+        size - arm_inset,
+        fill=DARK_THEME.error_text,
+        width=stroke,
+    )
+    icon.create_line(
+        size - arm_inset,
+        arm_inset,
+        arm_inset,
+        size - arm_inset,
+        fill=DARK_THEME.error_text,
+        width=stroke,
+    )
+    icon._cv_accessible_name = "Error"
+    return icon
+
+
 def _show_modal(
     parent,
     *,
@@ -95,14 +134,20 @@ def _show_modal(
     title_color = (
         DARK_THEME.error_text if kind == "error" else DARK_THEME.title
     )
+    heading_row = tk.Frame(content, bg=DARK_THEME.background)
+    heading_row.pack(fill="x")
+    if kind == "error":
+        _create_error_icon(heading_row, px=px).pack(
+            side="left", padx=(0, px(10))
+        )
     tk.Label(
-        content,
+        heading_row,
         text=title,
         font=typography.body_strong,
         fg=title_color,
         bg=DARK_THEME.background,
         anchor="w",
-    ).pack(fill="x")
+    ).pack(side="left", fill="x", expand=True)
     tk.Label(
         content,
         text=message,
@@ -115,6 +160,17 @@ def _show_modal(
     ).pack(fill="x", pady=(px(8), px(20)))
     button_row = tk.Frame(content, bg=DARK_THEME.background)
     button_row.pack(side="bottom", fill="x")
+    copy_status = None
+    if copy_details is not None:
+        copy_status = tk.Label(
+            button_row,
+            text="",
+            font=typography.supporting,
+            fg=DARK_THEME.body_text,
+            bg=DARK_THEME.background,
+            anchor="w",
+        )
+        copy_status.pack(side="left")
 
     def close(*, accepted: bool = False) -> None:
         nonlocal result
@@ -142,10 +198,19 @@ def _show_modal(
                 close()
                 return
             copied = _replace_clipboard(dialog, copy_details)
-            set_dialog_action_button(
-                cancel_button,
-                text="Copied" if copied else "Copy failed",
-            )
+            if copy_status is not None:
+                copy_status.config(
+                    text=(
+                        "Details copied."
+                        if copied
+                        else "Couldn’t copy details."
+                    ),
+                    fg=(
+                        DARK_THEME.body_text
+                        if copied
+                        else DARK_THEME.error_text
+                    ),
+                )
             if not copied:
                 try:
                     dialog.bell()
