@@ -92,11 +92,12 @@ class MapImportController:
 
     @staticmethod
     def import_model_format_from_descriptor(model_descriptor: dict) -> str | None:
-        return (
+        raw_format = (
             model_descriptor.get("format")
             or ("obj" if model_descriptor.get("obj_path") else None)
             or ("glb" if model_descriptor.get("glb_path") else None)
         )
+        return str(raw_format).strip().lower() if raw_format else None
 
     @staticmethod
     def default_progress_note() -> str:

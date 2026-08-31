@@ -108,6 +108,12 @@ def test_close_requests_obj_checkpoint_with_a_bounded_deadline():
     ]
 
 
+def test_obj_pause_support_normalizes_the_descriptor_format():
+    assert MapImportController.import_model_format_from_descriptor(
+        {"format": "OBJ"}
+    ) == "obj"
+
+
 def test_shutdown_joins_live_relay_and_clears_import_references():
     process = object()
     controller, _logger, calls = _controller()

@@ -39,6 +39,36 @@ def test_viewer_default_framebuffer_uses_multisampling_for_graphics_edges():
     assert viewer_window.CaveViewerWindow.samples == 4
 
 
+def test_pyglet_close_event_is_claimed_before_the_default_close_handler():
+    calls = []
+
+    class NativeWindow:
+        def push_handlers(self, **handlers):
+            self.handlers = handlers
+
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window.wnd = SimpleNamespace(name="pyglet", _window=NativeWindow())
+    window.on_close = lambda: calls.append("close")
+
+    window._claim_backend_close_event()
+
+    assert window.wnd._window.handlers["on_close"]() is True
+    assert calls == ["close"]
+
+
+def test_non_pyglet_close_event_is_left_to_its_native_backend():
+    calls = []
+    native_window = SimpleNamespace(
+        push_handlers=lambda **_handlers: calls.append("claimed")
+    )
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window.wnd = SimpleNamespace(name="glfw", _window=native_window)
+
+    window._claim_backend_close_event()
+
+    assert calls == []
+
+
 class FakeImportInhibitor:
     def __init__(self, calls):
         self._calls = calls

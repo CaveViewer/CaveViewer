@@ -724,6 +724,11 @@ class CaveViewerWindow(mglw.WindowConfig):
         # key callback. CaveViewer owns Escape so capture discard can finish
         # and present its result before the backend window is allowed to close.
         self._claim_backend_escape_key()
+        # Pyglet's default close event destroys its native window after the
+        # callback returns.  CaveViewer sometimes needs to defer that close
+        # briefly (for example, while an OBJ import saves a resume point), so
+        # claim the event before moderngl-window's forwarding handler runs.
+        self._claim_backend_close_event()
         record_runtime_stage(
             "viewer_config_context_ready",
             context_version=getattr(getattr(self, "ctx", None), "version_code", None),
@@ -1615,6 +1620,25 @@ class CaveViewerWindow(mglw.WindowConfig):
     def _claim_backend_escape_key(self) -> None:
         """Disable the backend's preemptive Escape close callback."""
         self.wnd.exit_key = None
+
+    def _claim_backend_close_event(self) -> None:
+        """Route Pyglet close requests through CaveViewer's deferred workflow.
+
+        Returning ``True`` is Pyglet's ``EVENT_HANDLED`` sentinel.  Without it,
+        Pyglet invokes its default close handler after our callback and sets
+        ``has_exit`` even when :meth:`on_close` has deferred shutdown.
+        """
+        backend = getattr(self, "wnd", None)
+        native_window = getattr(backend, "_window", None)
+        push_handlers = getattr(native_window, "push_handlers", None)
+        if getattr(backend, "name", None) != "pyglet" or not callable(push_handlers):
+            return
+
+        def on_close() -> bool:
+            self.on_close()
+            return True
+
+        push_handlers(on_close=on_close)
 
     def _set_runtime_window_icon(self) -> None:
         """Set the native viewer-window icon when the backend exposes one."""
