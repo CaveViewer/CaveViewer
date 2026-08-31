@@ -832,9 +832,19 @@ class ControlsOverlay:
             if part == "+":
                 total_w += bitmap_font.text_width_px(part, key_size) + plus_gap * 2.0
             else:
-                total_w += bitmap_font.text_width_px(part, key_size) + key_pad_x * 2.0
+                total_w += self._keycap_width(part, key_size, key_pad_x)
             total_w += gap
         return max(0.0, total_w - gap)
+
+    @staticmethod
+    def _keycap_width(part: str, key_size: float, key_pad_x: float) -> float:
+        """Keep individual shortcut keys visually consistent across glyphs."""
+        content_width = bitmap_font.text_width_px(part, key_size) + key_pad_x * 2.0
+        if len(part) == 1:
+            # Use W as the shared single-key reference because it is the
+            # widest standard Latin key glyph in the overlay's bitmap font.
+            return bitmap_font.text_width_px("W", key_size) + key_pad_x * 2.0
+        return content_width
 
     def _draw_keycap_sequence(
         self, add_quad_px, add_text, label, x, y, key_size, key_pad_x, key_pad_y
@@ -850,9 +860,15 @@ class ControlsOverlay:
                 cursor_x += part_w + plus_gap * 2.0 + gap
                 continue
 
-            key_w = part_w + key_pad_x * 2.0
+            key_w = self._keycap_width(part, key_size, key_pad_x)
             self._draw_keycap(add_quad_px, cursor_x, y, cursor_x + key_w, y + key_h)
-            add_text(part, cursor_x + key_pad_x, y + key_pad_y, key_size, _SPLASH_TITLE_RGBA)
+            add_text(
+                part,
+                cursor_x + (key_w - part_w) / 2.0,
+                y + key_pad_y,
+                key_size,
+                _SPLASH_TITLE_RGBA,
+            )
             cursor_x += key_w + gap
 
     def _draw_keycap(self, add_quad_px, x0, y0, x1, y1):

@@ -40,6 +40,51 @@ def test_minimum_control_row_height_reserves_space_between_keycaps(monkeypatch):
     assert row_height == 32.0
 
 
+def test_single_keycaps_share_a_width_while_named_keys_fit_their_labels(monkeypatch):
+    overlay = controls_overlay.ControlsOverlay.__new__(controls_overlay.ControlsOverlay)
+    widths = {"W": 16.0, "A": 10.0, "-": 4.0, "Ctrl": 24.0}
+    monkeypatch.setattr(
+        controls_overlay.bitmap_font,
+        "text_width_px",
+        lambda text, _size: widths[text],
+    )
+
+    assert overlay._keycap_width("W", 1.0, 4.0) == 24.0
+    assert overlay._keycap_width("A", 1.0, 4.0) == 24.0
+    assert overlay._keycap_width("-", 1.0, 4.0) == 24.0
+    assert overlay._keycap_width("Ctrl", 1.0, 4.0) == 32.0
+
+
+def test_single_keycap_glyph_is_centered_in_its_shared_width(monkeypatch):
+    overlay = controls_overlay.ControlsOverlay.__new__(controls_overlay.ControlsOverlay)
+    overlay._keycap_parts = lambda _label: ["A"]
+    overlay._keycap_width = lambda _part, _size, _pad: 24.0
+    monkeypatch.setattr(
+        controls_overlay.bitmap_font,
+        "text_width_px",
+        lambda _text, _size: 10.0,
+    )
+    monkeypatch.setattr(
+        controls_overlay.bitmap_font,
+        "text_height_px",
+        lambda _size: 12.0,
+    )
+    text_calls = []
+
+    overlay._draw_keycap_sequence(
+        lambda *_args: None,
+        lambda text, x, *_args: text_calls.append((text, x)),
+        "A",
+        x=20.0,
+        y=10.0,
+        key_size=1.0,
+        key_pad_x=4.0,
+        key_pad_y=3.0,
+    )
+
+    assert text_calls == [("A", 27.0)]
+
+
 def test_fullscreen_begin_prompt_respects_budget_limited_wanted_count():
     overlay = controls_overlay.ControlsOverlay.__new__(controls_overlay.ControlsOverlay)
     overlay._active = True
