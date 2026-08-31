@@ -5082,12 +5082,13 @@ def test_mouse_motion_during_window_setup_returns_before_full_state_exists():
     window.on_mouse_position_event(10, 20, 1, -1)
 
 
-def test_mouse_press_and_drag_during_setup_return_before_overlay_exists():
+def test_mouse_callbacks_during_setup_return_before_controls_exist():
     window = object.__new__(viewer_window.CaveViewerWindow)
     window._window_setup_complete = False
 
     window.on_mouse_press_event(10, 20, 1)
     window.on_mouse_drag_event(10, 20, 1, -1)
+    window.on_mouse_release_event(10, 20, 1)
 
 
 def test_mouse_motion_after_color_picker_release_is_noop():

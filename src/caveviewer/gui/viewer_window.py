@@ -7591,7 +7591,12 @@ class CaveViewerWindow(mglw.WindowConfig):
     mouse_press_event = on_mouse_press_event
 
     def on_mouse_release_event(self, x, y, button):
-        if self._input_is_suppressed():
+        # Win32 may send a release before construction initializes the mouse
+        # state. Match the other mouse entry points and ignore it safely.
+        if (
+            not getattr(self, "_window_setup_complete", False)
+            or self._input_is_suppressed()
+        ):
             return
         look_button_name = self._active_presentation_profile().mouse_look_button_name
         look_button = self.wnd.mouse.left if look_button_name == "left" else self.wnd.mouse.right
