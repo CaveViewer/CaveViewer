@@ -173,6 +173,64 @@ def test_compound_shortcut_plus_uses_one_centered_keycap_unit(monkeypatch):
     assert text_calls == [("Ctrl", 23.0), ("+", 57.0), ("R", 85.0)]
 
 
+def test_compound_shortcuts_share_section_columns(monkeypatch):
+    overlay = controls_overlay.ControlsOverlay.__new__(controls_overlay.ControlsOverlay)
+    widths = {
+        "W": 16.0,
+        "Left click": 60.0,
+        "mouse": 38.0,
+        "Ctrl": 24.0,
+        "0": 10.0,
+        "+": 8.0,
+    }
+    monkeypatch.setattr(
+        controls_overlay.bitmap_font,
+        "text_width_px",
+        lambda text, _size: widths[text],
+    )
+    monkeypatch.setattr(
+        controls_overlay.bitmap_font,
+        "text_height_px",
+        lambda _size: 12.0,
+    )
+    overlay._keycap_width = lambda part, _size, _pad: {
+        "W": 24.0,
+        "Left click": 68.0,
+        "mouse": 46.0,
+        "Ctrl": 44.0,
+        "0": 24.0,
+    }[part]
+    rows = [("Left click + mouse", "Look around"), ("Ctrl + 0", "Reset")]
+
+    grid = overlay._compound_keycap_grid(rows, 1.0, 4.0, 300.0, 12.0)
+
+    assert grid == (208.0, 213.0, 288.0)
+    text_calls = []
+    overlay._draw_compound_keycap_sequence(
+        lambda *_args: None,
+        lambda text, x, *_args: text_calls.append((text, x)),
+        ("Left click", "mouse"),
+        grid,
+        10.0,
+        1.0,
+        4.0,
+        3.0,
+    )
+    overlay._draw_compound_keycap_sequence(
+        lambda *_args: None,
+        lambda text, x, *_args: text_calls.append((text, x)),
+        ("Ctrl", "0"),
+        grid,
+        30.0,
+        1.0,
+        4.0,
+        3.0,
+    )
+
+    assert text_calls[1] == ("+", 221.0)
+    assert text_calls[4] == ("+", 221.0)
+
+
 def test_fullscreen_begin_prompt_respects_budget_limited_wanted_count():
     overlay = controls_overlay.ControlsOverlay.__new__(controls_overlay.ControlsOverlay)
     overlay._active = True

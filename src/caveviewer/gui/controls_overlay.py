@@ -806,16 +806,40 @@ class ControlsOverlay:
         ) in section_layouts:
             add_text(heading_text, heading_x, y, heading_size, _SPLASH_TITLE_RGBA)
             y += heading_height + heading_gap
+            compound_grid = self._compound_keycap_grid(
+                rows,
+                key_size,
+                key_pad_x,
+                desc_x,
+                key_desc_gap,
+            )
 
             for key, desc in rows:
                 key_h = key_text_height + key_pad_y * 2.0
-                key_sequence_width = self._measure_keycap_sequence(key, key_size, key_pad_x)
-                key_x = desc_x - key_desc_gap - key_sequence_width
                 key_y = y + (row_height - key_h) / 2.0
-                self._draw_keycap_sequence(
-                    add_quad_px, add_text, key, key_x, key_y,
-                    key_size, key_pad_x, key_pad_y,
-                )
+                compound_parts = self._compound_keycap_parts(key)
+                if compound_grid is not None and compound_parts is not None:
+                    self._draw_compound_keycap_sequence(
+                        add_quad_px,
+                        add_text,
+                        compound_parts,
+                        compound_grid,
+                        key_y,
+                        key_size,
+                        key_pad_x,
+                        key_pad_y,
+                    )
+                else:
+                    key_sequence_width = self._measure_keycap_sequence(
+                        key,
+                        key_size,
+                        key_pad_x,
+                    )
+                    key_x = desc_x - key_desc_gap - key_sequence_width
+                    self._draw_keycap_sequence(
+                        add_quad_px, add_text, key, key_x, key_y,
+                        key_size, key_pad_x, key_pad_y,
+                    )
 
                 desc_y = y + (row_height - desc_text_height) / 2.0
                 add_text(desc, desc_x, desc_y, desc_size, _SPLASH_SUBTITLE_RGBA)
@@ -825,6 +849,43 @@ class ControlsOverlay:
 
     def _keycap_parts(self, label: str) -> list[str]:
         return list(shortcut_keycap_parts(label))
+
+    def _compound_keycap_parts(self, label: str) -> tuple[str, str] | None:
+        """Return the two keycaps of a simple ``first + final`` shortcut."""
+        parts = self._keycap_parts(label)
+        if len(parts) == 3 and parts[1] == "+":
+            return parts[0], parts[2]
+        return None
+
+    def _compound_keycap_grid(
+        self,
+        rows,
+        key_size: float,
+        key_pad_x: float,
+        desc_x: float,
+        key_desc_gap: float,
+    ) -> tuple[float, float, float] | None:
+        """Return shared first, separator, and final columns for one section."""
+        compound_rows = [
+            parts
+            for key, _description in rows
+            if (parts := self._compound_keycap_parts(key)) is not None
+        ]
+        if not compound_rows:
+            return None
+        final_column_width = max(
+            self._keycap_width(final, key_size, key_pad_x)
+            for _first, final in compound_rows
+        )
+        final_right = desc_x - key_desc_gap
+        final_left = final_right - final_column_width
+        separator_left = (
+            final_left
+            - _KEYCAP_SEQUENCE_GAP
+            - self._keycap_separator_width(key_size, key_pad_x)
+        )
+        first_right = separator_left - _KEYCAP_SEQUENCE_GAP
+        return first_right, separator_left, final_right
 
     def _measure_keycap_sequence(self, label, key_size, key_pad_x):
         total_w = 0.0
@@ -902,6 +963,52 @@ class ControlsOverlay:
                 _SPLASH_TITLE_RGBA,
             )
             cursor_x += key_w + _KEYCAP_SEQUENCE_GAP
+
+    def _draw_compound_keycap_sequence(
+        self,
+        add_quad_px,
+        add_text,
+        parts: tuple[str, str],
+        grid: tuple[float, float, float],
+        y: float,
+        key_size: float,
+        key_pad_x: float,
+        key_pad_y: float,
+    ) -> None:
+        """Draw one compound shortcut in its section's shared keycap columns."""
+        first, final = parts
+        first_right, separator_left, final_right = grid
+        key_h = bitmap_font.text_height_px(key_size) + key_pad_y * 2.0
+        first_w = self._keycap_width(first, key_size, key_pad_x)
+        final_w = self._keycap_width(final, key_size, key_pad_x)
+        first_x = first_right - first_w
+        final_x = final_right - final_w
+        separator_w = self._keycap_separator_width(key_size, key_pad_x)
+
+        self._draw_keycap(add_quad_px, first_x, y, first_right, y + key_h)
+        add_text(
+            first,
+            first_x + (first_w - bitmap_font.text_width_px(first, key_size)) / 2.0,
+            y + key_pad_y,
+            key_size,
+            _SPLASH_TITLE_RGBA,
+        )
+        add_text(
+            "+",
+            separator_left
+            + (separator_w - bitmap_font.text_width_px("+", key_size)) / 2.0,
+            y + key_pad_y,
+            key_size,
+            _SPLASH_INSTRUCTION_RGBA,
+        )
+        self._draw_keycap(add_quad_px, final_x, y, final_right, y + key_h)
+        add_text(
+            final,
+            final_x + (final_w - bitmap_font.text_width_px(final, key_size)) / 2.0,
+            y + key_pad_y,
+            key_size,
+            _SPLASH_TITLE_RGBA,
+        )
 
     def _draw_keycap(self, add_quad_px, x0, y0, x1, y1):
         fill = (0.020, 0.030, 0.045, 0.78)
