@@ -55,6 +55,7 @@ def test_keycap_tiers_share_widths_while_descriptive_controls_fit_labels(
         "Space": 30.0,
         "Escape": 42.0,
         "Del": 20.0,
+        "1–9": 34.0,
         "Minimap click": 64.0,
     }
     monkeypatch.setattr(
@@ -72,7 +73,11 @@ def test_keycap_tiers_share_widths_while_descriptive_controls_fit_labels(
     assert overlay._keycap_width("Space", 1.0, 4.0) == 50.0
     assert overlay._keycap_width("Escape", 1.0, 4.0) == 50.0
     assert overlay._keycap_width("Del", 1.0, 4.0) == 44.0
-    assert overlay._keycap_width("Minimap click", 1.0, 4.0) == 72.0
+    assert overlay._keycap_width("Minimap click", 1.0, 4.0) == 120.0
+    assert (
+        overlay._keycap_width("Minimap click", 1.0, 4.0)
+        == overlay._measure_keycap_sequence("Del + 1–9", 1.0, 4.0)
+    )
 
 
 def test_single_keycap_glyph_is_centered_in_its_shared_width(monkeypatch):

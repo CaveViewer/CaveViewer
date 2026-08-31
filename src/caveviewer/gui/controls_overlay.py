@@ -73,6 +73,7 @@ _FULLSCREEN_SUBTITLE_TEXT_SIZE = 2.55
 _CONTROL_KEYCAP_ROW_GAP = 4.0
 _MEDIUM_NAMED_KEYCAPS = frozenset({"Cmd", "Ctrl", "Del", "Scroll", "Shift"})
 _WIDE_NAMED_KEYCAPS = frozenset({"Escape", "Space"})
+_KEYCAP_SEQUENCE_GAP = 5.0
 
 
 def _fullscreen_layout_scale(window_size: tuple[int, int]) -> float:
@@ -827,21 +828,19 @@ class ControlsOverlay:
 
     def _measure_keycap_sequence(self, label, key_size, key_pad_x):
         total_w = 0.0
-        gap = 5.0
         for part in self._keycap_parts(label):
             if part == "+":
                 total_w += self._keycap_separator_width(key_size, key_pad_x)
             else:
                 total_w += self._keycap_width(part, key_size, key_pad_x)
-            total_w += gap
-        return max(0.0, total_w - gap)
+            total_w += _KEYCAP_SEQUENCE_GAP
+        return max(0.0, total_w - _KEYCAP_SEQUENCE_GAP)
 
     def _keycap_separator_width(self, key_size: float, key_pad_x: float) -> float:
         """Reserve a borderless 1u lane for a compound shortcut separator."""
         return self._keycap_width("W", key_size, key_pad_x)
 
-    @staticmethod
-    def _keycap_width(part: str, key_size: float, key_pad_x: float) -> float:
+    def _keycap_width(self, part: str, key_size: float, key_pad_x: float) -> float:
         """Return a semantic keycap width while preserving descriptive controls."""
         content_width = bitmap_font.text_width_px(part, key_size) + key_pad_x * 2.0
         if len(part) == 1:
@@ -862,13 +861,22 @@ class ControlsOverlay:
                 bitmap_font.text_width_px(reference, key_size)
                 for reference in _WIDE_NAMED_KEYCAPS
             ) + key_pad_x * 2.0
+        if part == "Minimap click":
+            # Align the standalone minimap control with the compound bookmark
+            # delete shortcut immediately above it in the Navigate section.
+            return (
+                self._keycap_width("Del", key_size, key_pad_x)
+                + _KEYCAP_SEQUENCE_GAP
+                + self._keycap_separator_width(key_size, key_pad_x)
+                + _KEYCAP_SEQUENCE_GAP
+                + self._keycap_width("1–9", key_size, key_pad_x)
+            )
         return content_width
 
     def _draw_keycap_sequence(
         self, add_quad_px, add_text, label, x, y, key_size, key_pad_x, key_pad_y
     ):
         cursor_x = x
-        gap = 5.0
         key_h = bitmap_font.text_height_px(key_size) + key_pad_y * 2.0
         for part in self._keycap_parts(label):
             part_w = bitmap_font.text_width_px(part, key_size)
@@ -881,7 +889,7 @@ class ControlsOverlay:
                     key_size,
                     _SPLASH_INSTRUCTION_RGBA,
                 )
-                cursor_x += separator_w + gap
+                cursor_x += separator_w + _KEYCAP_SEQUENCE_GAP
                 continue
 
             key_w = self._keycap_width(part, key_size, key_pad_x)
@@ -893,7 +901,7 @@ class ControlsOverlay:
                 key_size,
                 _SPLASH_TITLE_RGBA,
             )
-            cursor_x += key_w + gap
+            cursor_x += key_w + _KEYCAP_SEQUENCE_GAP
 
     def _draw_keycap(self, add_quad_px, x0, y0, x1, y1):
         fill = (0.020, 0.030, 0.045, 0.78)
