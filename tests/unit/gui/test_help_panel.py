@@ -34,6 +34,37 @@ def test_help_panel_uses_a_compact_keys_table_without_redundant_labels():
     assert "help_section_column_count" not in source
 
 
+def test_help_keycaps_standardize_single_key_widths_and_center_glyphs():
+    panel = help_panel.HelpPanel.__new__(help_panel.HelpPanel)
+    widths = {"W": 11, "Escape": 38}
+    panel._font_width = lambda _role, text: widths[text]
+    panel._px = lambda value: value
+
+    assert panel._keycap_width("-") == 25
+    assert panel._keycap_width("=") == 25
+    assert panel._keycap_width("Escape") == 52
+
+    text_calls = []
+    panel._style = SimpleNamespace(
+        keycap_background_color="#111111",
+        keycap_border_color="#222222",
+        keycap_text_color="#eeeeee",
+        section_color="#cccccc",
+    )
+    panel._keycap_height = lambda _shortcut: 20
+    panel._canvas_font = lambda _role: "font"
+    canvas = SimpleNamespace(
+        create_rectangle=lambda *_args, **_kwargs: None,
+        create_text=lambda *args, **kwargs: text_calls.append((args, kwargs)),
+    )
+
+    panel._draw_keycap_sequence(canvas, x=10, y=20, shortcut="- =")
+
+    first_keycap = text_calls[0]
+    assert first_keycap[0] == (22.5, 30.0)
+    assert first_keycap[1]["anchor"] == "center"
+
+
 def test_capture_help_has_its_own_tab_with_artifact_specific_guidance():
     source = inspect.getsource(help_panel.HelpPanel)
     row_source = inspect.getsource(help_panel.HelpPanel._draw_shortcut_row)

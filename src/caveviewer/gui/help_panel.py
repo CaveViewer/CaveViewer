@@ -836,6 +836,16 @@ class HelpPanel:
             return self._font_line_height("action")
         return self._font_line_height("keycap") + self._px(4) + 2
 
+    def _keycap_width(self, part: str) -> int:
+        """Return a stable width for individual keys and a natural width otherwise."""
+        if len(part) == 1:
+            # Individual keycaps share the W width so narrow glyphs such as
+            # '-' and '=' neither shrink their caps nor look off-centre.
+            text_width = self._font_width("keycap", "W")
+        else:
+            text_width = self._font_width("keycap", part)
+        return text_width + self._px(12) + 2
+
     def _draw_keycap_sequence(self, canvas, *, x: int, y: int, shortcut: str) -> None:
         style = self._style
         keycap_height = self._keycap_height(shortcut)
@@ -853,7 +863,7 @@ class HelpPanel:
                 )
                 cursor += self._font_width("action", part) + self._px(8)
                 continue
-            keycap_width = self._font_width("keycap", part) + self._px(12) + 2
+            keycap_width = self._keycap_width(part)
             canvas.create_rectangle(
                 cursor,
                 y,
@@ -865,12 +875,12 @@ class HelpPanel:
                 tags="help-content",
             )
             canvas.create_text(
-                cursor + self._px(6) + 1,
+                cursor + (keycap_width / 2),
                 y + keycap_height / 2,
                 text=part,
                 font=self._canvas_font("keycap"),
                 fill=style.keycap_text_color,
-                anchor="w",
+                anchor="center",
                 tags="help-content",
             )
             cursor += keycap_width + self._px(5)
