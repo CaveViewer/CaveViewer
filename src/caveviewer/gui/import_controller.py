@@ -545,6 +545,9 @@ class MapImportController:
 
     def _close_owner_if_possible(self) -> None:
         """Close through the owner so it releases its render resources first."""
+        hide_owner = getattr(self._owner, "_hide_window_before_close", None)
+        if callable(hide_owner):
+            hide_owner()
         close_owner = getattr(self._owner, "_complete_window_close", None)
         if callable(close_owner):
             close_owner()

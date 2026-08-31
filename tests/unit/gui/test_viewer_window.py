@@ -5498,6 +5498,15 @@ def test_cancel_active_import_does_not_wait_for_live_import_thread(monkeypatch):
     assert calls == []
 
 
+def test_checkpoint_close_hides_the_native_viewer_before_resource_teardown():
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window.wnd = SimpleNamespace(visible=True)
+
+    window._hide_window_before_close()
+
+    assert window.wnd.visible is False
+
+
 def test_on_close_shutdowns_active_import_before_releasing_resources():
     calls = []
 

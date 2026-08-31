@@ -135,6 +135,7 @@ def test_close_after_paused_import_releases_the_viewer_without_a_notice():
     calls = []
     owner = SimpleNamespace(
         _has_map_loaded=False,
+        _hide_window_before_close=lambda: calls.append("hide_viewer"),
         _complete_window_close=lambda: calls.append("close_viewer"),
     )
     controller, logger, _terminate_calls = _controller()
@@ -148,7 +149,7 @@ def test_close_after_paused_import_releases_the_viewer_without_a_notice():
 
     controller.drain_queue()
 
-    assert calls == ["close_viewer"]
+    assert calls == ["hide_viewer", "close_viewer"]
     assert controller.pause_notice_until is None
     assert "Resume checkpoint saved; closing viewer." in logger.info_messages
 

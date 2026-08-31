@@ -7662,6 +7662,18 @@ class CaveViewerWindow(mglw.WindowConfig):
     def _shutdown_active_import(self) -> None:
         self._ensure_import_controller().shutdown()
 
+    def _hide_window_before_close(self) -> None:
+        """Remove the native viewer before releasing its visible GL surface."""
+        window = getattr(self, "wnd", None)
+        if window is None:
+            return
+        try:
+            window.visible = False
+        except Exception:
+            # Backends without a visibility property still retain the regular
+            # close path below; this is a presentation-only improvement.
+            pass
+
     def _complete_window_close(self) -> None:
         """Release viewer resources after any active capture has finished."""
         if self._closing_requested:
