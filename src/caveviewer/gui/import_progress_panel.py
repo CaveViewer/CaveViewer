@@ -144,16 +144,14 @@ def _hex_color_rgb(color: str) -> tuple[float, float, float]:
     return tuple(int(color[index : index + 2], 16) / 255.0 for index in (1, 3, 5))
 
 
-def _compact_progress_layout_scale(window_size: tuple[int, int]) -> float:
-    """Return bounded label compensation for compact viewer surfaces."""
+def _progress_label_layout_scale(window_size: tuple[int, int]) -> float:
+    """Match the fullscreen controls prompt's responsive text scale."""
     try:
         width, height = (max(1, int(value)) for value in window_size)
     except (TypeError, ValueError):
         return 1.0
     surface_ratio = min(width / 1536.0, height / 864.0)
-    if surface_ratio >= 1.0:
-        return 1.0
-    return min(1.22, 1.0 / max(0.75, surface_ratio))
+    return max(1.0, min(1.32, surface_ratio))
 
 
 class ImportProgressPanel:
@@ -355,7 +353,7 @@ class ImportProgressPanel:
             title=title,
             stage=self._stage_label(stage),
             note=note,
-            layout_scale=_compact_progress_layout_scale(window_size),
+            layout_scale=_progress_label_layout_scale(window_size),
         )
 
         data = np.array(verts, dtype=np.float32)
