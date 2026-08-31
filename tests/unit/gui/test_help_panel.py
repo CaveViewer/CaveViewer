@@ -177,14 +177,14 @@ def test_help_panel_only_renders_log_action_status_when_present():
     assert "if state.status_text:" in render_source
 
 
-def test_troubleshooting_uses_the_shared_tab_alignment_and_hides_empty_copy_action():
+def test_troubleshooting_aligns_and_places_copy_below_available_error_details():
     render_source = inspect.getsource(help_panel.HelpPanel._render_troubleshooting)
 
     assert "content_x = self._px(TABBED_CONTENT_ALIGNMENT_INSET)" in render_source
     assert "content_right = width - self._px(12)" in render_source
-    assert 'if copy_button is not None and state.error_excerpt is not None:' in (
-        render_source
-    )
+    assert "if copy_button is not None:" in render_source
+    assert "# Copy is an inline utility for the excerpt" in render_source
+    assert "canvas.create_window(\n                    content_x,\n                    y," in render_source
     assert "enabled=state.error_excerpt is not None" not in render_source
 
 

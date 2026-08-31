@@ -614,24 +614,6 @@ class HelpPanel:
         )
         heading_height = self._font_line_height("section")
         copy_button = self._copy_error_button
-        if copy_button is not None and state.error_excerpt is not None:
-            set_dialog_action_button(
-                copy_button,
-                command=self._copy_last_error,
-                enabled=True,
-            )
-            try:
-                copy_button.update_idletasks()
-                copy_width = copy_button.winfo_reqwidth()
-            except tk.TclError:
-                copy_width = self._px(104)
-            canvas.create_window(
-                max(content_x, content_right - copy_width),
-                y,
-                window=copy_button,
-                anchor="nw",
-                tags="help-content",
-            )
         y += heading_height + self._px(
             STANDARD_CONTENT_SECTION_SPACING.heading_to_content_y
         )
@@ -668,6 +650,28 @@ class HelpPanel:
             )
             canvas.tag_raise(excerpt_item)
             y += excerpt_height + (text_pad * 2) + self._px(10)
+
+            # Copy is an inline utility for the excerpt, so it follows the
+            # details rather than competing with the section heading.
+            if copy_button is not None:
+                set_dialog_action_button(
+                    copy_button,
+                    command=self._copy_last_error,
+                    enabled=True,
+                )
+                canvas.create_window(
+                    content_x,
+                    y,
+                    window=copy_button,
+                    anchor="nw",
+                    tags="help-content",
+                )
+                try:
+                    copy_button.update_idletasks()
+                    copy_height = max(self._px(36), copy_button.winfo_reqheight())
+                except tk.TclError:
+                    copy_height = self._px(36)
+                y += copy_height + self._px(10)
         elif state.error_status_text:
             empty_item = canvas.create_text(
                 content_x,
