@@ -177,6 +177,17 @@ def test_help_panel_only_renders_log_action_status_when_present():
     assert "if state.status_text:" in render_source
 
 
+def test_troubleshooting_uses_the_shared_tab_alignment_and_hides_empty_copy_action():
+    render_source = inspect.getsource(help_panel.HelpPanel._render_troubleshooting)
+
+    assert "content_x = self._px(TABBED_CONTENT_ALIGNMENT_INSET)" in render_source
+    assert "content_right = width - self._px(12)" in render_source
+    assert 'if copy_button is not None and state.error_excerpt is not None:' in (
+        render_source
+    )
+    assert "enabled=state.error_excerpt is not None" not in render_source
+
+
 def test_copy_error_excerpt_uses_exact_displayed_text():
     class Clipboard:
         def __init__(self):

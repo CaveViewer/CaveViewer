@@ -526,9 +526,12 @@ class HelpPanel:
 
         style = self._style
         state = self._troubleshooting_state
+        content_x = self._px(TABBED_CONTENT_ALIGNMENT_INSET)
+        content_right = width - self._px(12)
+        content_width = max(self._px(260), content_right - content_x)
         y = 0
         canvas.create_text(
-            0,
+            content_x,
             y,
             text="APPLICATION LOGS",
             font=self._canvas_font("section"),
@@ -540,14 +543,14 @@ class HelpPanel:
             STANDARD_CONTENT_SECTION_SPACING.heading_to_content_y
         )
         description = canvas.create_text(
-            0,
+            content_x,
             y,
             text="Share the latest log with support to help diagnose a problem.",
             font=self._canvas_font("action"),
             fill=style.action_color,
             anchor="nw",
             justify="left",
-            width=max(self._px(260), width - self._px(20)),
+            width=content_width,
             tags="help-content",
         )
         bounds = canvas.bbox(description)
@@ -567,7 +570,7 @@ class HelpPanel:
                 enabled=state.can_reveal,
             )
             canvas.create_window(
-                0,
+                content_x,
                 y,
                 window=button,
                 anchor="nw",
@@ -582,14 +585,14 @@ class HelpPanel:
 
         if state.status_text:
             status_item = canvas.create_text(
-                0,
+                content_x,
                 y,
                 text=state.status_text,
                 font=self._canvas_font("detail"),
                 fill=("#ff9b90" if state.is_error else style.detail_color),
                 anchor="nw",
                 justify="left",
-                width=max(self._px(260), width - self._px(20)),
+                width=content_width,
                 tags="help-content",
             )
             status_bounds = canvas.bbox(status_item)
@@ -601,7 +604,7 @@ class HelpPanel:
 
         y += self._px(STANDARD_CONTENT_SECTION_SPACING.between_sections_y)
         canvas.create_text(
-            0,
+            content_x,
             y,
             text="LAST ERROR",
             font=self._canvas_font("section"),
@@ -611,11 +614,11 @@ class HelpPanel:
         )
         heading_height = self._font_line_height("section")
         copy_button = self._copy_error_button
-        if copy_button is not None:
+        if copy_button is not None and state.error_excerpt is not None:
             set_dialog_action_button(
                 copy_button,
                 command=self._copy_last_error,
-                enabled=state.error_excerpt is not None,
+                enabled=True,
             )
             try:
                 copy_button.update_idletasks()
@@ -623,7 +626,7 @@ class HelpPanel:
             except tk.TclError:
                 copy_width = self._px(104)
             canvas.create_window(
-                max(0, width - copy_width - self._px(12)),
+                max(content_x, content_right - copy_width),
                 y,
                 window=copy_button,
                 anchor="nw",
@@ -637,14 +640,14 @@ class HelpPanel:
         if excerpt is not None:
             text_pad = self._px(12)
             excerpt_item = canvas.create_text(
-                text_pad,
+                content_x + text_pad,
                 y + text_pad,
                 text=excerpt.text,
                 font=style.error_font,
                 fill=style.action_color,
                 anchor="nw",
                 justify="left",
-                width=max(self._px(240), width - (text_pad * 2) - self._px(12)),
+                width=max(self._px(240), content_width - (text_pad * 2)),
                 tags="help-content",
             )
             excerpt_bounds = canvas.bbox(excerpt_item)
@@ -654,9 +657,9 @@ class HelpPanel:
                 else max(1, excerpt_bounds[3] - excerpt_bounds[1])
             )
             canvas.create_rectangle(
-                0,
+                content_x,
                 y,
-                width - self._px(12),
+                content_right,
                 y + excerpt_height + (text_pad * 2),
                 fill=style.keycap_background_color,
                 outline=style.keycap_border_color,
@@ -667,14 +670,14 @@ class HelpPanel:
             y += excerpt_height + (text_pad * 2) + self._px(10)
         elif state.error_status_text:
             empty_item = canvas.create_text(
-                0,
+                content_x,
                 y,
                 text=state.error_status_text,
                 font=self._canvas_font("detail"),
                 fill=("#ff9b90" if state.is_error else style.detail_color),
                 anchor="nw",
                 justify="left",
-                width=max(self._px(260), width - self._px(20)),
+                width=content_width,
                 tags="help-content",
             )
             empty_bounds = canvas.bbox(empty_item)
@@ -686,7 +689,7 @@ class HelpPanel:
 
         if self._copy_feedback:
             feedback_item = canvas.create_text(
-                0,
+                content_x,
                 y,
                 text=self._copy_feedback,
                 font=self._canvas_font("detail"),
