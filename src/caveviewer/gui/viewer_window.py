@@ -7390,7 +7390,13 @@ class CaveViewerWindow(mglw.WindowConfig):
     mouse_position_event = on_mouse_position_event
 
     def on_mouse_drag_event(self, x, y, dx, dy):
-        if self._input_is_suppressed():
+        # Win32 can dispatch a drag before the native window's Python-side
+        # controls have completed construction. Do not dereference the overlay
+        # until initialization has established it.
+        if (
+            not getattr(self, "_window_setup_complete", False)
+            or self._input_is_suppressed()
+        ):
             return
         if self.controls_overlay.is_waiting_for_begin:
             return
@@ -7399,7 +7405,12 @@ class CaveViewerWindow(mglw.WindowConfig):
     mouse_drag_event = on_mouse_drag_event
 
     def on_mouse_press_event(self, x, y, button):
-        if self._input_is_suppressed():
+        # A press can arrive through the same native callback path before
+        # `controls_overlay` is available; treat it as non-actionable.
+        if (
+            not getattr(self, "_window_setup_complete", False)
+            or self._input_is_suppressed()
+        ):
             return
         if self.controls_overlay.is_waiting_for_begin:
             return
