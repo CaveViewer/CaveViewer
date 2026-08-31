@@ -17,8 +17,9 @@ from caveviewer.gui.dialog_style import (
     create_dialog_action_button,
     set_dialog_action_button,
 )
-from caveviewer.gui.modal_dialog import (
-    COPY_CONFIRMATION_GAP,
+from caveviewer.gui.action_confirmation import (
+    ACTION_CONFIRMATION_GAP,
+    TransientActionConfirmation,
     create_confirmation_mark,
 )
 from caveviewer.gui.section_spacing import STANDARD_CONTENT_SECTION_SPACING
@@ -37,8 +38,6 @@ from caveviewer.gui.troubleshooting_logs import (
     TroubleshootingLogController,
     TroubleshootingLogState,
 )
-from caveviewer.gui.tk_feedback import COPY_FEEDBACK_MS
-
 
 _CAPTURE_HELP_LAYOUT = (
     (
@@ -256,10 +255,10 @@ class HelpPanel:
         self._troubleshooting_button = None
         self._copy_error_button = None
         self._copy_confirmation_mark = None
+        self._copy_confirmation = None
         self._copy_confirmation_visible = False
         self._copy_feedback = ""
         self._copy_feedback_is_error = False
-        self._copy_feedback_after_id: str | None = None
         self._shell = None
         self._content_canvas = None
         self._scrollbar = None
@@ -343,6 +342,11 @@ class HelpPanel:
             canvas,
             px=self._px,
             background=style.background_color,
+            accessible_name="Error details copied",
+        )
+        self._copy_confirmation = TransientActionConfirmation(
+            canvas,
+            on_visibility_changed=self._set_copy_confirmation_visible,
         )
 
         self._scrollbar = CanvasVerticalScrollbar(
@@ -448,11 +452,10 @@ class HelpPanel:
             scrollbar.sync_overflow(self._content_height)
 
     def _refresh_troubleshooting(self) -> None:
-        self._cancel_copy_feedback_timer()
+        self._clear_copy_confirmation()
         controller = self._troubleshooting_controller
         if controller is not None:
             self._troubleshooting_state = controller.refresh()
-        self._copy_confirmation_visible = False
         self._copy_feedback = ""
         self._copy_feedback_is_error = False
 
@@ -471,27 +474,25 @@ class HelpPanel:
         if excerpt is None or canvas is None:
             return
         copied = copy_error_excerpt_to_clipboard(canvas, excerpt.text)
-        self._cancel_copy_feedback_timer()
-        self._copy_confirmation_visible = copied
         self._copy_feedback = "" if copied else "Couldn’t copy. Select the text manually."
         self._copy_feedback_is_error = not copied
-        if copied:
-            try:
-                self._copy_feedback_after_id = canvas.after(
-                    COPY_FEEDBACK_MS,
-                    self._clear_copy_feedback,
-                )
-            except tk.TclError:
-                pass
-        self._render_table(canvas.winfo_width())
+        confirmation = self._copy_confirmation
+        if confirmation is not None:
+            was_visible = confirmation.visible
+            if copied:
+                confirmation.show()
+            else:
+                confirmation.clear()
+                if not was_visible:
+                    self._render_table(canvas.winfo_width())
+        else:
+            self._copy_confirmation_visible = copied
+            self._render_table(canvas.winfo_width())
 
-    def _clear_copy_feedback(self) -> None:
-        """Hide the transient copy confirmation while keeping Copy available."""
+    def _set_copy_confirmation_visible(self, visible: bool) -> None:
+        """Render a visibility change requested by the shared confirmation."""
 
-        self._copy_feedback_after_id = None
-        self._copy_confirmation_visible = False
-        self._copy_feedback = ""
-        self._copy_feedback_is_error = False
+        self._copy_confirmation_visible = visible
         canvas = self._content_canvas
         if canvas is not None:
             try:
@@ -499,22 +500,18 @@ class HelpPanel:
             except tk.TclError:
                 pass
 
-    def _cancel_copy_feedback_timer(self) -> None:
-        """Cancel the copy confirmation timer before replacing its state."""
-        after_id = self._copy_feedback_after_id
-        self._copy_feedback_after_id = None
-        canvas = self._content_canvas
-        if after_id is None or canvas is None:
-            return
-        try:
-            canvas.after_cancel(after_id)
-        except tk.TclError:
-            pass
+    def _clear_copy_confirmation(self) -> None:
+        """Hide the shared copy confirmation and cancel its pending timer."""
+
+        confirmation = self._copy_confirmation
+        if confirmation is not None:
+            confirmation.clear()
+        else:
+            self._copy_confirmation_visible = False
 
     def on_hidden(self) -> None:
         """Clear copy feedback when the user leaves Help."""
-        self._cancel_copy_feedback_timer()
-        self._copy_confirmation_visible = False
+        self._clear_copy_confirmation()
         self._copy_feedback = ""
         self._copy_feedback_is_error = False
 
@@ -675,7 +672,7 @@ class HelpPanel:
                 confirmation_mark = self._copy_confirmation_mark
                 if confirmation_mark is not None and self._copy_confirmation_visible:
                     canvas.create_window(
-                        content_x + copy_width + self._px(COPY_CONFIRMATION_GAP),
+                        content_x + copy_width + self._px(ACTION_CONFIRMATION_GAP),
                         copy_y + (copy_height // 2),
                         window=confirmation_mark,
                         anchor="w",
@@ -836,6 +833,16 @@ class HelpPanel:
             return self._font_line_height("action")
         return self._font_line_height("keycap") + self._px(4) + 2
 
+    def _keycap_width(self, part: str) -> int:
+        """Return a stable width for individual keys and a natural width otherwise."""
+        if len(part) == 1:
+            # Individual keycaps share the W width so narrow glyphs such as
+            # '-' and '=' neither shrink their caps nor look off-centre.
+            text_width = self._font_width("keycap", "W")
+        else:
+            text_width = self._font_width("keycap", part)
+        return text_width + self._px(12) + 2
+
     def _draw_keycap_sequence(self, canvas, *, x: int, y: int, shortcut: str) -> None:
         style = self._style
         keycap_height = self._keycap_height(shortcut)
@@ -853,7 +860,7 @@ class HelpPanel:
                 )
                 cursor += self._font_width("action", part) + self._px(8)
                 continue
-            keycap_width = self._font_width("keycap", part) + self._px(12) + 2
+            keycap_width = self._keycap_width(part)
             canvas.create_rectangle(
                 cursor,
                 y,
@@ -865,12 +872,12 @@ class HelpPanel:
                 tags="help-content",
             )
             canvas.create_text(
-                cursor + self._px(6) + 1,
+                cursor + (keycap_width / 2),
                 y + keycap_height / 2,
                 text=part,
                 font=self._canvas_font("keycap"),
                 fill=style.keycap_text_color,
-                anchor="w",
+                anchor="center",
                 tags="help-content",
             )
             cursor += keycap_width + self._px(5)

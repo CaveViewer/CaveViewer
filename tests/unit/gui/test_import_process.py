@@ -606,6 +606,9 @@ def test_terminate_import_process_cleans_abandoned_staging(tmp_path):
     active_other_process.mkdir()
     unrelated_dir.mkdir()
     (staging_dir / "partial.bin").write_bytes(b"partial")
+    lock_dir = cache_dir.parent / ".map-key.build-lock"
+    lock_dir.mkdir()
+    (lock_dir / "owner-pid").write_text("123", encoding="ascii")
     process = FakeProcess(target=object(), args=(), name="import", pid=123)
 
     import_process.terminate_import_process(
@@ -618,6 +621,7 @@ def test_terminate_import_process_cleans_abandoned_staging(tmp_path):
     assert backup_dir.is_dir()
     assert active_other_process.is_dir()
     assert unrelated_dir.is_dir()
+    assert not lock_dir.exists()
 
 
 def test_terminate_import_process_ignores_finished_process():

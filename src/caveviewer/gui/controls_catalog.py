@@ -35,7 +35,9 @@ class KeyboardShortcutSection:
 _HELP_HIDDEN_SHORTCUT_IDS = frozenset(
     {"bookmark-delete-control-shift", "import-pause"}
 )
-_SPACED_KEY_GROUPS = frozenset({"W A S D", "J L I K", "Z X", "- ="})
+_SPACED_KEY_GROUPS = frozenset(
+    {"W A S D", "E Q", "← → ↑ ↓", "J L I K", "Z X", "- ="}
+)
 
 
 def is_help_shortcut_visible(shortcut: KeyboardShortcut) -> bool:
@@ -104,7 +106,7 @@ def keyboard_control_sections(
         ),
         KeyboardShortcut(
             "bookmark-delete",
-            "Delete + 1–9",
+            "Del + 1–9",
             "Delete camera bookmark",
         ),
         KeyboardShortcut(
@@ -133,7 +135,7 @@ def keyboard_control_sections(
                     "W A S D",
                     "Move forward, left, backward, and right",
                 ),
-                KeyboardShortcut("move-vertical", "E / Q", "Move up / down"),
+                KeyboardShortcut("move-vertical", "E Q", "Move up / down"),
                 KeyboardShortcut("move-speed-boost", "Shift", "Speed boost"),
                 KeyboardShortcut(
                     "move-speed-decrease",
@@ -153,7 +155,7 @@ def keyboard_control_sections(
             shortcuts=(
                 KeyboardShortcut(
                     "look-arrows",
-                    "Arrow keys",
+                    "← → ↑ ↓",
                     "Look left, right, up, and down",
                 ),
                 KeyboardShortcut(
@@ -203,7 +205,7 @@ def keyboard_control_sections(
                 KeyboardShortcut(
                     "recorded-dive-space",
                     "Space",
-                    "Pause/resume Recorded Dive",
+                    "Pause/resume recorded dive",
                 ),
             ),
         ),

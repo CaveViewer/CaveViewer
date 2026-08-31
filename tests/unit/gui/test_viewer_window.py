@@ -39,6 +39,36 @@ def test_viewer_default_framebuffer_uses_multisampling_for_graphics_edges():
     assert viewer_window.CaveViewerWindow.samples == 4
 
 
+def test_pyglet_close_event_is_claimed_before_the_default_close_handler():
+    calls = []
+
+    class NativeWindow:
+        def push_handlers(self, **handlers):
+            self.handlers = handlers
+
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window.wnd = SimpleNamespace(name="pyglet", _window=NativeWindow())
+    window.on_close = lambda: calls.append("close")
+
+    window._claim_backend_close_event()
+
+    assert window.wnd._window.handlers["on_close"]() is True
+    assert calls == ["close"]
+
+
+def test_non_pyglet_close_event_is_left_to_its_native_backend():
+    calls = []
+    native_window = SimpleNamespace(
+        push_handlers=lambda **_handlers: calls.append("claimed")
+    )
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window.wnd = SimpleNamespace(name="glfw", _window=native_window)
+
+    window._claim_backend_close_event()
+
+    assert calls == []
+
+
 class FakeImportInhibitor:
     def __init__(self, calls):
         self._calls = calls
@@ -5082,6 +5112,15 @@ def test_mouse_motion_during_window_setup_returns_before_full_state_exists():
     window.on_mouse_position_event(10, 20, 1, -1)
 
 
+def test_mouse_callbacks_during_setup_return_before_controls_exist():
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window._window_setup_complete = False
+
+    window.on_mouse_press_event(10, 20, 1)
+    window.on_mouse_drag_event(10, 20, 1, -1)
+    window.on_mouse_release_event(10, 20, 1)
+
+
 def test_mouse_motion_after_color_picker_release_is_noop():
     window = object.__new__(viewer_window.CaveViewerWindow)
     window._window_setup_complete = True
@@ -5459,11 +5498,23 @@ def test_cancel_active_import_does_not_wait_for_live_import_thread(monkeypatch):
     assert calls == []
 
 
+def test_checkpoint_close_hides_the_native_viewer_before_resource_teardown():
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window.wnd = SimpleNamespace(visible=True)
+
+    window._hide_window_before_close()
+
+    assert window.wnd.visible is False
+
+
 def test_on_close_shutdowns_active_import_before_releasing_resources():
     calls = []
 
     class FakeImportController:
         active = True
+
+        def request_pause_for_close(self):
+            return False
 
         def shutdown(self):
             calls.append("shutdown_import")

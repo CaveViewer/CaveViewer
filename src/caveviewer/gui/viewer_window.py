@@ -724,6 +724,11 @@ class CaveViewerWindow(mglw.WindowConfig):
         # key callback. CaveViewer owns Escape so capture discard can finish
         # and present its result before the backend window is allowed to close.
         self._claim_backend_escape_key()
+        # Pyglet's default close event destroys its native window after the
+        # callback returns.  CaveViewer sometimes needs to defer that close
+        # briefly (for example, while an OBJ import saves a resume point), so
+        # claim the event before moderngl-window's forwarding handler runs.
+        self._claim_backend_close_event()
         record_runtime_stage(
             "viewer_config_context_ready",
             context_version=getattr(getattr(self, "ctx", None), "version_code", None),
@@ -1615,6 +1620,25 @@ class CaveViewerWindow(mglw.WindowConfig):
     def _claim_backend_escape_key(self) -> None:
         """Disable the backend's preemptive Escape close callback."""
         self.wnd.exit_key = None
+
+    def _claim_backend_close_event(self) -> None:
+        """Route Pyglet close requests through CaveViewer's deferred workflow.
+
+        Returning ``True`` is Pyglet's ``EVENT_HANDLED`` sentinel.  Without it,
+        Pyglet invokes its default close handler after our callback and sets
+        ``has_exit`` even when :meth:`on_close` has deferred shutdown.
+        """
+        backend = getattr(self, "wnd", None)
+        native_window = getattr(backend, "_window", None)
+        push_handlers = getattr(native_window, "push_handlers", None)
+        if getattr(backend, "name", None) != "pyglet" or not callable(push_handlers):
+            return
+
+        def on_close() -> bool:
+            self.on_close()
+            return True
+
+        push_handlers(on_close=on_close)
 
     def _set_runtime_window_icon(self) -> None:
         """Set the native viewer-window icon when the backend exposes one."""
@@ -7390,7 +7414,13 @@ class CaveViewerWindow(mglw.WindowConfig):
     mouse_position_event = on_mouse_position_event
 
     def on_mouse_drag_event(self, x, y, dx, dy):
-        if self._input_is_suppressed():
+        # Win32 can dispatch a drag before the native window's Python-side
+        # controls have completed construction. Do not dereference the overlay
+        # until initialization has established it.
+        if (
+            not getattr(self, "_window_setup_complete", False)
+            or self._input_is_suppressed()
+        ):
             return
         if self.controls_overlay.is_waiting_for_begin:
             return
@@ -7399,7 +7429,12 @@ class CaveViewerWindow(mglw.WindowConfig):
     mouse_drag_event = on_mouse_drag_event
 
     def on_mouse_press_event(self, x, y, button):
-        if self._input_is_suppressed():
+        # A press can arrive through the same native callback path before
+        # `controls_overlay` is available; treat it as non-actionable.
+        if (
+            not getattr(self, "_window_setup_complete", False)
+            or self._input_is_suppressed()
+        ):
             return
         if self.controls_overlay.is_waiting_for_begin:
             return
@@ -7580,7 +7615,12 @@ class CaveViewerWindow(mglw.WindowConfig):
     mouse_press_event = on_mouse_press_event
 
     def on_mouse_release_event(self, x, y, button):
-        if self._input_is_suppressed():
+        # Win32 may send a release before construction initializes the mouse
+        # state. Match the other mouse entry points and ignore it safely.
+        if (
+            not getattr(self, "_window_setup_complete", False)
+            or self._input_is_suppressed()
+        ):
             return
         look_button_name = self._active_presentation_profile().mouse_look_button_name
         look_button = self.wnd.mouse.left if look_button_name == "left" else self.wnd.mouse.right
@@ -7622,6 +7662,18 @@ class CaveViewerWindow(mglw.WindowConfig):
     def _shutdown_active_import(self) -> None:
         self._ensure_import_controller().shutdown()
 
+    def _hide_window_before_close(self) -> None:
+        """Remove the native viewer before releasing its visible GL surface."""
+        window = getattr(self, "wnd", None)
+        if window is None:
+            return
+        try:
+            window.visible = False
+        except Exception:
+            # Backends without a visibility property still retain the regular
+            # close path below; this is a presentation-only improvement.
+            pass
+
     def _complete_window_close(self) -> None:
         """Release viewer resources after any active capture has finished."""
         if self._closing_requested:
@@ -7657,6 +7709,9 @@ class CaveViewerWindow(mglw.WindowConfig):
 
     def on_close(self):
         if self._closing_requested:
+            return
+        if self._ensure_import_controller().request_pause_for_close():
+            self._defer_backend_close_request()
             return
         if self._escape_capture_cancellation_active():
             # Escape owns this shutdown request until discard cleanup and the

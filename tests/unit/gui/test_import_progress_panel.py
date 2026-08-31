@@ -61,7 +61,7 @@ def test_ring_labels_share_the_import_title_stage_note_layout(monkeypatch):
         ("Building map chunks…", 416.0, ImportProgressPanel.STAGE_TEXT_SIZE),
         (
             "First-time setup in progress.",
-            pytest.approx(440.65),
+            pytest.approx(440.55),
             ImportProgressPanel.NOTE_TEXT_SIZE,
         ),
     ]
@@ -96,12 +96,57 @@ def test_bar_labels_use_compact_progress_layout(monkeypatch):
     )
 
     assert text_calls == [
-        ("Preparing Map", 176.0, ImportProgressPanel.TITLE_TEXT_SIZE),
-        ("Building map chunksâ€¦", 258.0, ImportProgressPanel.STAGE_TEXT_SIZE),
+        ("Preparing Map", 164.0, ImportProgressPanel.TITLE_TEXT_SIZE),
+        ("Building map chunksâ€¦", 240.0, ImportProgressPanel.STAGE_TEXT_SIZE),
         (
             "First-time setup in progress.",
             330.0,
             ImportProgressPanel.NOTE_TEXT_SIZE,
+        ),
+    ]
+
+
+def test_progress_labels_match_fullscreen_prompt_scaling(monkeypatch):
+    panel = object.__new__(ImportProgressPanel)
+    text_calls = []
+    monkeypatch.setattr(
+        import_progress_panel.bitmap_font,
+        "text_bounds_px",
+        lambda text, pixel_size: (0.0, 0.0, len(text) * pixel_size, pixel_size),
+    )
+    monkeypatch.setattr(
+        import_progress_panel.bitmap_font,
+        "iter_text_pixels",
+        lambda text, _x, y, pixel_size: text_calls.append((text, y, pixel_size))
+        or (),
+    )
+
+    assert import_progress_panel._progress_label_layout_scale((1280, 720)) == 1.0
+    assert import_progress_panel._progress_label_layout_scale(
+        (1920, 1080)
+    ) == pytest.approx(1.25)
+    assert import_progress_panel._progress_label_layout_scale(
+        (3840, 2160)
+    ) == pytest.approx(1.32)
+
+    panel._add_bar_labels(
+        add_quad_px=lambda *_args: None,
+        center_x=400.0,
+        center_y=300.0,
+        window_width=800.0,
+        title="Opening map",
+        stage="Building map chunks",
+        note="First-time setup in progress.",
+        layout_scale=1.25,
+    )
+
+    assert text_calls == [
+        ("Opening map", pytest.approx(130.0), pytest.approx(3.1875)),
+        ("Building map chunks", pytest.approx(225.0), pytest.approx(3.1875)),
+        (
+            "First-time setup in progress.",
+            pytest.approx(337.5),
+            pytest.approx(2.425),
         ),
     ]
 

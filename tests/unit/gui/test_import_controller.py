@@ -91,6 +91,69 @@ def test_cancel_active_import_uses_zero_timeout_cleanup_without_relay():
     assert calls == [(process, {"timeout": 0.0, "cache_dir": "/cache/cave"})]
 
 
+def test_close_requests_obj_checkpoint_with_a_bounded_deadline():
+    controller, logger, _calls = _controller()
+    controller.active = True
+    controller.model_format = "obj"
+    controller.command_queue = queue.Queue()
+    controller._perf_counter = lambda: 10.0
+
+    assert controller.request_pause_for_close() is True
+    assert controller.command_queue.get_nowait() == ("pause",)
+    assert controller._close_pause_deadline == 13.0
+    assert controller.progress_title == "Pausing import"
+    assert controller.progress_note == "Saving a resume point."
+    assert logger.info_messages == [
+        "Import pause requested; waiting for the current safe checkpoint."
+    ]
+
+
+def test_obj_pause_support_normalizes_the_descriptor_format():
+    assert MapImportController.import_model_format_from_descriptor(
+        {"format": "OBJ"}
+    ) == "obj"
+
+
+def test_resuming_import_message_returns_to_normal_progress_after_three_seconds():
+    controller, _logger, _calls = _controller()
+    clock = [10.0]
+    controller._perf_counter = lambda: clock[0]
+
+    controller.update_progress_message_for_stage("resuming import")
+
+    assert controller.progress_title == "Resuming import"
+    assert controller.progress_note == "Using saved work from the previous session."
+
+    clock[0] = 13.0
+    controller.update_progress_message_for_stage("resuming import")
+
+    assert controller.progress_title == ""
+    assert controller.progress_note == controller.default_progress_note()
+
+
+def test_close_after_paused_import_releases_the_viewer_without_a_notice():
+    calls = []
+    owner = SimpleNamespace(
+        _has_map_loaded=False,
+        _hide_window_before_close=lambda: calls.append("hide_viewer"),
+        _complete_window_close=lambda: calls.append("close_viewer"),
+    )
+    controller, logger, _terminate_calls = _controller()
+    controller._owner = owner
+    controller.active = True
+    controller.is_startup = True
+    controller.map_name = "cave.obj"
+    controller._close_pause_deadline = 13.0
+    controller.event_queue = queue.Queue()
+    controller.event_queue.put(("paused", "/cache/.cave.resume-123"))
+
+    controller.drain_queue()
+
+    assert calls == ["hide_viewer", "close_viewer"]
+    assert controller.pause_notice_until is None
+    assert "Resume checkpoint saved; closing viewer." in logger.info_messages
+
+
 def test_shutdown_joins_live_relay_and_clears_import_references():
     process = object()
     controller, _logger, calls = _controller()

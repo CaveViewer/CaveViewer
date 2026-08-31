@@ -70,6 +70,10 @@ _SPLASH_PROGRESS_FILL_RGBA = (0.8980, 0.6314, 0.1216, 1.0)    # #e5a11f
 _FULLSCREEN_BASE_WINDOW_SIZE = (1536, 864)
 _FULLSCREEN_LAYOUT_SCALE_MAX = 1.32
 _FULLSCREEN_SUBTITLE_TEXT_SIZE = 2.55
+_CONTROL_KEYCAP_ROW_GAP = 4.0
+_MEDIUM_NAMED_KEYCAPS = frozenset({"Cmd", "Ctrl", "Del", "Scroll", "Shift"})
+_WIDE_NAMED_KEYCAPS = frozenset({"Escape", "Space"})
+_KEYCAP_SEQUENCE_GAP = 5.0
 
 
 def _fullscreen_layout_scale(window_size: tuple[int, int]) -> float:
@@ -90,6 +94,62 @@ def _fullscreen_layout_scale(window_size: tuple[int, int]) -> float:
     base_width, base_height = _FULLSCREEN_BASE_WINDOW_SIZE
     size_scale = min(width / base_width, height / base_height)
     return max(1.0, min(_FULLSCREEN_LAYOUT_SCALE_MAX, size_scale))
+
+
+def _minimum_control_row_height(
+    key_size: float,
+    desc_size: float,
+    key_pad_y: float,
+    keycap_row_gap: float,
+) -> float:
+    """Return a row height that keeps stacked keycap borders separated."""
+    return max(
+        bitmap_font.text_height_px(key_size) + key_pad_y * 2.0 + keycap_row_gap,
+        bitmap_font.text_height_px(desc_size) + 8.0,
+    )
+
+
+def _balanced_control_columns(control_sections):
+    """Pair related control sections into the approved two-column layout."""
+    return [
+        [control_sections[0], control_sections[2]],
+        [control_sections[1], control_sections[3]],
+    ]
+
+
+def _paired_section_offsets(
+    columns,
+    heading_size: float,
+    row_height: float,
+    heading_gap: float,
+    section_gap: float,
+) -> tuple[list[float], float]:
+    """Return shared vertical starts and total height for paired sections."""
+    heading_height = bitmap_font.text_height_px(heading_size)
+    slot_count = max((len(column) for column in columns), default=0)
+    slot_heights = []
+    for slot_index in range(slot_count):
+        slot_heights.append(
+            max(
+                (
+                    heading_height
+                    + heading_gap
+                    + len(column[slot_index][1]) * row_height
+                    for column in columns
+                    if slot_index < len(column)
+                ),
+                default=0.0,
+            )
+        )
+
+    offsets = []
+    cursor_y = 0.0
+    for slot_index, slot_height in enumerate(slot_heights):
+        offsets.append(cursor_y)
+        cursor_y += slot_height
+        if slot_index < len(slot_heights) - 1:
+            cursor_y += section_gap
+    return offsets, cursor_y
 
 
 def _get_platform_control_sections(
@@ -121,19 +181,18 @@ def _get_platform_control_sections(
             ("Option + left click + mouse", "Look around (alternative)")
         )
     else:  # left
-        visual_look_rows.append(("Left click + mouse", "Look around"))
+        visual_look_rows.append(("Left-drag", "Look around"))
 
     movement = catalog_rows("movement")
     movement.append(("Scroll", "Adjust fly speed"))
     look = [*visual_look_rows, *catalog_rows("view")]
-    navigate = catalog_rows("bookmarks", "map", "recorded-dive")
+    navigate = catalog_rows("bookmarks")
     navigate.extend(
         [
             ("Minimap click", "Jump to that spot"),
-            ("Open button", "Switch to a different map"),
         ]
     )
-    capture = catalog_rows("capture", "map-import")
+    capture = catalog_rows("capture", "map-import", "recorded-dive")
     return [
         ("Move", movement),
         ("Look", look),
@@ -512,7 +571,7 @@ class ControlsOverlay:
         layout_scale = _fullscreen_layout_scale(window_size)
 
         # Dim the 3D view heavily while the controls reference is shown.
-        add_quad_px(0, 0, w, h, (0.001, 0.002, 0.005, 0.96))
+        add_quad_px(0, 0, w, h, (0.001, 0.002, 0.005, 1.0))
 
         # Manual help has a title; startup help is intentionally lighter:
         # the map is already visually loading, so the only text needed
@@ -555,9 +614,9 @@ class ControlsOverlay:
             fill_x1 = bar_x0 + self._progress_fraction * bar_w
             if fill_x1 > bar_x0:
                 add_quad_px(bar_x0, bar_y0, fill_x1, bar_y1, _SPLASH_PROGRESS_FILL_RGBA)
-            table_start_offset = 126.0 * layout_scale
+            table_start_offset = 82.0 * layout_scale
         else:
-            table_start_offset = 126.0 * layout_scale
+            table_start_offset = 96.0 * layout_scale
 
         table_top_y = bar_bottom_y + table_start_offset
         self._draw_grouped_controls(
@@ -612,14 +671,15 @@ class ControlsOverlay:
     ):
         w, h = window_size
 
-        heading_size = 1.68 * layout_scale
-        key_size = 1.76 * layout_scale
-        desc_size = 1.80 * layout_scale
-        row_height = 31.0 * layout_scale
-        heading_gap = 13.0 * layout_scale
-        section_gap = 58.0 * layout_scale
+        heading_size = 1.82 * layout_scale
+        key_size = 1.96 * layout_scale
+        desc_size = 1.98 * layout_scale
+        row_height = 35.0 * layout_scale
+        heading_gap = 15.0 * layout_scale
+        section_gap = 52.0 * layout_scale
         key_pad_x = 8.0 * layout_scale
         key_pad_y = 4.0 * layout_scale
+        keycap_row_gap = _CONTROL_KEYCAP_ROW_GAP * layout_scale
         key_desc_gap = 20.0 * layout_scale
 
         if self._manual_mode and getattr(
@@ -640,18 +700,18 @@ class ControlsOverlay:
         def ensure_text_fits_row(candidate_height):
             return max(
                 candidate_height,
-                bitmap_font.text_height_px(key_size) + key_pad_y * 2.0,
-                bitmap_font.text_height_px(desc_size) + 8.0,
+                _minimum_control_row_height(
+                    key_size,
+                    desc_size,
+                    key_pad_y,
+                    keycap_row_gap,
+                ),
             )
 
         row_height = ensure_text_fits_row(row_height)
 
-        columns = [
-            [self._control_sections[0]],
-            [self._control_sections[1], self._control_sections[3]],
-            [self._control_sections[2]],
-        ]
-        column_gap = max(34.0, min(72.0, w * 0.035))
+        columns = _balanced_control_columns(self._control_sections)
+        column_gap = max(72.0, min(140.0, w * 0.07))
 
         def measure_columns():
             return [
@@ -663,7 +723,13 @@ class ControlsOverlay:
             ]
 
         metrics = measure_columns()
-        max_height = max((metric["height"] for metric in metrics), default=0.0)
+        section_offsets, max_height = _paired_section_offsets(
+            columns,
+            heading_size,
+            row_height,
+            heading_gap,
+            section_gap,
+        )
         total_width = sum(metric["width"] for metric in metrics) + column_gap * max(0, len(columns) - 1)
         available_width = max(240.0, w - 80.0)
         if max_height > available_height or total_width > available_width:
@@ -678,10 +744,18 @@ class ControlsOverlay:
             section_gap = max(18.0, section_gap * fit_ratio)
             key_pad_x = max(7.0, key_pad_x * fit_ratio)
             key_pad_y = max(3.0, key_pad_y * fit_ratio)
+            keycap_row_gap = max(2.0, keycap_row_gap * fit_ratio)
             key_desc_gap = max(12.0, key_desc_gap * fit_ratio)
             column_gap = max(28.0, column_gap * fit_ratio)
             row_height = ensure_text_fits_row(row_height)
             metrics = measure_columns()
+            section_offsets, _ = _paired_section_offsets(
+                columns,
+                heading_size,
+                row_height,
+                heading_gap,
+                section_gap,
+            )
 
         total_width = sum(metric["width"] for metric in metrics) + column_gap * max(0, len(columns) - 1)
 
@@ -701,6 +775,7 @@ class ControlsOverlay:
                 key_pad_x=key_pad_x,
                 key_pad_y=key_pad_y,
                 key_desc_gap=key_desc_gap,
+                section_top_ys=[top_y + offset for offset in section_offsets],
             )
             x += metric["width"] + column_gap
 
@@ -739,7 +814,7 @@ class ControlsOverlay:
     def _draw_control_column(
         self, add_quad_px, add_text, sections, x, top_y, key_col_width,
         heading_size, key_size, desc_size, row_height, heading_gap, section_gap,
-        key_pad_x, key_pad_y, key_desc_gap
+        key_pad_x, key_pad_y, key_desc_gap, section_top_ys=None,
     ):
         y = top_y
         heading_height = bitmap_font.text_height_px(heading_size)
@@ -748,70 +823,222 @@ class ControlsOverlay:
 
         desc_x = x + key_col_width + key_desc_gap
 
-        for heading, rows in sections:
-            heading_text = heading.upper()
-            heading_w = bitmap_font.text_width_px(heading_text, heading_size)
-            section_desc_width = max(
-                (bitmap_font.text_width_px(desc, desc_size) for _, desc in rows),
-                default=0.0,
-            )
-            section_content_width = max(
-                heading_w,
-                key_col_width + key_desc_gap + section_desc_width,
-            )
-            heading_x = x + (section_content_width - heading_w) / 2.0
-            add_text(heading_text, heading_x, y, heading_size, _SPLASH_TITLE_RGBA)
+        # Headings, right-aligned shortcut lanes, and descriptions each share
+        # a stable guide within the column. Paired section starts keep Navigate
+        # and Capture on the same horizontal row.
+        for section_index, (heading, rows) in enumerate(sections):
+            if section_top_ys is not None:
+                y = section_top_ys[section_index]
+            add_text(heading.upper(), x, y, heading_size, _SPLASH_TITLE_RGBA)
             y += heading_height + heading_gap
+            compound_grid = self._compound_keycap_grid(
+                rows,
+                key_size,
+                key_pad_x,
+                desc_x,
+                key_desc_gap,
+            )
 
             for key, desc in rows:
                 key_h = key_text_height + key_pad_y * 2.0
-                key_sequence_width = self._measure_keycap_sequence(key, key_size, key_pad_x)
-                key_x = desc_x - key_desc_gap - key_sequence_width
                 key_y = y + (row_height - key_h) / 2.0
-                self._draw_keycap_sequence(
-                    add_quad_px, add_text, key, key_x, key_y,
-                    key_size, key_pad_x, key_pad_y,
-                )
+                compound_parts = self._compound_keycap_parts(key)
+                if compound_grid is not None and compound_parts is not None:
+                    self._draw_compound_keycap_sequence(
+                        add_quad_px,
+                        add_text,
+                        compound_parts,
+                        compound_grid,
+                        key_y,
+                        key_size,
+                        key_pad_x,
+                        key_pad_y,
+                    )
+                else:
+                    key_sequence_width = self._measure_keycap_sequence(
+                        key,
+                        key_size,
+                        key_pad_x,
+                    )
+                    key_x = desc_x - key_desc_gap - key_sequence_width
+                    self._draw_keycap_sequence(
+                        add_quad_px, add_text, key, key_x, key_y,
+                        key_size, key_pad_x, key_pad_y,
+                    )
 
                 desc_y = y + (row_height - desc_text_height) / 2.0
                 add_text(desc, desc_x, desc_y, desc_size, _SPLASH_SUBTITLE_RGBA)
                 y += row_height
-
-            y += section_gap
+            if section_top_ys is None:
+                y += section_gap
 
     def _keycap_parts(self, label: str) -> list[str]:
         return list(shortcut_keycap_parts(label))
 
+    def _compound_keycap_parts(self, label: str) -> tuple[str, str] | None:
+        """Return the two keycaps of a simple ``first + final`` shortcut."""
+        parts = self._keycap_parts(label)
+        if len(parts) == 3 and parts[1] == "+":
+            return parts[0], parts[2]
+        return None
+
+    def _compound_keycap_grid(
+        self,
+        rows,
+        key_size: float,
+        key_pad_x: float,
+        desc_x: float,
+        key_desc_gap: float,
+    ) -> tuple[float, float, float] | None:
+        """Return shared first, separator, and final columns for one section."""
+        compound_rows = [
+            parts
+            for key, _description in rows
+            if (parts := self._compound_keycap_parts(key)) is not None
+        ]
+        if not compound_rows:
+            return None
+        final_column_width = max(
+            self._keycap_width(final, key_size, key_pad_x)
+            for _first, final in compound_rows
+        )
+        final_right = desc_x - key_desc_gap
+        final_left = final_right - final_column_width
+        separator_left = (
+            final_left
+            - _KEYCAP_SEQUENCE_GAP
+            - self._keycap_separator_width(key_size, key_pad_x)
+        )
+        first_right = separator_left - _KEYCAP_SEQUENCE_GAP
+        return first_right, separator_left, final_right
+
     def _measure_keycap_sequence(self, label, key_size, key_pad_x):
         total_w = 0.0
-        gap = 5.0
-        plus_gap = 4.0
         for part in self._keycap_parts(label):
             if part == "+":
-                total_w += bitmap_font.text_width_px(part, key_size) + plus_gap * 2.0
+                total_w += self._keycap_separator_width(key_size, key_pad_x)
             else:
-                total_w += bitmap_font.text_width_px(part, key_size) + key_pad_x * 2.0
-            total_w += gap
-        return max(0.0, total_w - gap)
+                total_w += self._keycap_width(part, key_size, key_pad_x)
+            total_w += _KEYCAP_SEQUENCE_GAP
+        return max(0.0, total_w - _KEYCAP_SEQUENCE_GAP)
+
+    def _keycap_separator_width(self, key_size: float, key_pad_x: float) -> float:
+        """Reserve a borderless 1u lane for a compound shortcut separator."""
+        return self._keycap_width("W", key_size, key_pad_x)
+
+    def _keycap_width(self, part: str, key_size: float, key_pad_x: float) -> float:
+        """Return a semantic keycap width while preserving descriptive controls."""
+        content_width = bitmap_font.text_width_px(part, key_size) + key_pad_x * 2.0
+        if len(part) == 1:
+            # Use W as the shared single-key reference because it is the
+            # widest standard Latin key glyph in the overlay's bitmap font.
+            return bitmap_font.text_width_px("W", key_size) + key_pad_x * 2.0
+        if part in _MEDIUM_NAMED_KEYCAPS:
+            # Compact named controls form one visual family, so minor glyph
+            # differences (such as Shift versus Scroll) do not create noise.
+            return max(
+                bitmap_font.text_width_px(reference, key_size)
+                for reference in _MEDIUM_NAMED_KEYCAPS
+            ) + key_pad_x * 2.0
+        if part in _WIDE_NAMED_KEYCAPS:
+            # These standalone actions need a wider shared cap. The draw path
+            # below centers every label, including shorter Space, within it.
+            return max(
+                bitmap_font.text_width_px(reference, key_size)
+                for reference in _WIDE_NAMED_KEYCAPS
+            ) + key_pad_x * 2.0
+        if part == "Left-drag":
+            # Match the complete four-arrow row immediately below this
+            # gesture while preserving their shared trailing edge.
+            unit_width = self._keycap_width("W", key_size, key_pad_x)
+            return unit_width * 4.0 + _KEYCAP_SEQUENCE_GAP * 3.0
+        if part == "Minimap click":
+            # Align the standalone minimap control with the compound bookmark
+            # delete shortcut immediately above it in the Navigate section.
+            return (
+                self._keycap_width("Del", key_size, key_pad_x)
+                + _KEYCAP_SEQUENCE_GAP
+                + self._keycap_separator_width(key_size, key_pad_x)
+                + _KEYCAP_SEQUENCE_GAP
+                + self._keycap_width("1–9", key_size, key_pad_x)
+            )
+        return content_width
 
     def _draw_keycap_sequence(
         self, add_quad_px, add_text, label, x, y, key_size, key_pad_x, key_pad_y
     ):
         cursor_x = x
-        gap = 5.0
-        plus_gap = 4.0
         key_h = bitmap_font.text_height_px(key_size) + key_pad_y * 2.0
         for part in self._keycap_parts(label):
             part_w = bitmap_font.text_width_px(part, key_size)
             if part == "+":
-                add_text(part, cursor_x + plus_gap, y + key_pad_y, key_size, _SPLASH_INSTRUCTION_RGBA)
-                cursor_x += part_w + plus_gap * 2.0 + gap
+                separator_w = self._keycap_separator_width(key_size, key_pad_x)
+                add_text(
+                    part,
+                    cursor_x + (separator_w - part_w) / 2.0,
+                    y + key_pad_y,
+                    key_size,
+                    _SPLASH_INSTRUCTION_RGBA,
+                )
+                cursor_x += separator_w + _KEYCAP_SEQUENCE_GAP
                 continue
 
-            key_w = part_w + key_pad_x * 2.0
+            key_w = self._keycap_width(part, key_size, key_pad_x)
             self._draw_keycap(add_quad_px, cursor_x, y, cursor_x + key_w, y + key_h)
-            add_text(part, cursor_x + key_pad_x, y + key_pad_y, key_size, _SPLASH_TITLE_RGBA)
-            cursor_x += key_w + gap
+            add_text(
+                part,
+                cursor_x + (key_w - part_w) / 2.0,
+                y + key_pad_y,
+                key_size,
+                _SPLASH_TITLE_RGBA,
+            )
+            cursor_x += key_w + _KEYCAP_SEQUENCE_GAP
+
+    def _draw_compound_keycap_sequence(
+        self,
+        add_quad_px,
+        add_text,
+        parts: tuple[str, str],
+        grid: tuple[float, float, float],
+        y: float,
+        key_size: float,
+        key_pad_x: float,
+        key_pad_y: float,
+    ) -> None:
+        """Draw one compound shortcut in its section's shared keycap columns."""
+        first, final = parts
+        first_right, separator_left, final_right = grid
+        key_h = bitmap_font.text_height_px(key_size) + key_pad_y * 2.0
+        first_w = self._keycap_width(first, key_size, key_pad_x)
+        final_w = self._keycap_width(final, key_size, key_pad_x)
+        first_x = first_right - first_w
+        final_x = final_right - final_w
+        separator_w = self._keycap_separator_width(key_size, key_pad_x)
+
+        self._draw_keycap(add_quad_px, first_x, y, first_right, y + key_h)
+        add_text(
+            first,
+            first_x + (first_w - bitmap_font.text_width_px(first, key_size)) / 2.0,
+            y + key_pad_y,
+            key_size,
+            _SPLASH_TITLE_RGBA,
+        )
+        add_text(
+            "+",
+            separator_left
+            + (separator_w - bitmap_font.text_width_px("+", key_size)) / 2.0,
+            y + key_pad_y,
+            key_size,
+            _SPLASH_INSTRUCTION_RGBA,
+        )
+        self._draw_keycap(add_quad_px, final_x, y, final_right, y + key_h)
+        add_text(
+            final,
+            final_x + (final_w - bitmap_font.text_width_px(final, key_size)) / 2.0,
+            y + key_pad_y,
+            key_size,
+            _SPLASH_TITLE_RGBA,
+        )
 
     def _draw_keycap(self, add_quad_px, x0, y0, x1, y1):
         fill = (0.020, 0.030, 0.045, 0.78)

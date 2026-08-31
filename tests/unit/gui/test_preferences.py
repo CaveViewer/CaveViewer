@@ -853,7 +853,7 @@ def test_preferences_panel_exposes_backup_and_restore_as_a_separate_tab():
     )
 
 
-def test_preferences_panel_exposes_persistent_unsaved_change_actions():
+def test_preferences_panel_uses_dirty_controls_without_generic_status_message():
     from caveviewer.gui import preferences_dialog
 
     build_source = inspect.getsource(preferences_dialog.PreferencesPanel._build)
@@ -869,7 +869,10 @@ def test_preferences_panel_exposes_persistent_unsaved_change_actions():
     assert "state.dirty_sections" in dirty_source
     assert "state.dirty_keys" in dirty_source
     assert 'suffix = " •"' in dirty_source
-    assert 'text="You have unsaved changes."' in feedback_source
+    assert "enabled=has_changes and state.apply_enabled" in dirty_source
+    assert "enabled=has_changes" in dirty_source
+    assert "You have unsaved changes." not in feedback_source
+    assert "_save_confirmation" not in build_source
 
 
 def test_preferences_panel_exports_validated_form_to_selected_file(
@@ -1821,7 +1824,7 @@ def test_preferences_panel_tracks_and_discards_unsaved_values(valid_preferences)
     panel.form = preferences_dialog.PreferencesFormController(snapshot)
     panel.rendering_state = False
     panel.rendered_invalid_key = None
-    panel._feedback_override = ("Preferences saved.", "#ffffff")
+    panel._feedback_override = ("Preferences exported.", "#ffffff")
     synchronized = []
     panel._sync_field_value = lambda key, value: synchronized.append((key, value))
     panel._render_form_state = lambda *_args, **_kwargs: None
@@ -1860,10 +1863,10 @@ def test_preferences_transient_feedback_times_out_and_replaces_prior_timer():
         panel._feedback_override
     )
 
-    panel._show_transient_feedback("Preferences saved.", "#0f0", duration_ms=4000)
+    panel._show_transient_feedback("Preferences exported.", "#0f0", duration_ms=4000)
 
     assert cancelled == ["old-timer"]
-    assert panel._feedback_override == ("Preferences saved.", "#0f0")
+    assert panel._feedback_override == ("Preferences exported.", "#0f0")
     assert synchronized[-1] == panel._feedback_override
     callbacks[4000]()
     assert panel._feedback_override is None
@@ -1878,7 +1881,7 @@ def test_preferences_hidden_clears_only_transient_feedback():
     )
     panel.dialog = SimpleNamespace(after_cancel=lambda _after_id: None)
     panel._feedback_after_id = "timer"
-    panel._feedback_override = ("Preferences saved.", "#0f0")
+    panel._feedback_override = ("Preferences exported.", "#0f0")
     panel._feedback_override_is_transient = True
     panel._destroyed = False
     panel._sync_feedback_to_current_state = lambda: None
@@ -1931,13 +1934,15 @@ def test_preferences_panel_reports_atomic_save_failure(
     snapshot = settings.require_validated_preferences(valid_preferences)
     original_preferences = settings.load_preferences()
     feedback = []
+    rendered = []
+    dirty_state = SimpleNamespace(has_unsaved_changes=True)
     panel = preferences_dialog.PreferencesPanel.__new__(
         preferences_dialog.PreferencesPanel
     )
     panel.form = SimpleNamespace(
-        attempt_apply=lambda: (SimpleNamespace(), snapshot)
+        attempt_apply=lambda: (dirty_state, snapshot)
     )
-    panel._render_form_state = lambda *_args, **_kwargs: None
+    panel._render_form_state = lambda state, **_kwargs: rendered.append(state)
     panel.numeric_entry_states = {}
     panel._set_feedback = lambda message, kind: feedback.append((message, kind))
     panel.preferences = original_preferences
@@ -1951,6 +1956,7 @@ def test_preferences_panel_reports_atomic_save_failure(
 
     assert feedback == [("Could not save settings.", MessageKind.ERROR)]
     assert panel.preferences is original_preferences
+    assert rendered == [dirty_state]
 
 
 def test_preferences_panel_calls_apply_callback_after_success(valid_preferences):
@@ -1961,12 +1967,13 @@ def test_preferences_panel_calls_apply_callback_after_success(valid_preferences)
     applied = []
     marked_saved = []
     rendered = []
+    dirty_state = SimpleNamespace(has_unsaved_changes=True)
     clean_state = SimpleNamespace(has_unsaved_changes=False)
     panel = preferences_dialog.PreferencesPanel.__new__(
         preferences_dialog.PreferencesPanel
     )
     panel.form = SimpleNamespace(
-        attempt_apply=lambda: (SimpleNamespace(), snapshot),
+        attempt_apply=lambda: (dirty_state, snapshot),
         mark_saved=lambda preferences: marked_saved.append(preferences)
         or clean_state,
     )
@@ -1984,5 +1991,9 @@ def test_preferences_panel_calls_apply_callback_after_success(valid_preferences)
 
     assert applied == [snapshot]
     assert marked_saved == [snapshot]
+    assert rendered == [dirty_state, clean_state]
     assert rendered[-1] is clean_state
     assert panel.preferences is snapshot
+    apply_source = inspect.getsource(preferences_dialog.PreferencesPanel.apply)
+    assert "_show_save_confirmation" not in apply_source
+    assert "Preferences saved" not in apply_source

@@ -129,19 +129,19 @@ def test_copy_feedback_uses_a_transient_geometric_confirmation_mark():
     assert '"Details copied."' not in source
     assert '"Couldn’t copy details."' in source
     assert "set_dialog_action_button" not in source
-    assert "dialog.after(" in source
-    assert "3000" in source
-    assert "dialog.after_cancel(" in source
-    assert "copy_confirmation.pack_forget()" in source
+    assert "TransientActionConfirmation(" in source
+    assert "copy_confirmation_controller.show()" in source
+    assert 'accessible_name="Details copied"' in source
+    assert "mark.pack_forget()" in source
     copy_action_pack = source.index(
         'cancel_button.pack(side="right", padx=(0, px(8)))'
     )
     feedback_pack = source.index(
-        'copy_feedback.pack(side="right", padx=(0, px(COPY_CONFIRMATION_GAP)))'
+        'copy_feedback.pack(side="right", padx=(0, px(ACTION_CONFIRMATION_GAP)))'
     )
     assert copy_action_pack < feedback_pack
     assert "create_line(" in mark_source
-    assert 'mark._cv_accessible_name = "Copied"' in mark_source
+    assert 'setattr(mark, "_cv_accessible_name", accessible_name)' in mark_source
     assert "tk.Label" not in mark_source
 
 

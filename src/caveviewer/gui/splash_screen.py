@@ -156,6 +156,11 @@ _SPLASH_LAYOUT_POLICY = _PRESENTATION_PROFILE.splash_layout
 _APP_ICON_PATH: str | None = None
 
 
+def _returning_library_needs_topmost(profile: PresentationProfile) -> bool:
+    """Keep macOS focus recovery without rebuilding Windows' native frame."""
+    return profile.platform_name == "darwin"
+
+
 def _last_browse_path_file() -> str:
     """Resolve state lazily so environment overrides apply to this process."""
     return migrate_state_file("last_browse_path", ".caveviewer_last_browse_path")
@@ -2493,10 +2498,13 @@ def show_splash_screen(
         root.deiconify()
         root.lift()
         root.focus_force()
-        if not show_launch_overlay:
-            # Briefly force topmost so the returning library appears above the
-            # GLFW viewer that just closed. On macOS focus does not transfer
-            # automatically.
+        if (
+            not show_launch_overlay
+            and _returning_library_needs_topmost(presentation_profile)
+        ):
+            # macOS does not reliably transfer focus from the just-closed
+            # native viewer. On Windows, toggling this native frame state
+            # creates a visible flash, so its regular activation path is used.
             root.attributes("-topmost", True)
             splash_controller.schedule(
                 200, lambda: root.attributes("-topmost", False)
