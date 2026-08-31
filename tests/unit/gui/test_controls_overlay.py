@@ -23,6 +23,23 @@ def test_fullscreen_layout_scale_is_capped_for_very_large_viewer_surfaces():
     )
 
 
+def test_minimum_control_row_height_reserves_space_between_keycaps(monkeypatch):
+    monkeypatch.setattr(
+        controls_overlay.bitmap_font,
+        "text_height_px",
+        lambda _size: 20.0,
+    )
+
+    row_height = controls_overlay._minimum_control_row_height(
+        key_size=1.0,
+        desc_size=1.0,
+        key_pad_y=4.0,
+        keycap_row_gap=4.0,
+    )
+
+    assert row_height == 32.0
+
+
 def test_fullscreen_begin_prompt_respects_budget_limited_wanted_count():
     overlay = controls_overlay.ControlsOverlay.__new__(controls_overlay.ControlsOverlay)
     overlay._active = True

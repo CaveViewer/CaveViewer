@@ -70,6 +70,7 @@ _SPLASH_PROGRESS_FILL_RGBA = (0.8980, 0.6314, 0.1216, 1.0)    # #e5a11f
 _FULLSCREEN_BASE_WINDOW_SIZE = (1536, 864)
 _FULLSCREEN_LAYOUT_SCALE_MAX = 1.32
 _FULLSCREEN_SUBTITLE_TEXT_SIZE = 2.55
+_CONTROL_KEYCAP_ROW_GAP = 4.0
 
 
 def _fullscreen_layout_scale(window_size: tuple[int, int]) -> float:
@@ -90,6 +91,19 @@ def _fullscreen_layout_scale(window_size: tuple[int, int]) -> float:
     base_width, base_height = _FULLSCREEN_BASE_WINDOW_SIZE
     size_scale = min(width / base_width, height / base_height)
     return max(1.0, min(_FULLSCREEN_LAYOUT_SCALE_MAX, size_scale))
+
+
+def _minimum_control_row_height(
+    key_size: float,
+    desc_size: float,
+    key_pad_y: float,
+    keycap_row_gap: float,
+) -> float:
+    """Return a row height that keeps stacked keycap borders separated."""
+    return max(
+        bitmap_font.text_height_px(key_size) + key_pad_y * 2.0 + keycap_row_gap,
+        bitmap_font.text_height_px(desc_size) + 8.0,
+    )
 
 
 def _get_platform_control_sections(
@@ -620,6 +634,7 @@ class ControlsOverlay:
         section_gap = 58.0 * layout_scale
         key_pad_x = 8.0 * layout_scale
         key_pad_y = 4.0 * layout_scale
+        keycap_row_gap = _CONTROL_KEYCAP_ROW_GAP * layout_scale
         key_desc_gap = 20.0 * layout_scale
 
         if self._manual_mode and getattr(
@@ -640,8 +655,12 @@ class ControlsOverlay:
         def ensure_text_fits_row(candidate_height):
             return max(
                 candidate_height,
-                bitmap_font.text_height_px(key_size) + key_pad_y * 2.0,
-                bitmap_font.text_height_px(desc_size) + 8.0,
+                _minimum_control_row_height(
+                    key_size,
+                    desc_size,
+                    key_pad_y,
+                    keycap_row_gap,
+                ),
             )
 
         row_height = ensure_text_fits_row(row_height)
@@ -678,6 +697,7 @@ class ControlsOverlay:
             section_gap = max(18.0, section_gap * fit_ratio)
             key_pad_x = max(7.0, key_pad_x * fit_ratio)
             key_pad_y = max(3.0, key_pad_y * fit_ratio)
+            keycap_row_gap = max(2.0, keycap_row_gap * fit_ratio)
             key_desc_gap = max(12.0, key_desc_gap * fit_ratio)
             column_gap = max(28.0, column_gap * fit_ratio)
             row_height = ensure_text_fits_row(row_height)
