@@ -148,8 +148,10 @@ primitives remain documented in [design-system.md](design-system.md).
   standard app-owned two-action modal. Use generic user-facing copy for an
   edge-case failure, **Copy details** for the underlying diagnostic bundle,
   and **Dismiss** to close; copying must not dismiss the modal.
-- Keep action labels stable after activation. Present clipboard success or
-  failure as adjacent status text rather than renaming the action control.
+- Keep action labels stable after activation. Confirm a successful clipboard
+  action with an adjacent geometric check mark that disappears after three
+  seconds; keep failures visible as explicit adjacent text rather than
+  renaming the action control.
 - Do not communicate severity through color alone. Error dialogs pair their
   heading and error color with a recognizable semantic icon whose shape remains
   meaningful without color perception.

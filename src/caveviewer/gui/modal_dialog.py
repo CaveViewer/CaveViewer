@@ -186,6 +186,39 @@ def create_semantic_heading(
     return heading_row
 
 
+def create_confirmation_mark(
+    parent,
+    *,
+    px,
+    background: str | None = None,
+):
+    """Draw a compact, font-independent check mark for transient feedback."""
+    size = px(18)
+    resolved_background = background or DARK_THEME.background
+    mark = tk.Canvas(
+        parent,
+        width=size,
+        height=size,
+        bg=resolved_background,
+        highlightthickness=0,
+        takefocus=False,
+    )
+    mark.create_line(
+        px(3),
+        px(9),
+        px(7),
+        px(13),
+        px(15),
+        px(4),
+        fill=DARK_THEME.title,
+        width=px(2),
+        capstyle="round",
+        joinstyle="round",
+    )
+    mark._cv_accessible_name = "Copied"
+    return mark
+
+
 def _show_modal(
     parent,
     *,
@@ -240,20 +273,41 @@ def _show_modal(
     button_row = tk.Frame(content, bg=DARK_THEME.background)
     button_row.pack(side="bottom", fill="x")
     copy_status = None
+    copy_confirmation = None
+    copy_confirmation_after_id = None
     if copy_details is not None:
+        copy_feedback = tk.Frame(button_row, bg=DARK_THEME.background)
+        copy_feedback.pack(side="left")
+        copy_confirmation = create_confirmation_mark(copy_feedback, px=px)
         copy_status = tk.Label(
-            button_row,
+            copy_feedback,
             text="",
             font=typography.supporting,
             fg=DARK_THEME.body_text,
             bg=DARK_THEME.background,
             anchor="w",
         )
-        copy_status.pack(side="left")
+
+    def hide_copy_confirmation() -> None:
+        nonlocal copy_confirmation_after_id
+        copy_confirmation_after_id = None
+        if copy_confirmation is not None:
+            copy_confirmation.pack_forget()
+
+    def cancel_copy_confirmation() -> None:
+        nonlocal copy_confirmation_after_id
+        if copy_confirmation_after_id is None:
+            return
+        try:
+            dialog.after_cancel(copy_confirmation_after_id)
+        except tk.TclError:
+            pass
+        copy_confirmation_after_id = None
 
     def close(*, accepted: bool = False) -> None:
         nonlocal result
         result = accepted
+        cancel_copy_confirmation()
         try:
             dialog.grab_release()
         except tk.TclError:
@@ -273,23 +327,29 @@ def _show_modal(
     confirm_button.pack(side="right")
     if cancel_text is not None:
         def run_secondary_action() -> None:
+            nonlocal copy_confirmation_after_id
             if copy_details is None:
                 close()
                 return
             copied = _replace_clipboard(dialog, copy_details)
-            if copy_status is not None:
+            cancel_copy_confirmation()
+            if copied:
+                if copy_status is not None:
+                    copy_status.pack_forget()
+                if copy_confirmation is not None:
+                    copy_confirmation.pack(side="left")
+                    copy_confirmation_after_id = dialog.after(
+                        3000,
+                        hide_copy_confirmation,
+                    )
+            elif copy_status is not None:
+                if copy_confirmation is not None:
+                    copy_confirmation.pack_forget()
                 copy_status.config(
-                    text=(
-                        "Details copied."
-                        if copied
-                        else "Couldn’t copy details."
-                    ),
-                    fg=(
-                        DARK_THEME.body_text
-                        if copied
-                        else DARK_THEME.error_text
-                    ),
+                    text="Couldn’t copy details.",
+                    fg=DARK_THEME.error_text,
                 )
+                copy_status.pack(side="left")
             if not copied:
                 try:
                     dialog.bell()

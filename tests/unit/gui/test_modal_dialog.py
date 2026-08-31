@@ -121,14 +121,21 @@ def test_replace_clipboard_reports_success_and_failure():
     assert modal_dialog._replace_clipboard(Clipboard(fail=True), "details") is False
 
 
-def test_copy_feedback_keeps_action_label_stable_and_uses_separate_status():
+def test_copy_feedback_uses_a_transient_geometric_confirmation_mark():
     source = inspect.getsource(modal_dialog._show_modal)
+    mark_source = inspect.getsource(modal_dialog.create_confirmation_mark)
 
     assert 'cancel_text="Copy details"' not in source
-    assert '"Details copied."' in source
+    assert '"Details copied."' not in source
     assert '"Couldn’t copy details."' in source
     assert "set_dialog_action_button" not in source
-    assert "copy_status.config(" in source
+    assert "dialog.after(" in source
+    assert "3000" in source
+    assert "dialog.after_cancel(" in source
+    assert "copy_confirmation.pack_forget()" in source
+    assert "create_line(" in mark_source
+    assert 'mark._cv_accessible_name = "Copied"' in mark_source
+    assert "tk.Label" not in mark_source
 
 
 def test_semantic_icons_are_geometric_and_have_accessible_names():
