@@ -34,7 +34,9 @@ tracked copy is authoritative.
 
 Rows must be ordered by implementation sequence. Use one row per independently
 verifiable task. `<br><br>` separates independently verifiable details with a
-blank rendered line inside a table cell.
+blank rendered line inside a table cell. Keep the style block below in every
+work document so all master-table headers and contents remain vertically
+aligned to the top.
 
 In **Desired solution**, number every independently verifiable outcome and
 separate outcomes with a blank rendered line using `<br><br>`. In **Task
@@ -48,7 +50,7 @@ For example:
 <style>
 table th,
 table td {
-  vertical-align: top;
+  vertical-align: top !important;
 }
 </style>
 
