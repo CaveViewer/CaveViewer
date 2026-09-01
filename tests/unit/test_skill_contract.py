@@ -12,6 +12,7 @@ EXPECTED_SKILLS = {
     "caveviewer-import-lifecycle",
     "caveviewer-performance",
     "caveviewer-release",
+    "caveviewer-screenshot-polish",
     "caveviewer-work-cycle",
 }
 SKILL_NAME_PATTERN = re.compile(r"caveviewer-[a-z0-9]+(?:-[a-z0-9]+)*\Z")
