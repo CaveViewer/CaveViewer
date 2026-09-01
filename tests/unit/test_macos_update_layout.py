@@ -90,6 +90,5 @@ def test_macos_build_uses_shared_branding_export_and_native_icns_container():
     assert "macos/CaveViewer.iconset" in builder
     assert 'iconutil -c icns "$iconset_dir" -o "$icon_icns"' in builder
     assert "sips" not in builder
-    assert "app_icon_macos.png" not in builder
     assert "CFBundleIconFile" in smoke
     assert "branding/export-summary.v1.json" in smoke

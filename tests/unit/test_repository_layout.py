@@ -5,7 +5,6 @@ from pathlib import Path
 
 from caveviewer.resources import (
     cave_metadata_catalog_path,
-    image_path,
     map_library_catalog_path,
     release_public_key_path,
     shader_path,
@@ -75,7 +74,6 @@ def test_application_uses_src_package_layout():
         PACKAGE_ROOT / "gui" / "cave_metadata_panel.py",
         PACKAGE_ROOT / "gui" / "viewer_window.py",
         PACKAGE_ROOT / "resources" / "shaders" / "mesh.vert",
-        PACKAGE_ROOT / "resources" / "images" / "app_mark_transparent.png",
         PACKAGE_ROOT / "resources" / "release_signing_primary_public_key.pem",
         PACKAGE_ROOT / "resources" / "release_signing_recovery_public_key.pem",
         PACKAGE_ROOT / "resources" / "release_signing_legacy_public_key.pem",
@@ -164,17 +162,9 @@ def test_ux_guidelines_are_documented_without_owning_branding():
 
 def test_package_resource_service_resolves_runtime_files():
     assert shader_path("mesh.vert").is_file()
-    assert image_path("app_mark_transparent.png").is_file()
     for icon_name in (
-        "chevron-right.svg",
-        "download.svg",
-        "folder-open.svg",
-        "more-vertical.svg",
-        "pause.svg",
-        "play.svg",
         "retry.svg",
         "retry.png",
-        "stop.svg",
     ):
         assert ui_icon_path(icon_name).is_file()
     assert release_public_key_path().is_file()

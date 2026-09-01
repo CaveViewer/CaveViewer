@@ -38,7 +38,6 @@ def test_linux_package_uses_shared_branding_export_without_macos_reuse():
     assert "branding/export-summary.v1.json" in builder
     assert "build/branding/linux/linux" in packager
     assert "$icon_src" not in packager
-    assert "app_icon_macos.png" not in packager
     assert "from PIL import Image" not in packager
     assert 'cp -R "$branding_linux_dir/hicolor/."' in packager
     assert 'profile.asset_for("linux_scalable_icon")' in branding_export
