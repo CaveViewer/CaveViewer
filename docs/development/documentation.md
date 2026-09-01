@@ -6,9 +6,14 @@ agents can find the applicable rules without reading duplicate policy blocks.
 ## File roles
 
 - `AGENTS.md` files contain short, enforceable instructions for the files under
-  their directory.
+  their directory. The root file is the general entry point;
+  `docs/development/AGENTS.md` is the development-policy router and canonical
+  development-document index.
 - `docs/development/*.md` files are the canonical human-readable development
   references for their subjects.
+- `.agents/skills/*/SKILL.md` files route recurring agent tasks into the
+  applicable canonical references and project tooling. They supplement scoped
+  instructions without becoming a second policy source.
 - `README.md` files are directory entry points and navigation aids.
 - Tool-specific adapters, such as `.github/copilot-instructions.md`, should
   stay short and point to the canonical files.
@@ -17,6 +22,9 @@ agents can find the applicable rules without reading duplicate policy blocks.
 
 - Put universal rules in the repository root `AGENTS.md`.
 - Put specialized rules in the nearest applicable `AGENTS.md`.
+- Put reusable task routing and workflow-specific decision guidance in a
+  focused repository skill, and link back to the canonical development
+  document rather than copying it.
 - Do not duplicate inherited policies. Link to the parent or canonical
   development document instead.
 - Require explicit declarations for overrides.

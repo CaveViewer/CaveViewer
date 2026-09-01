@@ -1,73 +1,161 @@
 # Contributing to CaveViewer
 
-Thank you for improving CaveViewer. Changes should remain usable on Windows,
-macOS, and Linux and should preserve the ability to work with maps much larger
-than system memory.
+Thank you for improving CaveViewer. Contributions should remain usable on
+Windows, macOS, and Linux and preserve the ability to work with maps much
+larger than system memory.
 
-## Start here
+This guide is the human-facing contribution path. Detailed development policy
+and technical references are indexed in
+[Development instructions and documentation](docs/development/AGENTS.md).
 
-1. Follow the setup instructions in
-   [source-setup.md](docs/development/source-setup.md).
-2. Read the [architecture](docs/development/architecture.md) and
-   [repository-layout](docs/development/repository-layout.md) documents before
-   moving modules or changing component boundaries.
-3. Follow the [coding standards](docs/development/coding-standards.md) and
-   [testing guide](docs/development/testing.md).
-4. AI coding agents must also follow the nearest `AGENTS.md` file.
+## Prepare the repository
 
-## Change workflow
+Follow the [source setup guide](docs/development/source-setup.md) before making
+your first change. Start each independent branch from a clean, current `main`:
 
-- Start from a clean understanding of `git status`; do not fold unrelated local
-  edits into your change.
-- Keep behavior changes separate from directory moves and mechanical renames.
-- Add a focused regression test for fixes and tests for expected failure
-  cleanup.
-- Run focused tests while iterating, then run the complete suite:
+```bash
+git status
+git fetch origin
+git switch main
+git pull --ff-only origin main
+git switch -c feature/descriptive-name
+```
 
-  ```bash
-  .venv/bin/python -m pytest -p no:cacheprovider -q
-  ```
+Use an appropriate prefix such as `feature/`, `fix/`, or `docs/`. If the
+worktree is not clean, identify and preserve those changes before switching
+branches. If `main` cannot fast-forward to `origin/main`, resolve the divergence
+deliberately; do not use a force update or an unrelated merge to continue.
 
-- Run `git diff --check` and review the complete diff before submitting.
-- Update documentation and screenshots when user-visible behavior changes.
+## Define the work
 
-## Pull requests and `main`
+Before implementation, copy
+[the work-definition template](docs/development/work-definition.md) to
+`.work/<work-name>.md`. Complete its A3-style master table with the observed
+problem, current implementation, desired solution, ordered tasks, branch, and
+status. Keep the rows ordered by implementation sequence.
 
-[`main` is protected by the `protect-main` GitHub ruleset](https://github.com/CaveViewer/CaveViewer/rules/19104787).
-Do not push directly to it: every change must be submitted through a pull
-request.
+Root `.work/` is ignored and is the default location for an active plan. Move
+or copy a plan to `docs/development/work/` only when it needs to be shared,
+reviewed in the pull request, or retained as a durable execution record. Once a
+tracked copy exists, it is authoritative and must travel with the change.
 
-Before a pull request can merge, its latest commit must pass all of the
-following GitHub Actions checks:
+Read the canonical documents relevant to the task before editing. In
+particular:
 
-- `Syntax, import, and whitespace sanity`
-- `Coverage and Linux metadata`
-- `CLI smoke (Windows)`
-- `CLI smoke (macOS)`
-- `CLI smoke (Linux)`
-- `Unit tests (macOS)`
-- `Unit tests (Windows)`
-- `Unit tests (Linux)`
+- [Architecture](docs/development/architecture.md) defines component boundaries
+  and dependency direction.
+- [Repository layout](docs/development/repository-layout.md) defines stable
+  paths and structural compatibility.
+- [Coding standards](docs/development/coding-standards.md) defines implementation
+  conventions.
+- [Testing](docs/development/testing.md) defines test placement, commands,
+  markers, and coverage expectations.
+- [UX guidelines](docs/development/ux-guidelines.md),
+  [design system](docs/development/design-system.md), and
+  [branding](docs/development/branding.md) govern their respective presentation
+  concerns.
 
-The pull request must be current with `main`; passing checks on an older base
-commit are not sufficient. The ruleset also blocks branch deletion and force
-pushes. An approving review is not currently required, but the pull request
-and all required checks are.
+## Implement the plan
 
-## Release contributions
+Work through the master-plan rows in order. For each task:
+
+1. Mark the row in progress.
+2. Implement the smallest complete change.
+3. Add or update tests for observable behavior and failure cleanup.
+4. Run focused tests while iterating.
+5. Update affected documentation and comments.
+6. Record validation evidence and mark the row complete only when its desired
+   result is verified.
+
+Keep behavior changes separate from directory moves, mechanical renames, and
+formatting-only changes. Do not include unrelated local edits or generated
+caches, virtual environments, coverage files, build artifacts, downloaded
+maps, or private signing material.
+
+## Validate the branch
+
+Run focused tests first, then the complete suite before handoff when practical:
+
+```bash
+.venv/bin/python -m pytest -p no:cacheprovider -q
+```
+
+Also run:
+
+```bash
+git diff --check
+```
+
+Inspect the complete diff for unrelated changes, machine-local paths, secrets,
+and generated output. Perform the native platform checks required by the
+relevant development document and report any platform you could not test.
+
+## Submit a pull request
+
+`main` is protected by the
+[`protect-main` GitHub ruleset](https://github.com/CaveViewer/CaveViewer/rules/19104787).
+Do not push directly to it. Once every task assigned to the branch is complete,
+commit coherent changes and push the topic branch:
+
+```bash
+git push -u origin feature/descriptive-name
+```
+
+Open a pull request against `main`. Describe the problem, solution, validation,
+known limitations, and remaining platform checks. If the work definition is a
+tracked review artifact, include its updates in the pull request; otherwise
+keep the ignored local copy current with the PR reference and status.
+
+The pull request must be current with `main`, and its latest commit must pass
+all required GitHub checks. A result against an older base is not sufficient.
+When a check fails, inspect its complete logs, correct the root cause, add the
+lowest reliable regression coverage, rerun local validation, and push the
+focused correction. Do not weaken a check merely to make it pass.
+
+## Merge and clean up
+
+After the pull request passes and is approved for merge:
+
+1. Merge it through the protected-branch workflow.
+2. Verify that GitHub reports the pull request as merged.
+3. Update local `main` to the merged revision.
+4. Delete the local topic branch.
+5. Delete the remote topic branch if GitHub did not remove it automatically.
+
+```bash
+git switch main
+git pull --ff-only origin main
+git branch -d feature/descriptive-name
+git push origin --delete feature/descriptive-name
+```
+
+Never delete a topic branch before verifying the merge. Record the merge and
+cleanup in the work definition. If the master plan contains tasks assigned to
+another branch, start that branch from the newly updated `main` and repeat the
+cycle. The work is finished when every row is complete or explicitly deferred.
+
+## Repository instructions and skills
+
+AI coding agents must follow the root and nearest scoped `AGENTS.md` files.
+Those files provide mandatory instructions and route agents to the canonical
+development documents.
+
+The repository also includes optional reusable agent workflows under
+`.agents/skills/`, documented in
+[Repository skills](docs/development/skills.md). An agent can use
+`$caveviewer-work-cycle` for the contribution lifecycle and combine it with a
+focused skill for branding, desktop UX, import lifecycle, performance, or
+release work. Skills help agents follow the same process; human contributors do
+not need Codex or a skill runner to contribute.
+
+## Specialized contributions
 
 Read the canonical [release guide](docs/development/releases.md) before changing
-release workflows, packaging scripts, update manifests, or version handling.
-Release versions must contain only dot-separated decimal integers, such as
-`1.0.64`. Do not encode preview status in a suffix such as `1.0.64-rc1`;
-the update checker treats that form as an unparseable version and will not offer
-it as a newer update. Use the workflow's `preview` option and the
-`preview.json` channel instead. GitHub workflow inputs also require the bare
-version without a leading `v`.
+release workflows, packaging scripts, signing, update manifests, channels, or
+version handling. Publication uses the dedicated release workflow and is not an
+ordinary feature-branch action.
 
-## Repository layout
-
-The project uses the conventional `src/caveviewer` package layout. Its stable
-paths and completed migration sequence are documented in
-[repository-layout.md](docs/development/repository-layout.md). Use the current
-paths and do not create a second parallel package tree.
+The project uses the conventional `src/caveviewer` package layout. Do not create
+a parallel package tree or change a public cache, update, storage, package, or
+application-identity contract without documenting and validating the
+compatibility impact in the same change.

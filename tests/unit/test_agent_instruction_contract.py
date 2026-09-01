@@ -12,6 +12,7 @@ def _read(relative_path: str) -> str:
 
 def test_instruction_hierarchy_is_present_and_scoped() -> None:
     scoped_instruction_paths = (
+        "docs/development/AGENTS.md",
         "src/AGENTS.md",
         "src/caveviewer/core/AGENTS.md",
         "src/caveviewer/gui/AGENTS.md",
@@ -24,19 +25,29 @@ def test_instruction_hierarchy_is_present_and_scoped() -> None:
         assert "Inherits:" in _read(relative_path)
 
 
-def test_root_instructions_require_work_planning_and_startup_checks() -> None:
+def test_root_instructions_delegate_development_policy_and_require_startup_checks() -> None:
     instructions = _read("AGENTS.md")
-    normalized_instructions = " ".join(instructions.split())
 
-    assert ".work/<work-name>.md" in instructions
-    assert "docs/development/work/<work-name>.md" in instructions
-    assert "docs/development/.agents/<work-name>.md" not in instructions
-    assert "root `.work/`" in instructions
-    assert "by default" in instructions
-    assert "only when it needs to be shared" in normalized_instructions
+    assert "docs/development/AGENTS.md" in instructions
     assert "## Session startup" in instructions
     assert "Inspect the active branch and Git status" in instructions
-    assert "focused and complete validation commands" in instructions
+    assert "focused and complete validation" in instructions
+    assert "## Architecture and compatibility" not in instructions
+    assert "## Common commands" not in instructions
+
+
+def test_development_instructions_index_every_canonical_document() -> None:
+    development_root = REPOSITORY_ROOT / "docs" / "development"
+    instructions = _read("docs/development/AGENTS.md")
+    canonical_documents = sorted(
+        path.name
+        for path in development_root.glob("*.md")
+        if path.name != "AGENTS.md"
+    )
+
+    assert canonical_documents
+    for filename in canonical_documents:
+        assert f"]({filename})" in instructions
 
 
 def test_jetbrains_rule_delegates_to_canonical_instructions() -> None:
@@ -69,7 +80,7 @@ def test_shared_pycharm_workflows_remain_visible_to_jetbrains_agents() -> None:
 
 def test_work_definition_and_discovery_docs_use_local_work_by_default() -> None:
     template = _read("docs/development/work-definition.md")
-    readme = _read("docs/development/README.md")
+    readme = _read("docs/development/AGENTS.md")
     required_columns = (
         "Problem",
         "Current implementation",
@@ -101,3 +112,30 @@ def test_work_definition_and_discovery_docs_use_local_work_by_default() -> None:
     assert "Ctrl+Shift+N" in assistance
     assert "it is not a browser for existing tracked rule files" in normalized_assistance
     assert "Do not create a duplicate rule" in normalized_assistance
+
+
+def test_contributing_guide_describes_the_complete_work_cycle() -> None:
+    contributing = _read("CONTRIBUTING.md")
+    normalized_contributing = " ".join(contributing.split())
+
+    for reference in (
+        "docs/development/AGENTS.md",
+        "docs/development/work-definition.md",
+        "docs/development/testing.md",
+        "docs/development/skills.md",
+    ):
+        assert reference in contributing
+
+    for workflow_contract in (
+        "git pull --ff-only origin main",
+        ".work/<work-name>.md",
+        "git diff --check",
+        "git branch -d",
+        "git push origin --delete",
+        "$caveviewer-work-cycle",
+        ".agents/skills/",
+    ):
+        assert workflow_contract in contributing
+
+    assert "Never delete a topic branch before verifying the merge" in normalized_contributing
+    assert "human contributors do not need Codex" in normalized_contributing
