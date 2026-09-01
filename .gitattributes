@@ -1,3 +1,9 @@
+# Keep text files identical across Windows, macOS, and Linux. Windows-native
+# batch entry points retain CRLF; all other detected text uses LF.
+* text=auto eol=lf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
 # Update signatures cover exact manifest bytes. Force LF on every platform so
 # Git cannot rewrite a signed JSON file during staging or checkout.
 updates/**/*.json text eol=lf
