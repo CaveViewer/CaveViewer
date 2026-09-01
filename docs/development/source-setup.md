@@ -14,7 +14,7 @@ Scope:
 
 Contributor workflow, architecture, repository layout, coding, testing, and
 AI-assistant guidance are indexed in the
-[development documentation](README.md). See
+[development documentation](AGENTS.md). See
 [`CONTRIBUTING.md`](../../CONTRIBUTING.md) before preparing a change.
 The canonical platform release sequence and verification checklist are in
 [`releases.md`](releases.md).

@@ -98,7 +98,7 @@ def test_branding_contract_is_documented_and_discoverable():
     branding_path = REPOSITORY_ROOT / "docs" / "development" / "branding.md"
     branding = branding_path.read_text(encoding="utf-8")
     development_index = (
-        REPOSITORY_ROOT / "docs" / "development" / "README.md"
+        REPOSITORY_ROOT / "docs" / "development" / "AGENTS.md"
     ).read_text(encoding="utf-8")
     architecture = (
         REPOSITORY_ROOT / "docs" / "development" / "architecture.md"
@@ -136,7 +136,7 @@ def test_ux_guidelines_are_documented_without_owning_branding():
     ux_path = REPOSITORY_ROOT / "docs" / "development" / "ux-guidelines.md"
     ux_guidelines = ux_path.read_text(encoding="utf-8")
     development_index = (
-        REPOSITORY_ROOT / "docs" / "development" / "README.md"
+        REPOSITORY_ROOT / "docs" / "development" / "AGENTS.md"
     ).read_text(encoding="utf-8")
 
     for heading in (

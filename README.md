@@ -250,7 +250,7 @@ diagnostics.
 ## Contributing
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the change workflow and
-[`docs/development/`](docs/development/README.md) for architecture, repository
+[`docs/development/`](docs/development/AGENTS.md) for architecture, repository
 layout, coding, testing, and AI-assisted development standards.
 
 ## License
