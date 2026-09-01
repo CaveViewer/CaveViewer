@@ -22,6 +22,7 @@ task.
 | `$caveviewer-import-lifecycle` | Import processes, cache locks, staging, pause/resume, cancellation, viewer close during import, partial caches, and Map Library recovery. | FPS tuning, benchmark interpretation, ordinary layout, or packaging. |
 | `$caveviewer-release` | Cross-platform packaging, release branches, workflows, signing, update metadata, publication, and release recovery. | Ordinary development runs or a functional map-import defect. |
 | `$caveviewer-performance` | Viewer benchmarks, FPS regressions, scenarios, thresholds, streaming profiling, and result interpretation. | Functional import lifecycle failures or routine map opening. |
+| `$caveviewer-screenshot-polish` | Pixel-faithful screenshot cleanup, captured-edge removal, transparent rounded corners, redaction, sizing, and documentation-image preparation. | Application UX changes, invented interface concepts, or generated brand artwork. |
 | `$caveviewer-work-cycle` | Starting, continuing, submitting, iterating, merging, and cleaning up planned repository work. | Release publication, one-off read-only analysis, or domain-specific implementation guidance. |
 
 Skills remain available for automatic selection. A contributor may explicitly
