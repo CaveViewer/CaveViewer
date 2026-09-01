@@ -15,7 +15,7 @@ def image_path(filename: str) -> Path:
 
 
 def ui_icon_path(filename: str) -> Path:
-    """Return a path to a scalable UI action icon source asset."""
+    """Return a path to a bundled UI action icon asset."""
     return resource_path("images", "ui", filename)
 
 

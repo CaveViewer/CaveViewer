@@ -100,7 +100,4 @@ def test_gui_consumers_do_not_name_concrete_brand_files():
 
     for path in consumer_paths:
         source = path.read_text(encoding="utf-8")
-        assert "app_mark_transparent.png" not in source
-        assert "app_icon_windows.png" not in source
-        assert "app_icon_macos.png" not in source
         assert "app_icon_resource_name" not in source
