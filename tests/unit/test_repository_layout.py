@@ -17,6 +17,16 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 PACKAGE_ROOT = REPOSITORY_ROOT / "src" / "caveviewer"
 
 
+def test_repository_declares_cross_platform_line_endings():
+    attributes = (REPOSITORY_ROOT / ".gitattributes").read_text(encoding="utf-8")
+
+    assert "* text=auto eol=lf" in attributes
+    assert "*.bat text eol=crlf" in attributes
+    assert "*.cmd text eol=crlf" in attributes
+    assert "updates/**/*.json text eol=lf" in attributes
+    assert "src/caveviewer/resources/branding/**/*.svg text eol=lf" in attributes
+
+
 def test_python_test_modules_have_descriptive_module_docstrings():
     undocumented = []
 
