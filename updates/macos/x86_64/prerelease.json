@@ -1,13 +1,13 @@
 {
   "architecture": "x86_64",
-  "download_size_bytes": 68519200,
-  "download_size_bytes_macosx_dmg": 68519200,
-  "download_url": "https://github.com/CaveViewer/CaveViewer/releases/download/v1.0.94/CaveViewer-1.0.94-macos-x86_64.dmg",
-  "download_url_macosx_dmg": "https://github.com/CaveViewer/CaveViewer/releases/download/v1.0.94/CaveViewer-1.0.94-macos-x86_64.dmg",
-  "latest_version": "1.0.94",
+  "download_size_bytes": 73711275,
+  "download_size_bytes_macosx_dmg": 73711275,
+  "download_url": "https://github.com/CaveViewer/CaveViewer/releases/download/v1.0.95/CaveViewer-1.0.95-macos-x86_64.dmg",
+  "download_url_macosx_dmg": "https://github.com/CaveViewer/CaveViewer/releases/download/v1.0.95/CaveViewer-1.0.95-macos-x86_64.dmg",
+  "latest_version": "1.0.95",
   "platform": "macos",
   "release_channel": "preview",
-  "release_notes": "Fixed bugs in cave slicing functionality.",
-  "sha256": "2bf2c64315ad8f460401303b18581e4f12dcb537b147c81694ad3789c6b00d37",
-  "sha256_macosx_dmg": "2bf2c64315ad8f460401303b18581e4f12dcb537b147c81694ad3789c6b00d37"
+  "release_notes": "Preview a refreshed cross-platform CaveViewer experience with new branding, safer preference backup and unsaved-change handling, improved Help diagnostics, smoother resumable imports, and clearer high-DPI controls.",
+  "sha256": "277b4a724fbba2e8aa21a6fe6e57d873bb9d5ebcdb77580e3f9c4d005bd22898",
+  "sha256_macosx_dmg": "277b4a724fbba2e8aa21a6fe6e57d873bb9d5ebcdb77580e3f9c4d005bd22898"
 }

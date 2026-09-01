@@ -1,11 +1,11 @@
 {
-  "download_size_bytes": 81598968,
-  "download_size_bytes_linux_appimage": 81598968,
-  "download_url": "https://github.com/CaveViewer/CaveViewer/releases/download/v1.0.94/CaveViewer-1.0.94-x86_64.AppImage",
-  "download_url_linux_appimage": "https://github.com/CaveViewer/CaveViewer/releases/download/v1.0.94/CaveViewer-1.0.94-x86_64.AppImage",
-  "latest_version": "1.0.94",
+  "download_size_bytes": 86231544,
+  "download_size_bytes_linux_appimage": 86231544,
+  "download_url": "https://github.com/CaveViewer/CaveViewer/releases/download/v1.0.95/CaveViewer-1.0.95-x86_64.AppImage",
+  "download_url_linux_appimage": "https://github.com/CaveViewer/CaveViewer/releases/download/v1.0.95/CaveViewer-1.0.95-x86_64.AppImage",
+  "latest_version": "1.0.95",
   "release_channel": "preview",
-  "release_notes": "Fixed bugs in cave slicing functionality.",
-  "sha256": "9bc0814b30495088a251e110509a8d188b132b3bd4223f6a3664f0eb65e617cf",
-  "sha256_linux_appimage": "9bc0814b30495088a251e110509a8d188b132b3bd4223f6a3664f0eb65e617cf"
+  "release_notes": "Preview a refreshed cross-platform CaveViewer experience with new branding, safer preference backup and unsaved-change handling, improved Help diagnostics, smoother resumable imports, and clearer high-DPI controls.",
+  "sha256": "fc1999509e5190605ffbd4cf658089550a4c309209546881e929e7cea0cba02a",
+  "sha256_linux_appimage": "fc1999509e5190605ffbd4cf658089550a4c309209546881e929e7cea0cba02a"
 }
