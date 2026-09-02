@@ -175,6 +175,11 @@ initial streaming keep their stage hierarchy, while minimap and bookmark
 repositioning use centered **Jumping to the selected point** text and the same
 300-by-4 logical-pixel bar. Map-loading and jump labels share the same bitmap
 type size, responsive scale, chalk color, and 60-logical-pixel label offset.
+The initial Tk launch surface uses its semantic heading role at the same
+60-logical-pixel offset, while launch, initial streaming, and first-time map
+building share the solid Void background. Renderer-specific font technology
+remains separate: Tk uses the platform family and OpenGL uses its scaled bitmap
+renderer.
 Capture countdown/status feedback uses a standard vector circle with the
 remaining seconds or status symbol centered inside it. The circle uses the same
 semantic fill/track colors and four-logical-pixel thickness as the flat loading

@@ -209,6 +209,8 @@ primitives remain documented in [design-system.md](design-system.md).
   Place it below the primary stage label and above the supporting description.
 - Use that same geometry for launch, viewer import and streaming, repositioning,
   Map Library transfers and cache work, and update transfer or verification.
+  Full-surface launch and map-loading states also share the branded Void
+  background; do not place separate startup artwork behind routine progress.
   Keep stop, pause, and cancel as separate focusable controls beside the stage;
   do not wrap those glyphs in circular progress geometry.
 - Within the OpenGL viewer, map loading and jump feedback share the same bitmap

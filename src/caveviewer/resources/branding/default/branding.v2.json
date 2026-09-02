@@ -10,7 +10,7 @@
   "assets": {
     "caveviewer_mark": {
       "path": "caveviewer-mark.png",
-      "sha256": "e659d88fe044cef77d280de39880e9749211b6e607f236bb1f6b6d961e2cb554",
+      "sha256": "7dd3215fb20dbe43c8c0e9f956df3fc5936f8c30dc78d1998a020b9357ddfde4",
       "minimum_width": 2048,
       "minimum_height": 2048,
       "alpha": "required",

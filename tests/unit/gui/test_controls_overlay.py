@@ -101,7 +101,7 @@ def test_fullscreen_controls_use_opaque_backdrop_and_spaced_prompt_gap():
         (1536, 864),
     )
 
-    assert quad_calls[0][-1][-1] == 1.0
+    assert quad_calls[0][-1] == controls_overlay._LOADING_BACKGROUND_RGBA
     assert grouped_calls[0]["top_y"] == 182.0
 
 

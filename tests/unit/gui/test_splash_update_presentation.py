@@ -834,10 +834,10 @@ def test_launch_surface_uses_a_flat_milestone_progress_bar():
 
     class _Canvas:
         def winfo_width(self):
-            return 132
+            return 800
 
         def winfo_height(self):
-            return 132
+            return 600
 
         def delete(self, tag):
             calls.append(("delete", tag))
@@ -859,7 +859,11 @@ def test_launch_surface_uses_a_flat_milestone_progress_bar():
     assert "create_arc(" not in source
     assert calls[0] == ("delete", "launch_content")
     assert calls[1][0] == "text"
+    assert calls[1][1] == (400.0, 240.0)
     assert calls[1][2]["text"] == "Preparing to explore what lies beneath..."
+    assert calls[1][2]["font"] == splash_screen._TYPOGRAPHY.heading
+    assert calls[1][2]["fill"] == splash_screen._SUBTITLE_COLOR
+    assert calls[2][1] == (250.0, 298.0, 550.0, 302.0)
     assert [call[0] for call in calls].count("rectangle") == 2
 
 
@@ -891,7 +895,9 @@ def test_launch_surface_uses_dark_background_without_a_logo_or_ring():
     assert "_load_brand_logo(" not in source
     assert "progress_ring_photo(" not in content_source
     assert "program_name" not in content_source
-    assert "_render_launch_background(" in source
+    assert "bg=_BG_COLOR" in source
+    assert "_render_launch_background(" not in source
+    assert "_load_launch_background_image(" not in source
 
 
 def test_splash_navigation_actions_are_keyboard_accessible_without_fallthrough():

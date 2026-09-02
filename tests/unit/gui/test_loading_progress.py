@@ -6,6 +6,9 @@ import pytest
 
 from caveviewer.gui.loading_progress import (
     OPENGL_PROGRESS_LAYOUT_SCALE_MAX,
+    ROUTINE_PROGRESS_BAR_HEIGHT,
+    ROUTINE_PROGRESS_BAR_WIDTH,
+    ROUTINE_PROGRESS_LABEL_OFFSET,
     circular_progress_ranges,
     clamp_progress,
     hex_color_rgb,
@@ -13,6 +16,12 @@ from caveviewer.gui.loading_progress import (
     progress_layout_scale,
     progress_segments,
 )
+
+
+def test_routine_loading_geometry_is_shared_across_renderers():
+    assert ROUTINE_PROGRESS_BAR_WIDTH == 300.0
+    assert ROUTINE_PROGRESS_BAR_HEIGHT == 4.0
+    assert ROUTINE_PROGRESS_LABEL_OFFSET == 60.0
 
 
 @pytest.mark.parametrize(

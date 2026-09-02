@@ -37,16 +37,17 @@ from caveviewer.gui.platform.presentation import (
 )
 from caveviewer.core.diagnostics.logging import get_logger
 from caveviewer.gui.loading_progress import (
-    OPENGL_PROGRESS_BAR_HEIGHT,
-    OPENGL_PROGRESS_BAR_WIDTH,
     OPENGL_PROGRESS_BASE_WINDOW_SIZE,
-    OPENGL_PROGRESS_LABEL_OFFSET,
     OPENGL_PROGRESS_LABEL_TEXT_SIZE,
     OPENGL_PROGRESS_LAYOUT_SCALE_MAX,
+    ROUTINE_PROGRESS_BAR_HEIGHT,
+    ROUTINE_PROGRESS_BAR_WIDTH,
+    ROUTINE_PROGRESS_LABEL_OFFSET,
     hex_color_rgb,
     progress_layout_scale,
     progress_segments,
 )
+from caveviewer.gui.tk_theme import DARK_THEME
 
 
 _LOG = get_logger("ControlsOverlay")
@@ -76,6 +77,7 @@ void main() {
 _SPLASH_TITLE_RGBA = (0.9490, 0.8510, 0.5490, 1.0)       # #f2d98c
 _SPLASH_SUBTITLE_RGBA = (0.8000, 0.8039, 0.8392, 1.0)    # #cccdd6
 _SPLASH_INSTRUCTION_RGBA = (0.6039, 0.6039, 0.6510, 1.0) # #9a9aa6
+_LOADING_BACKGROUND_RGBA = (*hex_color_rgb(DARK_THEME.background), 1.0)
 
 _FULLSCREEN_BASE_WINDOW_SIZE = OPENGL_PROGRESS_BASE_WINDOW_SIZE
 _FULLSCREEN_LAYOUT_SCALE_MAX = OPENGL_PROGRESS_LAYOUT_SCALE_MAX
@@ -568,7 +570,7 @@ class ControlsOverlay:
         layout_scale = _fullscreen_layout_scale(window_size)
 
         # Dim the 3D view heavily while the controls reference is shown.
-        add_quad_px(0, 0, w, h, (0.001, 0.002, 0.005, 1.0))
+        add_quad_px(0, 0, w, h, _LOADING_BACKGROUND_RGBA)
 
         # Manual help has a title; startup help is intentionally lighter:
         # the map is already visually loading, so the only text needed
@@ -600,8 +602,8 @@ class ControlsOverlay:
             add_text(subtitle, sub_x, sub_y, sub_size, _SPLASH_SUBTITLE_RGBA)
             bar_bottom_y = sub_y + bitmap_font.text_height_px(sub_size)
         if not self._manual_mode:
-            bar_w = 300.0 * layout_scale
-            bar_h = 4.0 * layout_scale
+            bar_w = ROUTINE_PROGRESS_BAR_WIDTH * layout_scale
+            bar_h = ROUTINE_PROGRESS_BAR_HEIGHT * layout_scale
             bar_x0 = (w - bar_w) / 2.0
             bar_x1 = bar_x0 + bar_w
             bar_y0 = bar_bottom_y + 22.0 * layout_scale
@@ -1063,7 +1065,7 @@ class ControlsOverlay:
         text_size = OPENGL_PROGRESS_LABEL_TEXT_SIZE * layout_scale
         text_width = bitmap_font.text_width_px(label, text_size)
         bar_cy = h / 2.0
-        label_y = bar_cy - OPENGL_PROGRESS_LABEL_OFFSET * layout_scale
+        label_y = bar_cy - ROUTINE_PROGRESS_LABEL_OFFSET * layout_scale
         add_text(
             label,
             (w - text_width) / 2.0,
@@ -1071,8 +1073,8 @@ class ControlsOverlay:
             text_size,
             _SPLASH_SUBTITLE_RGBA,
         )
-        bar_w = OPENGL_PROGRESS_BAR_WIDTH
-        bar_h = OPENGL_PROGRESS_BAR_HEIGHT
+        bar_w = ROUTINE_PROGRESS_BAR_WIDTH
+        bar_h = ROUTINE_PROGRESS_BAR_HEIGHT
         bar_x0 = (w - bar_w) / 2.0
         bar_x1 = bar_x0 + bar_w
         bar_y0 = bar_cy - bar_h / 2.0

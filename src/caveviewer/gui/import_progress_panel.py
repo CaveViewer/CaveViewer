@@ -28,14 +28,16 @@ from caveviewer.gui.loading_progress import (
     OPENGL_COUNTDOWN_DIAMETER,
     OPENGL_COUNTDOWN_RING_SEGMENTS,
     OPENGL_COUNTDOWN_STROKE_WIDTH,
-    OPENGL_PROGRESS_BAR_HEIGHT,
-    OPENGL_PROGRESS_BAR_WIDTH,
     OPENGL_PROGRESS_LABEL_TEXT_SIZE,
+    ROUTINE_PROGRESS_BAR_HEIGHT,
+    ROUTINE_PROGRESS_BAR_WIDTH,
+    ROUTINE_PROGRESS_LABEL_OFFSET,
     circular_progress_ranges,
     hex_color_rgb,
     progress_layout_scale,
     progress_segments,
 )
+from caveviewer.gui.tk_theme import DARK_THEME
 
 
 _VERT_SRC = """
@@ -71,15 +73,15 @@ def _progress_label_layout_scale(window_size: tuple[int, int]) -> float:
 class ImportProgressPanel:
     COUNTDOWN_DIAMETER = OPENGL_COUNTDOWN_DIAMETER
     COUNTDOWN_STROKE_WIDTH = OPENGL_COUNTDOWN_STROKE_WIDTH
-    PROGRESS_BAR_WIDTH = OPENGL_PROGRESS_BAR_WIDTH
-    PROGRESS_BAR_HEIGHT = OPENGL_PROGRESS_BAR_HEIGHT
+    PROGRESS_BAR_WIDTH = ROUTINE_PROGRESS_BAR_WIDTH
+    PROGRESS_BAR_HEIGHT = ROUTINE_PROGRESS_BAR_HEIGHT
     INDETERMINATE_SEGMENT_FRACTION = 0.28
     # Match the established full-screen “Press Space to begin” prompt.
     TITLE_TEXT_SIZE = OPENGL_PROGRESS_LABEL_TEXT_SIZE
     STAGE_TEXT_SIZE = OPENGL_PROGRESS_LABEL_TEXT_SIZE
     NOTE_TEXT_SIZE = 1.94
 
-    _BACKDROP_RGBA = (0.0039, 0.0078, 0.0118, 0.88)  # near-black blue
+    _BACKDROP_RGBA = (*hex_color_rgb(DARK_THEME.background), 1.0)
     _TITLE_TEXT_RGBA = (0.8980, 0.6314, 0.1216, 1.0)
     _STAGE_TEXT_RGBA = (0.8000, 0.8039, 0.8392, 1.0)
     _NOTE_TEXT_RGBA = (0.690, 0.720, 0.750, 0.92)
@@ -212,7 +214,7 @@ class ImportProgressPanel:
 
         self._vbo.write(data.tobytes())
 
-        self.ctx.clear(0.04, 0.05, 0.07)
+        self.ctx.clear(*hex_color_rgb(DARK_THEME.background))
         self.ctx.disable(moderngl.CULL_FACE)
         self.ctx.disable(moderngl.DEPTH_TEST)
         self.ctx.enable(moderngl.BLEND)
@@ -258,7 +260,7 @@ class ImportProgressPanel:
             title=title,
             title_y=center_y - 136.0 * layout_scale,
             stage=stage,
-            stage_y=center_y - 60.0 * layout_scale,
+            stage_y=center_y - ROUTINE_PROGRESS_LABEL_OFFSET * layout_scale,
             note=note,
             note_y=center_y + 30.0 * layout_scale,
             layout_scale=layout_scale,

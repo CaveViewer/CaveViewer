@@ -166,15 +166,25 @@ def test_progress_bar_fill_bounds_cover_determinate_and_indeterminate_states():
     assert indeterminate[0][1] - indeterminate[0][0] == pytest.approx(84.0)
 
 
-def test_import_progress_uses_shared_opengl_layout_tokens():
+def test_import_progress_uses_shared_routine_layout_tokens():
     assert ImportProgressPanel.PROGRESS_BAR_WIDTH == (
-        import_progress_panel.OPENGL_PROGRESS_BAR_WIDTH
+        import_progress_panel.ROUTINE_PROGRESS_BAR_WIDTH
     )
     assert ImportProgressPanel.PROGRESS_BAR_HEIGHT == (
-        import_progress_panel.OPENGL_PROGRESS_BAR_HEIGHT
+        import_progress_panel.ROUTINE_PROGRESS_BAR_HEIGHT
     )
     assert ImportProgressPanel.STAGE_TEXT_SIZE == (
         import_progress_panel.OPENGL_PROGRESS_LABEL_TEXT_SIZE
+    )
+    assert import_progress_panel.ROUTINE_PROGRESS_LABEL_OFFSET == 60.0
+
+
+def test_import_progress_uses_the_shared_void_background():
+    assert ImportProgressPanel._BACKDROP_RGBA == (
+        *import_progress_panel.hex_color_rgb(
+            import_progress_panel.DARK_THEME.background
+        ),
+        1.0,
     )
 
 
