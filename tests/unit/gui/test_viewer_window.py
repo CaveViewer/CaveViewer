@@ -4635,7 +4635,7 @@ def test_import_progress_message_switches_for_resume(monkeypatch):
     window._update_import_progress_message_for_stage("resuming import")
 
     assert window._import_resuming_from_checkpoint is True
-    assert window._import_progress_title == "Resuming import"
+    assert window._import_progress_title == ""
     assert window._import_progress_note == "Using saved work from the previous session."
 
 
@@ -5187,7 +5187,7 @@ def test_request_import_pause_sends_child_command(monkeypatch):
 
     assert window._import_pause_requested is True
     assert window._import_progress_stage == "pausing import"
-    assert window._import_progress_title == "Pausing import"
+    assert window._import_progress_title == ""
     assert window._import_progress_note == "Saving a resume point."
     assert commands.get_nowait() == ("pause",)
     assert "Import pause requested" in logger.info_messages[-1]

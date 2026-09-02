@@ -26,6 +26,12 @@ def test_render_cache_finalization_phases_are_user_facing():
     )
 
 
+def test_resume_stage_uses_the_active_scanning_label():
+    panel = object.__new__(ImportProgressPanel)
+
+    assert panel._stage_label("resuming import") == "Scanning map…"
+
+
 def test_circle_labels_share_the_import_title_stage_note_layout(monkeypatch):
     panel = object.__new__(ImportProgressPanel)
     text_calls = []
@@ -97,10 +103,14 @@ def test_bar_labels_use_compact_progress_layout(monkeypatch):
 
     assert text_calls == [
         ("Preparing Map", 164.0, ImportProgressPanel.TITLE_TEXT_SIZE),
-        ("Building map chunksâ€¦", 240.0, ImportProgressPanel.STAGE_TEXT_SIZE),
+        (
+            "Building map chunksâ€¦",
+            pytest.approx(260.755),
+            ImportProgressPanel.STAGE_TEXT_SIZE,
+        ),
         (
             "First-time setup in progress.",
-            330.0,
+            pytest.approx(337.305),
             ImportProgressPanel.NOTE_TEXT_SIZE,
         ),
     ]
@@ -142,10 +152,14 @@ def test_progress_labels_match_fullscreen_prompt_scaling(monkeypatch):
 
     assert text_calls == [
         ("Opening map", pytest.approx(130.0), pytest.approx(3.1875)),
-        ("Building map chunks", pytest.approx(225.0), pytest.approx(3.1875)),
+        (
+            "Building map chunks",
+            pytest.approx(250.94375),
+            pytest.approx(3.1875),
+        ),
         (
             "First-time setup in progress.",
-            pytest.approx(337.5),
+            pytest.approx(346.63125),
             pytest.approx(2.425),
         ),
     ]
@@ -166,6 +180,21 @@ def test_progress_bar_fill_bounds_cover_determinate_and_indeterminate_states():
     assert indeterminate[0][1] - indeterminate[0][0] == pytest.approx(84.0)
 
 
+def test_import_stage_change_keeps_the_current_progress_fraction():
+    panel = object.__new__(ImportProgressPanel)
+    panel._display_fraction = 0.64
+    panel._progress_token = ("cave.obj", False)
+
+    panel._begin_progress_run(
+        map_name="cave.obj",
+        indeterminate=False,
+        fraction=0.65,
+    )
+
+    assert panel._display_fraction == pytest.approx(0.64)
+    assert panel._progress_token == ("cave.obj", False)
+
+
 def test_import_progress_uses_shared_routine_layout_tokens():
     assert ImportProgressPanel.PROGRESS_BAR_WIDTH == (
         import_progress_panel.ROUTINE_PROGRESS_BAR_WIDTH
@@ -176,7 +205,8 @@ def test_import_progress_uses_shared_routine_layout_tokens():
     assert ImportProgressPanel.STAGE_TEXT_SIZE == (
         import_progress_panel.OPENGL_PROGRESS_LABEL_TEXT_SIZE
     )
-    assert import_progress_panel.ROUTINE_PROGRESS_LABEL_OFFSET == 60.0
+    assert import_progress_panel.ROUTINE_PROGRESS_TITLE_TO_BAR_GAP == 40.0
+    assert import_progress_panel.ROUTINE_PROGRESS_BAR_TO_DESCRIPTION_GAP == 30.0
 
 
 def test_import_progress_uses_the_shared_void_background():

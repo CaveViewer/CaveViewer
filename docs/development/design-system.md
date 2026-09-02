@@ -173,13 +173,13 @@ repeat close requests until the writer has finished.
 Routine viewer waits use the shared flat progress bar: full-screen import and
 initial streaming keep their stage hierarchy, while minimap and bookmark
 repositioning use centered **Jumping to the selected point** text and the same
-300-by-4 logical-pixel bar. Map-loading and jump labels share the same bitmap
-type size, responsive scale, chalk color, and 60-logical-pixel label offset.
-The initial Tk launch surface uses its semantic heading role at the same
-60-logical-pixel offset, while launch, initial streaming, and first-time map
-building share the solid Void background. Renderer-specific font technology
-remains separate: Tk uses the platform family and OpenGL uses its scaled bitmap
-renderer.
+300-by-4 logical-pixel bar. Every routine indicator measures the visible title
+bottom to bar top at 40 logical pixels and the bar bottom to an optional
+description at 30 logical pixels; omitting a description collapses that space.
+The initial Tk launch surface uses the same measured layout and control scale,
+while launch, initial streaming, and first-time map building share the solid
+Void background. Renderer-specific font technology remains separate: Tk uses
+the platform family and OpenGL uses its scaled bitmap renderer.
 Capture countdown/status feedback uses a standard vector circle with the
 remaining seconds or status symbol centered inside it. The circle uses the same
 semantic fill/track colors and four-logical-pixel thickness as the flat loading

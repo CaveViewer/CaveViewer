@@ -156,8 +156,9 @@ invent navigation, data, or controls for a marketing composition.
 
 Favor one focal mark, one primary message, and ample negative space. Avoid
 repeating the logo in navigation, loading, and content at the same time. The
-startup surface intentionally uses the solid Void background, a single
-sentence, and a flat progress bar without an additional logo or product title.
+startup surface uses the Void background with a sparse, static triangular mesh,
+a single sentence, and a flat progress bar without an additional logo or
+product title.
 
 ## Motion, voice, and accessibility
 
@@ -782,9 +783,10 @@ supported macOS architectures; do not treat a flattened approximation as a
 layered source.
 
 The initial startup surface intentionally carries no independent logo or
-product-title lockup. It uses the solid Void background, the sentence
-`Preparing to explore what lies beneath...`, and the same subdued-track/amber-
-fill flat progress language used by map loading. Composition milestones are
+product-title lockup. It uses the Void background with a sparse static
+triangular mesh, the sentence `Preparing to explore what lies beneath...`, and
+the same subdued-track/amber-fill flat progress language used by map loading.
+Composition milestones are
 monotonic and remain below 100 percent until the map library, Preferences
 surface, final geometry, and idle layout work needed by the first interactive
 frame are ready. The launch surface is then dismissed only after both that

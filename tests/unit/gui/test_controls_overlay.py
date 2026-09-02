@@ -102,7 +102,7 @@ def test_fullscreen_controls_use_opaque_backdrop_and_spaced_prompt_gap():
     )
 
     assert quad_calls[0][-1] == controls_overlay._LOADING_BACKGROUND_RGBA
-    assert grouped_calls[0]["top_y"] == 182.0
+    assert grouped_calls[0]["top_y"] == 258.68
 
 
 def test_compact_loading_panel_uses_text_and_flat_progress_without_logo(monkeypatch):
@@ -122,9 +122,9 @@ def test_compact_loading_panel_uses_text_and_flat_progress_without_logo(monkeypa
     )
 
     assert labels[0][0] == "Jumping to the selected point"
-    assert labels[0][2] == 240.0
+    assert labels[0][2] == 260.0
     assert labels[0][3] == controls_overlay.OPENGL_PROGRESS_LABEL_TEXT_SIZE
-    assert quads[1][:4] == (250.0, 298.0, 550.0, 302.0)
+    assert quads[1][:4] == (250.0, 329.0, 550.0, 333.0)
     assert len(quads) == 3  # backdrop, track, determinate fill
     assert "draw_logo" not in controls_overlay.ControlsOverlay.render.__code__.co_names
 

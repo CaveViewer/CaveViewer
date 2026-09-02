@@ -118,7 +118,7 @@ class MapImportController:
 
         if self.pause_requested or normalized == "pausing import":
             self.set_progress_message(
-                "Pausing import",
+                "",
                 "Saving a resume point.",
             )
         elif (
@@ -127,7 +127,7 @@ class MapImportController:
             and self._perf_counter() < self._resume_status_until
         ):
             self.set_progress_message(
-                "Resuming import",
+                "",
                 "Using saved work from the previous session.",
             )
         else:
@@ -584,7 +584,7 @@ class MapImportController:
         self.pause_requested = True
         self.progress_stage = "pausing import"
         self.set_progress_message(
-            "Pausing import",
+            "",
             "Saving a resume point.",
         )
         if self.command_queue is not None:

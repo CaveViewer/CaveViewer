@@ -24,11 +24,11 @@ def test_bundled_default_profile_uses_original_mark_for_windows_and_about():
     profile = resolve_branding_profile(environ={}, frozen=False)
 
     assert profile.profile_id == "default"
-    assert set(profile.roles) == REQUIRED_ROLES
+    assert REQUIRED_ROLES <= set(profile.roles)
     assert profile.asset_for("application_mark").width >= 1024
     assert profile.asset_for("application_mark").height >= 1024
     assert profile.asset_for("application_mark").alpha_required is True
-    assert profile.asset_for("about_mark") is profile.asset_for("application_mark")
+    assert profile.asset_for("about_mark").path.name == "about-mark-semi-flat.png"
     assert profile.asset_for("application_mark").path.name == "caveviewer-mark.png"
     assert profile.asset_for("windows_app_icon").path.name == (
         "windows-small-mark.png"

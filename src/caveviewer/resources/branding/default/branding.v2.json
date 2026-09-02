@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "profile_id": "default",
-  "display_name": "CaveViewer Original Mark",
+  "display_name": "CaveViewer Default Branding with Rich About Mark",
   "provenance": {
     "creator": "CaveViewer project",
     "license": "CaveViewer project artwork",
@@ -11,6 +11,14 @@
     "caveviewer_mark": {
       "path": "caveviewer-mark.png",
       "sha256": "7dd3215fb20dbe43c8c0e9f956df3fc5936f8c30dc78d1998a020b9357ddfde4",
+      "minimum_width": 2048,
+      "minimum_height": 2048,
+      "alpha": "required",
+      "safe_area_inset": 0.0
+    },
+    "about_semi_flat": {
+      "path": "about-mark-semi-flat.png",
+      "sha256": "68bf45c441d2a8cf37d8785073023c4b51cdfd0b8525a818bee21b3cee0cd754",
       "minimum_width": 2048,
       "minimum_height": 2048,
       "alpha": "required",
@@ -59,7 +67,7 @@
   },
   "roles": {
     "application_mark": "caveviewer_mark",
-    "about_mark": "caveviewer_mark",
+    "about_mark": "about_semi_flat",
     "windows_app_icon": "windows_small_mark",
     "macos_app_icon": "macos_app_mark",
     "linux_app_icon": "linux_app_mark",

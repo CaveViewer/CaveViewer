@@ -93,11 +93,9 @@ from caveviewer.gui.map_selection import (
     validate_selected_map_folder as _validate_selected_map_folder,
 )
 from caveviewer.gui.loading_progress import (
-    ROUTINE_PROGRESS_BAR_HEIGHT,
-    ROUTINE_PROGRESS_BAR_WIDTH,
-    ROUTINE_PROGRESS_LABEL_OFFSET,
     monotonic_progress,
     progress_segments,
+    routine_progress_layout,
 )
 from caveviewer.gui.modal_dialog import (
     MODAL_CONTENT_PAD_X,
@@ -248,6 +246,9 @@ _LIBRARY_FORMER_MAP_TITLE_COLOR = DARK_THEME.secondary_text
 _SUBTITLE_COLOR = DARK_THEME.body_text
 _INSTRUCTION_COLOR = DARK_THEME.secondary_text
 _BUTTON_BG = DARK_THEME.primary_button
+# The About wordmark uses a quieter gold that matches the refined About mark
+# without changing the brighter amber used for interactive controls.
+_ABOUT_WORDMARK_ACCENT = "#D99524"
 _BUTTON_BORDER_COLOR = DARK_THEME.primary_button_border
 # Navigation uses a location marker rather than a button treatment.  The
 # background shift stays deliberately quiet; the amber rail and stronger label
@@ -661,50 +662,82 @@ def _launch_canvas_dimensions(canvas) -> tuple[int, int]:
     return tuple(dimensions)
 
 
+def _canvas_text_metrics(canvas, *, text: str, font, px) -> tuple[float, float]:
+    """Measure Canvas text from Tk's actual selected font metrics."""
+    try:
+        import tkinter.font as tkfont
+
+        tk_font = tkfont.Font(root=canvas, font=font)
+        return (
+            max(1, tk_font.measure(text)),
+            max(1, tk_font.metrics("linespace")),
+        )
+    except Exception:
+        return max(1, px(len(text) * 10)), max(1, px(22))
+
+
 def _render_launch_content(canvas, *, progress: float, px) -> None:
-    """Center the launch copy and flat milestone bar on the Void background."""
+    """Render the shared loading bar beneath the centered product wordmark."""
     width, height = _launch_canvas_dimensions(canvas)
-    center_x = width / 2
-    bar_center_y = height * 0.50
-    label_y = bar_center_y - px(ROUTINE_PROGRESS_LABEL_OFFSET)
     canvas.delete("launch_content")
+    wordmark_font = _TYPOGRAPHY.display
+    cave_width, wordmark_height = _canvas_text_metrics(
+        canvas,
+        text="Cave",
+        font=wordmark_font,
+        px=px,
+    )
+    viewer_width, _ = _canvas_text_metrics(
+        canvas,
+        text="Viewer",
+        font=wordmark_font,
+        px=px,
+    )
+    layout = routine_progress_layout(
+        center_x=width / 2,
+        center_y=height / 2,
+        title_height=wordmark_height,
+        scale=px(1),
+    )
+    wordmark_left = width / 2 - (cave_width + viewer_width) / 2
     canvas.create_text(
-        center_x,
-        label_y,
-        text="Preparing to explore what lies beneath...",
-        font=_TYPOGRAPHY.heading,
-        fill=_SUBTITLE_COLOR,
+        wordmark_left,
+        layout.title_top,
+        text="Cave",
+        font=wordmark_font,
+        fill=_ABOUT_WORDMARK_ACCENT,
+        anchor="nw",
         tags="launch_content",
     )
-    bar_width = min(px(ROUTINE_PROGRESS_BAR_WIDTH), max(1, width - px(80)))
-    bar_height = max(1, px(ROUTINE_PROGRESS_BAR_HEIGHT))
-    bar_left = center_x - bar_width / 2
-    bar_top = bar_center_y - bar_height / 2
+    canvas.create_text(
+        wordmark_left + cave_width,
+        layout.title_top,
+        text="Viewer",
+        font=wordmark_font,
+        fill=_TITLE_COLOR,
+        anchor="nw",
+        tags="launch_content",
+    )
     canvas.create_rectangle(
-        bar_left,
-        bar_top,
-        bar_left + bar_width,
-        bar_top + bar_height,
-        fill=getattr(
-            canvas,
-            "_cv_progress_track_color",
-            _LIBRARY_PROGRESS_TRACK_COLOR,
-        ),
+        layout.bar_left,
+        layout.bar_top,
+        layout.bar_right,
+        layout.bar_bottom,
+        fill=getattr(canvas, "_cv_progress_track_color", _LIBRARY_PROGRESS_TRACK_COLOR),
         outline="",
         tags="launch_content",
     )
-    bounded_progress = max(0.0, min(1.0, float(progress)))
-    if bounded_progress > 0.0:
+    for left, right in progress_segments(
+        layout.bar_left,
+        layout.bar_right,
+        progress,
+    ):
         canvas.create_rectangle(
-            bar_left,
-            bar_top,
-            bar_left + bar_width * bounded_progress,
-            bar_top + bar_height,
-            fill=getattr(
-                canvas,
-                "_cv_progress_fill_color",
-                _LIBRARY_PROGRESS_FILL_COLOR,
-            ),
+            left,
+            layout.bar_top,
+            right,
+            layout.bar_bottom,
+            fill=getattr(canvas, "_cv_progress_fill_color", _LIBRARY_PROGRESS_FILL_COLOR),
             outline="",
             tags="launch_content",
         )
@@ -791,7 +824,7 @@ def _build_themed_about_content(
     identity_lockup = tk.Frame(content, bg=_BG_COLOR)
     identity_lockup.pack(pady=(0, px(18)))
 
-    logo_photo = _load_brand_logo(parent, px=px, max_dimension=92)
+    logo_photo = _load_brand_logo(parent, px=px, max_dimension=112)
     if logo_photo is not None:
         logo_label = tk.Label(
             identity_lockup,
@@ -804,13 +837,37 @@ def _build_themed_about_content(
 
     identity_text = tk.Frame(identity_lockup, bg=_BG_COLOR)
     identity_text.pack(side="left")
-    tk.Label(
-        identity_text,
-        text=program_name,
-        font=_TYPOGRAPHY.heading,
-        fg=_TITLE_COLOR,
-        bg=_BG_COLOR,
-    ).pack(anchor="w")
+    # Keep the product name visually unified while giving the two semantic
+    # halves distinct brand emphasis.  Adjacent labels avoid introducing a
+    # layout gap or changing the selected system typeface.
+    wordmark = tk.Frame(identity_text, bg=_BG_COLOR)
+    wordmark.pack(anchor="w")
+    if program_name == "CaveViewer":
+        tk.Label(
+            wordmark,
+            text="Cave",
+            font=_TYPOGRAPHY.heading,
+            fg=_ABOUT_WORDMARK_ACCENT,
+            bg=_BG_COLOR,
+            borderwidth=0,
+        ).pack(side="left")
+        tk.Label(
+            wordmark,
+            text="Viewer",
+            font=_TYPOGRAPHY.heading,
+            fg=_TITLE_COLOR,
+            bg=_BG_COLOR,
+            borderwidth=0,
+        ).pack(side="left")
+    else:
+        tk.Label(
+            wordmark,
+            text=program_name,
+            font=_TYPOGRAPHY.heading,
+            fg=_TITLE_COLOR,
+            bg=_BG_COLOR,
+            borderwidth=0,
+        ).pack(side="left")
     tk.Label(
         identity_text,
         text=f"Version {version}",
