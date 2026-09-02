@@ -33,10 +33,10 @@ def create_tk_typography(
         return (font_family, size, *styles)
 
     return TkTypography(
-        display=font(20, "bold"),
-        heading=font(16, "bold"),
-        body_strong=font(12, "bold"),
-        body=font(12),
-        supporting=font(10),
-        section=font(10, "bold"),
+        display=font(18, "bold"),
+        heading=font(14, "bold"),
+        body_strong=font(10, "bold"),
+        body=font(10),
+        supporting=font(9),
+        section=font(9, "bold"),
     )

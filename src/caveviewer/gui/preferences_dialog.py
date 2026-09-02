@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import os
 import tkinter as tk
-from typing import TYPE_CHECKING, Callable
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Callable, Mapping
 
 from caveviewer.core.preferences.transfer import PREFERENCES_EXPORT_FILENAME
 from caveviewer.storage_paths import default_downloads_dir
@@ -24,7 +25,10 @@ from caveviewer.gui.preferences_form import (
     PreferencesFormState,
     MessageKind,
 )
-from caveviewer.gui.section_spacing import STANDARD_CONTENT_SECTION_SPACING
+from caveviewer.gui.section_spacing import (
+    PRIMARY_SURFACE_VERTICAL_MARGIN,
+    STANDARD_CONTENT_SECTION_SPACING,
+)
 from caveviewer.gui.dialog_style import (
     DIALOG_BODY_PAD_Y,
     create_dialog_action_button,
@@ -62,6 +66,15 @@ from caveviewer.gui.tk_typography import TkTypography, create_tk_typography
 
 if TYPE_CHECKING:
     from caveviewer.gui.platform.runtime import PlatformRuntime
+
+
+@dataclass(frozen=True, slots=True)
+class PreferencesPanelSnapshot:
+    """Unsaved form and navigation state retained across shell recomposition."""
+
+    values: Mapping[str, str]
+    active_page_key: str | None
+    scroll_fraction: float
 
 
 _BG_COLOR = DARK_THEME.background
@@ -209,6 +222,7 @@ class PreferencesPanel:
         on_applied: Callable[[Preferences], None] | None = None,
         on_cancel: Callable[[], None] | None = None,
         confirm_restore: Callable[[], bool] | None = None,
+        initial_snapshot: PreferencesPanelSnapshot | None = None,
     ) -> None:
         if (
             platform_runtime is not None
@@ -318,6 +332,42 @@ class PreferencesPanel:
             self._is_numeric_entry_candidate
         )
         self._build()
+        if initial_snapshot is not None:
+            self._restore_snapshot(initial_snapshot)
+
+    def snapshot(self) -> PreferencesPanelSnapshot:
+        """Capture staged values without validating or saving them."""
+        scroll_fraction = 0.0
+        if self.page_canvas is not None:
+            try:
+                scroll_fraction = float(self.page_canvas.yview()[0])
+            except (IndexError, TypeError, ValueError, tk.TclError):
+                pass
+        return PreferencesPanelSnapshot(
+            values=dict(self.form.state.values),
+            active_page_key=self.active_page_key,
+            scroll_fraction=scroll_fraction,
+        )
+
+    def _restore_snapshot(self, snapshot: PreferencesPanelSnapshot) -> None:
+        state = self.form.stage(snapshot.values)
+        target_page = snapshot.active_page_key
+        if target_page in _PREFERENCE_PAGE_KEYS:
+            self._show_page(target_page)
+        self.rendering_state = True
+        try:
+            for key, value in state.values.items():
+                self._sync_field_value(key, value)
+        finally:
+            self.rendering_state = False
+        self._render_form_state(state)
+        if self.page_canvas is not None and snapshot.scroll_fraction > 0.0:
+            fraction = max(0.0, min(1.0, float(snapshot.scroll_fraction)))
+            self.dialog.after_idle(
+                lambda: self.page_canvas.yview_moveto(fraction)
+                if self.page_canvas is not None
+                else None
+            )
 
     @staticmethod
     def _is_numeric_entry_candidate(value_type: str, candidate: str) -> bool:
@@ -1127,11 +1177,16 @@ class PreferencesPanel:
             ),
             style=TopTabbedContentSurfaceStyle(
                 background_color=_BG_COLOR,
-                content_pad_x=self._layout_policy.body_pad_x,
+                content_pad_left_x=0,
+                content_pad_right_x=self._layout_policy.body_pad_x,
                 content_bottom_pad_y=DIALOG_BODY_PAD_Y,
             ),
         )
-        surface.pack(fill="both", expand=True)
+        surface.pack(
+            fill="both",
+            expand=True,
+            pady=self._surface_px(PRIMARY_SURFACE_VERTICAL_MARGIN),
+        )
         self.tab_strip = surface.tab_strip
         body = surface.content
 

@@ -67,3 +67,14 @@ class SplashSession:
                 pass
             finally:
                 self._after_ids.discard(after_id)
+
+    def cancel_after_callback(self, root: Any, after_id: str | None) -> None:
+        """Cancel one owned callback when a newer coalesced event replaces it."""
+        if after_id is None or after_id not in self._after_ids:
+            return
+        try:
+            root.after_cancel(after_id)
+        except Exception:
+            pass
+        finally:
+            self._after_ids.discard(after_id)

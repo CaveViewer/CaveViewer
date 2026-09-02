@@ -7,6 +7,7 @@ import inspect
 import pytest
 
 from caveviewer.gui.top_tab_strip import (
+    TABBED_CONTENT_ALIGNMENT_INSET,
     TABBED_CONTENT_TOP_GAP,
     TopTab,
     TopTabbedContentSurface,
@@ -90,12 +91,26 @@ def test_tab_strip_marks_pending_tabs_without_replacing_their_labels():
 def test_tabbed_content_surface_defines_one_standard_content_gap():
     style = TopTabbedContentSurfaceStyle(
         background_color="#101018",
-        content_pad_x=32,
+        content_pad_left_x=0,
+        content_pad_right_x=32,
     )
     source = inspect.getsource(TopTabbedContentSurface)
+    tab_style = TopTabStripStyle(
+        background_color="#101018",
+        active_color="#f0ad22",
+        inactive_color="#a9abb8",
+        focus_color="#f0ad22",
+        font=("TkDefaultFont", 12, "bold"),
+    )
 
     assert TABBED_CONTENT_TOP_GAP == 26
+    assert TABBED_CONTENT_ALIGNMENT_INSET == 12
+    assert tab_style.tab_pad_x == TABBED_CONTENT_ALIGNMENT_INSET
+    assert style.content_pad_left_x == 0
+    assert style.content_pad_right_x == 32
     assert style.content_bottom_pad_y == 0
+    assert "horizontal_padding = (" in source
+    assert "padx=horizontal_padding" in source
     assert "horizontal_inset=0" in source
     assert "top_inset=0" in source
     assert "TABBED_CONTENT_TOP_GAP" in source

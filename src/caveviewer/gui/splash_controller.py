@@ -119,3 +119,7 @@ class SplashController:
     def cancel_scheduled_callbacks(self) -> None:
         """Cancel owned callbacks during final composition cleanup."""
         self._session.cancel_after_callbacks(self._scheduler)
+
+    def cancel_scheduled_callback(self, after_id: str | None) -> None:
+        """Cancel one owned callback superseded by a newer UI event."""
+        self._session.cancel_after_callback(self._scheduler, after_id)

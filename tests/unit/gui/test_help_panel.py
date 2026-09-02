@@ -165,6 +165,14 @@ def test_help_panel_uses_a_quiet_table_without_card_borders():
     assert "canvas.create_line(" not in row_source
 
 
+def test_help_uses_the_shared_primary_surface_origin():
+    create_source = inspect.getsource(help_panel.HelpPanel.create)
+
+    assert "content_pad_left_x=0" in create_source
+    assert "content_pad_right_x=style.content_pad_x" in create_source
+    assert "pady=self._px(PRIMARY_SURFACE_VERTICAL_MARGIN)" in create_source
+
+
 def test_help_panel_uses_standard_section_spacing_without_heading_rules():
     table_source = inspect.getsource(help_panel.HelpPanel._render_table)
     heading_source = inspect.getsource(help_panel.HelpPanel._draw_section_heading)

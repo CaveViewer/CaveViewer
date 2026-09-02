@@ -72,10 +72,10 @@ branding_profile_dir = (
     if branding_profile_value
     else resources_root / 'branding' / 'default'
 )
-branding_manifest_path = branding_profile_dir / 'branding.v1.json'
+branding_manifest_path = branding_profile_dir / 'branding.v2.json'
 if not branding_manifest_path.is_file():
     raise RuntimeError(
-        'CAVEVIEWER_BRAND_PROFILE_DIR does not contain branding.v1.json: '
+        'CAVEVIEWER_BRAND_PROFILE_DIR does not contain branding.v2.json: '
         f'{branding_profile_dir}'
     )
 branding_datas = [

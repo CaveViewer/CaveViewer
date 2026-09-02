@@ -67,6 +67,20 @@ def test_cancel_after_callbacks_cancels_all_outstanding_callbacks():
     assert not session._after_ids
 
 
+def test_cancel_after_callback_cancels_only_the_superseded_callback():
+    """A debounced event can replace its own callback without touching others."""
+    root = FakeRoot()
+    session = SplashSession()
+
+    superseded_id = session.schedule_after(root, 100, lambda: None)
+    retained_id = session.schedule_after(root, 200, lambda: None)
+    session.cancel_after_callback(root, superseded_id)
+
+    assert root.cancelled == [superseded_id]
+    assert set(root.callbacks) == {retained_id}
+    assert session._after_ids == {retained_id}
+
+
 def test_select_folder_records_selected_path():
     """The session owns the selected folder result returned by the splash."""
     session = SplashSession()

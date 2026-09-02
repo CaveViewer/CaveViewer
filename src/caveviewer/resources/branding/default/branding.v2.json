@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "profile_id": "default",
   "display_name": "CaveViewer Original Mark",
   "provenance": {
@@ -8,14 +8,6 @@
     "source": "Monochromatic amber cave-map concept derived from the original CaveViewer app mark, with optical compositions for Windows, macOS, and GNOME plus self-contained Linux vector variants"
   },
   "assets": {
-    "cookie": {
-      "path": "application-mark.png",
-      "sha256": "d99122de3968541d9f37f1aa2ff435402d02c3b496c28df138c22a5632e4998e",
-      "minimum_width": 1024,
-      "minimum_height": 1024,
-      "alpha": "required",
-      "safe_area_inset": 0.02
-    },
     "caveviewer_mark": {
       "path": "caveviewer-mark.png",
       "sha256": "e659d88fe044cef77d280de39880e9749211b6e607f236bb1f6b6d961e2cb554",
@@ -63,38 +55,19 @@
       "minimum_height": 128,
       "alpha": "required",
       "safe_area_inset": 0.0
-    },
-    "loading_progress_mark": {
-      "path": "loading-progress-mark.png",
-      "sha256": "8ffcf0a8b4878a1b48e9a45880a2516325eafc12ede1987bf6fde7575baa6f2c",
-      "minimum_width": 1024,
-      "minimum_height": 1024,
-      "alpha": "required",
-      "safe_area_inset": 0.0
-    },
-    "loading_progress_rim_mask": {
-      "path": "loading-progress-rim-mask.png",
-      "sha256": "8142d8eb9ffcc1a721ef8b4b9af59d4591721d64c6e74e430ab36bbffeefdbce",
-      "minimum_width": 1024,
-      "minimum_height": 1024,
-      "alpha": "required",
-      "safe_area_inset": 0.0
     }
   },
   "roles": {
     "application_mark": "caveviewer_mark",
     "about_mark": "caveviewer_mark",
-    "loading_mark": "loading_progress_mark",
-    "loading_progress_mask": "loading_progress_rim_mask",
     "windows_app_icon": "windows_small_mark",
     "macos_app_icon": "macos_app_mark",
     "linux_app_icon": "linux_app_mark",
     "linux_scalable_icon": "linux_scalable_mark",
     "linux_symbolic_icon": "linux_symbolic_mark"
   },
-  "loading_ring": {
+  "loading_progress": {
     "fill_color": "#FFB000",
-    "track_color": "#3B3428",
-    "mode": "ring_with_mark"
+    "track_color": "#3B3428"
   }
 }

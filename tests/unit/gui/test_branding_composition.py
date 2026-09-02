@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from caveviewer.branding import BrandingAssets, LoadingRingTokens
+from caveviewer.branding import BrandingAssets, LoadingProgressTokens
 from caveviewer.gui import splash_screen, viewer_window
 from caveviewer.gui.platform.presentation import select_presentation_profile
 from caveviewer.gui.platform.runtime import create_platform_runtime
@@ -16,8 +16,6 @@ def _assets(tmp_path: Path) -> BrandingAssets:
         for name in (
             "application",
             "about",
-            "loading",
-            "loading_mask",
             "windows",
             "macos",
             "linux",
@@ -29,12 +27,10 @@ def _assets(tmp_path: Path) -> BrandingAssets:
         profile_id="candidate",
         application_mark=paths["application"],
         about_mark=paths["about"],
-        loading_mark=paths["loading"],
-        loading_progress_mask=paths["loading_mask"],
         windows_app_icon=paths["windows"],
         macos_app_icon=paths["macos"],
         linux_app_icon=paths["linux"],
-        loading_ring=LoadingRingTokens("#FFB000", "#3B3428"),
+        loading_progress=LoadingProgressTokens("#FFB000", "#3B3428"),
     )
 
 
@@ -53,6 +49,8 @@ def test_platform_runtime_retains_one_injected_branding_snapshot(tmp_path):
     assert viewer_window._runtime_app_icon_path(runtime) == str(
         branding_assets.windows_app_icon
     )
+    assert branding_assets.loading_progress.fill_color == "#FFB000"
+    assert branding_assets.loading_progress.track_color == "#3B3428"
 
 
 def test_splash_activates_about_and_platform_icon_roles(monkeypatch, tmp_path):

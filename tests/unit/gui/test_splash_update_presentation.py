@@ -78,7 +78,7 @@ def test_splash_components_do_not_override_the_system_cursor(module):
 
 
 def test_map_library_cave_details_stay_in_the_splash_content_area():
-    splash_source = inspect.getsource(splash_screen.show_splash_screen)
+    splash_source = inspect.getsource(splash_screen._show_splash_composition)
     details_source = inspect.getsource(cave_metadata_panel.CaveMetadataPanel)
 
     assert "cave_metadata_surface = tk.Frame(right_frame, bg=_BG_COLOR)" in splash_source
@@ -109,7 +109,7 @@ def test_map_library_cave_details_stay_in_the_splash_content_area():
                 available_version="1.0.78",
             ),
             "",
-            "Update to 1.0.78",
+            "Update to version 1.0.78",
             splash_screen._UpdateAction.DOWNLOAD,
             None,
             False,
@@ -259,6 +259,36 @@ def test_cancel_update_action_accepts_pointer_and_keyboard_activation(sequence):
     assert manager.calls == ["cancel"]
 
 
+def test_available_update_uses_one_pointer_and_keyboard_action_label():
+    label = _FakeUpdateActionLabel()
+    manager = _FakeUpdateActionManager()
+
+    splash_screen._bind_update_label_action(
+        label,
+        manager,
+        splash_screen._UpdateAction.DOWNLOAD,
+    )
+
+    assert label.options == {"takefocus": True}
+    assert set(label.bindings) == {"<Button-1>", "<Return>", "<space>"}
+    assert label.bindings["<Button-1>"]() == "break"
+    assert manager.calls == ["start"]
+
+
+def test_available_update_without_a_version_uses_the_safe_fallback_copy():
+    presentation = splash_screen._update_presentation(
+        UpdateSnapshot(
+            state=UpdateState.AVAILABLE,
+            current_version="1.0.77",
+        )
+    )
+
+    assert presentation == splash_screen._UpdatePresentation(
+        action_text="Update",
+        action=splash_screen._UpdateAction.DOWNLOAD,
+    )
+
+
 def test_install_update_action_requests_the_explicit_manager_handoff():
     label = _FakeUpdateActionLabel()
     manager = _FakeUpdateActionManager()
@@ -365,7 +395,7 @@ def test_windows_exe_update_prompts_for_install_restart_and_never_uses_reveal():
     )
 
     assert available == splash_screen._UpdatePresentation(
-        action_text="Install and restart 1.0.64",
+        action_text="Update to version 1.0.64",
         action=splash_screen._UpdateAction.INSTALL,
     )
     assert ready == splash_screen._UpdatePresentation(
@@ -374,7 +404,9 @@ def test_windows_exe_update_prompts_for_install_restart_and_never_uses_reveal():
         action=splash_screen._UpdateAction.INSTALL,
     )
     assert handoff == splash_screen._UpdatePresentation(
-        status_text="Verifying installer…"
+        status_text="Verifying installer…",
+        progress_visible=True,
+        progress_fraction=None,
     )
 
 
@@ -398,7 +430,7 @@ def test_preview_install_actions_do_not_repeat_the_package_channel():
         )
     )
 
-    assert available.action_text == "Install and restart 1.0.86"
+    assert available.action_text == "Update to version 1.0.86"
     assert ready.action_text == "Install and restart"
 
 
@@ -435,9 +467,11 @@ def test_preview_update_states_are_explicitly_labeled():
         )
     )
 
-    assert available.action_text == "Update to 1.0.64"
+    assert available.action_text == "Update to version 1.0.64"
     assert downloading.status_text == "Downloading… 50%"
+    assert downloading.progress_fraction == 0.5
     assert verifying.status_text == "Verifying…"
+    assert verifying.progress_fraction is None
     assert ready.status_text == "Update ready"
 
 
@@ -543,7 +577,7 @@ def test_splash_root_reuses_existing_retained_tk_root(monkeypatch, platform_name
 
 
 def test_recovered_map_error_is_presented_after_library_reveal():
-    source = inspect.getsource(splash_screen.show_splash_screen)
+    source = inspect.getsource(splash_screen._show_splash_composition)
     reveal_start = source.index("def _reveal_composed_main_surface")
     reveal_end = source.index("def _animate_launch_progress", reveal_start)
     reveal_source = source[reveal_start:reveal_end]
@@ -670,20 +704,20 @@ def test_splash_fonts_scale_from_runtime_tk_default(monkeypatch):
         assert splash_screen._TK_TEXT_SCALE == pytest.approx(1.4)
         assert splash_screen._TYPOGRAPHY.display == (
             "Helvetica Neue",
-            28,
+            25,
             "bold",
         )
-        assert splash_screen._TYPOGRAPHY.heading == ("Helvetica Neue", 22, "bold")
+        assert splash_screen._TYPOGRAPHY.heading == ("Helvetica Neue", 20, "bold")
         assert splash_screen._TYPOGRAPHY.body_strong == (
             "Helvetica Neue",
-            17,
+            14,
             "bold",
         )
-        assert splash_screen._TYPOGRAPHY.body == ("Helvetica Neue", 17)
-        assert splash_screen._TYPOGRAPHY.supporting == ("Helvetica Neue", 14)
+        assert splash_screen._TYPOGRAPHY.body == ("Helvetica Neue", 14)
+        assert splash_screen._TYPOGRAPHY.supporting == ("Helvetica Neue", 13)
         assert splash_screen._TYPOGRAPHY.section == (
             "Helvetica Neue",
-            14,
+            13,
             "bold",
         )
     finally:
@@ -717,10 +751,39 @@ def test_splash_linux_fonts_do_not_multiply_the_tk_default_font(monkeypatch):
         assert splash_screen._TK_TEXT_SCALE == pytest.approx(1.0)
         assert splash_screen._TYPOGRAPHY.body_strong == (
             "sans-serif",
-            12,
+            10,
             "bold",
         )
-        assert splash_screen._TYPOGRAPHY.supporting == ("sans-serif", 10)
+        assert splash_screen._TYPOGRAPHY.supporting == ("sans-serif", 9)
+    finally:
+        for name, value in original_values.items():
+            setattr(splash_screen, name, value)
+
+
+def test_splash_windows_fonts_apply_large_monitor_density_once(monkeypatch):
+    font_globals = ("_UI_FONT_FAMILY", "_TK_TEXT_SCALE", "_TYPOGRAPHY")
+    original_values = {name: getattr(splash_screen, name) for name in font_globals}
+
+    class FakeDefaultFont:
+        def actual(self, key):
+            return {"family": "Segoe UI", "size": 10}[key]
+
+    import tkinter.font as tkfont
+
+    monkeypatch.setattr(tkfont, "families", lambda _root: ["Segoe UI"])
+    monkeypatch.setattr(tkfont, "nametofont", lambda _name: FakeDefaultFont())
+
+    try:
+        splash_screen._configure_runtime_tk_fonts(
+            object(),
+            presentation_profile=select_presentation_profile(platform_name="win32"),
+            density_scale=0.875,
+        )
+
+        assert splash_screen._TK_TEXT_SCALE == pytest.approx(0.875)
+        assert splash_screen._TYPOGRAPHY.body == ("Segoe UI", 9)
+        assert splash_screen._TYPOGRAPHY.supporting == ("Segoe UI", 8)
+        assert splash_screen._TYPOGRAPHY.display == ("Segoe UI", 16, "bold")
     finally:
         for name, value in original_values.items():
             setattr(splash_screen, name, value)
@@ -832,7 +895,7 @@ def test_launch_surface_uses_dark_background_without_a_logo_or_ring():
 
 
 def test_splash_navigation_actions_are_keyboard_accessible_without_fallthrough():
-    source = inspect.getsource(splash_screen.show_splash_screen)
+    source = inspect.getsource(splash_screen._show_splash_composition)
     update_action_source = inspect.getsource(splash_screen._bind_update_label_action)
     background_layout_source = source[
         source.index("_create_map_library_panel(map_library_surface)") : source.index(
@@ -961,7 +1024,9 @@ def test_splash_navigation_actions_are_keyboard_accessible_without_fallthrough()
 
 
 def test_splash_navigation_keeps_asymmetric_label_padding_in_pack_geometry():
-    source = textwrap.dedent(inspect.getsource(splash_screen.show_splash_screen))
+    source = textwrap.dedent(
+        inspect.getsource(splash_screen._show_splash_composition)
+    )
     tree = ast.parse(source)
     label_calls = [
         call
@@ -981,18 +1046,18 @@ def test_splash_navigation_keeps_asymmetric_label_padding_in_pack_geometry():
         for call in label_calls
         for keyword in call.keywords
     )
-    assert 'item.pack(side="left", fill="both", expand=True, padx=(0, px(11)))' in source
+    assert 'item.pack(side="left", fill="both", expand=True, padx=(0, px(9)))' in source
 
 
 def test_splash_navigation_uses_consistent_row_spacing():
-    source = inspect.getsource(splash_screen.show_splash_screen)
+    source = inspect.getsource(splash_screen._show_splash_composition)
 
-    assert splash_screen._NAVIGATION_ITEM_GAP == 8
+    assert splash_screen._NAVIGATION_ITEM_GAP == 4
     assert 'item_row.pack(fill="x", pady=(0, px(_NAVIGATION_ITEM_GAP)))' in source
 
 
 def test_splash_navigation_selection_uses_type_and_color_without_a_fill():
-    source = inspect.getsource(splash_screen.show_splash_screen)
+    source = inspect.getsource(splash_screen._show_splash_composition)
 
     assert "_NAVIGATION_ACTIVE_BG" not in inspect.getsource(splash_screen)
     assert "background = _NAVIGATION_HOVER_BG if active else _BG_COLOR" in source
@@ -1014,17 +1079,17 @@ def test_unsaved_preferences_dialog_offers_three_explicit_close_choices():
     assert "save_button.focus_set()" in source
 
 
-def test_preferences_and_help_share_a_compact_embedded_panel_type_scale():
-    source = inspect.getsource(splash_screen.show_splash_screen)
+def test_preferences_and_help_share_the_primary_semantic_type_scale():
+    source = inspect.getsource(splash_screen._show_splash_composition)
     help_style_source = inspect.getsource(splash_screen._help_panel_style)
 
-    assert splash_screen._EMBEDDED_PANEL_TEXT_SCALE_FACTOR == pytest.approx(11 / 12)
+    assert splash_screen._EMBEDDED_PANEL_TEXT_SCALE_FACTOR == pytest.approx(1.0)
     assert "typography=_embedded_panel_typography()" in source
     assert "typography = _embedded_panel_typography()" in help_style_source
 
 
 def test_splash_navigation_uses_a_quiet_rail_and_lower_app_status():
-    source = inspect.getsource(splash_screen.show_splash_screen)
+    source = inspect.getsource(splash_screen._show_splash_composition)
     update_source = inspect.getsource(splash_screen._update_presentation)
 
     assert "_TYPOGRAPHY: TkTypography = create_tk_typography(" in inspect.getsource(
@@ -1032,16 +1097,23 @@ def test_splash_navigation_uses_a_quiet_rail_and_lower_app_status():
     )
     assert "brand_frame = tk.Frame(left_frame, bg=_BG_COLOR)" not in source
     assert "masthead_icon_label" not in source
-    assert 'navigation_frame.pack(fill="x", pady=(px(22), 0))' in source
+    assert 'navigation_frame.pack(fill="x", pady=(px(18), 0))' in source
     assert "app_status_frame = tk.Frame(left_frame, bg=_BG_COLOR)" in source
-    assert 'text=f"Version {version}"' in source
-    assert 'version_label.pack(anchor="w")' in source
+    assert "version_table" not in source
+    assert "version_descriptor_label" not in source
+    assert "available_update_label" not in source
+    assert "available_version_label" not in source
     assert "update_cluster = tk.Frame(app_status_frame, bg=_BG_COLOR)" in source
+    assert 'update_status_row.pack(anchor="w", fill="x")' in source
+    assert source.count("update_status_row.pack(") == 1
+    assert "update_status_row.pack_forget()" not in source
     assert "def _set_update_cluster_visible(visible: bool)" in source
     assert "def _layout_update_cluster(presentation: _UpdatePresentation)" in source
     assert "Preview update" not in update_source
     assert "Preview installer" not in update_source
-    assert 'action_text = f"{action_text} {snapshot.available_version}"' in update_source
+    assert 'action_text = f"Update to version {snapshot.available_version}"' in update_source
+    assert "action_version" not in update_source
+    assert "version_action" not in update_source
     assert "action_text=snapshot.reveal_action_label" in update_source
     assert "action_replaces_status_after_delay=True" in update_source
     assert "_UPDATE_READY_ACTION_DELAY_MS = 3_000" in inspect.getsource(
@@ -1050,22 +1122,22 @@ def test_splash_navigation_uses_a_quiet_rail_and_lower_app_status():
     assert "def _show_delayed_update_action(" in source
     assert "show_delayed_action=True" in source
     assert "update_cluster.pack_forget()" in source
-    assert "update_cancel_button.pack_forget()" in source
+    assert "update_progress_bar.pack_forget()" not in source
+    assert 'update_progress_bar.pack(anchor="w", fill="x", pady=(px(6), 0))' in source
+    assert source.count("update_progress_bar.pack(") == 1
+    assert "update_progress_bar._cv_progress_visible" in source
+    assert "if not update_progress_bar._cv_progress_visible:" in source
+    assert "update_progress_bar._cv_progress_visible = presentation.progress_visible" in source
     assert 'update_label.pack(side="left", anchor="w", fill="x", expand=True)' in source
-    assert 'update_cancel_button.pack(side="right", padx=(px(6), 0))' in source
-    assert "def _draw_update_cancel_button(progress_fraction: float)" in source
-    assert "extent_degrees=-360 * clamped" in source
-    update_cancel_source = source[
-        source.index("def _draw_update_cancel_button(") : source.index(
-            "def _set_update_cluster_visible("
-        )
-    ]
-    assert "progress_control_photo(" in update_cancel_source
-    assert "create_rectangle(" not in update_cancel_source
-    assert "update_progress_canvas" not in source
+    assert "update_action_label.pack(" in source
+    assert "padx=(px(6), 0) if presentation.status_text else 0" in source
+    assert "def _draw_update_progress_bar(progress_fraction: float | None)" in source
+    assert "progress_segments(" in source
+    assert "progress_control_photo(" not in source
+    assert "update_progress_bar = tk.Canvas(" in source
     footer_action_source = source[
         source.index("update_action_label = tk.Label(") : source.index(
-            "update_cancel_button = tk.Canvas("
+            "update_progress_bar = tk.Canvas("
         )
     ]
     assert "font=_TYPOGRAPHY.supporting" in footer_action_source
@@ -1077,7 +1149,7 @@ def test_themed_about_content_owns_the_brand_identity_while_launch_stays_quiet()
     logo_source = inspect.getsource(splash_screen._load_brand_logo)
     launch_source = inspect.getsource(splash_screen._build_launch_surface)
     dialog_source = inspect.getsource(splash_screen._show_themed_about_dialog)
-    splash_source = inspect.getsource(splash_screen.show_splash_screen)
+    splash_source = inspect.getsource(splash_screen._show_splash_composition)
 
     assert "tk.Toplevel(root)" in dialog_source
     assert "_build_themed_about_content(" in dialog_source
@@ -1085,6 +1157,8 @@ def test_themed_about_content_owns_the_brand_identity_while_launch_stays_quiet()
     assert "_LOGO_PATH" in logo_source
     assert "_load_brand_logo(" in content_source
     assert "_load_brand_logo(" not in launch_source
+    assert 'text=f"Version {version}"' in content_source
+    assert "version=version" in splash_source
     assert "_CREDITS_TEXT.strip()" in content_source
     assert "_ABOUT_WEBSITE_LINKS" in content_source
     assert "www.caveviewer.com" in inspect.getsource(splash_screen)
@@ -1117,7 +1191,7 @@ def test_themed_about_content_owns_the_brand_identity_while_launch_stays_quiet()
 
 
 def test_cache_rebuild_starts_from_splash_without_a_confirmation_window():
-    splash_source = inspect.getsource(splash_screen.show_splash_screen)
+    splash_source = inspect.getsource(splash_screen._show_splash_composition)
 
     assert "CacheRebuildJobController(" in splash_source
     assert "runtime_settings_provider=" in splash_source
@@ -1129,7 +1203,7 @@ def test_cache_rebuild_starts_from_splash_without_a_confirmation_window():
 
 
 def test_splash_map_picker_checks_its_directory_selection_route_before_calling_it():
-    source = inspect.getsource(splash_screen.show_splash_screen)
+    source = inspect.getsource(splash_screen._show_splash_composition)
 
     assert "directory_selection_preflight(" in source
     assert "choose_authorized_directory(" in source
@@ -1139,7 +1213,7 @@ def test_splash_map_picker_checks_its_directory_selection_route_before_calling_i
 
 
 def test_splash_map_library_uses_navigation_and_an_overflow_cue():
-    splash_source = inspect.getsource(splash_screen.show_splash_screen)
+    splash_source = inspect.getsource(splash_screen._show_splash_composition)
     style_source = inspect.getsource(splash_screen._map_library_panel_style)
     controller_source = inspect.getsource(map_library_controller.MapLibraryController)
     panel_source = inspect.getsource(map_library_panel.MapLibraryPanel)
@@ -1167,7 +1241,7 @@ def test_splash_map_library_uses_navigation_and_an_overflow_cue():
     assert "No maps added yet." in source
     assert "Maps you open yourself will appear here." not in source
     assert "No user-opened maps yet." not in source
-    assert 'top_pad=16' in source
+    assert 'top_pad=12' in source
     assert 'bottom_pad=18' in source
     assert "Open a local map" in panel_source
     assert "Browse a cave map folder" in panel_source
@@ -1206,9 +1280,9 @@ def test_splash_map_library_uses_navigation_and_an_overflow_cue():
     assert "self._sync_row_title_wraplength(" in panel_source
     assert "highlightthickness=0" in source
     assert "panel_border_color=_LIBRARY_PANEL_BORDER_COLOR" in style_source
-    assert 'left_frame = tk.Frame(content_frame, bg=_BG_COLOR, width=px(220))' in source
-    assert 'padx=(px(32), 0)' in source
-    assert 'panel.pack(fill="both", expand=True, pady=self._px(14))' in panel_source
+    assert 'left_frame = tk.Frame(content_frame, bg=_BG_COLOR, width=px(190))' in source
+    assert 'padx=(px(24), 0)' in source
+    assert "pady=self._px(PRIMARY_SURFACE_VERTICAL_MARGIN)" in panel_source
     assert "title_font=_TYPOGRAPHY.body_strong" in style_source
     assert "body_font=_TYPOGRAPHY.body" in style_source
     assert "supporting_font=_TYPOGRAPHY.supporting" in style_source
@@ -1218,13 +1292,14 @@ def test_splash_map_library_uses_navigation_and_an_overflow_cue():
     assert "style.action_button_size" in panel_source
     assert "style.action_icon_stroke_width" in panel_source
     assert "style.overflow_button_size" in panel_source
-    assert "progress_bar_canvas = tk.Canvas(" not in source
+    assert "progress_bar_canvas = tk.Canvas(" in source
+    assert "progress_bar_canvas.pack(" in panel_source
     assert "reserve_progress=True" not in panel_source
     assert "_create_action_button" in panel_source
-    assert "_draw_action_stop_progress" in panel_source
-    assert "progress_control_photo(" in panel_source
+    assert "_draw_action_stop" in panel_source
+    assert "progress_control_photo(" not in panel_source
     action_progress_source = inspect.getsource(
-        map_library_panel.MapLibraryPanel._draw_action_progress
+        map_library_panel.MapLibraryPanel._draw_action_operation_glyph
     )
     assert "button.create_rectangle(" not in action_progress_source
     assert "_draw_download" in panel_source
@@ -1233,8 +1308,8 @@ def test_splash_map_library_uses_navigation_and_an_overflow_cue():
     assert "_draw_retry" in panel_source
     assert "_set_row_open_activation" not in panel_source
     assert "_cv_row_action_widgets" not in panel_source
-    assert "stop_fill_color = style.button_fg" in panel_source
-    assert "action_progress_ring_diameter=" in style_source
+    assert "color = style.button_fg" in panel_source
+    assert "action_progress_ring_diameter=" not in style_source
     assert "action_retry_icon_diameter=" in style_source
     assert "action_stop_size=" in style_source
     assert "show_stop_progress=True" in workflow_source
@@ -1253,16 +1328,16 @@ def test_splash_map_library_uses_navigation_and_an_overflow_cue():
     assert "No longer a part of the standard library" in source
     assert "self._draw_vector_photo(" in section_source
     assert "create_polygon(" not in section_source
-    assert "progress_control_photo(" in panel_source
+    assert "_set_row_progress_bar" in panel_source
     assert 'text="Hide"' not in section_source
     assert 'text="Show"' not in section_source
 
     style = splash_screen._map_library_panel_style()
-    assert style.progress_track_color == splash_screen.DARK_THEME.entry_background
-    assert style.progress_fill_color == splash_screen.DARK_THEME.primary_button
+    assert style.progress_track_color == "#3B3428"
+    assert style.progress_fill_color == "#FFB000"
     assert style.progress_track_color != style.button_bg
     assert style.progress_fill_color != style.button_bg
-    assert style.progress_fill_color == style.button_fg
+    assert style.progress_fill_color != style.button_fg
     assert style.former_map_title_color == splash_screen.DARK_THEME.secondary_text
     assert style.former_map_title_color != style.title_color
 
@@ -1383,7 +1458,7 @@ def test_map_library_section_headers_use_adjacent_disclosure_triangles(monkeypat
 
 
 def test_splash_and_library_curved_canvas_art_uses_antialiased_vector_photos():
-    navigation_source = inspect.getsource(splash_screen.show_splash_screen)
+    navigation_source = inspect.getsource(splash_screen._show_splash_composition)
     panel_source = inspect.getsource(map_library_panel.MapLibraryPanel)
 
     assert "vector_icon_photo(" in navigation_source
@@ -1468,7 +1543,7 @@ def test_map_library_size_updates_are_independent_from_row_metadata():
 
 
 def test_map_library_rows_use_subtle_overflow_menu_for_management():
-    splash_source = inspect.getsource(splash_screen.show_splash_screen)
+    splash_source = inspect.getsource(splash_screen._show_splash_composition)
     style_source = inspect.getsource(splash_screen._map_library_panel_style)
     panel_source = inspect.getsource(map_library_panel.MapLibraryPanel)
     row_menu_source = inspect.getsource(
@@ -1517,7 +1592,8 @@ def test_map_library_rows_use_subtle_overflow_menu_for_management():
     assert "Open" in source
     assert "button.create_oval(" not in panel_source
     assert "vector_icon_photo(" in panel_source
-    assert 'button.pack(side="right", padx=(0, self._px(12))' in panel_source
+    assert "overflow_button.grid(" in panel_source
+    assert "column=3" in panel_source
     assert "padx=(0, self._px(8))" in panel_source
     assert "_install_menu_dismissal_bindings" in panel_source
     assert "tk.Frame(" in row_menu_source
@@ -1601,10 +1677,10 @@ def test_map_library_menu_popover_position_stays_inside_the_splash():
 
 
 def test_library_action_buttons_use_normalized_dimensions():
-    assert splash_screen._LIBRARY_ACTION_BUTTON_SIZE == 32
+    assert splash_screen._LIBRARY_ACTION_BUTTON_SIZE == 28
     assert splash_screen._LIBRARY_ACTION_ICON_STROKE_WIDTH == 2
-    assert splash_screen._LIBRARY_OVERFLOW_BUTTON_SIZE == 28
-    assert splash_screen._TYPOGRAPHY.supporting[1] == 10
+    assert splash_screen._LIBRARY_OVERFLOW_BUTTON_SIZE == 24
+    assert splash_screen._TYPOGRAPHY.supporting[1] == 9
     style = splash_screen._map_library_panel_style()
     assert not hasattr(style, "scrollbar_right_inset")
     assert style.panel_border_color == splash_screen._LIBRARY_PANEL_BORDER_COLOR
@@ -1693,7 +1769,7 @@ def test_map_library_open_map_action_uses_the_existing_folder_callback(monkeypat
             return 420
 
         def winfo_height(self) -> int:
-            return 58
+            return 50
 
         def delete(self, tag) -> None:
             self.draw_calls.append(("delete", tag))
@@ -1753,7 +1829,7 @@ def test_map_library_open_map_action_uses_the_existing_folder_callback(monkeypat
 
     action = canvases[0]
     assert action.options["takefocus"] is True
-    assert action.options["height"] == 58
+    assert action.options["height"] == 50
     assert action.options["bg"] == "#202025"
     assert action.pack_calls == [{"anchor": "w", "fill": "x"}]
     assert wheel_targets == [action]
@@ -1812,7 +1888,7 @@ def test_map_library_retry_uses_font_awesome_at_its_inset_optical_size(monkeypat
 
     panel = object.__new__(map_library_panel.MapLibraryPanel)
     panel._px = lambda value: value
-    panel._style = SimpleNamespace(action_retry_icon_diameter=18)
+    panel._style = SimpleNamespace(action_retry_icon_diameter=16)
     button = _FakeButton()
     retry_calls = []
     photo = object()
@@ -1823,80 +1899,102 @@ def test_map_library_retry_uses_font_awesome_at_its_inset_optical_size(monkeypat
 
     monkeypatch.setattr(map_library_panel, "retry_icon_photo", capture_retry_icon)
 
-    panel._draw_retry(button, 32, 32, "#e5a11f")
+    panel._draw_retry(button, 28, 28, "#e5a11f")
 
     assert len(button.image_calls) == 1
     assert retry_calls == [
         {
-            "image_size": (32, 32),
-            "glyph_diameter": 18,
+            "image_size": (28, 28),
+            "glyph_diameter": 16,
             "color": "#e5a11f",
         }
     ]
     assert button._cv_retry_photo is photo
     assert button.image_calls == [
-        ((16.0, 16.0), {"image": photo, "tags": "cv_action_content"})
+        ((14.0, 14.0), {"image": photo, "tags": "cv_action_content"})
     ]
 
 
-@pytest.mark.parametrize(
-    ("pause", "center_glyph"),
-    ((False, "stop"), (True, "pause")),
-)
-def test_map_library_progress_control_uses_one_centered_high_dpi_photo(
-    monkeypatch,
+@pytest.mark.parametrize(("pause", "polygon_count"), ((False, 1), (True, 2)))
+def test_map_library_operation_control_is_separate_from_progress(
     pause,
-    center_glyph,
+    polygon_count,
 ):
-    class _FakeButton:
-        def __init__(self) -> None:
-            self.image_calls = []
-
-        def create_image(self, *coordinates, **options) -> None:
-            self.image_calls.append((coordinates, options))
-
     panel = object.__new__(map_library_panel.MapLibraryPanel)
     panel._px = lambda value: int(round(value * 2.5))
     panel._style = SimpleNamespace(
-        action_progress_ring_diameter=22,
-        action_progress_ring_stroke_width=2,
         action_stop_size=7,
-        progress_track_color="#50535c",
-        progress_fill_color="#e5a11f",
         button_fg="#e5a11f",
         disabled_button_fg="#6f717f",
     )
-    button = _FakeButton()
-    progress_calls = []
-    photo = object()
+    captured = []
+    panel._draw_vector_photo = lambda _button, **options: captured.append(options)
+    button = SimpleNamespace(_cv_enabled=True)
 
-    def capture_progress_control(_widget, **options):
-        progress_calls.append(options)
-        return photo
+    panel._draw_action_operation_glyph(button, 80, 80, pause=pause)
 
-    monkeypatch.setattr(
-        map_library_panel,
-        "progress_control_photo",
-        capture_progress_control,
+    assert len(captured) == 1
+    assert len(captured[0]["polygons"]) == polygon_count
+    assert all(
+        polygon.fill_color == "#e5a11f"
+        for polygon in captured[0]["polygons"]
     )
 
-    panel._draw_action_progress(button, 80, 80, pause=pause)
 
-    assert progress_calls == [
-        {
-            "image_size": 60,
-            "ring_diameter": 55,
-            "stroke_width": 5,
-            "track_color": "#50535c",
-            "fill_color": "#e5a11f",
-            "start_degrees": 90,
-            "extent_degrees": -2,
-            "center_glyph": center_glyph,
-            "center_glyph_size": 18,
-            "center_glyph_color": "#e5a11f",
-        }
-    ]
-    assert button._cv_progress_control_photo is photo
-    assert button.image_calls == [
-        ((40.0, 40.0), {"image": photo, "tags": "cv_action_content"})
-    ]
+def test_public_splash_trampoline_recomposes_without_exposing_private_result(
+    monkeypatch,
+):
+    resume = splash_screen._SplashResumeState(
+        geometry=splash_screen.TkWindowGeometry(900, 700, 100, 100),
+        active_surface="preferences",
+    )
+    results = [splash_screen._SplashRecomposeRequest(resume), "C:/maps/cave"]
+    calls = []
+
+    def compose(**kwargs):
+        calls.append(kwargs)
+        return results.pop(0)
+
+    monkeypatch.setattr(splash_screen, "_show_splash_composition", compose)
+
+    result = splash_screen.show_splash_screen(update_manager=object())
+
+    assert result == "C:/maps/cave"
+    assert calls[0]["show_launch_overlay"] is True
+    assert calls[0]["resume_state"] is None
+    assert calls[1]["show_launch_overlay"] is False
+    assert calls[1]["resume_state"] is resume
+
+
+def test_splash_composition_observes_settled_windows_monitor_transitions():
+    source = inspect.getsource(splash_screen._show_splash_composition)
+
+    assert 'monitor_configure_binding_id[0] = root.bind(' in source
+    assert 'root.unbind("<Configure>", binding_id)' in source
+    assert "if splash_controller.closing or recompose_request[0] is not None:" in source
+    assert "display_scale_changed(display_metrics, candidate)" in source
+    assert "scale_window_geometry(" in source
+    assert "preferred_size=(" in source
+    assert "preferences_panel.snapshot()" in source
+    assert "display_metrics=candidate" in source
+    assert "window_state=current_window_state" in source
+    assert 'resume_state.window_state == "zoomed"' in source
+    assert 'root.state("zoomed")' in source
+    assert "display_metrics = carried_display_metrics or" in source
+    assert "synchronize_tk_point_scale(root, display_metrics)" in source
+    assert "if resume_state is None:" in source
+    assert "_finalize_leave_splash()" in source
+
+
+def test_map_library_rows_reserve_trailing_control_columns():
+    row_source = inspect.getsource(map_library_panel.MapLibraryPanel._create_row)
+    overflow_source = inspect.getsource(
+        map_library_panel.MapLibraryPanel._create_overflow_button
+    )
+
+    assert "row_content.grid_columnconfigure(0, weight=1, minsize=1)" in row_source
+    assert "column=0" in row_source
+    assert "column=1" in row_source
+    assert "column=2" in row_source
+    assert "column=3" in row_source
+    assert ".pack(" not in overflow_source

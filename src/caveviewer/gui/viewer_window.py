@@ -1101,6 +1101,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         self.controls_overlay = ControlsOverlay(
             self.ctx,
             presentation_profile=self._presentation_profile,
+            branding_assets=self._branding_assets,
         )
         self.controls_overlay.show_fullscreen()
 
@@ -1118,8 +1119,6 @@ class CaveViewerWindow(mglw.WindowConfig):
                 self.ctx,
                 branding_assets=self._branding_assets,
             )
-        self.controls_overlay.set_logo_renderer(self.import_progress_panel)
-
         self.ctx.enable(moderngl.DEPTH_TEST)
         self.ctx.enable(moderngl.CULL_FACE)
 
@@ -5454,7 +5453,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         symbol_size = 5.2 if symbol == "OK" else 3.8 if symbol == "..." else 7.2
         center_x = w / 2.0
         ring_center_y = h / 2.0
-        self.import_progress_panel.draw_ring_label(
+        self.import_progress_panel.draw_circle_label(
             center_x=center_x,
             center_y=ring_center_y,
             window_size=window_size,

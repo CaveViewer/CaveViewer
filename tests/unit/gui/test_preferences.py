@@ -818,11 +818,28 @@ def test_preferences_panel_uses_extracted_settings_logic():
         is preferences_form.PreferencesFormController
     )
     assert splash_screen.PreferencesPanel is preferences_dialog.PreferencesPanel
-    splash_source = inspect.getsource(splash_screen.show_splash_screen)
+    splash_source = inspect.getsource(splash_screen._show_splash_composition)
     assert "PreferencesPanel(" in splash_source
     assert "platform_runtime=platform_runtime" in splash_source
     assert "on_cancel=_show_map_library_surface" in splash_source
     assert "_show_preferences_dialog(" not in splash_source
+
+
+def test_preferences_panel_snapshot_keeps_unsaved_values_and_navigation():
+    from caveviewer.gui import preferences_dialog
+
+    panel = object.__new__(preferences_dialog.PreferencesPanel)
+    panel.form = SimpleNamespace(
+        state=SimpleNamespace(values={"memory_target_percent": "63"})
+    )
+    panel.active_page_key = "streaming"
+    panel.page_canvas = SimpleNamespace(yview=lambda: (0.35, 0.8))
+
+    snapshot = panel.snapshot()
+
+    assert snapshot.values == {"memory_target_percent": "63"}
+    assert snapshot.active_page_key == "streaming"
+    assert snapshot.scroll_fraction == 0.35
 
 
 def test_preferences_panel_exposes_backup_and_restore_as_a_separate_tab():
@@ -1712,7 +1729,10 @@ def test_preferences_visual_groups_cover_each_schema_field_once():
 
 def test_preferences_groups_use_the_standard_section_container():
     from caveviewer.gui import preferences_dialog
-    from caveviewer.gui.section_spacing import STANDARD_CONTENT_SECTION_SPACING
+    from caveviewer.gui.section_spacing import (
+        PRIMARY_SURFACE_VERTICAL_MARGIN,
+        STANDARD_CONTENT_SECTION_SPACING,
+    )
 
     container_source = inspect.getsource(
         preferences_dialog.PreferenceSectionContainer
@@ -1721,14 +1741,25 @@ def test_preferences_groups_use_the_standard_section_container():
         preferences_dialog.PreferencesPanel._render_section
     )
 
-    assert STANDARD_CONTENT_SECTION_SPACING.heading_to_content_y == 16
-    assert STANDARD_CONTENT_SECTION_SPACING.between_sections_y == 32
+    assert STANDARD_CONTENT_SECTION_SPACING.heading_to_content_y == 13
+    assert STANDARD_CONTENT_SECTION_SPACING.between_sections_y == 26
+    assert PRIMARY_SURFACE_VERTICAL_MARGIN == 14
     assert "text=title.upper()" in container_source
     assert "DARK_THEME.entry_border" not in container_source
     assert "STANDARD_CONTENT_SECTION_SPACING.heading_to_content_y" in container_source
     assert "STANDARD_CONTENT_SECTION_SPACING.between_sections_y" in container_source
     assert "PreferenceSectionContainer(" in render_section_source
     assert "group.content" in render_section_source
+
+
+def test_preferences_uses_the_shared_primary_surface_origin():
+    from caveviewer.gui import preferences_dialog
+
+    source = inspect.getsource(preferences_dialog.PreferencesPanel._build)
+
+    assert "content_pad_left_x=0" in source
+    assert "content_pad_right_x=self._layout_policy.body_pad_x" in source
+    assert "pady=self._surface_px(PRIMARY_SURFACE_VERTICAL_MARGIN)" in source
 
 
 def test_preferences_panel_uses_sidebar_context_and_full_width_forms():
