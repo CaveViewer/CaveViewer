@@ -70,6 +70,18 @@ def test_controller_cannot_schedule_before_start_or_after_close():
         controller.schedule(1, lambda: None)
 
 
+def test_controller_can_cancel_one_debounced_callback():
+    controller, scheduler = _controller()
+    controller.start()
+    superseded = controller.schedule(25, lambda: None)
+    retained = controller.schedule(50, lambda: None)
+
+    controller.cancel_scheduled_callback(superseded)
+
+    assert scheduler.cancelled == [superseded]
+    assert retained not in scheduler.cancelled
+
+
 def test_startup_readiness_gate_requires_time_and_composition_readiness():
     gate = StartupReadinessGate(visible_at=10.0)
 

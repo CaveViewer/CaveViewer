@@ -26,7 +26,7 @@ def test_render_cache_finalization_phases_are_user_facing():
     )
 
 
-def test_ring_labels_share_the_import_title_stage_note_layout(monkeypatch):
+def test_circle_labels_share_the_import_title_stage_note_layout(monkeypatch):
     panel = object.__new__(ImportProgressPanel)
     text_calls = []
 
@@ -46,7 +46,7 @@ def test_ring_labels_share_the_import_title_stage_note_layout(monkeypatch):
         record_text,
     )
 
-    panel._add_ring_labels(
+    panel._add_circle_labels(
         add_quad_px=lambda *_args: None,
         center_x=400.0,
         center_y=300.0,
@@ -166,34 +166,24 @@ def test_progress_bar_fill_bounds_cover_determinate_and_indeterminate_states():
     assert indeterminate[0][1] - indeterminate[0][0] == pytest.approx(84.0)
 
 
+def test_import_progress_uses_shared_opengl_layout_tokens():
+    assert ImportProgressPanel.PROGRESS_BAR_WIDTH == (
+        import_progress_panel.OPENGL_PROGRESS_BAR_WIDTH
+    )
+    assert ImportProgressPanel.PROGRESS_BAR_HEIGHT == (
+        import_progress_panel.OPENGL_PROGRESS_BAR_HEIGHT
+    )
+    assert ImportProgressPanel.STAGE_TEXT_SIZE == (
+        import_progress_panel.OPENGL_PROGRESS_LABEL_TEXT_SIZE
+    )
+
+
 def test_import_render_uses_flat_bar_without_large_logo():
     source = import_progress_panel.ImportProgressPanel.render.__code__.co_names
 
     assert "_progress_bar_fill_bounds" in source
     assert "_add_bar_labels" in source
     assert "_render_logo" not in source
-
-
-def test_progress_ring_shader_uses_framebuffer_derivative_smoothing():
-    source = import_progress_panel._LOGO_FRAG_SRC
-
-    assert "fwidth(dist)" in source
-    assert "fwidth(pixel_progress)" in source
-    assert "fwidth(arc_offset)" in source
-    assert "float edge = 0.005;" not in source
-    assert "step(pixel_progress, progress)" not in source
-
-
-def test_progress_ring_shader_uses_profile_colors_without_logo_color_filtering():
-    source = import_progress_panel._LOGO_FRAG_SRC
-
-    assert "uniform vec3 u_track_rgb;" in source
-    assert "uniform vec3 u_fill_rgb;" in source
-    assert "vec3 track_rgb =" not in source
-    assert "vec3 fill_rgb =" not in source
-    assert "is_amber" not in source
-    assert "uniform sampler2D u_rim_mask;" in source
-    assert "rim_mask_alpha" in source
 
 
 def test_hex_brand_color_conversion_matches_shader_values():
@@ -204,82 +194,44 @@ def test_hex_brand_color_conversion_matches_shader_values():
     )
 
 
-def test_failed_loading_mark_decode_falls_back_to_transparent_ring_texture(
-    tmp_path,
-):
-    class FakeTexture:
-        def __init__(self):
-            self.released = False
-
-        def release(self):
-            self.released = True
-
-        def build_mipmaps(self):
-            return None
-
-    class FakeContext:
-        def __init__(self):
-            self.calls = []
-
-        def texture(self, size, components, data):
-            self.calls.append((size, components, data))
-            return FakeTexture()
-
-    branding_assets = import_progress_panel.resolve_branding_assets(environ={})
+def test_countdown_circle_uses_shared_progress_thickness_and_brand_colors():
+    assets = import_progress_panel.resolve_branding_assets(environ={})
     panel = object.__new__(ImportProgressPanel)
-    panel.ctx = FakeContext()
-    panel._branding_assets = import_progress_panel.BrandingAssets(
-        profile_id=branding_assets.profile_id,
-        application_mark=branding_assets.application_mark,
-        about_mark=branding_assets.about_mark,
-        loading_mark=tmp_path / "missing.png",
-        loading_progress_mask=branding_assets.loading_progress_mask,
-        windows_app_icon=branding_assets.windows_app_icon,
-        macos_app_icon=branding_assets.macos_app_icon,
-        linux_app_icon=branding_assets.linux_app_icon,
-        loading_ring=branding_assets.loading_ring,
+    panel._progress_track_rgba = (*import_progress_panel._hex_color_rgb(
+        assets.loading_progress.track_color
+    ), 1.0)
+    panel._progress_fill_rgba = (*import_progress_panel._hex_color_rgb(
+        assets.loading_progress.fill_color
+    ), 1.0)
+    arcs = []
+    panel._append_circle_arc = lambda *args: arcs.append(args[4:7])
+
+    panel._append_progress_circle(
+        [], lambda x, y: (x, y), 100.0, 100.0, 0.25, 0.5
     )
-    panel._logo_texture = None
-    panel._logo_aspect = 2.0
-    panel._logo_available = True
 
-    panel._load_logo_texture()
-
-    assert panel._logo_available is False
-    assert panel._logo_aspect == 1.0
-    assert panel._logo_texture is not None
-    assert panel.ctx.calls[0] == ((1, 1), 4, b"\x00\x00\x00\x00")
-    assert panel.ctx.calls[1][:2] == ((1024, 1024), 4)
-    assert panel._rim_mask_available is True
+    assert ImportProgressPanel.COUNTDOWN_STROKE_WIDTH == (
+        ImportProgressPanel.PROGRESS_BAR_HEIGHT
+    )
+    assert arcs[0][:2] == (0.0, 1.0)
+    assert arcs[1][:2] == (0.0, 0.25)
+    assert arcs[1][2][:3] == panel._progress_fill_rgba[:3]
+    assert arcs[1][2][3] == 0.5
 
 
-def test_failed_loading_mark_upload_retries_with_ring_only_texture():
-    class FakeTexture:
-        def build_mipmaps(self):
-            return None
-
-    class FakeContext:
-        def __init__(self):
-            self.calls = []
-
-        def texture(self, size, components, data):
-            self.calls.append((size, components, len(data)))
-            if len(self.calls) == 1:
-                raise RuntimeError("simulated full-mark upload failure")
-            return FakeTexture()
-
+def test_circle_arc_builds_clockwise_geometry_from_twelve_oclock():
     panel = object.__new__(ImportProgressPanel)
-    panel.ctx = FakeContext()
-    panel._branding_assets = import_progress_panel.resolve_branding_assets(environ={})
-    panel._logo_texture = None
-    panel._logo_aspect = 1.0
-    panel._logo_available = False
+    vertices = []
 
-    panel._load_logo_texture()
+    panel._append_circle_arc(
+        vertices,
+        lambda x, y: (x, y),
+        100.0,
+        100.0,
+        0.0,
+        0.25,
+        (1.0, 0.5, 0.0, 1.0),
+    )
 
-    assert panel._logo_available is False
-    assert panel._logo_texture is not None
-    assert len(panel.ctx.calls) == 3
-    assert panel.ctx.calls[1] == ((1, 1), 4, 4)
-    assert panel.ctx.calls[2][:2] == ((1024, 1024), 4)
-    assert panel._rim_mask_available is True
+    assert vertices[0][:2] == pytest.approx((100.0, 14.0))
+    assert vertices[-5][:2] == pytest.approx((186.0, 100.0))

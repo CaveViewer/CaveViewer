@@ -22,7 +22,10 @@ from caveviewer.gui.action_confirmation import (
     TransientActionConfirmation,
     create_confirmation_mark,
 )
-from caveviewer.gui.section_spacing import STANDARD_CONTENT_SECTION_SPACING
+from caveviewer.gui.section_spacing import (
+    PRIMARY_SURFACE_VERTICAL_MARGIN,
+    STANDARD_CONTENT_SECTION_SPACING,
+)
 from caveviewer.gui.scrollable_content import (
     CanvasScrollbarStyle,
     CanvasVerticalScrollbar,
@@ -292,11 +295,16 @@ class HelpPanel:
             ),
             style=TopTabbedContentSurfaceStyle(
                 background_color=style.background_color,
-                content_pad_x=style.content_pad_x,
+                content_pad_left_x=0,
+                content_pad_right_x=style.content_pad_x,
                 content_bottom_pad_y=14,
             ),
         )
-        surface.pack(fill="both", expand=True)
+        surface.pack(
+            fill="both",
+            expand=True,
+            pady=self._px(PRIMARY_SURFACE_VERTICAL_MARGIN),
+        )
         self._shell = surface.widget
         self._tab_strip = surface.tab_strip
 

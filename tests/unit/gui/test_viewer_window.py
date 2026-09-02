@@ -948,7 +948,7 @@ def test_capture_status_uses_import_style_message_note_layout(monkeypatch):
         ("scrim", args, kwargs)
     )
     window.import_progress_panel = SimpleNamespace(
-        draw_ring_label=lambda **kwargs: calls.append(("ring", kwargs))
+        draw_circle_label=lambda **kwargs: calls.append(("circle", kwargs))
     )
     monkeypatch.setattr(viewer_window.time, "perf_counter", lambda: 10.0)
 
@@ -957,7 +957,7 @@ def test_capture_status_uses_import_style_message_note_layout(monkeypatch):
     assert calls == [
         ("scrim", ((800, 600),), {"alpha": 0.42}),
         (
-            "ring",
+            "circle",
             {
                 "center_x": 400.0,
                 "center_y": 300.0,
@@ -973,7 +973,7 @@ def test_capture_status_uses_import_style_message_note_layout(monkeypatch):
     ]
 
 
-def test_saving_capture_status_uses_an_indeterminate_ring(monkeypatch):
+def test_saving_capture_status_uses_an_indeterminate_circle(monkeypatch):
     window = object.__new__(viewer_window.CaveViewerWindow)
     window.wnd = SimpleNamespace(size=(800, 600))
     window.UI_TEXT_SCALE = 1.28
@@ -988,7 +988,7 @@ def test_saving_capture_status_uses_an_indeterminate_ring(monkeypatch):
     calls = []
     window._render_recording_countdown_scrim = lambda *args, **kwargs: None
     window.import_progress_panel = SimpleNamespace(
-        draw_ring_label=lambda **kwargs: calls.append(kwargs)
+        draw_circle_label=lambda **kwargs: calls.append(kwargs)
     )
     monkeypatch.setattr(viewer_window.time, "perf_counter", lambda: 10.0)
 

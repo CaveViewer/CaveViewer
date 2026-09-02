@@ -93,7 +93,7 @@ or cyan must not become a logo, highlight, progress, or primary-action color.
 | Panel | `#12121A` | Raised application and website surfaces. |
 | Raised panel | `#181822` | Website depth layer; use sparingly. |
 | Icon amber | `#FFB000` | Application mark and branded loading fill. |
-| Action amber | `#E5A11F` | Desktop primary actions and progress fill. |
+| Action amber | `#E5A11F` | Desktop primary actions. |
 | Light amber | `#F2D98C` | Titles, links, and warm high-emphasis text. |
 | Brass | `#CAA23E` | Website secondary accent and restrained detail. |
 | Dim brass | `#8A7030` | Low-emphasis website accent. |
@@ -101,13 +101,13 @@ or cyan must not become a logo, highlight, progress, or primary-action color.
 | Muted chalk | `#9A9AA6` | Supporting copy and secondary information. |
 | Slate line | `#5C5C6E` | Borders and structural separation. |
 | Faint line | `#2A2A36` | Quiet website dividers and background detail. |
-| Loading track | `#3B3428` | Branded loading-ring track paired with icon amber. |
+| Loading track | `#3B3428` | Branded loading track paired with icon amber. |
 
 Use the semantic token for the role instead of choosing the nearest amber by
 eye. The application theme currently lives in
 `src/caveviewer/gui/tk_theme.py`; website tokens live in `docs/index.html`;
 profile-controlled loading colors live in
-`src/caveviewer/resources/branding/default/branding.v1.json`. Where these
+`src/caveviewer/resources/branding/default/branding.v2.json`. Where these
 surfaces intentionally use different amber values, preserve the role
 distinction. Do not average the palette into a new color.
 
@@ -119,7 +119,7 @@ or motion as defined in [UX guidelines](ux-guidelines.md).
 ## Typography
 
 Typography is part of the brand system but is not currently a branding-profile
-field. Do not add fonts to `branding.v1.json` without a separately planned
+field. Do not add fonts to `branding.v2.json` without a separately planned
 schema and packaging change.
 
 Desktop interfaces use a native-feeling sans serif selected by the platform
@@ -163,8 +163,9 @@ and a flat progress bar without an additional logo or product title.
 
 Motion communicates progress or transition; it is not decoration. Use calm,
 bounded animation, respect reduced-motion preferences, and never block the UI
-thread to hold a branded frame. Progress uses the same dark-track/amber-fill
-language across startup and map loading.
+thread to hold a branded frame. Routine progress uses the same flat
+dark-track/amber-fill language across startup, viewer, Map Library, and update
+work. Geometry belongs to the design system; branding supplies semantic colors.
 
 Brand voice is calm, capable, concise, and exploratory. Explain the user's
 state or next action without dramatizing risk. Prefer language such as
@@ -186,7 +187,7 @@ of selecting an unrelated concrete image path.
 
 The implementation is divided into five layers:
 
-1. `src/caveviewer/resources/branding/default/branding.v1.json` is the bundled
+1. `src/caveviewer/resources/branding/default/branding.v2.json` is the bundled
    default profile. It maps semantic roles to versioned PNG or SVG source
    assets, records provenance and hashes, and defines loading presentation
    tokens.
@@ -204,7 +205,9 @@ The implementation is divided into five layers:
    build scripts consume that resolved export so runtime and native package
    surfaces do not drift.
 
-The current version-1 profile controls artwork roles and loading-ring colors.
+The current version-2 profile controls artwork roles and geometry-neutral
+`loading_progress` colors. Routine flat bars and the vector capture circle use
+the same tokens, so their color can be rebranded without replacing UI artwork.
 It does **not** control the Tk theme, typography, website CSS, startup
 photography or copy, screenshots, store metadata, signing identity, product
 name, or platform application IDs. Those remain separate sources listed in the
@@ -212,14 +215,13 @@ machine-readable contract. Adding any of them to the profile requires a
 versioned schema change and matching runtime, exporter, packaging, and test
 updates.
 
-The version-1 branding profile controls these roles:
+The version-2 branding profile controls these roles:
 
 - application mark;
 - Windows, macOS, and Linux application-icon overrides;
 - Linux full-color scalable and High Contrast symbolic application icons;
 - About-page mark;
-- loading-indicator mark and progress mask;
-- bounded loading-ring presentation tokens.
+- loading-progress fill and track colors.
 
 Optional DMG volume/background artwork, file-association icons, store imagery,
 and web exports are extension points, not current profile roles.
@@ -235,7 +237,8 @@ Tk, OpenGL, or platform packaging tools.
 | --- | --- | --- | --- | --- |
 | All desktop platforms | About page | About mark | Runtime RGBA image | GUI composition |
 | All desktop platforms | Initial startup | Dark cave background, launch copy, and shared progress colors | Text-and-bar launch surface gated by minimum display time and composed-main-screen readiness | GUI composition |
-| All desktop platforms | Import/loading progress | Loading mark, progress mask, and ring tokens | Static mark plus masked progress rim; circular ring, text-only, or ring-only failure fallback | GUI presentation |
+| All desktop platforms | Routine loading progress | Semantic progress fill and track colors | Flat determinate or indeterminate bar across launch, viewer, Map Library, and updates | GUI presentation |
+| All desktop platforms | Capture countdown/status | Semantic progress fill and track colors | Standard vector circle with centered countdown or status text | GUI presentation |
 | Windows | Window upper-left icon, taskbar, title bar, native dialogs | Windows application icon | Runtime PNG and inherited window icon | GUI/platform adapter |
 | Windows | Executable, installer, Start menu, shortcuts, pinned taskbar, Installed Apps and uninstaller | Windows application icon | Multi-frame ICO embedded by PyInstaller and Inno Setup | Windows packaging |
 | macOS | Application windows, Dock, Command-Tab, Finder and Applications | macOS application icon | Complete iconset and ICNS in the application bundle | macOS packaging |
@@ -293,7 +296,7 @@ brand is accepted rather than for every developer experiment.
 
 ## Developer workflow
 
-A profile is a directory containing `branding.v1.json` and its referenced PNG
+A profile is a directory containing `branding.v2.json` and its referenced PNG
 sources. Copy the bundled default profile to an ignored working directory,
 update its identity, provenance, roles, hashes, and artwork, then validate it:
 
@@ -326,17 +329,16 @@ Omitting it selects the bundled `default` profile.
 
 ## Profile fields
 
-- `schema_version` is currently `1`.
+- `schema_version` is currently `2`. Version-1 custom profiles are rejected and
+  must be migrated explicitly.
 - `profile_id` and `provenance` identify and license the source.
 - `assets` declares relative paths, SHA-256 hashes, minimum dimensions, alpha,
   square geometry, and safe-area inset.
-- `roles` maps application, About, loading mark/mask, platform raster-icon,
-  Linux scalable-icon, and Linux symbolic-icon semantics. The loading progress
-  mask is an alpha-only source aligned with the loading mark; its
-  non-transparent pixels define the brand shape that receives track and fill
-  colors.
-- `loading_ring` selects `text_only`, `ring_only`, or `ring_with_mark` and
-  supplies validated fill and track colors.
+- `roles` maps application, About, platform raster-icon, Linux scalable-icon,
+  and Linux symbolic-icon semantics.
+- `loading_progress` supplies validated fill and track colors used by routine
+  bars and the vector capture countdown/status circle. Geometry and text remain
+  application-owned so a profile never needs legacy loading artwork.
 
 Correct validation errors in sources or the manifest, then export again. Never
 repair a profile by editing generated output.
@@ -353,7 +355,7 @@ not change machine behavior may retain the current version.
 ```json
 {
   "contract_id": "caveviewer-brand-guidelines",
-  "contract_version": 1,
+  "contract_version": 2,
   "document": "docs/development/branding.md",
   "brand": {
     "product_name": "CaveViewer",
@@ -378,7 +380,7 @@ not change machine behavior may retain the current version.
     ]
   },
   "authority": {
-    "profile_manifest": "src/caveviewer/resources/branding/default/branding.v1.json",
+    "profile_manifest": "src/caveviewer/resources/branding/default/branding.v2.json",
     "profile_schema_and_resolver": "src/caveviewer/branding.py",
     "exporter": "src/caveviewer/branding_export.py",
     "desktop_theme": "src/caveviewer/gui/tk_theme.py",
@@ -483,8 +485,7 @@ not change machine behavior may retain the current version.
       "action_amber": {
         "hex": "#E5A11F",
         "uses": [
-          "desktop primary action",
-          "desktop progress fill"
+          "desktop primary action"
         ]
       },
       "light_amber": {
@@ -615,15 +616,13 @@ not change machine behavior may retain the current version.
     ]
   },
   "implementation": {
-    "profile_schema_version": 1,
+    "profile_schema_version": 2,
     "profile_selector_environment_variable": "CAVEVIEWER_BRAND_PROFILE",
     "external_runtime_profile_allowed_in_source_build": true,
     "external_runtime_profile_allowed_in_frozen_build": false,
     "required_roles": [
       "application_mark",
       "about_mark",
-      "loading_mark",
-      "loading_progress_mask",
       "windows_app_icon",
       "macos_app_icon",
       "linux_app_icon",
@@ -635,7 +634,7 @@ not change machine behavior may retain the current version.
       "asset hashes and provenance",
       "minimum dimensions and alpha policy",
       "safe-area inset",
-      "loading-ring mode, fill color, and track color"
+      "loading-progress fill color and track color"
     ],
     "not_profile_controlled": [
       "desktop Tk theme",
@@ -646,11 +645,11 @@ not change machine behavior may retain the current version.
       "DMG background or volume artwork",
       "stable product identity"
     ],
-    "loading_modes": [
-      "text_only",
-      "ring_only",
-      "ring_with_mark"
-    ],
+    "capture_countdown": {
+      "geometry": "application-owned vector circle",
+      "center_content": "remaining seconds or status symbol",
+      "uses_loading_progress_colors": true
+    },
     "windows_icon_sizes_px": [
       16,
       24,

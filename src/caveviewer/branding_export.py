@@ -42,8 +42,6 @@ MACOS_ICONSET_OUTPUTS = (
 RUNTIME_ROLE_SIZES = {
     "application_mark": 512,
     "about_mark": 512,
-    "loading_mark": 256,
-    "loading_progress_mask": 256,
     "windows_app_icon": 256,
     "macos_app_icon": 1024,
     "linux_app_icon": 512,
@@ -354,7 +352,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="caveviewer-branding")
     parser.add_argument(
         "--profile",
-        help="Profile directory or branding.v1.json; defaults to the bundled profile",
+        help="Profile directory or branding.v2.json; defaults to the bundled profile",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("validate", help="Validate a profile and print its identity")

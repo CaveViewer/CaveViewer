@@ -128,7 +128,7 @@ if [ -d "$branding_profile" ]; then
 else
   branding_profile_dir="$(dirname "$branding_profile")"
 fi
-for required_path in "$icon_file" "$branding_summary" "$branding_profile_dir/branding.v1.json"; do
+for required_path in "$icon_file" "$branding_summary" "$branding_profile_dir/branding.v2.json"; do
   if [ ! -f "$required_path" ]; then
     echo "Error: required branding export input is missing: $required_path" >&2
     exit 1
@@ -174,7 +174,7 @@ if [ -z "$bundled_release_metadata" ]; then
   exit 1
 fi
 cv_verify_release_metadata "$bundled_release_metadata" "$(cv_release_channel)"
-bundled_branding_manifest="$(find "$payload_dir" -type f -path '*caveviewer/resources/branding/default/branding.v1.json' -print -quit)"
+bundled_branding_manifest="$(find "$payload_dir" -type f -path '*caveviewer/resources/branding/default/branding.v2.json' -print -quit)"
 bundled_branding_summary="$(find "$payload_dir" -type f -path '*caveviewer/resources/branding/export-summary.v1.json' -print -quit)"
 if [ -z "$bundled_branding_manifest" ] || [ -z "$bundled_branding_summary" ]; then
   echo "Error: frozen payload is missing selected branding inputs or provenance." >&2

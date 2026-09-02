@@ -24,6 +24,7 @@ import time
 import moderngl
 import numpy as np
 
+from caveviewer.branding import BrandingAssets, resolve_branding_assets
 from caveviewer.gui import bitmap_font
 from caveviewer.gui.controls_catalog import (
     is_help_shortcut_visible,
@@ -35,6 +36,17 @@ from caveviewer.gui.platform.presentation import (
     get_presentation_profile,
 )
 from caveviewer.core.diagnostics.logging import get_logger
+from caveviewer.gui.loading_progress import (
+    OPENGL_PROGRESS_BAR_HEIGHT,
+    OPENGL_PROGRESS_BAR_WIDTH,
+    OPENGL_PROGRESS_BASE_WINDOW_SIZE,
+    OPENGL_PROGRESS_LABEL_OFFSET,
+    OPENGL_PROGRESS_LABEL_TEXT_SIZE,
+    OPENGL_PROGRESS_LAYOUT_SCALE_MAX,
+    hex_color_rgb,
+    progress_layout_scale,
+    progress_segments,
+)
 
 
 _LOG = get_logger("ControlsOverlay")
@@ -64,12 +76,10 @@ void main() {
 _SPLASH_TITLE_RGBA = (0.9490, 0.8510, 0.5490, 1.0)       # #f2d98c
 _SPLASH_SUBTITLE_RGBA = (0.8000, 0.8039, 0.8392, 1.0)    # #cccdd6
 _SPLASH_INSTRUCTION_RGBA = (0.6039, 0.6039, 0.6510, 1.0) # #9a9aa6
-_SPLASH_PROGRESS_TRACK_RGBA = (0.1098, 0.1098, 0.1412, 0.98)  # #1c1c24
-_SPLASH_PROGRESS_FILL_RGBA = (0.8980, 0.6314, 0.1216, 1.0)    # #e5a11f
 
-_FULLSCREEN_BASE_WINDOW_SIZE = (1536, 864)
-_FULLSCREEN_LAYOUT_SCALE_MAX = 1.32
-_FULLSCREEN_SUBTITLE_TEXT_SIZE = 2.55
+_FULLSCREEN_BASE_WINDOW_SIZE = OPENGL_PROGRESS_BASE_WINDOW_SIZE
+_FULLSCREEN_LAYOUT_SCALE_MAX = OPENGL_PROGRESS_LAYOUT_SCALE_MAX
+_FULLSCREEN_SUBTITLE_TEXT_SIZE = OPENGL_PROGRESS_LABEL_TEXT_SIZE
 _CONTROL_KEYCAP_ROW_GAP = 4.0
 _MEDIUM_NAMED_KEYCAPS = frozenset({"Cmd", "Ctrl", "Del", "Scroll", "Shift"})
 _WIDE_NAMED_KEYCAPS = frozenset({"Escape", "Space"})
@@ -84,16 +94,7 @@ def _fullscreen_layout_scale(window_size: tuple[int, int]) -> float:
     1536x864 baseline.  Cap the multiplier so very large monitors do not turn
     the reference table into billboard-sized text.
     """
-    try:
-        width, height = window_size
-        width = max(1, int(width))
-        height = max(1, int(height))
-    except Exception:
-        width, height = _FULLSCREEN_BASE_WINDOW_SIZE
-
-    base_width, base_height = _FULLSCREEN_BASE_WINDOW_SIZE
-    size_scale = min(width / base_width, height / base_height)
-    return max(1.0, min(_FULLSCREEN_LAYOUT_SCALE_MAX, size_scale))
+    return progress_layout_scale(window_size)
 
 
 def _minimum_control_row_height(
@@ -248,6 +249,7 @@ class ControlsOverlay:
         ctx: moderngl.Context,
         *,
         presentation_profile: PresentationProfile | None = None,
+        branding_assets: BrandingAssets | None = None,
     ):
         self.ctx = ctx
         self.program = ctx.program(vertex_shader=_VERT_SRC, fragment_shader=_FRAG_SRC)
@@ -267,7 +269,16 @@ class ControlsOverlay:
         self._fade_start_time = None
         self._progress_fraction = 0.0
         self._panel_loaded_time: float | None = None
-        self._logo_renderer = None  # set via set_logo_renderer() after construction
+        self._branding_assets = branding_assets or resolve_branding_assets(environ={})
+        progress_tokens = self._branding_assets.loading_progress
+        self._progress_track_rgba = (
+            *hex_color_rgb(progress_tokens.track_color),
+            0.98,
+        )
+        self._progress_fill_rgba = (
+            *hex_color_rgb(progress_tokens.fill_color),
+            1.0,
+        )
         
         # Generate control rows from the immutable process presentation profile.
         self._presentation_profile = presentation_profile or get_presentation_profile()
@@ -293,11 +304,6 @@ class ControlsOverlay:
         self._start_time = time.perf_counter()
         self._fade_start_time = None
         self._progress_fraction = 0.0
-
-    def set_logo_renderer(self, renderer) -> None:
-        """Wire in an ImportProgressPanel so the teleport panel uses its
-        logo+ring progress indicator instead of a plain bar."""
-        self._logo_renderer = renderer
 
     def show_panel(self) -> None:
         """Call after a minimap teleport, while the new area's chunks stream in."""
@@ -551,15 +557,6 @@ class ControlsOverlay:
         self.ctx.enable(moderngl.BLEND)
         if verts:
             self._vao.render(moderngl.TRIANGLES, vertices=len(verts))
-        # For the compact teleport panel, draw the logo+ring centred on screen.
-        if not self._fullscreen and self._logo_renderer is not None:
-            self._logo_renderer.draw_logo(
-                center_x=w / 2.0,
-                center_y=h / 2.0,
-                window_size=window_size,
-                progress=self._progress_fraction,
-                alpha=alpha_mult,
-            )
         self.ctx.disable(moderngl.BLEND)
         self.ctx.enable(moderngl.DEPTH_TEST)
         self.ctx.enable(moderngl.CULL_FACE)
@@ -610,10 +607,13 @@ class ControlsOverlay:
             bar_y0 = bar_bottom_y + 22.0 * layout_scale
             bar_y1 = bar_y0 + bar_h
 
-            add_quad_px(bar_x0, bar_y0, bar_x1, bar_y1, _SPLASH_PROGRESS_TRACK_RGBA)
-            fill_x1 = bar_x0 + self._progress_fraction * bar_w
-            if fill_x1 > bar_x0:
-                add_quad_px(bar_x0, bar_y0, fill_x1, bar_y1, _SPLASH_PROGRESS_FILL_RGBA)
+            add_quad_px(bar_x0, bar_y0, bar_x1, bar_y1, self._progress_track_rgba)
+            for fill_x0, fill_x1 in progress_segments(
+                bar_x0, bar_x1, self._progress_fraction
+            ):
+                add_quad_px(
+                    fill_x0, bar_y0, fill_x1, bar_y1, self._progress_fill_rgba
+                )
             table_start_offset = 82.0 * layout_scale
         else:
             table_start_offset = 96.0 * layout_scale
@@ -1056,8 +1056,34 @@ class ControlsOverlay:
         w, h = window_size
         # Dim the 3D view so that unloaded geometry (black void) is never
         # directly visible while streaming catches up after a teleport.
-        # The dim and the logo progress ring fade out together via alpha_mult.
+        # The dim and compact routine-progress feedback fade out together.
         add_quad_px(0, 0, w, h, (0.003, 0.005, 0.008, 0.90))
+        label = "Jumping to the selected point"
+        layout_scale = progress_layout_scale(window_size)
+        text_size = OPENGL_PROGRESS_LABEL_TEXT_SIZE * layout_scale
+        text_width = bitmap_font.text_width_px(label, text_size)
+        bar_cy = h / 2.0
+        label_y = bar_cy - OPENGL_PROGRESS_LABEL_OFFSET * layout_scale
+        add_text(
+            label,
+            (w - text_width) / 2.0,
+            label_y,
+            text_size,
+            _SPLASH_SUBTITLE_RGBA,
+        )
+        bar_w = OPENGL_PROGRESS_BAR_WIDTH
+        bar_h = OPENGL_PROGRESS_BAR_HEIGHT
+        bar_x0 = (w - bar_w) / 2.0
+        bar_x1 = bar_x0 + bar_w
+        bar_y0 = bar_cy - bar_h / 2.0
+        bar_y1 = bar_y0 + bar_h
+        add_quad_px(bar_x0, bar_y0, bar_x1, bar_y1, self._progress_track_rgba)
+        for fill_x0, fill_x1 in progress_segments(
+            bar_x0, bar_x1, self._progress_fraction
+        ):
+            add_quad_px(
+                fill_x0, bar_y0, fill_x1, bar_y1, self._progress_fill_rgba
+            )
 
     # -- shared control-table drawing --------------------------------------------
 

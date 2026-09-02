@@ -44,16 +44,8 @@ def test_bundled_default_profile_uses_original_mark_for_windows_and_about():
     assert profile.asset_for("linux_symbolic_icon").path.name == (
         "linux-app-icon-symbolic.svg"
     )
-    assert profile.asset_for("loading_mark").path.name == "loading-progress-mark.png"
-    assert profile.asset_for("loading_progress_mask").path.name == (
-        "loading-progress-rim-mask.png"
-    )
-    assert profile.asset_for("loading_mark") is not profile.asset_for(
-        "windows_app_icon"
-    )
-    assert profile.loading_ring.fill_color == "#FFB000"
-    assert profile.loading_ring.track_color == "#3B3428"
-    assert profile.loading_ring.mode == "ring_with_mark"
+    assert profile.loading_progress.fill_color == "#FFB000"
+    assert profile.loading_progress.track_color == "#3B3428"
 
 
 def test_runtime_snapshot_resolves_semantic_paths_and_platform_icons():
@@ -61,7 +53,6 @@ def test_runtime_snapshot_resolves_semantic_paths_and_platform_icons():
 
     assert assets.profile_id == "default"
     assert assets.about_mark.is_file()
-    assert assets.loading_mark.is_file()
     assert assets.application_icon_for("win32") == assets.windows_app_icon
     assert assets.application_icon_for("darwin") == assets.macos_app_icon
     assert assets.application_icon_for("linux") == assets.linux_app_icon
@@ -83,6 +74,22 @@ def test_developer_override_accepts_a_profile_directory(tmp_path):
     assert profile.manifest_path.parent == profile_dir.resolve()
 
 
+def test_developer_override_rejects_legacy_profile_directory(tmp_path):
+    profile_dir = _copy_default_profile(tmp_path)
+    payload = _read_manifest(profile_dir)
+    payload["schema_version"] = 1
+    (profile_dir / "branding.v2.json").unlink()
+    (profile_dir / "branding.v1.json").write_text(
+        json.dumps(payload), encoding="utf-8"
+    )
+
+    with pytest.raises(BrandingProfileError, match="migrate.*branding.v2.json"):
+        resolve_branding_profile(
+            environ={BRANDING_PROFILE_ENVIRONMENT_VARIABLE: str(profile_dir)},
+            frozen=False,
+        )
+
+
 def test_frozen_application_ignores_external_profile_override(tmp_path):
     profile_dir = _copy_default_profile(tmp_path)
     payload = _read_manifest(profile_dir)
@@ -100,7 +107,7 @@ def test_frozen_application_ignores_external_profile_override(tmp_path):
 @pytest.mark.parametrize(
     ("mutation", "expected_error"),
     [
-        (lambda payload: payload.update(schema_version=2), "schema_version"),
+        (lambda payload: payload.update(schema_version=1), "schema_version"),
         (
             lambda payload: payload["roles"].pop("windows_app_icon"),
             "windows_app_icon",
@@ -110,16 +117,20 @@ def test_frozen_application_ignores_external_profile_override(tmp_path):
             "references unknown asset",
         ),
         (
-            lambda payload: payload["assets"]["cookie"].update(path="../outside.png"),
+            lambda payload: payload["assets"]["caveviewer_mark"].update(
+                path="../outside.png"
+            ),
             "must stay inside",
         ),
         (
-            lambda payload: payload["assets"]["cookie"].update(safe_area_inset=0.5),
+            lambda payload: payload["assets"]["caveviewer_mark"].update(
+                safe_area_inset=0.5
+            ),
             "between 0 and 0.25",
         ),
         (
-            lambda payload: payload["loading_ring"].update(mode="logo_spinner"),
-            "mode must be",
+            lambda payload: payload["loading_progress"].update(mode="logo_spinner"),
+            "unknown keys",
         ),
     ],
 )
@@ -130,44 +141,48 @@ def test_profile_rejects_invalid_contracts(tmp_path, mutation, expected_error):
     _write_manifest(profile_dir, payload)
 
     with pytest.raises(BrandingProfileError, match=expected_error):
-        load_branding_profile(profile_dir / "branding.v1.json")
+        load_branding_profile(profile_dir / "branding.v2.json")
 
 
 def test_profile_rejects_changed_artwork(tmp_path):
     profile_dir = _copy_default_profile(tmp_path)
-    artwork = profile_dir / "application-mark.png"
+    artwork = profile_dir / "caveviewer-mark.png"
     artwork.write_bytes(artwork.read_bytes() + b"changed")
 
     with pytest.raises(BrandingProfileError, match="SHA-256 mismatch"):
-        load_branding_profile(profile_dir / "branding.v1.json")
+        load_branding_profile(profile_dir / "branding.v2.json")
 
 
 def test_profile_rejects_non_square_png(tmp_path):
     profile_dir = _copy_default_profile(tmp_path)
-    artwork = profile_dir / "application-mark.png"
+    artwork = profile_dir / "caveviewer-mark.png"
     data = bytearray(artwork.read_bytes())
-    data[20:24] = (1200).to_bytes(4, "big")
+    data[20:24] = (2200).to_bytes(4, "big")
     artwork.write_bytes(data)
     payload = _read_manifest(profile_dir)
-    payload["assets"]["cookie"]["sha256"] = hashlib.sha256(data).hexdigest()
+    payload["assets"]["caveviewer_mark"]["sha256"] = hashlib.sha256(
+        data
+    ).hexdigest()
     _write_manifest(profile_dir, payload)
 
     with pytest.raises(BrandingProfileError, match="must be square"):
-        load_branding_profile(profile_dir / "branding.v1.json")
+        load_branding_profile(profile_dir / "branding.v2.json")
 
 
 def test_profile_rejects_png_without_required_alpha(tmp_path):
     profile_dir = _copy_default_profile(tmp_path)
-    artwork = profile_dir / "application-mark.png"
+    artwork = profile_dir / "caveviewer-mark.png"
     data = bytearray(artwork.read_bytes())
     data[25] = 2
     artwork.write_bytes(data)
     payload = _read_manifest(profile_dir)
-    payload["assets"]["cookie"]["sha256"] = hashlib.sha256(data).hexdigest()
+    payload["assets"]["caveviewer_mark"]["sha256"] = hashlib.sha256(
+        data
+    ).hexdigest()
     _write_manifest(profile_dir, payload)
 
     with pytest.raises(BrandingProfileError, match="requires an alpha channel"):
-        load_branding_profile(profile_dir / "branding.v1.json")
+        load_branding_profile(profile_dir / "branding.v2.json")
 
 
 def test_profile_rejects_svg_with_external_behavior(tmp_path):
@@ -185,7 +200,7 @@ def test_profile_rejects_svg_with_external_behavior(tmp_path):
     _write_manifest(profile_dir, payload)
 
     with pytest.raises(BrandingProfileError, match="self-contained vector"):
-        load_branding_profile(profile_dir / "branding.v1.json")
+        load_branding_profile(profile_dir / "branding.v2.json")
 
 
 def _copy_default_profile(tmp_path: Path) -> Path:
@@ -201,10 +216,10 @@ def _copy_default_profile(tmp_path: Path) -> Path:
 
 
 def _read_manifest(profile_dir: Path) -> dict:
-    return json.loads((profile_dir / "branding.v1.json").read_text(encoding="utf-8"))
+    return json.loads((profile_dir / "branding.v2.json").read_text(encoding="utf-8"))
 
 
 def _write_manifest(profile_dir: Path, payload: dict) -> None:
-    (profile_dir / "branding.v1.json").write_text(
+    (profile_dir / "branding.v2.json").write_text(
         json.dumps(payload), encoding="utf-8"
     )

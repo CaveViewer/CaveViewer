@@ -6,15 +6,17 @@ import tkinter as tk
 from dataclasses import dataclass
 from typing import Callable, Iterable
 
+from caveviewer.gui.loading_progress import monotonic_progress, progress_segments
+from caveviewer.gui.section_spacing import PRIMARY_SURFACE_VERTICAL_MARGIN
 from caveviewer.gui.scrollable_content import (
     CanvasScrollbarStyle,
     CanvasVerticalScrollbar,
 )
 from caveviewer.gui.splash_visuals import (
+    VectorArc,
     VectorEllipse,
     VectorPath,
     VectorPolygon,
-    progress_control_photo,
     retry_icon_photo,
     vector_icon_photo,
 )
@@ -95,8 +97,6 @@ class MapLibraryPanelStyle:
     metadata_error_duration_ms: int
     progress_track_color: str
     progress_fill_color: str
-    action_progress_ring_diameter: int
-    action_progress_ring_stroke_width: int
     action_retry_icon_diameter: int
     action_stop_size: int
     action_button_size: int
@@ -121,6 +121,7 @@ class MapLibraryRowWidgets:
     title_label: object
     metadata_label: object | None
     size_label: object | None
+    progress_bar_canvas: object
 
 
 @dataclass
@@ -187,7 +188,11 @@ class MapLibraryPanel:
         )
         # Keep a modest outer margin so the library can use more of the
         # available splash height without losing its visual separation.
-        panel.pack(fill="both", expand=True, pady=self._px(14))
+        panel.pack(
+            fill="both",
+            expand=True,
+            pady=self._px(PRIMARY_SURFACE_VERTICAL_MARGIN),
+        )
         panel.grid_columnconfigure(0, weight=1)
 
         scroll_row = 0
@@ -246,7 +251,7 @@ class MapLibraryPanel:
         self._recent_section = self._create_section(
             self._rows_frame,
             "Your Recent Maps",
-            top_pad=16,
+            top_pad=12,
         )
         self._recent_container = self._recent_section.content
         self._standard_section = self._create_section(
@@ -551,6 +556,7 @@ class MapLibraryPanel:
         widgets.action_button._cv_show_pause_progress = False
         widgets.action_button._cv_progress_fraction = 0.0
         self._draw_action_button(widgets.action_button)
+        self._hide_row_progress(widgets)
 
     def show_standard_progress(self, key: object) -> None:
         """Show the stop/progress affordance for an active download row."""
@@ -559,8 +565,9 @@ class MapLibraryPanel:
             return
         widgets.action_button._cv_show_stop_progress = True
         widgets.action_button._cv_show_pause_progress = False
-        widgets.action_button._cv_progress_fraction = 0.0
+        widgets.action_button._cv_progress_fraction = None
         self._draw_action_button(widgets.action_button)
+        self._set_row_progress_bar(widgets, None)
         self.root.update_idletasks()
 
     def apply_standard_progress(
@@ -577,25 +584,33 @@ class MapLibraryPanel:
             self.set_standard_row_metadata(key, "Downloading…")
             widgets.action_button._cv_progress_fraction = None
             self._draw_action_button(widgets.action_button)
+            self._set_row_progress_bar(widgets, None)
             return
         fraction = min(1.0, downloaded_bytes / total_bytes)
         self.set_standard_row_metadata(key, "Downloading…")
         widgets.action_button._cv_progress_fraction = fraction
         self._draw_action_button(widgets.action_button)
+        self._set_row_progress_bar(widgets, fraction)
 
     def set_row_progress(
         self,
         row_widgets: MapLibraryRowWidgets | None,
-        fraction: float,
+        fraction: float | None,
     ) -> None:
-        """Update an inline action-progress ring for either row kind."""
+        """Update the flat progress lane for either row kind."""
         if row_widgets is None or not self._widget_exists(row_widgets.action_button):
             return
-        row_widgets.action_button._cv_progress_fraction = min(
-            1.0,
-            max(0.0, float(fraction)),
-        )
+        row_widgets.action_button._cv_progress_fraction = fraction
         self._draw_action_button(row_widgets.action_button)
+        self._set_row_progress_bar(row_widgets, fraction)
+
+    def clear_row_progress(
+        self,
+        row_widgets: MapLibraryRowWidgets | None,
+    ) -> None:
+        """Hide and reset one row-owned progress animation."""
+        if row_widgets is not None:
+            self._hide_row_progress(row_widgets)
 
     def sync_after_row_change(self) -> None:
         """Schedule a scroll-region refresh after row insertion/removal."""
@@ -634,6 +649,26 @@ class MapLibraryPanel:
         except tk.TclError:
             return
 
+    def scroll_fraction(self) -> float:
+        """Return the current vertical position for shell recomposition."""
+        canvas = self._content_canvas
+        if not self._widget_exists(canvas):
+            return 0.0
+        try:
+            return float(canvas.yview()[0])
+        except (IndexError, TypeError, ValueError, tk.TclError):
+            return 0.0
+
+    def restore_scroll_fraction(self, fraction: float) -> None:
+        """Restore a bounded vertical position after rebuilding the shell."""
+        canvas = self._content_canvas
+        if not self._widget_exists(canvas):
+            return
+        try:
+            canvas.yview_moveto(max(0.0, min(1.0, float(fraction))))
+        except (TypeError, ValueError, tk.TclError):
+            return
+
     def _create_open_map_action(self, parent) -> None:
         """Create the featured entry point for opening a local map folder."""
         callback = self._open_map_folder
@@ -643,7 +678,7 @@ class MapLibraryPanel:
         style = self._style
         action = tk.Canvas(
             parent,
-            height=self._px(58),
+            height=self._px(50),
             bg=style.featured_action_bg,
             borderwidth=0,
             takefocus=True,
@@ -690,16 +725,16 @@ class MapLibraryPanel:
         style = self._style
         accent_width = max(2, self._px(3))
         stroke_width = max(1, self._px(2))
-        icon_left = self._px(22)
-        icon_top = max(self._px(8), height / 2 - self._px(11))
-        icon_right = icon_left + self._px(28)
-        icon_bottom = icon_top + self._px(22)
-        icon_tab_right = icon_left + self._px(15)
-        text_left = icon_right + self._px(16)
-        title_y = height / 2 - self._px(8)
-        subtitle_y = height / 2 + self._px(11)
-        chevron_x = width - self._px(22)
-        chevron_size = max(3, self._px(5))
+        icon_left = self._px(18)
+        icon_top = max(self._px(7), height / 2 - self._px(10))
+        icon_right = icon_left + self._px(24)
+        icon_bottom = icon_top + self._px(19)
+        icon_tab_right = icon_left + self._px(13)
+        text_left = icon_right + self._px(14)
+        title_y = height / 2 - self._px(7)
+        subtitle_y = height / 2 + self._px(9)
+        chevron_x = width - self._px(18)
+        chevron_size = max(3, self._px(4))
 
         action.create_rectangle(
             0,
@@ -766,7 +801,7 @@ class MapLibraryPanel:
         parent,
         text: str,
         *,
-        top_pad: int = 10,
+        top_pad: int = 8,
     ) -> MapLibrarySectionWidgets:
         """Create an expanded, keyboard-accessible disclosure header and body."""
         header = tk.Canvas(
@@ -776,10 +811,10 @@ class MapLibraryPanel:
             highlightthickness=1,
             highlightbackground=self._style.panel_color,
             highlightcolor=self._style.button_border_color,
-            height=max(1, self._px(24)),
+            height=max(1, self._px(22)),
             takefocus=True,
         )
-        header.pack(fill="x", pady=(self._px(top_pad), self._px(6)))
+        header.pack(fill="x", pady=(self._px(top_pad), self._px(4)))
         content = tk.Frame(parent, bg=self._style.panel_color)
         content.pack(fill="x")
         section = MapLibrarySectionWidgets(
@@ -916,10 +951,11 @@ class MapLibraryPanel:
             bg=style.panel_color,
             highlightthickness=0,
         )
-        row_shell.pack(fill="x", pady=(0, self._px(12)))
+        row_shell.pack(fill="x", pady=(0, self._px(8)))
 
         row_content = tk.Frame(row_shell, bg=style.panel_color)
         row_content.pack(fill="x")
+        row_content.grid_columnconfigure(0, weight=1, minsize=1)
 
         row_holder: list[MapLibraryRowWidgets | None] = [None]
         button_factory = None
@@ -935,14 +971,21 @@ class MapLibraryPanel:
             row_content,
             button_factory,
         )
+        overflow_button.grid(
+            row=0,
+            column=3,
+            sticky="e",
+            padx=(0, self._px(12)),
+            pady=self._px(5),
+        )
 
         text_column = tk.Frame(row_content, bg=style.panel_color)
-        text_column.pack(
-            side="left",
-            fill="x",
-            expand=True,
+        text_column.grid(
+            row=0,
+            column=0,
+            sticky="ew",
             padx=(0, self._px(8)),
-            pady=self._px(5),
+            pady=self._px(4),
         )
 
         name_label = tk.Label(
@@ -981,13 +1024,51 @@ class MapLibraryPanel:
             metadata_label._cv_base_fg = style.metadata_color
             metadata_label._cv_status_after_id = None
 
+        progress_bar_canvas = tk.Canvas(
+            text_column,
+            height=max(1, self._px(3)),
+            bg=style.panel_color,
+            borderwidth=0,
+            highlightthickness=0,
+            takefocus=False,
+        )
+        progress_bar_canvas._cv_progress_fraction = 0.0
+        progress_bar_canvas._cv_progress_phase = 0.0
+        progress_bar_canvas._cv_progress_after_id = None
+        progress_bar_canvas._cv_progress_visible = False
+        progress_bar_canvas.pack(
+            anchor="w",
+            fill="x",
+            pady=(self._px(5), 0),
+        )
+        progress_bar_canvas.bind(
+            "<Configure>",
+            lambda _event, target=progress_bar_canvas: self._draw_progress_bar(
+                target
+            ),
+            add="+",
+        )
+        progress_bar_canvas.bind(
+            "<Destroy>",
+            lambda _event, target=progress_bar_canvas: self._cancel_progress_animation(
+                target
+            ),
+            add="+",
+        )
+
         action_button = self._create_action_button(
             row_content,
             text=action_text,
             action=action,
         )
         self._configure_action_button_hover(action_button)
-        action_button.pack(side="right", padx=(0, self._px(4)), pady=self._px(5))
+        action_button.grid(
+            row=0,
+            column=2,
+            sticky="e",
+            padx=(0, self._px(4)),
+            pady=self._px(4),
+        )
 
         size_label = None
         if size_text or reserve_size:
@@ -1000,10 +1081,12 @@ class MapLibraryPanel:
                 anchor="e",
                 justify="right",
             )
-            size_label.pack(
-                side="right",
+            size_label.grid(
+                row=0,
+                column=1,
+                sticky="e",
                 padx=(self._px(8), self._px(12)),
-                pady=self._px(5),
+                pady=self._px(4),
             )
 
         row_widgets = MapLibraryRowWidgets(
@@ -1013,10 +1096,99 @@ class MapLibraryPanel:
             title_label=name_label,
             metadata_label=metadata_label,
             size_label=size_label,
+            progress_bar_canvas=progress_bar_canvas,
         )
         row_holder[0] = row_widgets
         self.refresh_row_overflow(row_widgets)
         return row_widgets
+
+    def _cancel_progress_animation(self, canvas) -> None:
+        after_id = getattr(canvas, "_cv_progress_after_id", None)
+        canvas._cv_progress_after_id = None
+        if after_id is not None:
+            try:
+                self.root.after_cancel(after_id)
+            except tk.TclError:
+                pass
+
+    def _hide_row_progress(self, row_widgets: MapLibraryRowWidgets) -> None:
+        canvas = row_widgets.progress_bar_canvas
+        self._cancel_progress_animation(canvas)
+        canvas._cv_progress_visible = False
+        canvas._cv_progress_fraction = 0.0
+        canvas._cv_progress_phase = 0.0
+        if self._widget_exists(canvas):
+            self._draw_progress_bar(canvas)
+
+    def _set_row_progress_bar(
+        self,
+        row_widgets: MapLibraryRowWidgets,
+        fraction: float | None,
+    ) -> None:
+        canvas = row_widgets.progress_bar_canvas
+        if not self._widget_exists(canvas):
+            return
+        canvas._cv_progress_visible = True
+        previous = getattr(canvas, "_cv_progress_fraction", 0.0)
+        canvas._cv_progress_fraction = (
+            None
+            if fraction is None
+            else monotonic_progress(previous or 0.0, fraction)
+        )
+        self._cancel_progress_animation(canvas)
+        self._draw_progress_bar(canvas)
+        if fraction is None:
+            self._schedule_progress_animation(canvas)
+
+    def _schedule_progress_animation(self, canvas) -> None:
+        if not self._widget_exists(canvas) or not getattr(
+            canvas, "_cv_progress_visible", False
+        ):
+            return
+        canvas._cv_progress_phase = (
+            float(getattr(canvas, "_cv_progress_phase", 0.0)) + 0.045
+        ) % 1.0
+        self._draw_progress_bar(canvas)
+        try:
+            canvas._cv_progress_after_id = self.root.after(
+                40,
+                lambda target=canvas: self._schedule_progress_animation(target),
+            )
+        except tk.TclError:
+            canvas._cv_progress_after_id = None
+
+    def _draw_progress_bar(self, canvas) -> None:
+        if not self._widget_exists(canvas):
+            return
+        width = max(1, canvas.winfo_width())
+        height = max(1, self._canvas_dimension(canvas, "height"))
+        canvas.delete("cv_progress")
+        if not getattr(canvas, "_cv_progress_visible", False):
+            return
+        canvas.create_rectangle(
+            0,
+            0,
+            width,
+            height,
+            fill=self._style.progress_track_color,
+            outline="",
+            tags="cv_progress",
+        )
+        for left, right in progress_segments(
+            0.0,
+            float(width),
+            getattr(canvas, "_cv_progress_fraction", 0.0),
+            phase=getattr(canvas, "_cv_progress_phase", 0.0),
+        ):
+            canvas.create_rectangle(
+                left,
+                0,
+                right,
+                height,
+                fill=self._style.progress_fill_color,
+                outline="",
+                tags="cv_progress",
+            )
 
     def _sync_row_title_wraplength(self, title_label, available_width: int) -> None:
         """Wrap a map title only at the width its row can really provide."""
@@ -1133,10 +1305,10 @@ class MapLibraryPanel:
         visual = getattr(button, "_cv_action_visual", None)
         icon = getattr(visual, "icon", "none")
         if icon == "stop-progress":
-            self._draw_action_stop_progress(button, width, height)
+            self._draw_action_stop(button, width, height)
             return
         if icon == "pause-progress":
-            self._draw_action_pause_progress(button, width, height)
+            self._draw_action_pause(button, width, height)
             return
         color = (
             self._style.button_fg
@@ -1230,25 +1402,25 @@ class MapLibraryPanel:
             tags="cv_action_content",
         )
 
-    def _draw_action_stop_progress(
+    def _draw_action_stop(
         self,
         button,
         width: int,
         height: int,
     ) -> None:
-        """Draw the centered circular progress ring with a stop square."""
-        self._draw_action_progress(button, width, height, pause=False)
+        """Draw a standalone stop control, separate from row progress."""
+        self._draw_action_operation_glyph(button, width, height, pause=False)
 
-    def _draw_action_pause_progress(
+    def _draw_action_pause(
         self,
         button,
         width: int,
         height: int,
     ) -> None:
-        """Draw the centered circular progress ring with a pause glyph."""
-        self._draw_action_progress(button, width, height, pause=True)
+        """Draw a standalone pause control, separate from row progress."""
+        self._draw_action_operation_glyph(button, width, height, pause=True)
 
-    def _draw_action_progress(
+    def _draw_action_operation_glyph(
         self,
         button,
         width: int,
@@ -1256,46 +1428,56 @@ class MapLibraryPanel:
         *,
         pause: bool,
     ) -> None:
-        """Draw a shared progress ring with either stop or pause affordance."""
+        """Draw a stop or pause glyph without embedding progress geometry."""
         style = self._style
         enabled = getattr(button, "_cv_enabled", True)
-        diameter = self._px(style.action_progress_ring_diameter)
-        stroke_width = max(1, self._px(style.action_progress_ring_stroke_width))
-        stop_size = self._px(style.action_stop_size)
+        glyph_size = self._px(style.action_stop_size)
         center_x = width / 2
         center_y = height / 2
-
-        track_color = style.progress_track_color
-        progress_fill_color = (
-            style.progress_fill_color if enabled else style.disabled_button_fg
-        )
-        stop_fill_color = style.button_fg if enabled else style.disabled_button_fg
-        fraction = getattr(button, "_cv_progress_fraction", 0.0)
-        if fraction is None:
-            extent = -100
+        color = style.button_fg if enabled else style.disabled_button_fg
+        half = glyph_size / 2.0
+        if pause:
+            gap = max(1.0, glyph_size * 0.18)
+            bar_width = max(1.0, (glyph_size - gap) / 2.0)
+            polygons = (
+                VectorPolygon(
+                    points=(
+                        (center_x - half, center_y - half),
+                        (center_x - half + bar_width, center_y - half),
+                        (center_x - half + bar_width, center_y + half),
+                        (center_x - half, center_y + half),
+                    ),
+                    fill_color=color,
+                ),
+                VectorPolygon(
+                    points=(
+                        (center_x + half - bar_width, center_y - half),
+                        (center_x + half, center_y - half),
+                        (center_x + half, center_y + half),
+                        (center_x + half - bar_width, center_y + half),
+                    ),
+                    fill_color=color,
+                ),
+            )
         else:
-            extent = -max(2, int(round(359 * max(0.0, min(1.0, fraction)))))
-        progress_photo = progress_control_photo(
+            polygons = (
+                VectorPolygon(
+                    points=(
+                        (center_x - half, center_y - half),
+                        (center_x + half, center_y - half),
+                        (center_x + half, center_y + half),
+                        (center_x - half, center_y + half),
+                    ),
+                    fill_color=color,
+                ),
+            )
+        self._draw_vector_photo(
             button,
-            image_size=max(1, int(round(diameter + stroke_width))),
-            ring_diameter=diameter,
-            stroke_width=stroke_width,
-            track_color=track_color,
-            fill_color=progress_fill_color,
-            start_degrees=90,
-            extent_degrees=extent,
-            center_glyph="pause" if pause else "stop",
-            center_glyph_size=stop_size,
-            center_glyph_color=stop_fill_color,
-        )
-        # Retain the single composite photo so Tk cannot collect the shared
-        # high-DPI ring and pause/stop artwork between redraws.
-        button._cv_progress_control_photo = progress_photo
-        button.create_image(
-            center_x,
-            center_y,
-            image=progress_photo,
+            image_size=(width, height),
+            center_x=center_x,
+            center_y=center_y,
             tags="cv_action_content",
+            polygons=polygons,
         )
 
     def _canvas_dimension(self, canvas, option: str) -> int:
@@ -1806,7 +1988,6 @@ class MapLibraryPanel:
             lambda _event, target=button: self._draw_overflow_button(target),
             add="+",
         )
-        button.pack(side="right", padx=(0, self._px(12)), pady=self._px(5))
         self._refresh_overflow_button(button)
         return button
 

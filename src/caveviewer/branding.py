@@ -17,15 +17,13 @@ from caveviewer.resources import resource_path
 
 
 BRANDING_PROFILE_ENVIRONMENT_VARIABLE = "CAVEVIEWER_BRAND_PROFILE"
-BRANDING_SCHEMA_VERSION = 1
-BRANDING_MANIFEST_FILENAME = "branding.v1.json"
+BRANDING_SCHEMA_VERSION = 2
+BRANDING_MANIFEST_FILENAME = "branding.v2.json"
 MAX_BRANDING_MANIFEST_BYTES = 64 * 1024
 REQUIRED_ROLES = frozenset(
     {
         "application_mark",
         "about_mark",
-        "loading_mark",
-        "loading_progress_mask",
         "windows_app_icon",
         "macos_app_icon",
         "linux_app_icon",
@@ -43,11 +41,8 @@ _ALLOWED_TOP_LEVEL_KEYS = frozenset(
         "provenance",
         "assets",
         "roles",
-        "loading_ring",
+        "loading_progress",
     }
-)
-_LOADING_PRESENTATION_MODES = frozenset(
-    {"text_only", "ring_only", "ring_with_mark"}
 )
 
 
@@ -69,12 +64,11 @@ class BrandingAsset:
 
 
 @dataclass(frozen=True)
-class LoadingRingTokens:
-    """Bounded brand-controlled colors for loading progress presentation."""
+class LoadingProgressTokens:
+    """Semantic colors for routine flat progress indicators."""
 
     fill_color: str
     track_color: str
-    mode: str = "ring_with_mark"
 
 
 @dataclass(frozen=True)
@@ -84,12 +78,10 @@ class BrandingAssets:
     profile_id: str
     application_mark: Path
     about_mark: Path
-    loading_mark: Path
-    loading_progress_mask: Path
     windows_app_icon: Path
     macos_app_icon: Path
     linux_app_icon: Path
-    loading_ring: LoadingRingTokens
+    loading_progress: LoadingProgressTokens
 
     def application_icon_for(self, platform_name: str) -> Path:
         """Return the semantic app icon for one Python platform name."""
@@ -112,7 +104,7 @@ class BrandingProfile:
     source: str
     assets: Mapping[str, BrandingAsset]
     roles: Mapping[str, str]
-    loading_ring: LoadingRingTokens
+    loading_progress: LoadingProgressTokens
 
     def asset_for(self, role: str) -> BrandingAsset:
         """Return the source asset assigned to one semantic role."""
@@ -164,12 +156,10 @@ def branding_assets_from_profile(profile: BrandingProfile) -> BrandingAssets:
         profile_id=profile.profile_id,
         application_mark=profile.asset_for("application_mark").path,
         about_mark=profile.asset_for("about_mark").path,
-        loading_mark=profile.asset_for("loading_mark").path,
-        loading_progress_mask=profile.asset_for("loading_progress_mask").path,
         windows_app_icon=profile.asset_for("windows_app_icon").path,
         macos_app_icon=profile.asset_for("macos_app_icon").path,
         linux_app_icon=profile.asset_for("linux_app_icon").path,
-        loading_ring=profile.loading_ring,
+        loading_progress=profile.loading_progress,
     )
 
 
@@ -244,28 +234,25 @@ def load_branding_profile(manifest_path: str | os.PathLike[str]) -> BrandingProf
             )
         roles[role] = asset_id
 
-    loading_ring_payload = _object(payload.get("loading_ring"), "loading_ring")
-    unknown_loading_ring_keys = set(loading_ring_payload) - {
+    loading_progress_payload = _object(
+        payload.get("loading_progress"), "loading_progress"
+    )
+    unknown_loading_progress_keys = set(loading_progress_payload) - {
         "fill_color",
         "track_color",
-        "mode",
     }
-    if unknown_loading_ring_keys:
+    if unknown_loading_progress_keys:
         raise BrandingProfileError(
-            "loading_ring contains unknown keys: "
-            f"{sorted(unknown_loading_ring_keys)}"
+            "loading_progress contains unknown keys: "
+            f"{sorted(unknown_loading_progress_keys)}"
         )
-    loading_mode = _non_empty_text(
-        loading_ring_payload.get("mode"), "loading_ring.mode"
-    )
-    if loading_mode not in _LOADING_PRESENTATION_MODES:
-        raise BrandingProfileError(
-            "loading_ring.mode must be text_only, ring_only, or ring_with_mark"
-        )
-    loading_ring = LoadingRingTokens(
-        fill_color=_color(loading_ring_payload.get("fill_color"), "fill_color"),
-        track_color=_color(loading_ring_payload.get("track_color"), "track_color"),
-        mode=loading_mode,
+    loading_progress = LoadingProgressTokens(
+        fill_color=_color(
+            loading_progress_payload.get("fill_color"), "fill_color"
+        ),
+        track_color=_color(
+            loading_progress_payload.get("track_color"), "track_color"
+        ),
     )
     return BrandingProfile(
         profile_id=profile_id,
@@ -276,12 +263,21 @@ def load_branding_profile(manifest_path: str | os.PathLike[str]) -> BrandingProf
         source=source,
         assets=MappingProxyType(assets),
         roles=MappingProxyType(roles),
-        loading_ring=loading_ring,
+        loading_progress=loading_progress,
     )
 
 
 def _manifest_path(path: Path) -> Path:
-    return path / BRANDING_MANIFEST_FILENAME if path.is_dir() else path
+    if not path.is_dir():
+        return path
+    manifest = path / BRANDING_MANIFEST_FILENAME
+    legacy_manifest = path / "branding.v1.json"
+    if not manifest.is_file() and legacy_manifest.is_file():
+        raise BrandingProfileError(
+            "branding schema version 1 is no longer supported; migrate the "
+            "profile to branding.v2.json"
+        )
+    return manifest
 
 
 def _load_asset(profile_root: Path, asset_id: str, payload) -> BrandingAsset:
@@ -463,11 +459,11 @@ def _positive_int(value, field: str) -> int:
 
 
 def _color(value, field: str) -> str:
-    text = _non_empty_text(value, f"loading_ring.{field}")
+    text = _non_empty_text(value, f"loading_progress.{field}")
     if len(text) != 7 or text[0] != "#" or any(
         character not in "0123456789abcdefABCDEF" for character in text[1:]
     ):
         raise BrandingProfileError(
-            f"loading_ring.{field} must be a six-digit hexadecimal color"
+            f"loading_progress.{field} must be a six-digit hexadecimal color"
         )
     return text.upper()

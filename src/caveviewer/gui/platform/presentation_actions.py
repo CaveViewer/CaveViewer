@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import ctypes
 import sys
+from ctypes import wintypes
+from dataclasses import dataclass
 from typing import Any, Protocol
 
 from caveviewer.core.diagnostics.logging import get_logger
@@ -28,11 +30,40 @@ _LOG = get_logger("CaveViewer")
 _macos_about_root_ref: Any | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class WindowMonitorMetrics:
+    """Raw physical measurements for the monitor containing one window."""
+
+    pixel_width: int
+    pixel_height: int
+    raw_dpi_x: float
+    raw_dpi_y: float
+    monitor_id: int | None = None
+    work_area: tuple[int, int, int, int] | None = None
+
+
+class _MonitorInfo(ctypes.Structure):
+    """Minimal Win32 MONITORINFO structure used by the presentation adapter."""
+
+    _fields_ = [
+        ("cbSize", wintypes.DWORD),
+        ("rcMonitor", wintypes.RECT),
+        ("rcWork", wintypes.RECT),
+        ("dwFlags", wintypes.DWORD),
+    ]
+
+
 class PresentationActionsAdapter(Protocol):
     """Native presentation actions that do not belong in a static profile."""
 
     def configure_process_dpi_awareness(self) -> None:
         """Perform best-effort process-wide DPI setup before creating Tk."""
+
+    def window_dpi(self, window: Any) -> float | None:
+        """Return the native effective DPI for an existing window when available."""
+
+    def window_monitor_metrics(self, window: Any) -> WindowMonitorMetrics | None:
+        """Return raw physical metrics for the window's monitor when available."""
 
     def install_about_handler(
         self,
@@ -57,6 +88,14 @@ class DefaultPresentationActionsAdapter:
 
     def configure_process_dpi_awareness(self) -> None:
         """Leave DPI setup to platforms that require a native action."""
+
+    def window_dpi(self, window: Any) -> float | None:
+        """Leave display-scale discovery to the toolkit on generic desktops."""
+        return None
+
+    def window_monitor_metrics(self, window: Any) -> WindowMonitorMetrics | None:
+        """Leave physical-monitor discovery to platform-specific adapters."""
+        return None
 
     def install_about_handler(
         self,
@@ -107,6 +146,89 @@ class WindowsPresentationActionsAdapter(DefaultPresentationActionsAdapter):
             ctypes.windll.user32.SetProcessDPIAware()
         except Exception:
             pass
+
+    def window_dpi(self, window: Any) -> float | None:
+        """Return the effective Windows DPI associated with one Tk window."""
+        try:
+            dpi = float(ctypes.windll.user32.GetDpiForWindow(window.winfo_id()))
+        except Exception:
+            return None
+        return dpi if dpi > 0 else None
+
+    def window_monitor_metrics(self, window: Any) -> WindowMonitorMetrics | None:
+        """Return best-effort pixel bounds and raw DPI for the active monitor."""
+        try:
+            user32 = ctypes.windll.user32
+            monitor_from_window = user32.MonitorFromWindow
+            get_monitor_info = user32.GetMonitorInfoW
+            get_monitor_dpi = ctypes.windll.shcore.GetDpiForMonitor
+            _set_native_signature(
+                monitor_from_window,
+                argument_types=(wintypes.HWND, wintypes.DWORD),
+                result_type=wintypes.HANDLE,
+            )
+            _set_native_signature(
+                get_monitor_info,
+                argument_types=(wintypes.HANDLE, ctypes.POINTER(_MonitorInfo)),
+                result_type=wintypes.BOOL,
+            )
+            _set_native_signature(
+                get_monitor_dpi,
+                argument_types=(
+                    wintypes.HANDLE,
+                    ctypes.c_int,
+                    ctypes.POINTER(wintypes.UINT),
+                    ctypes.POINTER(wintypes.UINT),
+                ),
+                result_type=ctypes.c_long,
+            )
+
+            monitor = monitor_from_window(window.winfo_id(), 2)
+            if not monitor:
+                return None
+
+            monitor_info = _MonitorInfo()
+            monitor_info.cbSize = ctypes.sizeof(_MonitorInfo)
+            if not get_monitor_info(monitor, ctypes.byref(monitor_info)):
+                return None
+
+            raw_dpi_x = wintypes.UINT()
+            raw_dpi_y = wintypes.UINT()
+            result = get_monitor_dpi(
+                monitor,
+                2,
+                ctypes.byref(raw_dpi_x),
+                ctypes.byref(raw_dpi_y),
+            )
+            if result != 0:
+                return None
+
+            bounds = monitor_info.rcMonitor
+            work = monitor_info.rcWork
+            return WindowMonitorMetrics(
+                pixel_width=abs(int(bounds.right) - int(bounds.left)),
+                pixel_height=abs(int(bounds.bottom) - int(bounds.top)),
+                raw_dpi_x=float(raw_dpi_x.value),
+                raw_dpi_y=float(raw_dpi_y.value),
+                monitor_id=int(monitor),
+                work_area=(
+                    int(work.left),
+                    int(work.top),
+                    int(work.right),
+                    int(work.bottom),
+                ),
+            )
+        except Exception:
+            return None
+
+
+def _set_native_signature(function, *, argument_types, result_type) -> None:
+    """Set ctypes signatures while remaining compatible with test doubles."""
+    try:
+        function.argtypes = list(argument_types)
+        function.restype = result_type
+    except Exception:
+        pass
 
 
 class MacOSPresentationActionsAdapter(DefaultPresentationActionsAdapter):

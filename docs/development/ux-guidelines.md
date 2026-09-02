@@ -46,6 +46,27 @@ primitives remain documented in [design-system.md](design-system.md).
 
 - Express layout dimensions in logical units and apply the active display-scale
   helper exactly once. Do not tune against device pixels from one screenshot.
+- Respect the operating system's effective display scale. Do not add a
+  user-facing CaveViewer UI-size preference or replace the platform DPI value.
+- Two displays with the same pixel resolution and operating-system scale receive
+  the same native geometry scale. On Windows, the Tk shell additionally applies
+  one bounded density factor on monitors larger than 24 inches so typography,
+  controls, icons, spacing, and window geometry remain proportional. Invalid or
+  unavailable physical-monitor data preserves full density. Bound the physical
+  adjustment to `clamp(24 / diagonal_inches, 0.875, 1.00)` so monitors around
+  27.4 inches and larger retain a modest, readable common floor.
+- Recompute Windows adaptive density after a monitor move settles; do not resize
+  continuously while the pointer is dragging. Rebuild the retained Tk shell
+  off-screen, preserve its active surface and unsaved Preferences values, and
+  scale the current outer bounds by the destination/source ratio. Explicit
+  development scaling overrides bypass adaptation so one override remains
+  authoritative. Carry the settled destination measurements into the rebuild
+  rather than remeasuring a withdrawn root, synchronize Tk point scaling before
+  replacement widgets are created, and detach the prior composition's root
+  observer so one move produces one lifecycle transition. For a normal window,
+  keep the larger of its proportionally scaled bounds and the destination's
+  1040-by-740 logical-pixel default, then clamp to the destination work area;
+  preserve a maximized window as maximized.
 - Use semantic typography roles from `caveviewer.gui.tk_typography`; do not
   introduce a new font size to solve a spacing problem.
 - Separate related content with the shared section-spacing tokens. Prefer
@@ -55,18 +76,26 @@ primitives remain documented in [design-system.md](design-system.md).
 - Give tabbed content one primary left edge shared by the tab label, section
   headings, and the first content column. Use an additional inset only when it
   communicates real hierarchy consistently across the surface.
+- Keep ordinary stacked shell surfaces on one stable origin. Map Library,
+  Preferences, and Help use the same 14-logical-pixel vertical surface margin
+  and 12-logical-pixel primary left edge; retain platform-specific right
+  gutters without mirroring them onto the left.
 - Size normal desktop windows for their complete primary content, then clamp
   them to the usable display area. Scrolling is the fallback for compact
   displays and accessibility scaling, not the default presentation on an
   ordinary desktop.
-- Use the same primary-shell geometry on Windows, macOS, and Linux: 1160 by
-  820 logical pixels by default and a 940 by 680 logical-pixel resize minimum.
+- Use the same compact primary-shell geometry on Windows, macOS, and Linux:
+  1040 by 740 logical pixels by default and an 840 by 600 logical-pixel resize
+  minimum.
   Clamp both the initial geometry and minimum constraints when the available
   display is smaller. Establish native resize capability before the window is
   first shown; do not toggle native frame styles during a visible surface
   handoff.
 - Recalculate wrapping and overflow from the final mapped width. Coalesce idle
   layout work and avoid update loops that repeatedly measure unchanged geometry.
+- In Map Library rows, give the text column the remaining width and reserve
+  trailing columns for size, primary action, and overflow action. Long names
+  may wrap, but they must never displace or clip row controls.
 
 ## Actions and labels
 
@@ -178,6 +207,16 @@ primitives remain documented in [design-system.md](design-system.md).
 
 - Prefer a flat progress bar for routine determinate and indeterminate work.
   Place it below the primary stage label and above the supporting description.
+- Use that same geometry for launch, viewer import and streaming, repositioning,
+  Map Library transfers and cache work, and update transfer or verification.
+  Keep stop, pause, and cancel as separate focusable controls beside the stage;
+  do not wrap those glyphs in circular progress geometry.
+- Within the OpenGL viewer, map loading and jump feedback share the same bitmap
+  type size, responsive scale, label color, bar dimensions, and spacing. Keep
+  jump copy ASCII-safe for the bitmap-font renderer.
+- Reserve the Map Library row's progress lane when the row is created. An
+  inactive lane is visually empty, but starting or ending work must not add,
+  remove, or resize row content.
 - Determinate progress is monotonic. Indeterminate progress uses visible motion
   without implying a percentage.
 - A completion frame may be shown briefly so the user can perceive the result;
@@ -192,6 +231,9 @@ primitives remain documented in [design-system.md](design-system.md).
 - Loading and progress presentation must not hide cancellation, failure, or
   shutdown state. Long-running work exposes an explicit state model rather than
   relying on changing labels alone.
+- Circular capture countdowns are task feedback rather than routine loading.
+  Draw a standard vector circle with the remaining seconds centered inside it;
+  use the same semantic colors and stroke thickness as the shared flat bar.
 
 ## Keyboard and accessibility
 

@@ -43,15 +43,22 @@ from caveviewer.core.diagnostics.startup import (
     record_startup_stage,
 )
 from caveviewer.core.preferences.runtime_settings import RuntimeSettings
-from caveviewer.gui.preferences_dialog import PreferencesPanel
+from caveviewer.gui.preferences_dialog import (
+    PreferencesPanel,
+    PreferencesPanelSnapshot,
+)
 from caveviewer.gui.preferences_workflow import (
     PreferencesCloseAction,
     resolve_preferences_close,
 )
 from caveviewer.gui.dpi_utils import (
-    apply_tk_scaling,
+    TkDisplayMetrics,
+    TkWindowGeometry,
     configure_process_dpi_awareness,
-    tk_display_scale,
+    display_scale_changed,
+    resolve_tk_display_metrics,
+    scale_window_geometry,
+    synchronize_tk_point_scale,
 )
 from caveviewer.gui.cache_rebuild_controller import CacheRebuildJobController
 from caveviewer.gui.cave_metadata import (
@@ -85,6 +92,7 @@ from caveviewer.gui.map_library_workflow import (
 from caveviewer.gui.map_selection import (
     validate_selected_map_folder as _validate_selected_map_folder,
 )
+from caveviewer.gui.loading_progress import monotonic_progress, progress_segments
 from caveviewer.gui.modal_dialog import (
     MODAL_CONTENT_PAD_X,
     MODAL_CONTENT_PAD_Y,
@@ -120,7 +128,6 @@ from caveviewer.gui.splash_visuals import (
     VectorPath,
     VectorPolygon,
     fit_splash_background,
-    progress_control_photo,
     vector_icon_photo,
 )
 from caveviewer.gui.tk_feedback import (
@@ -154,6 +161,26 @@ _SPLASH_BACKGROUND_PATH = _resolve_asset_path("splash_ginnie_dark.jpg")
 _PRESENTATION_PROFILE = get_presentation_profile()
 _SPLASH_LAYOUT_POLICY = _PRESENTATION_PROFILE.splash_layout
 _APP_ICON_PATH: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _SplashResumeState:
+    """Tk shell state carried across a monitor-triggered recomposition."""
+
+    geometry: TkWindowGeometry
+    active_surface: str
+    preferences: PreferencesPanelSnapshot | None = None
+    map_scroll_fraction: float = 0.0
+    cave: CaveMetadata | None = None
+    display_metrics: TkDisplayMetrics | None = None
+    window_state: str = "normal"
+
+
+@dataclass(frozen=True, slots=True)
+class _SplashRecomposeRequest:
+    """Private result consumed by the public splash trampoline."""
+
+    resume_state: _SplashResumeState
 
 
 def _returning_library_needs_topmost(profile: PresentationProfile) -> bool:
@@ -231,8 +258,8 @@ _BUTTON_BORDER_COLOR = DARK_THEME.primary_button_border
 _NAVIGATION_HOVER_BG = DARK_THEME.entry_background
 # Keep navigation entries distinct without making the rail read as a stack of
 # separate cards. This shared spacing also scales with the active display.
-_NAVIGATION_ITEM_GAP = 8
-_EMBEDDED_PANEL_TEXT_SCALE_FACTOR = 11 / 12
+_NAVIGATION_ITEM_GAP = 4
+_EMBEDDED_PANEL_TEXT_SCALE_FACTOR = 1.0
 _WINDOWS_SPLASH_LAYOUT = _SPLASH_LAYOUT_POLICY.windows_layout
 _LINUX_SPLASH_LAYOUT = _SPLASH_LAYOUT_POLICY.linux_layout
 _UI_FONT_FAMILY = _PRESENTATION_PROFILE.ui_font_family
@@ -278,15 +305,13 @@ _LIBRARY_METADATA_ERROR_DURATION_MS = ERROR_FEEDBACK_MS
 # accent as work completes.
 _LIBRARY_PROGRESS_TRACK_COLOR = DARK_THEME.entry_background
 _LIBRARY_PROGRESS_FILL_COLOR = DARK_THEME.primary_button
-_LIBRARY_ACTION_PROGRESS_RING_DIAMETER = 22
-_LIBRARY_ACTION_PROGRESS_RING_STROKE_WIDTH = 2
 # The circular retry arrow is visually denser than the neighboring chevron and
 # download glyphs, so it deliberately receives a smaller optical footprint.
-_LIBRARY_ACTION_RETRY_ICON_DIAMETER = 18
-_LIBRARY_ACTION_STOP_SIZE = 7
-_LIBRARY_ACTION_BUTTON_SIZE = 32
+_LIBRARY_ACTION_RETRY_ICON_DIAMETER = 16
+_LIBRARY_ACTION_STOP_SIZE = 6
+_LIBRARY_ACTION_BUTTON_SIZE = 28
 _LIBRARY_ACTION_ICON_STROKE_WIDTH = 2
-_LIBRARY_OVERFLOW_BUTTON_SIZE = 28
+_LIBRARY_OVERFLOW_BUTTON_SIZE = 24
 _LIBRARY_OVERFLOW_FG = "#606370"
 _LIBRARY_OVERFLOW_HOVER_FG = _INSTRUCTION_COLOR
 _LIBRARY_OVERFLOW_HOVER_BG = DARK_THEME.secondary_button
@@ -422,6 +447,7 @@ def _configure_runtime_tk_fonts(
     root,
     *,
     presentation_profile: PresentationProfile | None = None,
+    density_scale: float = 1.0,
 ) -> None:
     """Resolve the UI font against fonts Tk can actually render."""
     global _UI_FONT_FAMILY, _TK_TEXT_SCALE
@@ -457,12 +483,16 @@ def _configure_runtime_tk_fonts(
     except Exception as exc:
         _LOG.warning(f"could not resolve Tk UI font family ({exc}); using {_UI_FONT_FAMILY}.")
 
-    _TK_TEXT_SCALE = profile.tk_text_scale(default_font_points)
+    _TK_TEXT_SCALE = profile.tk_text_scale(default_font_points) * density_scale
     _refresh_tk_font_tokens()
 
 
-def _map_library_panel_style() -> MapLibraryPanelStyle:
+def _map_library_panel_style(
+    branding_assets: BrandingAssets | None = None,
+) -> MapLibraryPanelStyle:
     """Return the splash-owned style tokens for the Map Library panel."""
+    assets = branding_assets or _branding_assets_for_runtime(None)
+    progress_tokens = assets.loading_progress
     return MapLibraryPanelStyle(
         panel_color=_LIBRARY_PANEL_COLOR,
         panel_border_color=_LIBRARY_PANEL_BORDER_COLOR,
@@ -488,10 +518,8 @@ def _map_library_panel_style() -> MapLibraryPanelStyle:
         metadata_status_color=_LIBRARY_METADATA_STATUS_COLOR,
         metadata_status_duration_ms=_LIBRARY_METADATA_STATUS_DURATION_MS,
         metadata_error_duration_ms=_LIBRARY_METADATA_ERROR_DURATION_MS,
-        progress_track_color=_LIBRARY_PROGRESS_TRACK_COLOR,
-        progress_fill_color=_LIBRARY_PROGRESS_FILL_COLOR,
-        action_progress_ring_diameter=_LIBRARY_ACTION_PROGRESS_RING_DIAMETER,
-        action_progress_ring_stroke_width=_LIBRARY_ACTION_PROGRESS_RING_STROKE_WIDTH,
+        progress_track_color=progress_tokens.track_color,
+        progress_fill_color=progress_tokens.fill_color,
         action_retry_icon_diameter=_LIBRARY_ACTION_RETRY_ICON_DIAMETER,
         action_stop_size=_LIBRARY_ACTION_STOP_SIZE,
         action_button_size=_LIBRARY_ACTION_BUTTON_SIZE,
@@ -566,7 +594,7 @@ def _suppress_amber_logo_pixels(logo_img):
     for red, green, blue, alpha in rgba_image.get_flattened_data():
         # Use a wider warm-color envelope than the OpenGL shader so resized,
         # antialiased edges of the logo's rings and tick marks cannot survive
-        # as small dashes around the clean launch-progress ring. The blue cave
+        # as small dashes around a clean launch-progress treatment. The blue cave
         # artwork remains well outside these ratios.
         is_amber = (
             alpha > 5
@@ -703,7 +731,11 @@ def _render_launch_content(canvas, *, progress: float, px) -> None:
         bar_top,
         bar_left + bar_width,
         bar_top + bar_height,
-        fill=_LIBRARY_PROGRESS_TRACK_COLOR,
+        fill=getattr(
+            canvas,
+            "_cv_progress_track_color",
+            _LIBRARY_PROGRESS_TRACK_COLOR,
+        ),
         outline="",
         tags="launch_content",
     )
@@ -714,13 +746,22 @@ def _render_launch_content(canvas, *, progress: float, px) -> None:
             bar_top,
             bar_left + bar_width * bounded_progress,
             bar_top + bar_height,
-            fill=_LIBRARY_PROGRESS_FILL_COLOR,
+            fill=getattr(
+                canvas,
+                "_cv_progress_fill_color",
+                _LIBRARY_PROGRESS_FILL_COLOR,
+            ),
             outline="",
             tags="launch_content",
         )
 
 
-def _build_launch_surface(parent, *, px):
+def _build_launch_surface(
+    parent,
+    *,
+    px,
+    branding_assets: BrandingAssets | None = None,
+):
     """Build the branded, dark-cave launch surface and return its canvas."""
     import tkinter as tk
 
@@ -735,6 +776,11 @@ def _build_launch_surface(parent, *, px):
     launch_canvas.pack(fill="both", expand=True)
     launch_canvas._cv_launch_background_image = _load_launch_background_image()
     launch_canvas._cv_launch_progress = 0.0
+    progress_tokens = (
+        branding_assets or _branding_assets_for_runtime(None)
+    ).loading_progress
+    launch_canvas._cv_progress_track_color = progress_tokens.track_color
+    launch_canvas._cv_progress_fill_color = progress_tokens.fill_color
 
     def _refresh_launch_surface(_event=None) -> None:
         size = _launch_canvas_dimensions(launch_canvas)
@@ -1149,7 +1195,7 @@ class _UpdatePresentation:
     status_action: _UpdateAction | None = None
     action_replaces_status_after_delay: bool = False
     progress_visible: bool = False
-    progress_fraction: float = 0.0
+    progress_fraction: float | None = 0.0
     error: bool = False
 
 
@@ -1198,20 +1244,16 @@ def _update_presentation(snapshot: UpdateSnapshot) -> _UpdatePresentation:
     ):
         return _UpdatePresentation(status_text=snapshot.automatic_update.explanation)
     if snapshot.state == UpdateState.AVAILABLE:
-        if snapshot.install_action_label:
-            action_text = snapshot.install_action_label
-            if snapshot.available_version:
-                action_text = f"{action_text} {snapshot.available_version}"
-            return _UpdatePresentation(
-                action_text=action_text,
-                action=_UpdateAction.INSTALL,
-            )
-        action_text = "Update to"
+        action_text = "Update"
         if snapshot.available_version:
-            action_text = f"{action_text} {snapshot.available_version}"
+            action_text = f"Update to version {snapshot.available_version}"
         return _UpdatePresentation(
             action_text=action_text,
-            action=_UpdateAction.DOWNLOAD,
+            action=(
+                _UpdateAction.INSTALL
+                if snapshot.install_action_label
+                else _UpdateAction.DOWNLOAD
+            ),
         )
     if snapshot.state == UpdateState.DOWNLOADING:
         return _UpdatePresentation(
@@ -1227,7 +1269,7 @@ def _update_presentation(snapshot: UpdateSnapshot) -> _UpdatePresentation:
             action_text="Cancel",
             action=_UpdateAction.CANCEL,
             progress_visible=True,
-            progress_fraction=1.0,
+            progress_fraction=None,
         )
     if snapshot.state == UpdateState.READY:
         if snapshot.install_action_label:
@@ -1256,7 +1298,11 @@ def _update_presentation(snapshot: UpdateSnapshot) -> _UpdatePresentation:
             action_replaces_status_after_delay=True,
         )
     if snapshot.state == UpdateState.HANDOFF_VERIFYING:
-        return _UpdatePresentation(status_text="Verifying installer…")
+        return _UpdatePresentation(
+            status_text="Verifying installer…",
+            progress_visible=True,
+            progress_fraction=None,
+        )
     if snapshot.state == UpdateState.INSTALLING:
         return _UpdatePresentation(status_text="Starting update…")
     if snapshot.state == UpdateState.FAILED:
@@ -1306,6 +1352,42 @@ def show_splash_screen(
     show_launch_overlay: bool = True,
     map_open_error_details: str | None = None,
 ) -> str | None:
+    """Run responsive shell compositions without exposing recompose results."""
+    resume_state = None
+    launch_overlay = show_launch_overlay
+    while True:
+        result = _show_splash_composition(
+            program_name=program_name,
+            version=version,
+            update_manager=update_manager,
+            desktop_services=desktop_services,
+            platform_runtime=platform_runtime,
+            runtime_settings_provider=runtime_settings_provider,
+            on_preferences_saved=on_preferences_saved,
+            show_launch_overlay=launch_overlay,
+            map_open_error_details=map_open_error_details,
+            resume_state=resume_state,
+        )
+        if not isinstance(result, _SplashRecomposeRequest):
+            return result
+        resume_state = result.resume_state
+        launch_overlay = False
+        map_open_error_details = None
+
+
+def _show_splash_composition(
+    program_name: str = APP_NAME,
+    version: str = APP_VERSION,
+    *,
+    update_manager: UpdateManager,
+    desktop_services: DesktopServices | None = None,
+    platform_runtime: PlatformRuntime | None = None,
+    runtime_settings_provider: Callable[[], RuntimeSettings] | None = None,
+    on_preferences_saved: Callable[[object], object] | None = None,
+    show_launch_overlay: bool = True,
+    map_open_error_details: str | None = None,
+    resume_state: _SplashResumeState | None = None,
+) -> str | None | _SplashRecomposeRequest:
     """
     Builds the Map Library and blocks until the person either picks a folder
     (Browse -> select a folder -> OK) or closes the window. The branded launch
@@ -1396,28 +1478,62 @@ def show_splash_screen(
     )
     splash_controller.start()
     record_startup_stage("splash_root_create_complete")
-    apply_tk_scaling(
+    carried_display_metrics = (
+        resume_state.display_metrics if resume_state is not None else None
+    )
+    display_metrics = carried_display_metrics or resolve_tk_display_metrics(
         root,
         presentation_profile=presentation_profile,
+        presentation_actions_adapter=presentation_actions_adapter,
         scale_override=(viewer_settings.tk_scale if viewer_settings is not None else None),
     )
+    applied_tk_point_scale = display_metrics.tk_point_scale
+    if carried_display_metrics is not None:
+        applied_tk_point_scale = synchronize_tk_point_scale(root, display_metrics)
     _configure_runtime_tk_fonts(
         root,
         presentation_profile=presentation_profile,
+        density_scale=display_metrics.density_scale,
     )
-    splash_scale = tk_display_scale(
-        root,
-        presentation_profile=presentation_profile,
-        scale_override=(viewer_settings.tk_scale if viewer_settings is not None else None),
+    splash_scale = display_metrics.layout_scale
+    try:
+        tk_patchlevel = str(root.tk.call("info", "patchlevel"))
+    except Exception:
+        tk_patchlevel = "unknown"
+    _LOG.info(
+        "Tk display metrics: platform=%s, awareness=%s, native_dpi=%s, "
+        "geometry_scale=%.4f, monitor_diagonal_inches=%s, density_scale=%.4f, "
+        "layout_scale=%.4f, tk_scaling_observed=%.4f, "
+        "tk_scaling_target=%s, tk_scaling_applied=%.4f, tk=%s, override=%s.",
+        presentation_profile.platform_name,
+        (
+            "per-monitor-v2-with-fallbacks"
+            if presentation_profile.platform_name == "windows"
+            else "platform-default"
+        ),
+        (
+            f"{display_metrics.native_dpi:.1f}"
+            if display_metrics.native_dpi is not None
+            else "unavailable"
+        ),
+        display_metrics.geometry_scale,
+        (
+            f"{display_metrics.monitor_diagonal_inches:.1f}"
+            if display_metrics.monitor_diagonal_inches is not None
+            else "unavailable"
+        ),
+        display_metrics.density_scale,
+        display_metrics.layout_scale,
+        display_metrics.tk_point_scale,
+        (
+            f"{display_metrics.target_tk_point_scale:.4f}"
+            if display_metrics.target_tk_point_scale is not None
+            else "unchanged"
+        ),
+        applied_tk_point_scale,
+        tk_patchlevel,
+        display_metrics.override_active,
     )
-    if _LINUX_SPLASH_LAYOUT:
-        try:
-            _LOG.info(
-                "Tk display scale: "
-                f"{splash_scale:.2f}; tk scaling: {float(root.tk.call('tk', 'scaling')):.2f}"
-            )
-        except Exception:
-            pass
 
     def px(value: float) -> int:
         return int(round(value * splash_scale))
@@ -1434,25 +1550,36 @@ def show_splash_screen(
 
     presentation_actions_adapter.install_about_handler(root, program_name, version)
 
-    # Center the window on screen rather than letting the OS place it
-    # arbitrarily -- a first-launch splash screen appearing somewhere
-    # random/off-center is a small but noticeable rough edge.
+    # Initial startup is centered; monitor-triggered recomposition restores
+    # the already ratio-scaled bounds on the destination monitor.
     root.update_idletasks()
     screen_w = root.winfo_screenwidth()
     screen_h = root.winfo_screenheight()
     display_margin = px(80)
-    available_width = max(1, screen_w - display_margin)
-    available_height = max(1, screen_h - display_margin)
-    window_w = min(px(_SPLASH_WINDOW_WIDTH), available_width)
-    window_h = min(px(_SPLASH_WINDOW_MIN_HEIGHT), available_height)
+    if display_metrics.work_area is None:
+        available_width = max(1, screen_w - display_margin)
+        available_height = max(1, screen_h - display_margin)
+    else:
+        work_left, work_top, work_right, work_bottom = display_metrics.work_area
+        available_width = max(1, work_right - work_left)
+        available_height = max(1, work_bottom - work_top)
+    if resume_state is None:
+        window_w = min(px(_SPLASH_WINDOW_WIDTH), available_width)
+        window_h = min(px(_SPLASH_WINDOW_MIN_HEIGHT), available_height)
+        pos_x = (screen_w - window_w) // 2
+        pos_y = (screen_h - window_h) // 3
+    else:
+        restored = resume_state.geometry
+        window_w = min(restored.width, available_width)
+        window_h = min(restored.height, available_height)
+        pos_x = restored.x
+        pos_y = restored.y
     # Compact displays must never receive a minimum larger than the initial
     # display-clamped window. Normal displays retain the shared shell minimum.
     root.minsize(
         min(px(_SPLASH_RESIZE_MIN_WIDTH), available_width),
         min(px(_SPLASH_RESIZE_MIN_HEIGHT), available_height),
     )
-    pos_x = (screen_w - window_w) // 2
-    pos_y = (screen_h - window_h) // 3  # slightly above true vertical center, reads better
     root.geometry(f"{window_w}x{window_h}+{pos_x}+{pos_y}")
 
     root.grid_rowconfigure(0, weight=1)
@@ -1466,6 +1593,7 @@ def show_splash_screen(
         launch_indicator = _build_launch_surface(
             launch_surface,
             px=px,
+            branding_assets=branding_assets,
         )
 
     content_frame = tk.Frame(root, bg=_BG_COLOR)
@@ -1473,8 +1601,8 @@ def show_splash_screen(
         row=0,
         column=0,
         sticky="nsew",
-        padx=px(22),
-        pady=px(16),
+        padx=px(18),
+        pady=px(14),
     )
     if show_launch_overlay:
         launch_surface.tkraise()
@@ -1508,7 +1636,7 @@ def show_splash_screen(
     # The splash is organized as a stable navigation rail beside an active
     # content surface. Keeping the rail a fixed width prevents map-library
     # and Preferences content from jumping as users navigate.
-    left_frame = tk.Frame(content_frame, bg=_BG_COLOR, width=px(220))
+    left_frame = tk.Frame(content_frame, bg=_BG_COLOR, width=px(190))
     left_frame.pack(side="left", fill="y")
     left_frame.pack_propagate(False)
 
@@ -1517,7 +1645,7 @@ def show_splash_screen(
         side="left",
         fill="both",
         expand=True,
-        padx=(px(32), 0),
+        padx=(px(24), 0),
     )
     right_frame.grid_rowconfigure(0, weight=1)
     right_frame.grid_columnconfigure(0, weight=1)
@@ -1537,14 +1665,14 @@ def show_splash_screen(
     map_library_surface.tkraise()
 
     navigation_frame = tk.Frame(left_frame, bg=_BG_COLOR)
-    navigation_frame.pack(fill="x", pady=(px(22), 0))
+    navigation_frame.pack(fill="x", pady=(px(18), 0))
 
     app_status_frame = tk.Frame(left_frame, bg=_BG_COLOR)
     app_status_frame.pack(
         side="bottom",
         fill="x",
-        padx=px(14),
-        pady=(0, px(14)),
+        padx=px(12),
+        pady=(0, px(12)),
     )
     last_update_presentation: list[_UpdatePresentation | None] = [None]
     map_library_workflow_ref: list[MapLibraryWorkflow | None] = [None]
@@ -1554,24 +1682,17 @@ def show_splash_screen(
     about_surface_initialized = [False]
     discard_preferences_dialog_ref: list[object | None] = [None]
     active_surface = ["map_library"]
+    active_cave: list[CaveMetadata | None] = [None]
+    recompose_request: list[_SplashRecomposeRequest | None] = [None]
 
-    # The status frame remains anchored to the lower-left rail. Its version is
-    # always visible; the update subsection is introduced only when it has a
-    # meaningful state, keeping the quiet state genuinely compact.
-    version_label = tk.Label(
-        app_status_frame,
-        text=f"Version {version}",
-        font=_TYPOGRAPHY.supporting,
-        fg=_SUBTITLE_COLOR,
-        bg=_BG_COLOR,
-        anchor="w",
-    )
-    version_label.pack(anchor="w")
-
+    # The status frame stays anchored to the lower-left rail and remains
+    # completely quiet until an update has a meaningful state.
     update_cluster = tk.Frame(app_status_frame, bg=_BG_COLOR)
+    update_status_row = tk.Frame(update_cluster, bg=_BG_COLOR)
+    update_status_row.pack(anchor="w", fill="x")
 
     update_label = tk.Label(
-        update_cluster,
+        update_status_row,
         text="",
         font=_TYPOGRAPHY.supporting,
         fg=_INSTRUCTION_COLOR,
@@ -1586,7 +1707,7 @@ def show_splash_screen(
     )
 
     update_action_label = tk.Label(
-        update_cluster,
+        update_status_row,
         text="",
         # Footer actions are links to a follow-on update task, not the primary
         # action of the active panel. Keep their hierarchy with the status
@@ -1603,57 +1724,79 @@ def show_splash_screen(
         anchor="w",
     )
 
-    update_cancel_button_size = px(24)
-    update_cancel_button = tk.Canvas(
+    update_progress_bar = tk.Canvas(
         update_cluster,
-        width=update_cancel_button_size,
-        height=update_cancel_button_size,
+        width=px(192),
+        height=max(1, px(3)),
         bg=_BG_COLOR,
         borderwidth=0,
-        highlightthickness=1,
-        highlightbackground=_BG_COLOR,
-        highlightcolor=_BUTTON_BG,
-        takefocus=True,
+        highlightthickness=0,
+        takefocus=False,
     )
+    update_progress_bar._cv_progress_phase = 0.0
+    update_progress_bar._cv_progress_after_id = None
+    update_progress_bar._cv_display_fraction = 0.0
+    update_progress_bar._cv_progress_visible = False
+    update_progress_bar.pack(anchor="w", fill="x", pady=(px(6), 0))
 
-    def _invoke_update_cancel(_event=None):
-        _invoke_update_action(update_manager, _UpdateAction.CANCEL)
-        return "break"
+    def _cancel_update_progress_animation(_event=None) -> None:
+        after_id = update_progress_bar._cv_progress_after_id
+        update_progress_bar._cv_progress_after_id = None
+        if after_id is not None:
+            try:
+                root.after_cancel(after_id)
+            except tk.TclError:
+                pass
 
-    for sequence in ("<Button-1>", "<Return>", "<space>"):
-        update_cancel_button.bind(sequence, _invoke_update_cancel)
-
-    def _draw_update_cancel_button(progress_fraction: float) -> None:
-        """Draw the anti-aliased update-download stop/progress pattern."""
-        update_cancel_button.delete("all")
-        size = update_cancel_button_size
-        inset = px(3)
-        track_color = DARK_THEME.entry_background
-        clamped = max(0.0, min(1.0, float(progress_fraction)))
-        stroke_width = max(1, px(2))
-        ring_diameter = max(1, size - inset * 2)
-        stop_size = 2 * max(2, px(3))
-        progress_photo = progress_control_photo(
-            update_cancel_button,
-            image_size=ring_diameter + stroke_width * 2,
-            ring_diameter=ring_diameter,
-            stroke_width=stroke_width,
-            track_color=track_color,
-            fill_color=_BUTTON_BG,
-            start_degrees=90,
-            extent_degrees=-360 * clamped,
-            center_glyph="stop",
-            center_glyph_size=stop_size,
-            center_glyph_color=_BUTTON_BG,
+    def _draw_update_progress_bar(progress_fraction: float | None) -> None:
+        """Draw shared update progress without coupling it to Cancel."""
+        update_progress_bar.delete("all")
+        if not update_progress_bar._cv_progress_visible:
+            return
+        width = max(1, update_progress_bar.winfo_width())
+        height = max(1, int(float(update_progress_bar.cget("height"))))
+        progress_tokens = branding_assets.loading_progress
+        update_progress_bar.create_rectangle(
+            0,
+            0,
+            width,
+            height,
+            fill=progress_tokens.track_color,
+            outline="",
         )
-        # Keep the stop square in the ring's high-DPI raster so both share an
-        # exact center rather than relying on separate Canvas coordinates.
-        update_cancel_button._cv_progress_control_photo = progress_photo
-        update_cancel_button.create_image(
-            size / 2,
-            size / 2,
-            image=progress_photo,
-        )
+        for left, right in progress_segments(
+            0.0,
+            float(width),
+            progress_fraction,
+            phase=update_progress_bar._cv_progress_phase,
+        ):
+            update_progress_bar.create_rectangle(
+                left,
+                0,
+                right,
+                height,
+                fill=progress_tokens.fill_color,
+                outline="",
+            )
+
+    def _animate_update_progress() -> None:
+        update_progress_bar._cv_progress_phase = (
+            update_progress_bar._cv_progress_phase + 0.045
+        ) % 1.0
+        _draw_update_progress_bar(None)
+        try:
+            update_progress_bar._cv_progress_after_id = root.after(
+                40,
+                _animate_update_progress,
+            )
+        except tk.TclError:
+            update_progress_bar._cv_progress_after_id = None
+
+    update_progress_bar.bind(
+        "<Destroy>",
+        _cancel_update_progress_animation,
+        add="+",
+    )
 
     def _set_update_cluster_visible(visible: bool) -> None:
         if visible:
@@ -1663,10 +1806,14 @@ def show_splash_screen(
         update_cluster.pack_forget()
 
     def _layout_update_cluster(presentation: _UpdatePresentation) -> None:
-        """Pack only the update controls relevant to the current state."""
+        """Update content without changing the reserved cluster geometry."""
+        _cancel_update_progress_animation()
         update_label.pack_forget()
         update_action_label.pack_forget()
-        update_cancel_button.pack_forget()
+        update_progress_bar._cv_progress_visible = presentation.progress_visible
+        if not presentation.progress_visible:
+            update_progress_bar._cv_display_fraction = 0.0
+            _draw_update_progress_bar(None)
 
         if presentation.status_text:
             update_label.pack(side="left", anchor="w", fill="x", expand=True)
@@ -1674,13 +1821,22 @@ def show_splash_screen(
             presentation.action_text
             and not presentation.action_replaces_status_after_delay
         ):
-            if presentation.action == _UpdateAction.CANCEL:
-                _draw_update_cancel_button(presentation.progress_fraction)
-                update_cancel_button.pack(side="right", padx=(px(6), 0))
-            else:
-                update_action_label.pack(side="left", anchor="w")
+            update_action_label.pack(
+                side="left",
+                anchor="w",
+                padx=(px(6), 0) if presentation.status_text else 0,
+            )
         if presentation.progress_visible:
-            _draw_update_cancel_button(presentation.progress_fraction)
+            display_fraction = presentation.progress_fraction
+            if display_fraction is not None:
+                update_progress_bar._cv_display_fraction = monotonic_progress(
+                    update_progress_bar._cv_display_fraction,
+                    display_fraction,
+                )
+                display_fraction = update_progress_bar._cv_display_fraction
+            _draw_update_progress_bar(display_fraction)
+            if presentation.progress_fraction is None:
+                _animate_update_progress()
 
         _set_update_cluster_visible(
             bool(
@@ -1755,8 +1911,23 @@ def show_splash_screen(
         splash_controller.schedule(100, _refresh_update_presentation)
 
     close_waiting_for_rebuild_pause = [False]
+    monitor_check_after_id: list[str | None] = [None]
+    monitor_configure_binding_id: list[str | None] = [None]
+
+    def _detach_monitor_transition_observer() -> None:
+        splash_controller.cancel_scheduled_callback(monitor_check_after_id[0])
+        monitor_check_after_id[0] = None
+        binding_id = monitor_configure_binding_id[0]
+        if binding_id is None:
+            return
+        monitor_configure_binding_id[0] = None
+        try:
+            root.unbind("<Configure>", binding_id)
+        except Exception:
+            pass
 
     def _finalize_leave_splash() -> None:
+        _detach_monitor_transition_observer()
         workflow = map_library_workflow_ref[0]
         if workflow is not None:
             workflow.close()
@@ -1951,6 +2122,9 @@ def show_splash_screen(
             typography=_embedded_panel_typography(),
             on_applied=_on_preferences_applied,
             on_cancel=_show_map_library_surface,
+            initial_snapshot=(
+                resume_state.preferences if resume_state is not None else None
+            ),
         )
         preferences_panel_ref[0] = panel
         return panel
@@ -2055,7 +2229,7 @@ def show_splash_screen(
 
     def _create_navigation_icon(parent, icon_name: str):
         """Create a small, scalable outline icon for one navigation row."""
-        size = px(28)
+        size = px(24)
         icon = tk.Canvas(
             parent,
             width=size,
@@ -2069,7 +2243,7 @@ def show_splash_screen(
         def redraw(background: str, foreground: str) -> None:
             icon.configure(bg=background)
             icon.delete("navigation-icon")
-            stroke = max(1, px(1.6))
+            stroke = max(1, px(1.5))
             center = size / 2
             paths: tuple[VectorPath, ...] = ()
             polygons: tuple[VectorPolygon, ...] = ()
@@ -2079,26 +2253,26 @@ def show_splash_screen(
                 paths = (
                     VectorPath(
                         points=(
-                            (px(3), px(6)),
-                            (px(10), px(3)),
-                            (px(18), px(6)),
-                            (px(25), px(3)),
-                            (px(25), px(22)),
-                            (px(18), px(25)),
-                            (px(10), px(22)),
-                            (px(3), px(25)),
+                            (px(3), px(5)),
+                            (px(9), px(3)),
+                            (px(15), px(5)),
+                            (px(21), px(3)),
+                            (px(21), px(19)),
+                            (px(15), px(22)),
+                            (px(9), px(19)),
+                            (px(3), px(22)),
                         ),
                         color=foreground,
                         width=stroke,
                         closed=True,
                     ),
                     VectorPath(
-                        points=((px(10), px(3)), (px(10), px(22))),
+                        points=((px(9), px(3)), (px(9), px(19))),
                         color=foreground,
                         width=stroke,
                     ),
                     VectorPath(
-                        points=((px(18), px(6)), (px(18), px(25))),
+                        points=((px(15), px(5)), (px(15), px(22))),
                         color=foreground,
                         width=stroke,
                     ),
@@ -2126,7 +2300,7 @@ def show_splash_screen(
             elif icon_name == "help":
                 ellipses = (
                     VectorEllipse(
-                        bounds=(px(3), px(3), px(25), px(25)),
+                        bounds=(px(2), px(2), px(22), px(22)),
                         outline_color=foreground,
                         outline_width=stroke,
                     ),
@@ -2134,7 +2308,7 @@ def show_splash_screen(
             else:
                 ellipses = (
                     VectorEllipse(
-                        bounds=(px(3), px(3), px(25), px(25)),
+                        bounds=(px(2), px(2), px(22), px(22)),
                         outline_color=foreground,
                         outline_width=stroke,
                     ),
@@ -2185,7 +2359,7 @@ def show_splash_screen(
         """Create one keyboard-accessible action in the persistent nav rail."""
         item_row = tk.Frame(navigation_frame, bg=_BG_COLOR)
         icon = _create_navigation_icon(item_row, icon_name)
-        icon.pack(side="left", padx=(px(13), px(7)))
+        icon.pack(side="left", padx=(px(11), px(6)))
         item = tk.Label(
             item_row,
             text=text,
@@ -2194,13 +2368,13 @@ def show_splash_screen(
             bg=_BG_COLOR,
             anchor="w",
             padx=0,
-            pady=px(9),
+            pady=px(7),
             takefocus=True,
             highlightthickness=1,
             highlightbackground=_BG_COLOR,
             highlightcolor=_BUTTON_BORDER_COLOR,
         )
-        item.pack(side="left", fill="both", expand=True, padx=(0, px(11)))
+        item.pack(side="left", fill="both", expand=True, padx=(0, px(9)))
         state = {
             "selected": selected,
             "hovered": False,
@@ -2341,6 +2515,7 @@ def show_splash_screen(
 
     def _show_cave_metadata(cave: CaveMetadata) -> None:
         """Replace the right surface with one cave's descriptive information."""
+        active_cave[0] = cave
         _prepare_surface_change("cave_metadata")
         for child in cave_metadata_surface.winfo_children():
             child.destroy()
@@ -2386,7 +2561,7 @@ def show_splash_screen(
         bind_activation=_bind_activation,
         widget_exists=lambda widget: _widget_exists(widget),
         logger=_LOG,
-        style=_map_library_panel_style(),
+        style=_map_library_panel_style(branding_assets),
         open_map_folder=on_open_map_folder,
     )
     map_library_panel_ref[0] = map_library_panel
@@ -2460,18 +2635,41 @@ def show_splash_screen(
 
     map_library_navigation_item.focus_set()
     root.update_idletasks()
-    final_height = max(
-        px(_SPLASH_WINDOW_MIN_HEIGHT),
-        root.winfo_reqheight() + px(_SPLASH_WINDOW_EXTRA_BOTTOM_SLACK),
-    )
-    final_height = min(final_height, available_height)
-    pos_y = (screen_h - final_height) // 3
+    if resume_state is None:
+        final_height = max(
+            px(_SPLASH_WINDOW_MIN_HEIGHT),
+            root.winfo_reqheight() + px(_SPLASH_WINDOW_EXTRA_BOTTOM_SLACK),
+        )
+        final_height = min(final_height, available_height)
+        pos_y = (screen_h - final_height) // 3
+    else:
+        final_height = window_h
     root.geometry(f"{window_w}x{final_height}+{pos_x}+{pos_y}")
 
     # Compose Preferences behind the launch surface while every stacked panel
     # already owns its final mapped width. Fixed settlement passes drain only
     # geometry work; width/size guards prevent callbacks from cascading.
     _ensure_preferences_panel()
+    if resume_state is not None:
+        if resume_state.active_surface == "preferences":
+            _show_preferences_surface()
+        elif resume_state.active_surface == "help":
+            _show_help_surface()
+        elif resume_state.active_surface == "about":
+            _show_about_surface()
+        elif (
+            resume_state.active_surface == "cave_metadata"
+            and resume_state.cave is not None
+        ):
+            _show_cave_metadata(resume_state.cave)
+        else:
+            _show_map_library_surface()
+        if resume_state.map_scroll_fraction > 0.0:
+            splash_controller.schedule_idle(
+                lambda: map_library_panel.restore_scroll_fraction(
+                    resume_state.map_scroll_fraction
+                )
+            )
     _advance_launch_progress(0.30)
     _settle_launch_layout(root, passes=3)
     readiness_gate.mark_ready()
@@ -2496,6 +2694,11 @@ def show_splash_screen(
             launch_surface.destroy()
             mark_startup_splash_visible()
         root.deiconify()
+        if resume_state is not None and resume_state.window_state == "zoomed":
+            try:
+                root.state("zoomed")
+            except Exception:
+                pass
         root.lift()
         root.focus_force()
         if (
@@ -2555,7 +2758,9 @@ def show_splash_screen(
     # The app-owned manager survives this Tk window and any intervening viewer.
     # Polling immutable snapshots keeps every widget mutation on the Tk thread.
     splash_controller.schedule(50, _refresh_update_presentation)
-    splash_controller.schedule(350, update_manager.check_for_updates)
+    if resume_state is None:
+        splash_controller.schedule(350, update_manager.check_for_updates)
+
     def _handle_root_return(_event=None):
         if active_surface[0] == "preferences":
             panel = preferences_panel_ref[0]
@@ -2578,8 +2783,120 @@ def show_splash_screen(
         on_close()
         return "break"
 
+    def _monitor_recomposition_is_deferred() -> bool:
+        try:
+            if root.grab_current() is not None:
+                return True
+        except Exception:
+            pass
+        workflow = map_library_workflow_ref[0]
+        if workflow is None:
+            return False
+        if workflow.cache_rebuild_controller.active:
+            return True
+        active_download = getattr(workflow.controller, "active_download", None)
+        return bool(getattr(active_download, "in_progress", False))
+
+    def _check_monitor_transition() -> None:
+        monitor_check_after_id[0] = None
+        if splash_controller.closing or recompose_request[0] is not None:
+            return
+        try:
+            if not root.winfo_ismapped():
+                return
+        except Exception:
+            return
+        if _monitor_recomposition_is_deferred():
+            monitor_check_after_id[0] = splash_controller.schedule(
+                200,
+                _check_monitor_transition,
+            )
+            return
+        candidate = resolve_tk_display_metrics(
+            root,
+            presentation_profile=presentation_profile,
+            presentation_actions_adapter=presentation_actions_adapter,
+            scale_override=(
+                viewer_settings.tk_scale if viewer_settings is not None else None
+            ),
+        )
+        if not display_scale_changed(display_metrics, candidate):
+            return
+        current_geometry = TkWindowGeometry(
+            width=max(1, root.winfo_width()),
+            height=max(1, root.winfo_height()),
+            x=root.winfo_x(),
+            y=root.winfo_y(),
+        )
+        try:
+            current_window_state = str(root.state())
+        except Exception:
+            current_window_state = "normal"
+        scaled_geometry = scale_window_geometry(
+            current_geometry,
+            current_scale=display_metrics.layout_scale,
+            candidate_scale=candidate.layout_scale,
+            minimum_size=(
+                int(round(_SPLASH_RESIZE_MIN_WIDTH * candidate.layout_scale)),
+                int(round(_SPLASH_RESIZE_MIN_HEIGHT * candidate.layout_scale)),
+            ),
+            preferred_size=(
+                int(round(_SPLASH_WINDOW_WIDTH * candidate.layout_scale)),
+                int(round(_SPLASH_WINDOW_MIN_HEIGHT * candidate.layout_scale)),
+            ),
+            work_area=candidate.work_area,
+        )
+        preferences_panel = preferences_panel_ref[0]
+        recompose_request[0] = _SplashRecomposeRequest(
+            _SplashResumeState(
+                geometry=scaled_geometry,
+                active_surface=active_surface[0],
+                preferences=(
+                    preferences_panel.snapshot()
+                    if preferences_panel is not None
+                    else None
+                ),
+                map_scroll_fraction=map_library_panel.scroll_fraction(),
+                cave=active_cave[0],
+                display_metrics=candidate,
+                window_state=current_window_state,
+            )
+        )
+        _LOG.info(
+            "Tk monitor transition: monitor=%s->%s, layout_scale=%.4f->%.4f, "
+            "window=%sx%s->%sx%s, state=%s.",
+            display_metrics.monitor_id,
+            candidate.monitor_id,
+            display_metrics.layout_scale,
+            candidate.layout_scale,
+            current_geometry.width,
+            current_geometry.height,
+            scaled_geometry.width,
+            scaled_geometry.height,
+            current_window_state,
+        )
+        _finalize_leave_splash()
+
+    def _schedule_monitor_transition_check(event=None) -> None:
+        if presentation_profile.platform_name != "windows":
+            return
+        if splash_controller.closing or recompose_request[0] is not None:
+            return
+        if event is not None and getattr(event, "widget", root) is not root:
+            return
+        splash_controller.cancel_scheduled_callback(monitor_check_after_id[0])
+        monitor_check_after_id[0] = splash_controller.schedule(
+            180,
+            _check_monitor_transition,
+        )
+
     root.bind("<Return>", _handle_root_return)
     root.bind("<Escape>", _cancel_preferences_or_close)
+    monitor_configure_binding_id[0] = root.bind(
+        "<Configure>",
+        _schedule_monitor_transition_check,
+        add="+",
+    )
     bind_primary_shortcut(
         root,
         "w",
@@ -2603,7 +2920,7 @@ def show_splash_screen(
         except Exception:
             pass  # already destroyed, or a background thread beat us to it
 
-    return splash_controller.selected_folder
+    return recompose_request[0] or splash_controller.selected_folder
 
 
 def _load_last_browse_dir() -> str | None:

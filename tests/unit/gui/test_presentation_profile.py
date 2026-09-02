@@ -15,6 +15,7 @@ from caveviewer.gui.platform.presentation import (
 from caveviewer.gui.platform.presentation_actions import (
     DefaultPresentationActionsAdapter,
     MacOSPresentationActionsAdapter,
+    WindowMonitorMetrics,
     WindowsPresentationActionsAdapter,
     create_presentation_actions_adapter,
 )
@@ -57,11 +58,39 @@ def test_presentation_profile_selects_static_platform_conventions(
         2.0 * overlay_scale
     )
     assert profile.viewer_uses_glfw_native_initial_size is uses_glfw_size
-    assert profile.splash_layout.window_width == 1160
-    assert profile.splash_layout.min_height == 820
-    assert profile.splash_layout.resize_min_width == 940
-    assert profile.splash_layout.resize_min_height == 680
+    assert profile.splash_layout.window_width == 1040
+    assert profile.splash_layout.min_height == 740
+    assert profile.splash_layout.resize_min_width == 840
+    assert profile.splash_layout.resize_min_height == 600
     assert profile.font_candidates
+
+
+def test_compact_shell_geometry_still_uses_native_display_scale_once():
+    profile = select_presentation_profile(platform_name="win32")
+    scale = 240 / 96
+
+    assert round(profile.splash_layout.window_width * scale) == 2600
+    assert round(profile.splash_layout.min_height * scale) == 1850
+    assert round(profile.splash_layout.resize_min_width * scale) == 2100
+    assert round(profile.splash_layout.resize_min_height * scale) == 1500
+
+
+@pytest.mark.parametrize("platform_name", ["win32", "linux"])
+def test_desktop_profiles_use_compact_embedded_panel_spacing(platform_name):
+    layout = select_presentation_profile(
+        platform_name=platform_name
+    ).preferences_dialog_layout
+
+    assert layout.body_pad_x == 24
+    assert layout.min_width == 720
+    assert layout.row_pad_x == 14
+    assert layout.row_pad_y == 8
+    assert layout.control_row_top_pad_y == 10
+    assert layout.tab_pad_x == 12
+    assert layout.tab_pad_y == 6
+    assert layout.tab_bottom_pad_y == 14
+    assert layout.button_row_top_pad_y == 14
+    assert layout.notice_wrap_length == 600
 
 
 def test_windows_profile_retains_one_tk_root_across_viewer_sessions():
@@ -263,6 +292,89 @@ def test_windows_presentation_actions_keep_dpi_fallbacks(monkeypatch):
     WindowsPresentationActionsAdapter().configure_process_dpi_awareness()
 
     assert calls == [("v2", -4), ("v81", 2), ("vista", None)]
+
+
+def test_windows_presentation_actions_read_raw_monitor_metrics(monkeypatch):
+    calls = []
+
+    class FakeUser32:
+        @staticmethod
+        def MonitorFromWindow(handle, fallback):
+            calls.append(("monitor", handle, fallback))
+            return 999
+
+        @staticmethod
+        def GetMonitorInfoW(monitor, info_pointer):
+            calls.append(("info", monitor))
+            bounds = info_pointer._obj.rcMonitor
+            bounds.left = 3840
+            bounds.right = 1280
+            bounds.top = 1920
+            bounds.bottom = 0
+            work = info_pointer._obj.rcWork
+            work.left = 1280
+            work.right = 3840
+            work.top = 40
+            work.bottom = 1920
+            return 1
+
+    class FakeShcore:
+        @staticmethod
+        def GetDpiForMonitor(monitor, dpi_type, dpi_x_pointer, dpi_y_pointer):
+            calls.append(("dpi", monitor, dpi_type))
+            dpi_x_pointer._obj.value = 100
+            dpi_y_pointer._obj.value = 100
+            return 0
+
+    monkeypatch.setattr(
+        presentation_actions.ctypes,
+        "windll",
+        SimpleNamespace(user32=FakeUser32(), shcore=FakeShcore()),
+        raising=False,
+    )
+    window = SimpleNamespace(winfo_id=lambda: 321)
+
+    metrics = WindowsPresentationActionsAdapter().window_monitor_metrics(window)
+
+    assert metrics == WindowMonitorMetrics(
+        2560,
+        1920,
+        100.0,
+        100.0,
+        monitor_id=999,
+        work_area=(1280, 40, 3840, 1920),
+    )
+    assert calls == [
+        ("monitor", 321, 2),
+        ("info", 999),
+        ("dpi", 999, 2),
+    ]
+
+
+def test_windows_presentation_actions_ignore_failed_raw_dpi_query(monkeypatch):
+    class FakeUser32:
+        @staticmethod
+        def MonitorFromWindow(_handle, _fallback):
+            return 999
+
+        @staticmethod
+        def GetMonitorInfoW(_monitor, _info_pointer):
+            return 1
+
+    fake_shcore = SimpleNamespace(GetDpiForMonitor=lambda *_args: 1)
+    monkeypatch.setattr(
+        presentation_actions.ctypes,
+        "windll",
+        SimpleNamespace(user32=FakeUser32(), shcore=fake_shcore),
+        raising=False,
+    )
+
+    assert (
+        WindowsPresentationActionsAdapter().window_monitor_metrics(
+            SimpleNamespace(winfo_id=lambda: 321)
+        )
+        is None
+    )
 
 
 def test_runtime_composes_injected_presentation_values():

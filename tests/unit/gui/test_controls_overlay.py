@@ -86,6 +86,8 @@ def test_fullscreen_controls_use_opaque_backdrop_and_spaced_prompt_gap():
     overlay._manual_mode = False
     overlay._ready_to_begin = True
     overlay._progress_fraction = 0.0
+    overlay._progress_track_rgba = (0.1, 0.1, 0.1, 1.0)
+    overlay._progress_fill_rgba = (1.0, 0.5, 0.0, 1.0)
     overlay._draw_begin_prompt = lambda *_args: 100.0
     grouped_calls = []
     overlay._draw_grouped_controls = (
@@ -101,6 +103,50 @@ def test_fullscreen_controls_use_opaque_backdrop_and_spaced_prompt_gap():
 
     assert quad_calls[0][-1][-1] == 1.0
     assert grouped_calls[0]["top_y"] == 182.0
+
+
+def test_compact_loading_panel_uses_text_and_flat_progress_without_logo(monkeypatch):
+    overlay = controls_overlay.ControlsOverlay.__new__(controls_overlay.ControlsOverlay)
+    overlay._progress_fraction = 0.5
+    overlay._progress_track_rgba = (0.1, 0.1, 0.1, 1.0)
+    overlay._progress_fill_rgba = (1.0, 0.5, 0.0, 1.0)
+    monkeypatch.setattr(controls_overlay.bitmap_font, "text_width_px", lambda *_: 100.0)
+    monkeypatch.setattr(controls_overlay.bitmap_font, "text_height_px", lambda *_: 20.0)
+    quads = []
+    labels = []
+
+    overlay._build_panel(
+        lambda *args: quads.append(args),
+        lambda *args: labels.append(args),
+        (800, 600),
+    )
+
+    assert labels[0][0] == "Jumping to the selected point"
+    assert labels[0][2] == 240.0
+    assert labels[0][3] == controls_overlay.OPENGL_PROGRESS_LABEL_TEXT_SIZE
+    assert quads[1][:4] == (250.0, 298.0, 550.0, 302.0)
+    assert len(quads) == 3  # backdrop, track, determinate fill
+    assert "draw_logo" not in controls_overlay.ControlsOverlay.render.__code__.co_names
+
+
+def test_compact_loading_panel_uses_shared_responsive_label_scale(monkeypatch):
+    overlay = controls_overlay.ControlsOverlay.__new__(controls_overlay.ControlsOverlay)
+    overlay._progress_fraction = 0.5
+    overlay._progress_track_rgba = (0.1, 0.1, 0.1, 1.0)
+    overlay._progress_fill_rgba = (1.0, 0.5, 0.0, 1.0)
+    monkeypatch.setattr(controls_overlay.bitmap_font, "text_width_px", lambda *_: 100.0)
+    labels = []
+
+    overlay._build_panel(
+        lambda *_args: None,
+        lambda *args: labels.append(args),
+        (2048, 1152),
+    )
+
+    assert labels[0][3] == pytest.approx(
+        controls_overlay.OPENGL_PROGRESS_LABEL_TEXT_SIZE
+        * controls_overlay.OPENGL_PROGRESS_LAYOUT_SCALE_MAX
+    )
 
 
 def test_keycap_tiers_share_widths_while_descriptive_controls_fit_labels(

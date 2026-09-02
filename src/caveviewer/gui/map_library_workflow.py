@@ -929,6 +929,7 @@ class MapLibraryWorkflow:
 
     def _restore_cache_rebuild_row(self, active: _ActiveCacheRebuild) -> None:
         """Restore the row's normal Open action after a terminal rebuild state."""
+        self.panel.clear_row_progress(active.row_widgets)
         if active.library_map is not None:
             self.refresh_standard_row(active.library_map)
             return

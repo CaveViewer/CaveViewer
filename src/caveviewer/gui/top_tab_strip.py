@@ -30,7 +30,7 @@ class TopTabStripStyle:
     font: tuple
     horizontal_inset: int = 14
     top_inset: int = 8
-    tab_pad_x: int = 8
+    tab_pad_x: int = TABBED_CONTENT_ALIGNMENT_INSET
     tab_pad_y: int = 7
     tab_gap: int = 10
     focus_highlight_thickness: int = 1
@@ -41,7 +41,8 @@ class TopTabbedContentSurfaceStyle:
     """Shared layout tokens for content shown beneath a text tab strip."""
 
     background_color: str
-    content_pad_x: int
+    content_pad_left_x: int
+    content_pad_right_x: int
     content_bottom_pad_y: int = 0
 
 
@@ -211,9 +212,13 @@ class TopTabbedContentSurface:
         self._px = px
         self._style = style
         self.widget = tk.Frame(parent, bg=style.background_color)
+        horizontal_padding = (
+            self._px(style.content_pad_left_x),
+            self._px(style.content_pad_right_x),
+        )
 
         tab_host = tk.Frame(self.widget, bg=style.background_color)
-        tab_host.pack(fill="x", padx=self._px(style.content_pad_x))
+        tab_host.pack(fill="x", padx=horizontal_padding)
         self.tab_strip = TopTabStrip(
             tab_host,
             tabs=tabs,
@@ -232,7 +237,7 @@ class TopTabbedContentSurface:
         self.content.pack(
             fill="both",
             expand=True,
-            padx=self._px(style.content_pad_x),
+            padx=horizontal_padding,
             pady=(
                 self._px(TABBED_CONTENT_TOP_GAP),
                 self._px(style.content_bottom_pad_y),

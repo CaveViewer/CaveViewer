@@ -205,6 +205,9 @@ class _FakePanel:
     def set_row_progress(self, row_widgets, fraction: float) -> None:
         self.row_progress = (row_widgets, fraction)
 
+    def clear_row_progress(self, row_widgets) -> None:
+        self.cleared_row_progress = row_widgets
+
     def refresh_standard_row_overflow(self, key: str) -> None:
         self.last_overflow_key = key
 
