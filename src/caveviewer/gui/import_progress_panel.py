@@ -53,6 +53,20 @@ void main() {
 }
 """
 
+
+_PANEL_HEIGHT = 310.0
+_PANEL_TOP_FRACTION = 0.33
+_PROGRESS_BAR_CENTER_OFFSET = 62.0
+
+
+def _progress_bar_center_y(window_height: float) -> float:
+    """Return the vertically balanced center for the import progress group."""
+    return (
+        float(window_height) * _PANEL_TOP_FRACTION
+        + _PANEL_HEIGHT * 0.50
+        + _PROGRESS_BAR_CENTER_OFFSET
+    )
+
 _FRAG_SRC = """
 #version 330
 in vec4 v_color;
@@ -172,9 +186,6 @@ class ImportProgressPanel:
 
         add_quad_px(0, 0, w, h, self._BACKDROP_RGBA)
 
-        panel_h = 310.0
-        panel_y0 = h * 0.33
-
         indeterminate = fraction is None
         fraction_clamped = 0.0 if indeterminate else max(0.0, min(1.0, fraction))
         self._begin_progress_run(
@@ -188,7 +199,7 @@ class ImportProgressPanel:
 
         bar_cx = w / 2.0
         layout_scale = _progress_label_layout_scale(window_size)
-        bar_cy = panel_y0 + panel_h * 0.50 + 70.0
+        bar_cy = _progress_bar_center_y(h)
         layout = self._routine_progress_layout(
             center_x=bar_cx,
             center_y=bar_cy,

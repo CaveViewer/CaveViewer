@@ -4653,14 +4653,14 @@ def test_pending_import_splash_renders_logo_before_import_starts(monkeypatch):
     )
 
     window = _import_window()
-    window.wnd = SimpleNamespace(size=(800, 600))
+    window.wnd = SimpleNamespace(size=(800, 600), buffer_size=(820, 600))
     window.import_progress_panel = FakeImportProgressPanel()
 
     window._render_pending_import_splash()
 
     assert rendered == [
         (
-            (800, 600),
+            (820, 600),
             "cave.obj",
             "starting import",
             0.0,
@@ -4790,7 +4790,7 @@ def test_ready_cache_startup_splash_is_indeterminate():
 
     window = object.__new__(viewer_window.CaveViewerWindow)
     window.ctx = SimpleNamespace(clear=lambda *color: clear_calls.append(color))
-    window.wnd = SimpleNamespace(size=(800, 600))
+    window.wnd = SimpleNamespace(size=(800, 600), buffer_size=(820, 600))
     window.import_progress_panel = FakeImportProgressPanel()
     window._startup_map_load_pending = (
         "/cache/devils-eye",
@@ -4804,7 +4804,7 @@ def test_ready_cache_startup_splash_is_indeterminate():
     assert clear_calls == [(0.02, 0.02, 0.03)]
     assert rendered == [
         (
-            (800, 600),
+            (820, 600),
             "devils_eye.obj",
             "opening cave",
             None,
@@ -5012,7 +5012,7 @@ def test_import_progress_render_draws_every_callback_without_sleep(monkeypatch):
     window = object.__new__(viewer_window.CaveViewerWindow)
     window._window_setup_complete = True
     window._closing_requested = False
-    window.wnd = SimpleNamespace(size=(800, 600), buffer_size=(800, 600))
+    window.wnd = SimpleNamespace(size=(800, 600), buffer_size=(820, 600))
     window.ctx = SimpleNamespace(clear=lambda *color: clear_calls.append(color))
     window.import_progress_panel = FakeProgressPanel()
     window._startup_focus_enabled = False
@@ -5042,10 +5042,27 @@ def test_import_progress_render_draws_every_callback_without_sleep(monkeypatch):
         (0.02, 0.02, 0.03),
     ]
     assert render_calls == [
-        ((800, 600), "cave.obj", "building cache", 0.5, "", ""),
-        ((800, 600), "cave.obj", "building cache", 0.5, "", ""),
-        ((800, 600), "cave.obj", "building cache", 0.5, "", ""),
+        ((820, 600), "cave.obj", "building cache", 0.5, "", ""),
+        ((820, 600), "cave.obj", "building cache", 0.5, "", ""),
+        ((820, 600), "cave.obj", "building cache", 0.5, "", ""),
     ]
+
+
+def test_import_pause_notice_uses_framebuffer_surface_size():
+    calls = []
+
+    class FakeImportController:
+        def render_pause_notice_if_active(self, panel, window, window_size):
+            calls.append((panel, window, window_size))
+            return True
+
+    window = _import_window()
+    window.wnd = SimpleNamespace(size=(800, 600), buffer_size=(820, 600))
+    window.import_progress_panel = object()
+    window._ensure_import_controller = lambda: FakeImportController()
+
+    assert window._render_import_pause_notice_if_active() is True
+    assert calls == [(window.import_progress_panel, window.wnd, (820, 600))]
 
 
 def test_import_pause_notice_render_is_throttled_without_sleep(monkeypatch):
