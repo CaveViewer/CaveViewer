@@ -1158,6 +1158,35 @@ class PreferencesPanel:
         self._scrollbar_layout_state = None
         self._schedule_page_layout_sync()
 
+    def measure_preferred_page_height(self) -> int:
+        """Return the tallest Preferences page height before the shell is shown."""
+        original_page_key = self.active_page_key
+        original_scroll_fraction = 0.0
+        if self.page_canvas is not None:
+            try:
+                original_scroll_fraction = float(self.page_canvas.yview()[0])
+            except (IndexError, TypeError, ValueError, tk.TclError):
+                pass
+
+        page_heights: list[int] = []
+        for page_key, _label in _PREFERENCE_PAGES:
+            self._show_page(page_key)
+            self.dialog.update_idletasks()
+            self._sync_page_layout()
+            self.dialog.update_idletasks()
+            page = self.pages.get(page_key)
+            if page is not None:
+                page_heights.append(max(0, int(page.winfo_reqheight())))
+
+        if original_page_key in _PREFERENCE_PAGE_KEYS:
+            self._show_page(original_page_key)
+        if self.page_canvas is not None:
+            try:
+                self.page_canvas.yview_moveto(original_scroll_fraction)
+            except tk.TclError:
+                pass
+        return max(page_heights, default=0)
+
     def _build(self) -> None:
         surface = TopTabbedContentSurface(
             self.container,

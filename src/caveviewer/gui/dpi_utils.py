@@ -26,7 +26,7 @@ from caveviewer.gui.platform.presentation_actions import (
 
 _DPI_AWARENESS_CONFIGURED = False
 _TK_POINTS_PER_96_DPI = 96.0 / 72.0
-_MIN_WINDOWS_LARGE_MONITOR_DENSITY = 0.875
+_MIN_WINDOWS_LARGE_MONITOR_DENSITY = 0.95
 
 
 @dataclass(frozen=True, slots=True)

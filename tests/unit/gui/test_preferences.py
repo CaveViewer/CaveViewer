@@ -1928,6 +1928,44 @@ def test_preferences_hidden_clears_only_transient_feedback():
     assert panel._feedback_override == ("Could not save preferences.", "#f00")
 
 
+def test_preferences_measurement_builds_all_tabs_and_restores_active_page():
+    from caveviewer.gui import preferences_dialog
+
+    panel = preferences_dialog.PreferencesPanel.__new__(
+        preferences_dialog.PreferencesPanel
+    )
+    heights = {
+        "streaming": 620,
+        "parsing": 710,
+        "storage": 430,
+        "backup": 680,
+    }
+    shown_pages = []
+    scroll_positions = []
+    panel.active_page_key = "streaming"
+    panel.pages = {}
+    panel.dialog = SimpleNamespace(update_idletasks=lambda: None)
+    panel.page_canvas = SimpleNamespace(
+        yview=lambda: (0.25, 0.75),
+        yview_moveto=scroll_positions.append,
+    )
+    panel._sync_page_layout = lambda: None
+
+    def show_page(page_key):
+        shown_pages.append(page_key)
+        panel.active_page_key = page_key
+        panel.pages[page_key] = SimpleNamespace(
+            winfo_reqheight=lambda key=page_key: heights[key]
+        )
+
+    panel._show_page = show_page
+
+    assert panel.measure_preferred_page_height() == 710
+    assert shown_pages == ["streaming", "parsing", "storage", "backup", "streaming"]
+    assert panel.active_page_key == "streaming"
+    assert scroll_positions == [0.25]
+
+
 def test_preferences_invalid_field_switches_to_containing_page():
     from caveviewer.gui import preferences_dialog
 

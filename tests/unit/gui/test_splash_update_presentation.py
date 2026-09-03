@@ -777,13 +777,13 @@ def test_splash_windows_fonts_apply_large_monitor_density_once(monkeypatch):
         splash_screen._configure_runtime_tk_fonts(
             object(),
             presentation_profile=select_presentation_profile(platform_name="win32"),
-            density_scale=0.875,
+            density_scale=0.95,
         )
 
-        assert splash_screen._TK_TEXT_SCALE == pytest.approx(0.875)
-        assert splash_screen._TYPOGRAPHY.body == ("Segoe UI", 9)
-        assert splash_screen._TYPOGRAPHY.supporting == ("Segoe UI", 8)
-        assert splash_screen._TYPOGRAPHY.display == ("Segoe UI", 16, "bold")
+        assert splash_screen._TK_TEXT_SCALE == pytest.approx(0.95)
+        assert splash_screen._TYPOGRAPHY.body == ("Segoe UI", 10)
+        assert splash_screen._TYPOGRAPHY.supporting == ("Segoe UI", 9)
+        assert splash_screen._TYPOGRAPHY.display == ("Segoe UI", 17, "bold")
     finally:
         for name, value in original_values.items():
             setattr(splash_screen, name, value)
@@ -796,6 +796,151 @@ def test_launch_layout_settlement_is_fixed_and_bounded():
     splash_screen._settle_launch_layout(root, passes=3)
 
     assert calls == [True, True, True]
+
+
+def test_normal_shell_height_grows_for_preferences_content_and_clamps_to_work_area():
+    assert splash_screen._preferred_shell_height_for_preferences(
+        shell_height=1758,
+        viewport_height=1200,
+        content_height=1400,
+        minimum_height=1758,
+        available_height=2100,
+    ) == 1958
+    assert splash_screen._preferred_shell_height_for_preferences(
+        shell_height=1758,
+        viewport_height=1200,
+        content_height=1600,
+        minimum_height=1758,
+        available_height=2050,
+    ) == 2050
+
+
+def test_normal_shell_height_keeps_the_current_size_when_preferences_fit():
+    assert splash_screen._preferred_shell_height_for_preferences(
+        shell_height=1758,
+        viewport_height=1200,
+        content_height=1200,
+        minimum_height=1758,
+        available_height=2100,
+    ) == 1758
+
+
+def test_preferences_shell_height_remeasures_after_each_growth():
+    measurements = iter(
+        (
+            (1758, 1200, 1400),
+            (1958, 1350, 1500),
+            (2100, 1500, 1500),
+        )
+    )
+    applied_heights = []
+
+    fitted_height = splash_screen._fit_shell_height_to_preferences(
+        shell_height=1758,
+        minimum_height=1758,
+        available_height=2100,
+        measure=lambda: next(measurements),
+        apply_height=applied_heights.append,
+    )
+
+    assert fitted_height == 2100
+    assert applied_heights == [1958, 2100]
+
+
+def test_preferences_shell_height_never_shrinks_restored_geometry():
+    applied_heights = []
+
+    fitted_height = splash_screen._fit_shell_height_to_preferences(
+        shell_height=2000,
+        minimum_height=1758,
+        available_height=2100,
+        measure=lambda: (2000, 1500, 1400),
+        apply_height=applied_heights.append,
+    )
+
+    assert fitted_height == 2000
+    assert applied_heights == []
+
+
+def test_preferences_shell_fit_rejects_stale_source_monitor_geometry():
+    measurements = iter(
+        (
+            # Observed after moving from the 16-inch 4K/240-DPI display to
+            # the 31.7-inch/144-DPI display: the stale viewport exceeds root.
+            (1054, 1224, 880),
+            (1054, 800, 880),
+            (1134, 880, 880),
+        )
+    )
+    applied_heights = []
+
+    fitted_height = splash_screen._fit_shell_height_to_preferences(
+        shell_height=1054,
+        minimum_height=855,
+        available_height=2088,
+        measure=lambda: next(measurements),
+        apply_height=applied_heights.append,
+    )
+
+    assert fitted_height == 1134
+    assert applied_heights == [1134]
+
+
+def test_preferences_shell_fit_uses_work_area_when_geometry_never_settles():
+    applied_heights = []
+
+    fitted_height = splash_screen._fit_shell_height_to_preferences(
+        shell_height=1054,
+        minimum_height=855,
+        available_height=2088,
+        measure=lambda: (1054, 1224, 880),
+        apply_height=applied_heights.append,
+    )
+
+    assert fitted_height == 2088
+    assert applied_heights == [2088]
+
+
+def test_preferences_shell_fit_uses_rendered_width_and_restores_intended_surface():
+    source = inspect.getsource(splash_screen._show_splash_composition)
+    fit_source = source[
+        source.index("_advance_launch_progress(0.30)") : source.index(
+            "readiness_gate.mark_ready()"
+        )
+    ]
+
+    intended_index = fit_source.index("intended_surface_key = active_surface[0]")
+    raise_index = fit_source.index("preferences_surface.tkraise()")
+    shown_index = fit_source.index("preferences_panel.on_shown()")
+    fit_index = fit_source.index("_fit_shell_height_to_preferences(")
+    restore_index = fit_source.index("stacked_surfaces.get(")
+
+    assert intended_index < raise_index < shown_index < fit_index < restore_index
+    assert "active_surface[0] =" not in fit_source
+    assert '"Preferences shell fit:' in fit_source
+
+
+def test_monitor_recomposition_maps_invisibly_before_preferences_fit():
+    source = inspect.getsource(splash_screen._show_splash_composition)
+    fit_source = source[
+        source.index("_advance_launch_progress(0.30)") : source.index(
+            "readiness_gate.mark_ready()"
+        )
+    ]
+    reveal_start = source.index("def _reveal_composed_main_surface")
+    reveal_end = source.index("def _animate_launch_progress", reveal_start)
+    reveal_source = source[reveal_start:reveal_end]
+
+    cover_index = fit_source.index("recomposition_cover = tk.Frame(")
+    hide_index = fit_source.index('root.attributes("-alpha", 0.0)')
+    map_index = fit_source.index("root.deiconify()")
+    measure_index = fit_source.index("_fit_shell_height_to_preferences(")
+
+    assert cover_index < hide_index < map_index < measure_index
+    assert "root.winfo_height()" in fit_source
+    assert reveal_source.index("recomposition_cover.destroy()") < (
+        reveal_source.index('root.attributes("-alpha", 1.0)')
+    )
 
 
 def test_preferences_navigation_gear_geometry_executes_during_startup():

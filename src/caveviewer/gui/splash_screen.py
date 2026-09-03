@@ -266,6 +266,7 @@ _CACHE_REBUILD_CLOSE_PAUSE_ATTEMPTS = 25
 _UPDATE_READY_ACTION_DELAY_MS = 3_000
 _MIN_LAUNCH_SPLASH_MS = 3_000
 _LAUNCH_PROGRESS_INTERVAL_MS = 40
+_PREFERENCES_SHELL_FIT_MAX_PASSES = 3
 
 _TYPOGRAPHY: TkTypography = create_tk_typography(
     _UI_FONT_FAMILY,
@@ -784,6 +785,80 @@ def _settle_launch_layout(root, *, passes: int = 3) -> None:
     """Run a fixed, bounded number of Tk geometry-only settlement passes."""
     for _pass in range(max(0, int(passes))):
         root.update_idletasks()
+
+
+def _preferred_shell_height_for_preferences(
+    *,
+    shell_height: int | float,
+    viewport_height: int | float,
+    content_height: int | float,
+    minimum_height: int | float,
+    available_height: int | float,
+) -> int:
+    """Grow a normal shell enough for its measured Preferences viewport."""
+    current_height = max(1, int(round(shell_height)))
+    viewport = max(0, int(round(viewport_height)))
+    content = max(0, int(round(content_height)))
+    minimum = max(1, int(round(minimum_height)))
+    available = max(1, int(round(available_height)))
+    required_height = max(minimum, current_height + max(0, content - viewport))
+    return min(required_height, available)
+
+
+def _fit_shell_height_to_preferences(
+    *,
+    shell_height: int | float,
+    minimum_height: int | float,
+    available_height: int | float,
+    measure: Callable[
+        [],
+        tuple[int | float, int | float, int | float],
+    ],
+    apply_height: Callable[[int], None],
+) -> int:
+    """Converge a normal shell height with its settled Preferences viewport."""
+    fitted_height = max(1, int(round(shell_height)))
+    fit_confirmed = False
+    for _pass in range(_PREFERENCES_SHELL_FIT_MAX_PASSES):
+        actual_shell_height, viewport_height, content_height = measure()
+        actual_height = max(0, int(round(actual_shell_height)))
+        viewport = max(0, int(round(viewport_height)))
+        content = max(0, int(round(content_height)))
+        if actual_height <= 0 or viewport <= 0 or viewport > actual_height:
+            # A retained Tk root can briefly report the old monitor's child
+            # geometry after its requested destination bounds have changed.
+            # Reject physically impossible measurements and give the bounded
+            # settlement loop another chance instead of accepting a false fit.
+            continue
+        fitted_height = max(fitted_height, actual_height)
+        if content <= viewport or fitted_height >= available_height:
+            fit_confirmed = True
+            break
+        next_height = _preferred_shell_height_for_preferences(
+            shell_height=actual_height,
+            viewport_height=viewport,
+            content_height=content,
+            minimum_height=minimum_height,
+            available_height=available_height,
+        )
+        next_height = max(fitted_height, next_height)
+        if next_height <= fitted_height:
+            # The requested root growth has not reached its children yet.
+            # Keep settling rather than confirming the previous viewport.
+            continue
+        fitted_height = next_height
+        apply_height(fitted_height)
+    if not fit_confirmed:
+        # The work-area bound is the only trustworthy geometry left. Prefer a
+        # larger normal window over preserving an avoidable Preferences bar.
+        fallback_height = max(
+            fitted_height,
+            max(1, int(round(available_height))),
+        )
+        if fallback_height > fitted_height:
+            fitted_height = fallback_height
+            apply_height(fitted_height)
+    return fitted_height
 
 
 def _navigation_gear_points(center: float, px) -> tuple[tuple[float, float], ...]:
@@ -1613,6 +1688,8 @@ def _show_splash_composition(
         padx=px(18),
         pady=px(14),
     )
+    recomposition_cover = None
+    recomposition_alpha_hidden = False
     if show_launch_overlay:
         launch_surface.tkraise()
         launch_visible_at = time.monotonic()
@@ -1671,6 +1748,13 @@ def _show_splash_composition(
         cave_metadata_surface,
     ):
         surface.grid(row=0, column=0, sticky="nsew")
+    stacked_surfaces = {
+        "map_library": map_library_surface,
+        "preferences": preferences_surface,
+        "help": help_surface,
+        "about": about_surface,
+        "cave_metadata": cave_metadata_surface,
+    }
     map_library_surface.tkraise()
 
     navigation_frame = tk.Frame(left_frame, bg=_BG_COLOR)
@@ -2656,9 +2740,10 @@ def _show_splash_composition(
     root.geometry(f"{window_w}x{final_height}+{pos_x}+{pos_y}")
 
     # Compose Preferences behind the launch surface while every stacked panel
-    # already owns its final mapped width. Fixed settlement passes drain only
-    # geometry work; width/size guards prevent callbacks from cascading.
-    _ensure_preferences_panel()
+    # already owns its final mapped width. A normal shell verifies every tab
+    # before first reveal so fixed form content does not begin inside a
+    # needlessly scrollable viewport.
+    preferences_panel = _ensure_preferences_panel()
     if resume_state is not None:
         if resume_state.active_surface == "preferences":
             _show_preferences_surface()
@@ -2680,7 +2765,92 @@ def _show_splash_composition(
                 )
             )
     _advance_launch_progress(0.30)
+    if resume_state is not None and resume_state.window_state != "zoomed":
+        # A withdrawn retained root keeps child sizes from its source monitor.
+        # Map it behind an app-owned cover at the destination so Windows and Tk
+        # establish the new DPI-aware client geometry before Preferences is
+        # measured. Alpha prevents even the cover from flashing when supported.
+        recomposition_cover = tk.Frame(root, bg=_BG_COLOR)
+        recomposition_cover.grid(row=0, column=0, sticky="nsew")
+        recomposition_cover.tkraise()
+        try:
+            root.attributes("-alpha", 0.0)
+            recomposition_alpha_hidden = True
+        except Exception:
+            pass
+        root.deiconify()
     _settle_launch_layout(root, passes=3)
+    if resume_state is None or resume_state.window_state != "zoomed":
+        intended_surface_key = active_surface[0]
+        initial_fit_height = final_height
+        initial_actual_height = root.winfo_height()
+
+        # Tk only supplies the final configured width and wrapping geometry to
+        # the raised stacked surface. Stage Preferences behind the launch
+        # overlay (or on the still-withdrawn recovery root) while fitting, then
+        # restore the user's intended surface before the shell is revealed.
+        preferences_surface.tkraise()
+        preferences_panel.on_shown()
+        _settle_launch_layout(root, passes=3)
+
+        def _measure_preferences_viewport() -> tuple[int, int, int]:
+            _settle_launch_layout(root, passes=1)
+            return (
+                root.winfo_height(),
+                preferences_panel.page_canvas.winfo_height(),
+                preferences_panel.measure_preferred_page_height(),
+            )
+
+        def _apply_preferences_shell_height(next_height: int) -> None:
+            nonlocal pos_y
+            if resume_state is None:
+                pos_y = (screen_h - next_height) // 3
+            root.geometry(f"{window_w}x{next_height}+{pos_x}+{pos_y}")
+            _settle_launch_layout(root, passes=3)
+
+        final_height = _fit_shell_height_to_preferences(
+            shell_height=final_height,
+            minimum_height=px(_SPLASH_WINDOW_MIN_HEIGHT),
+            available_height=available_height,
+            measure=_measure_preferences_viewport,
+            apply_height=_apply_preferences_shell_height,
+        )
+        (
+            final_actual_height,
+            final_viewport_height,
+            final_preferences_height,
+        ) = _measure_preferences_viewport()
+        final_measurement_valid = (
+            final_actual_height > 0
+            and final_viewport_height > 0
+            and final_viewport_height <= final_actual_height
+        )
+        preferences_overflow = max(
+            0,
+            final_preferences_height - final_viewport_height,
+        )
+        _LOG.debug(
+            "Preferences shell fit: requested_initial_height=%s, "
+            "actual_initial_height=%s, requested_final_height=%s, "
+            "actual_final_height=%s, "
+            "viewport_height=%s, content_height=%s, available_height=%s, "
+            "overflow=%s, measurement_valid=%s, work_area_clamped=%s.",
+            initial_fit_height,
+            initial_actual_height,
+            final_height,
+            final_actual_height,
+            final_viewport_height,
+            final_preferences_height,
+            available_height,
+            preferences_overflow,
+            final_measurement_valid,
+            preferences_overflow > 1 and final_height >= available_height,
+        )
+        stacked_surfaces.get(
+            intended_surface_key,
+            map_library_surface,
+        ).tkraise()
+        _settle_launch_layout(root, passes=1)
     readiness_gate.mark_ready()
 
     map_open_error_presented = [False]
@@ -2702,7 +2872,14 @@ def _show_splash_composition(
         if launch_surface is not None:
             launch_surface.destroy()
             mark_startup_splash_visible()
+        if recomposition_cover is not None:
+            recomposition_cover.destroy()
         root.deiconify()
+        if recomposition_alpha_hidden:
+            try:
+                root.attributes("-alpha", 1.0)
+            except Exception:
+                pass
         if resume_state is not None and resume_state.window_state == "zoomed":
             try:
                 root.state("zoomed")

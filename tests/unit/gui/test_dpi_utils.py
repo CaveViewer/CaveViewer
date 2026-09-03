@@ -211,9 +211,9 @@ def test_platform_without_tk_display_scaling_keeps_logical_geometry():
     [
         (16.0, 1.0),
         (24.0, 1.0),
-        (27.0, 24.0 / 27.0),
-        (27.5, 0.875),
-        (32.0, 0.875),
+        (25.0, 24.0 / 25.0),
+        (26.0, 0.95),
+        (32.0, 0.95),
     ],
 )
 def test_windows_monitor_diagonal_applies_bounded_density(
@@ -273,12 +273,12 @@ def test_32_inch_250_percent_shell_contract():
     )
 
     assert display.geometry_scale == pytest.approx(2.5)
-    assert display.density_scale == pytest.approx(0.875)
-    assert display.layout_scale == pytest.approx(2.1875)
-    assert round(profile.splash_layout.window_width * display.layout_scale) == 2275
-    assert round(profile.splash_layout.min_height * display.layout_scale) == 1619
-    assert round(profile.splash_layout.resize_min_width * display.layout_scale) == 1838
-    assert round(profile.splash_layout.resize_min_height * display.layout_scale) == 1312
+    assert display.density_scale == pytest.approx(0.95)
+    assert display.layout_scale == pytest.approx(2.375)
+    assert round(profile.splash_layout.window_width * display.layout_scale) == 2470
+    assert round(profile.splash_layout.min_height * display.layout_scale) == 1758
+    assert round(profile.splash_layout.resize_min_width * display.layout_scale) == 1995
+    assert round(profile.splash_layout.resize_min_height * display.layout_scale) == 1425
 
 
 def test_observed_31_7_inch_144_dpi_desktop_contract():
@@ -294,10 +294,10 @@ def test_observed_31_7_inch_144_dpi_desktop_contract():
 
     assert display.monitor_diagonal_inches == pytest.approx(31.7)
     assert display.geometry_scale == pytest.approx(1.5)
-    assert display.density_scale == pytest.approx(0.875)
-    assert display.layout_scale == pytest.approx(1.3125)
-    assert round(profile.splash_layout.window_width * display.layout_scale) == 1365
-    assert round(profile.splash_layout.min_height * display.layout_scale) == 971
+    assert display.density_scale == pytest.approx(0.95)
+    assert display.layout_scale == pytest.approx(1.425)
+    assert round(profile.splash_layout.window_width * display.layout_scale) == 1482
+    assert round(profile.splash_layout.min_height * display.layout_scale) == 1054
 
 
 def test_each_metrics_resolution_remeasures_the_windows_monitor():
@@ -321,7 +321,7 @@ def test_each_metrics_resolution_remeasures_the_windows_monitor():
     )
 
     assert laptop_display.density_scale == 1.0
-    assert desktop_display.density_scale == pytest.approx(0.875)
+    assert desktop_display.density_scale == pytest.approx(0.95)
     assert adapter.monitor_calls == [root, root]
 
 
