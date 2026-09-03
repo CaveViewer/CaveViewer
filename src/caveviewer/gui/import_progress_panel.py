@@ -28,14 +28,18 @@ from caveviewer.gui.loading_progress import (
     OPENGL_COUNTDOWN_DIAMETER,
     OPENGL_COUNTDOWN_RING_SEGMENTS,
     OPENGL_COUNTDOWN_STROKE_WIDTH,
-    OPENGL_PROGRESS_BAR_HEIGHT,
-    OPENGL_PROGRESS_BAR_WIDTH,
     OPENGL_PROGRESS_LABEL_TEXT_SIZE,
+    ROUTINE_PROGRESS_BAR_HEIGHT,
+    ROUTINE_PROGRESS_BAR_TO_DESCRIPTION_GAP,
+    ROUTINE_PROGRESS_BAR_WIDTH,
+    ROUTINE_PROGRESS_TITLE_TO_BAR_GAP,
     circular_progress_ranges,
     hex_color_rgb,
     progress_layout_scale,
     progress_segments,
+    routine_progress_layout,
 )
+from caveviewer.gui.tk_theme import DARK_THEME
 
 
 _VERT_SRC = """
@@ -71,15 +75,15 @@ def _progress_label_layout_scale(window_size: tuple[int, int]) -> float:
 class ImportProgressPanel:
     COUNTDOWN_DIAMETER = OPENGL_COUNTDOWN_DIAMETER
     COUNTDOWN_STROKE_WIDTH = OPENGL_COUNTDOWN_STROKE_WIDTH
-    PROGRESS_BAR_WIDTH = OPENGL_PROGRESS_BAR_WIDTH
-    PROGRESS_BAR_HEIGHT = OPENGL_PROGRESS_BAR_HEIGHT
     INDETERMINATE_SEGMENT_FRACTION = 0.28
+    PROGRESS_BAR_WIDTH = ROUTINE_PROGRESS_BAR_WIDTH
+    PROGRESS_BAR_HEIGHT = ROUTINE_PROGRESS_BAR_HEIGHT
     # Match the established full-screen “Press Space to begin” prompt.
     TITLE_TEXT_SIZE = OPENGL_PROGRESS_LABEL_TEXT_SIZE
     STAGE_TEXT_SIZE = OPENGL_PROGRESS_LABEL_TEXT_SIZE
     NOTE_TEXT_SIZE = 1.94
 
-    _BACKDROP_RGBA = (0.0039, 0.0078, 0.0118, 0.88)  # near-black blue
+    _BACKDROP_RGBA = (*hex_color_rgb(DARK_THEME.background), 1.0)
     _TITLE_TEXT_RGBA = (0.8980, 0.6314, 0.1216, 1.0)
     _STAGE_TEXT_RGBA = (0.8000, 0.8039, 0.8392, 1.0)
     _NOTE_TEXT_RGBA = (0.690, 0.720, 0.750, 0.92)
@@ -127,6 +131,24 @@ class ImportProgressPanel:
         self._display_fraction = 0.0
         self._progress_token = None
 
+    def _begin_progress_run(
+        self,
+        *,
+        map_name: str,
+        indeterminate: bool,
+        fraction: float,
+    ) -> None:
+        """Keep one monotonic progress value while the import stage changes."""
+        token = (map_name, indeterminate)
+        if self._progress_token != token:
+            self.reset_progress()
+            self._progress_token = token
+
+        # If this panel is reused for the same map right after a full run,
+        # allow the newly started import to begin with an empty bar.
+        if fraction <= 0.05 and self._display_fraction >= 0.95:
+            self._display_fraction = 0.0
+
     def render(self, window_size: tuple[int, int], map_name: str, stage: str, fraction: float | None,
                title: str = "Preparing Map",
                note: str = "First-time setup in progress. Next time, this map will open much faster.") -> None:
@@ -155,39 +177,44 @@ class ImportProgressPanel:
 
         indeterminate = fraction is None
         fraction_clamped = 0.0 if indeterminate else max(0.0, min(1.0, fraction))
-        token = (map_name, title, stage, indeterminate)
-        if self._progress_token != token:
-            self.reset_progress()
-            self._progress_token = token
-
-        # If this panel is reused for the same token right after a full
-        # run (e.g. opening the same map again), allow a fresh start.
-        if fraction_clamped <= 0.05 and self._display_fraction >= 0.95:
-            self._display_fraction = 0.0
+        self._begin_progress_run(
+            map_name=map_name,
+            indeterminate=indeterminate,
+            fraction=fraction_clamped,
+        )
 
         if not indeterminate:
             self._display_fraction = max(self._display_fraction, fraction_clamped)
 
         bar_cx = w / 2.0
-        # Keep the active stage where it was, but place progress after it in
-        # reading order and before the explanatory note.
+        layout_scale = _progress_label_layout_scale(window_size)
         bar_cy = panel_y0 + panel_h * 0.50 + 70.0
-        bar_x0 = bar_cx - self.PROGRESS_BAR_WIDTH / 2.0
-        bar_x1 = bar_cx + self.PROGRESS_BAR_WIDTH / 2.0
-        bar_y0 = bar_cy - self.PROGRESS_BAR_HEIGHT / 2.0
-        bar_y1 = bar_cy + self.PROGRESS_BAR_HEIGHT / 2.0
-        add_quad_px(bar_x0, bar_y0, bar_x1, bar_y1, self._progress_track_rgba)
+        layout = self._routine_progress_layout(
+            center_x=bar_cx,
+            center_y=bar_cy,
+            window_width=w,
+            stage=self._stage_label(stage),
+            note=note,
+            layout_scale=layout_scale,
+        )
+        add_quad_px(
+            layout.bar_left,
+            layout.bar_top,
+            layout.bar_right,
+            layout.bar_bottom,
+            self._progress_track_rgba,
+        )
         for fill_x0, fill_x1 in self._progress_bar_fill_bounds(
-            bar_x0,
-            bar_x1,
+            layout.bar_left,
+            layout.bar_right,
             None if indeterminate else self._display_fraction,
             (time.perf_counter() * 0.72) % 1.0,
         ):
             add_quad_px(
                 fill_x0,
-                bar_y0,
+                layout.bar_top,
                 fill_x1,
-                bar_y1,
+                layout.bar_bottom,
                 self._progress_fill_rgba,
             )
         self._add_bar_labels(
@@ -198,7 +225,7 @@ class ImportProgressPanel:
             title=title,
             stage=self._stage_label(stage),
             note=note,
-            layout_scale=_progress_label_layout_scale(window_size),
+            layout_scale=layout_scale,
         )
 
         data = np.array(verts, dtype=np.float32)
@@ -212,7 +239,7 @@ class ImportProgressPanel:
 
         self._vbo.write(data.tobytes())
 
-        self.ctx.clear(0.04, 0.05, 0.07)
+        self.ctx.clear(*hex_color_rgb(DARK_THEME.background))
         self.ctx.disable(moderngl.CULL_FACE)
         self.ctx.disable(moderngl.DEPTH_TEST)
         self.ctx.enable(moderngl.BLEND)
@@ -251,6 +278,14 @@ class ImportProgressPanel:
         layout_scale: float = 1.0,
     ) -> None:
         """Append the import title, stage, and note around the flat progress bar."""
+        layout = self._routine_progress_layout(
+            center_x=center_x,
+            center_y=center_y,
+            window_width=window_width,
+            stage=stage,
+            note=note,
+            layout_scale=layout_scale,
+        )
         self._add_labels(
             add_quad_px=add_quad_px,
             center_x=center_x,
@@ -258,11 +293,62 @@ class ImportProgressPanel:
             title=title,
             title_y=center_y - 136.0 * layout_scale,
             stage=stage,
-            stage_y=center_y - 60.0 * layout_scale,
+            stage_y=layout.title_top,
             note=note,
-            note_y=center_y + 30.0 * layout_scale,
+            note_y=layout.description_top,
             layout_scale=layout_scale,
         )
+
+    @classmethod
+    def _routine_progress_layout(
+        cls,
+        *,
+        center_x: float,
+        center_y: float,
+        window_width: float,
+        stage: str | None,
+        note: str | None,
+        layout_scale: float,
+    ):
+        """Measure bitmap labels before applying the shared loading layout."""
+        return routine_progress_layout(
+            center_x=center_x,
+            center_y=center_y,
+            title_height=cls._label_height(
+                stage,
+                cls.STAGE_TEXT_SIZE,
+                window_width,
+                layout_scale,
+            ),
+            description_height=cls._label_height(
+                note,
+                cls.NOTE_TEXT_SIZE,
+                window_width,
+                layout_scale,
+            ),
+            has_description=bool(" ".join(str(note or "").split())),
+            scale=layout_scale,
+        )
+
+    @staticmethod
+    def _label_height(
+        text: str | None,
+        pixel_size: float,
+        window_width: float,
+        layout_scale: float,
+    ) -> float:
+        """Return the rendered bitmap-label height after width fitting."""
+        text = " ".join(str(text or "").split())
+        if not text:
+            return 0.0
+        pixel_size *= layout_scale
+        bounds = bitmap_font.text_bounds_px(text, pixel_size)
+        text_width = bounds[2] - bounds[0]
+        max_width = window_width - 96.0
+        if text_width > max_width:
+            pixel_size = max(1.20, pixel_size * max_width / text_width)
+            bounds = bitmap_font.text_bounds_px(text, pixel_size)
+        return bounds[3] - bounds[1]
 
     def _append_circle_arc(
         self,
@@ -607,7 +693,7 @@ class ImportProgressPanel:
             "building guided dive identity": "Creating dive plan identity…",
             "writing manifest": "Finalizing map cache…",
             "loading cached map": "Loading cached map…",
-            "resuming import": "Resuming import…",
+            "resuming import": "Scanning map…",
             "continuing saved import": "Continuing saved import…",
             "pausing import": "Pausing import…",
             "resume point saved": "Resume point saved",

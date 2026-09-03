@@ -19,6 +19,11 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+requires_executable_shell_scripts = pytest.mark.skipif(
+    os.name == "nt",
+    reason="release finalizer shell integration is exercised by Unix CI jobs",
+)
+pytestmark = requires_executable_shell_scripts
 
 
 def _run(*args: str | Path, cwd: Path, env: dict[str, str] | None = None) -> str:

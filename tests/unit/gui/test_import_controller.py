@@ -101,7 +101,7 @@ def test_close_requests_obj_checkpoint_with_a_bounded_deadline():
     assert controller.request_pause_for_close() is True
     assert controller.command_queue.get_nowait() == ("pause",)
     assert controller._close_pause_deadline == 13.0
-    assert controller.progress_title == "Pausing import"
+    assert controller.progress_title == ""
     assert controller.progress_note == "Saving a resume point."
     assert logger.info_messages == [
         "Import pause requested; waiting for the current safe checkpoint."
@@ -121,7 +121,7 @@ def test_resuming_import_message_returns_to_normal_progress_after_three_seconds(
 
     controller.update_progress_message_for_stage("resuming import")
 
-    assert controller.progress_title == "Resuming import"
+    assert controller.progress_title == ""
     assert controller.progress_note == "Using saved work from the previous session."
 
     clock[0] = 13.0

@@ -2,46 +2,7 @@
 
 from __future__ import annotations
 
-from PIL import Image
-
-from caveviewer.gui import splash_screen, splash_visuals
-from caveviewer.resources import image_path
-
-
-def test_bundled_launch_background_is_a_dark_cave_image():
-    background_path = image_path("splash_ginnie_dark.jpg")
-
-    assert background_path.is_file()
-    with Image.open(background_path) as image:
-        assert image.size == (2048, 1369)
-        # A one-pixel LANCZOS reduction is a stable brightness summary that
-        # keeps the cave detail decisively behind amber and white launch content.
-        brightness = (
-            sum(
-                image.convert("RGB")
-                .resize((1, 1), Image.Resampling.LANCZOS)
-                .getpixel((0, 0))
-            )
-            / 3
-        )
-        assert brightness < 18
-
-
-def test_launch_background_loader_keeps_the_flat_fallback_when_missing(monkeypatch):
-    monkeypatch.setattr(splash_screen, "_SPLASH_BACKGROUND_PATH", None)
-
-    assert splash_screen._load_launch_background_image() is None
-
-
-def test_launch_background_fills_the_target_without_letterboxing():
-    source = Image.new("RGB", (8, 4), "#17324a")
-
-    fitted = splash_visuals.fit_splash_background(source, size=(5, 5))
-
-    assert fitted.mode == "RGB"
-    assert fitted.size == (5, 5)
-    assert fitted.getpixel((0, 0)) == (23, 50, 74)
-    assert fitted.getpixel((4, 4)) == (23, 50, 74)
+from caveviewer.gui import splash_visuals
 
 
 def test_progress_ring_supersampling_covers_a_4k_250_percent_target():

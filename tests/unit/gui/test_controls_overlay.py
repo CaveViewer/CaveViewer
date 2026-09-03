@@ -101,8 +101,29 @@ def test_fullscreen_controls_use_opaque_backdrop_and_spaced_prompt_gap():
         (1536, 864),
     )
 
-    assert quad_calls[0][-1][-1] == 1.0
-    assert grouped_calls[0]["top_y"] == 182.0
+    assert quad_calls[0][-1] == controls_overlay._LOADING_BACKGROUND_RGBA
+    layout_scale = controls_overlay._fullscreen_layout_scale((1536, 864))
+    subtitle_height = controls_overlay.bitmap_font.text_height_px(
+        controls_overlay._FULLSCREEN_SUBTITLE_TEXT_SIZE * layout_scale
+    )
+    layout = controls_overlay.routine_progress_layout(
+        center_x=768.0,
+        center_y=(
+            864 * 0.12
+            + (
+                subtitle_height
+                + controls_overlay.ROUTINE_PROGRESS_TITLE_TO_BAR_GAP
+                * layout_scale
+                + controls_overlay.ROUTINE_PROGRESS_BAR_HEIGHT * layout_scale
+            )
+            / 2.0
+        ),
+        title_height=subtitle_height,
+        scale=layout_scale,
+    )
+    assert grouped_calls[0]["top_y"] == pytest.approx(
+        layout.bar_bottom + 82.0 * layout_scale
+    )
 
 
 def test_compact_loading_panel_uses_text_and_flat_progress_without_logo(monkeypatch):
@@ -122,9 +143,22 @@ def test_compact_loading_panel_uses_text_and_flat_progress_without_logo(monkeypa
     )
 
     assert labels[0][0] == "Jumping to the selected point"
-    assert labels[0][2] == 240.0
+    layout_scale = controls_overlay.progress_layout_scale((800, 600))
+    bounds = controls_overlay.bitmap_font.text_bounds_px(
+        "Jumping to the selected point",
+        controls_overlay.OPENGL_PROGRESS_LABEL_TEXT_SIZE * layout_scale,
+    )
+    layout = controls_overlay.routine_progress_layout(
+        center_x=400.0,
+        center_y=300.0,
+        title_height=bounds[3] - bounds[1],
+        scale=layout_scale,
+    )
+    assert labels[0][2] == pytest.approx(layout.title_top - bounds[1])
     assert labels[0][3] == controls_overlay.OPENGL_PROGRESS_LABEL_TEXT_SIZE
-    assert quads[1][:4] == (250.0, 298.0, 550.0, 302.0)
+    assert quads[1][:4] == pytest.approx(
+        (layout.bar_left, layout.bar_top, layout.bar_right, layout.bar_bottom)
+    )
     assert len(quads) == 3  # backdrop, track, determinate fill
     assert "draw_logo" not in controls_overlay.ControlsOverlay.render.__code__.co_names
 

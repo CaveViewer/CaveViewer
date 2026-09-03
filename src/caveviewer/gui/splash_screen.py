@@ -92,7 +92,11 @@ from caveviewer.gui.map_library_workflow import (
 from caveviewer.gui.map_selection import (
     validate_selected_map_folder as _validate_selected_map_folder,
 )
-from caveviewer.gui.loading_progress import monotonic_progress, progress_segments
+from caveviewer.gui.loading_progress import (
+    monotonic_progress,
+    progress_segments,
+    routine_progress_layout,
+)
 from caveviewer.gui.modal_dialog import (
     MODAL_CONTENT_PAD_X,
     MODAL_CONTENT_PAD_Y,
@@ -127,7 +131,6 @@ from caveviewer.gui.splash_visuals import (
     VectorEllipse,
     VectorPath,
     VectorPolygon,
-    fit_splash_background,
     vector_icon_photo,
 )
 from caveviewer.gui.tk_feedback import (
@@ -143,21 +146,13 @@ from caveviewer.gui.update_manager import (
     UpdateSnapshot,
     UpdateState,
 )
-from caveviewer.resources import image_path
 
 if TYPE_CHECKING:
     from caveviewer.branding import BrandingAssets
     from caveviewer.gui.platform.runtime import PlatformRuntime
 
 
-def _resolve_asset_path(filename: str) -> str | None:
-    """Resolve an image from the installed or bundled resource package."""
-    path = image_path(filename)
-    return str(path) if path.is_file() else None
-
-
 _LOGO_PATH: str | None = None
-_SPLASH_BACKGROUND_PATH = _resolve_asset_path("splash_ginnie_dark.jpg")
 _PRESENTATION_PROFILE = get_presentation_profile()
 _SPLASH_LAYOUT_POLICY = _PRESENTATION_PROFILE.splash_layout
 _APP_ICON_PATH: str | None = None
@@ -251,6 +246,9 @@ _LIBRARY_FORMER_MAP_TITLE_COLOR = DARK_THEME.secondary_text
 _SUBTITLE_COLOR = DARK_THEME.body_text
 _INSTRUCTION_COLOR = DARK_THEME.secondary_text
 _BUTTON_BG = DARK_THEME.primary_button
+# The About wordmark uses a quieter gold that matches the refined About mark
+# without changing the brighter amber used for interactive controls.
+_ABOUT_WORDMARK_ACCENT = "#D99524"
 _BUTTON_BORDER_COLOR = DARK_THEME.primary_button_border
 # Navigation uses a location marker rather than a button treatment.  The
 # background shift stays deliberately quiet; the amber rail and stronger label
@@ -268,8 +266,6 @@ _CACHE_REBUILD_CLOSE_PAUSE_ATTEMPTS = 25
 _UPDATE_READY_ACTION_DELAY_MS = 3_000
 _MIN_LAUNCH_SPLASH_MS = 3_000
 _LAUNCH_PROGRESS_INTERVAL_MS = 40
-_LAUNCH_PROGRESS_WIDTH = 280
-_LAUNCH_PROGRESS_HEIGHT = 5
 
 _TYPOGRAPHY: TkTypography = create_tk_typography(
     _UI_FONT_FAMILY,
@@ -646,20 +642,6 @@ def _load_brand_logo(
     return logo_photo
 
 
-def _load_launch_background_image():
-    """Load the bundled dark cave scene once for one launch-surface canvas."""
-    if not _SPLASH_BACKGROUND_PATH:
-        return None
-    try:
-        from PIL import Image
-
-        with Image.open(_SPLASH_BACKGROUND_PATH) as background:
-            return background.convert("RGB")
-    except Exception as exc:
-        _LOG.warning("Could not load launch splash background: %s", exc)
-        return None
-
-
 def _launch_canvas_dimensions(canvas) -> tuple[int, int]:
     """Return usable canvas dimensions before and after Tk maps the launch UI."""
     dimensions = []
@@ -680,77 +662,82 @@ def _launch_canvas_dimensions(canvas) -> tuple[int, int]:
     return tuple(dimensions)
 
 
-def _render_launch_background(canvas, *, source_image, size: tuple[int, int]) -> None:
-    """Place the dark cave image behind launch content, with a flat fallback."""
-    if source_image is None:
-        return
-    width, height = size
-    if getattr(canvas, "_cv_launch_background_size", None) == (width, height):
-        return
+def _canvas_text_metrics(canvas, *, text: str, font, px) -> tuple[float, float]:
+    """Measure Canvas text from Tk's actual selected font metrics."""
     try:
-        from PIL import ImageTk
+        import tkinter.font as tkfont
 
-        background_photo = ImageTk.PhotoImage(
-            fit_splash_background(source_image, size=(width, height)),
-            master=canvas.winfo_toplevel(),
+        tk_font = tkfont.Font(root=canvas, font=font)
+        return (
+            max(1, tk_font.measure(text)),
+            max(1, tk_font.metrics("linespace")),
         )
-        canvas.delete("launch_background")
-        canvas.create_image(
-            width / 2,
-            height / 2,
-            image=background_photo,
-            tags="launch_background",
-        )
-        canvas.tag_lower("launch_background")
-        canvas._cv_launch_background_photo = background_photo
-        canvas._cv_launch_background_size = (width, height)
-    except Exception as exc:
-        _LOG.warning("Could not render launch splash background: %s", exc)
+    except Exception:
+        return max(1, px(len(text) * 10)), max(1, px(22))
 
 
 def _render_launch_content(canvas, *, progress: float, px) -> None:
-    """Center the launch copy and flat milestone bar over the cave background."""
+    """Render the shared loading bar beneath the centered product wordmark."""
     width, height = _launch_canvas_dimensions(canvas)
-    center_x = width / 2
-    label_y = height * 0.50
     canvas.delete("launch_content")
+    wordmark_font = _TYPOGRAPHY.display
+    cave_width, wordmark_height = _canvas_text_metrics(
+        canvas,
+        text="Cave",
+        font=wordmark_font,
+        px=px,
+    )
+    viewer_width, _ = _canvas_text_metrics(
+        canvas,
+        text="Viewer",
+        font=wordmark_font,
+        px=px,
+    )
+    layout = routine_progress_layout(
+        center_x=width / 2,
+        center_y=height / 2,
+        title_height=wordmark_height,
+        scale=px(1),
+    )
+    wordmark_left = width / 2 - (cave_width + viewer_width) / 2
     canvas.create_text(
-        center_x,
-        label_y,
-        text="Preparing to explore what lies beneath...",
-        font=_TYPOGRAPHY.heading,
-        fill=_TITLE_COLOR,
+        wordmark_left,
+        layout.title_top,
+        text="Cave",
+        font=wordmark_font,
+        fill=_ABOUT_WORDMARK_ACCENT,
+        anchor="nw",
         tags="launch_content",
     )
-    bar_width = min(px(_LAUNCH_PROGRESS_WIDTH), max(1, width - px(80)))
-    bar_height = max(1, px(_LAUNCH_PROGRESS_HEIGHT))
-    bar_left = center_x - bar_width / 2
-    bar_top = label_y + px(34)
+    canvas.create_text(
+        wordmark_left + cave_width,
+        layout.title_top,
+        text="Viewer",
+        font=wordmark_font,
+        fill=_TITLE_COLOR,
+        anchor="nw",
+        tags="launch_content",
+    )
     canvas.create_rectangle(
-        bar_left,
-        bar_top,
-        bar_left + bar_width,
-        bar_top + bar_height,
-        fill=getattr(
-            canvas,
-            "_cv_progress_track_color",
-            _LIBRARY_PROGRESS_TRACK_COLOR,
-        ),
+        layout.bar_left,
+        layout.bar_top,
+        layout.bar_right,
+        layout.bar_bottom,
+        fill=getattr(canvas, "_cv_progress_track_color", _LIBRARY_PROGRESS_TRACK_COLOR),
         outline="",
         tags="launch_content",
     )
-    bounded_progress = max(0.0, min(1.0, float(progress)))
-    if bounded_progress > 0.0:
+    for left, right in progress_segments(
+        layout.bar_left,
+        layout.bar_right,
+        progress,
+    ):
         canvas.create_rectangle(
-            bar_left,
-            bar_top,
-            bar_left + bar_width * bounded_progress,
-            bar_top + bar_height,
-            fill=getattr(
-                canvas,
-                "_cv_progress_fill_color",
-                _LIBRARY_PROGRESS_FILL_COLOR,
-            ),
+            left,
+            layout.bar_top,
+            right,
+            layout.bar_bottom,
+            fill=getattr(canvas, "_cv_progress_fill_color", _LIBRARY_PROGRESS_FILL_COLOR),
             outline="",
             tags="launch_content",
         )
@@ -762,7 +749,7 @@ def _build_launch_surface(
     px,
     branding_assets: BrandingAssets | None = None,
 ):
-    """Build the branded, dark-cave launch surface and return its canvas."""
+    """Build the branded Void launch surface and return its canvas."""
     import tkinter as tk
 
     launch_canvas = tk.Canvas(
@@ -774,7 +761,6 @@ def _build_launch_surface(
         highlightthickness=0,
     )
     launch_canvas.pack(fill="both", expand=True)
-    launch_canvas._cv_launch_background_image = _load_launch_background_image()
     launch_canvas._cv_launch_progress = 0.0
     progress_tokens = (
         branding_assets or _branding_assets_for_runtime(None)
@@ -783,12 +769,6 @@ def _build_launch_surface(
     launch_canvas._cv_progress_fill_color = progress_tokens.fill_color
 
     def _refresh_launch_surface(_event=None) -> None:
-        size = _launch_canvas_dimensions(launch_canvas)
-        _render_launch_background(
-            launch_canvas,
-            source_image=launch_canvas._cv_launch_background_image,
-            size=size,
-        )
         _render_launch_content(
             launch_canvas,
             progress=launch_canvas._cv_launch_progress,
@@ -841,31 +821,60 @@ def _build_themed_about_content(
     else:
         content.pack(fill="both", expand=True, padx=px(32), pady=px(28))
 
-    logo_photo = _load_brand_logo(parent, px=px, max_dimension=92)
+    identity_lockup = tk.Frame(content, bg=_BG_COLOR)
+    identity_lockup.pack(pady=(0, px(18)))
+
+    logo_photo = _load_brand_logo(parent, px=px, max_dimension=112)
     if logo_photo is not None:
         logo_label = tk.Label(
-            content,
+            identity_lockup,
             image=logo_photo,
             bg=_BG_COLOR,
             borderwidth=0,
         )
         logo_label.image = logo_photo
-        logo_label.pack(pady=(0, px(10)))
+        logo_label.pack(side="left", padx=(0, px(14)))
 
+    identity_text = tk.Frame(identity_lockup, bg=_BG_COLOR)
+    identity_text.pack(side="left")
+    # Keep the product name visually unified while giving the two semantic
+    # halves distinct brand emphasis.  Adjacent labels avoid introducing a
+    # layout gap or changing the selected system typeface.
+    wordmark = tk.Frame(identity_text, bg=_BG_COLOR)
+    wordmark.pack(anchor="w")
+    if program_name == "CaveViewer":
+        tk.Label(
+            wordmark,
+            text="Cave",
+            font=_TYPOGRAPHY.heading,
+            fg=_ABOUT_WORDMARK_ACCENT,
+            bg=_BG_COLOR,
+            borderwidth=0,
+        ).pack(side="left")
+        tk.Label(
+            wordmark,
+            text="Viewer",
+            font=_TYPOGRAPHY.heading,
+            fg=_TITLE_COLOR,
+            bg=_BG_COLOR,
+            borderwidth=0,
+        ).pack(side="left")
+    else:
+        tk.Label(
+            wordmark,
+            text=program_name,
+            font=_TYPOGRAPHY.heading,
+            fg=_TITLE_COLOR,
+            bg=_BG_COLOR,
+            borderwidth=0,
+        ).pack(side="left")
     tk.Label(
-        content,
-        text=program_name,
-        font=_TYPOGRAPHY.heading,
-        fg=_TITLE_COLOR,
-        bg=_BG_COLOR,
-    ).pack()
-    tk.Label(
-        content,
+        identity_text,
         text=f"Version {version}",
         font=_TYPOGRAPHY.supporting,
         fg=_SUBTITLE_COLOR,
         bg=_BG_COLOR,
-    ).pack(pady=(px(2), px(18)))
+    ).pack(anchor="w", pady=(px(2), 0))
 
     tk.Label(
         content,

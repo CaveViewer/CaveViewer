@@ -820,10 +820,13 @@ def test_launch_splash_waits_only_for_the_remaining_minimum_duration():
     assert gate.remaining_delay_ms(16.0) == 0
 
 
-def test_launch_splash_uses_the_loading_exploration_tagline():
+def test_launch_splash_uses_the_two_tone_product_wordmark():
     source = inspect.getsource(splash_screen._render_launch_content)
 
-    assert 'text="Preparing to explore what lies beneath..."' in source
+    assert 'text="Cave"' in source
+    assert 'text="Viewer"' in source
+    assert "_ABOUT_WORDMARK_ACCENT" in source
+    assert "routine_progress_layout" in source
     assert "program_name" not in source
     assert 'text="Starting…"' not in source
 
@@ -834,10 +837,10 @@ def test_launch_surface_uses_a_flat_milestone_progress_bar():
 
     class _Canvas:
         def winfo_width(self):
-            return 132
+            return 800
 
         def winfo_height(self):
-            return 132
+            return 600
 
         def delete(self, tag):
             calls.append(("delete", tag))
@@ -858,8 +861,20 @@ def test_launch_surface_uses_a_flat_milestone_progress_bar():
     assert "create_oval(" not in source
     assert "create_arc(" not in source
     assert calls[0] == ("delete", "launch_content")
-    assert calls[1][0] == "text"
-    assert calls[1][2]["text"] == "Preparing to explore what lies beneath..."
+    assert calls[1] == (
+        "text",
+        (350.0, 267.0),
+        {
+            "text": "Cave",
+            "font": splash_screen._TYPOGRAPHY.display,
+            "fill": splash_screen._ABOUT_WORDMARK_ACCENT,
+            "anchor": "nw",
+            "tags": "launch_content",
+        },
+    )
+    assert calls[2][2]["text"] == "Viewer"
+    assert calls[2][2]["fill"] == splash_screen._TITLE_COLOR
+    assert calls[3][1] == (250.0, 329.0, 550.0, 333.0)
     assert [call[0] for call in calls].count("rectangle") == 2
 
 
@@ -891,7 +906,9 @@ def test_launch_surface_uses_dark_background_without_a_logo_or_ring():
     assert "_load_brand_logo(" not in source
     assert "progress_ring_photo(" not in content_source
     assert "program_name" not in content_source
-    assert "_render_launch_background(" in source
+    assert "bg=_BG_COLOR" in source
+    assert "_render_launch_background(" not in source
+    assert "_load_launch_background_image(" not in source
 
 
 def test_splash_navigation_actions_are_keyboard_accessible_without_fallthrough():

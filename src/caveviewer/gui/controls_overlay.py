@@ -37,16 +37,17 @@ from caveviewer.gui.platform.presentation import (
 )
 from caveviewer.core.diagnostics.logging import get_logger
 from caveviewer.gui.loading_progress import (
-    OPENGL_PROGRESS_BAR_HEIGHT,
-    OPENGL_PROGRESS_BAR_WIDTH,
     OPENGL_PROGRESS_BASE_WINDOW_SIZE,
-    OPENGL_PROGRESS_LABEL_OFFSET,
     OPENGL_PROGRESS_LABEL_TEXT_SIZE,
     OPENGL_PROGRESS_LAYOUT_SCALE_MAX,
+    ROUTINE_PROGRESS_BAR_HEIGHT,
+    ROUTINE_PROGRESS_TITLE_TO_BAR_GAP,
     hex_color_rgb,
     progress_layout_scale,
     progress_segments,
+    routine_progress_layout,
 )
+from caveviewer.gui.tk_theme import DARK_THEME
 
 
 _LOG = get_logger("ControlsOverlay")
@@ -76,6 +77,7 @@ void main() {
 _SPLASH_TITLE_RGBA = (0.9490, 0.8510, 0.5490, 1.0)       # #f2d98c
 _SPLASH_SUBTITLE_RGBA = (0.8000, 0.8039, 0.8392, 1.0)    # #cccdd6
 _SPLASH_INSTRUCTION_RGBA = (0.6039, 0.6039, 0.6510, 1.0) # #9a9aa6
+_LOADING_BACKGROUND_RGBA = (*hex_color_rgb(DARK_THEME.background), 1.0)
 
 _FULLSCREEN_BASE_WINDOW_SIZE = OPENGL_PROGRESS_BASE_WINDOW_SIZE
 _FULLSCREEN_LAYOUT_SCALE_MAX = OPENGL_PROGRESS_LAYOUT_SCALE_MAX
@@ -568,7 +570,7 @@ class ControlsOverlay:
         layout_scale = _fullscreen_layout_scale(window_size)
 
         # Dim the 3D view heavily while the controls reference is shown.
-        add_quad_px(0, 0, w, h, (0.001, 0.002, 0.005, 1.0))
+        add_quad_px(0, 0, w, h, _LOADING_BACKGROUND_RGBA)
 
         # Manual help has a title; startup help is intentionally lighter:
         # the map is already visually loading, so the only text needed
@@ -600,20 +602,40 @@ class ControlsOverlay:
             add_text(subtitle, sub_x, sub_y, sub_size, _SPLASH_SUBTITLE_RGBA)
             bar_bottom_y = sub_y + bitmap_font.text_height_px(sub_size)
         if not self._manual_mode:
-            bar_w = 300.0 * layout_scale
-            bar_h = 4.0 * layout_scale
-            bar_x0 = (w - bar_w) / 2.0
-            bar_x1 = bar_x0 + bar_w
-            bar_y0 = bar_bottom_y + 22.0 * layout_scale
-            bar_y1 = bar_y0 + bar_h
+            subtitle_height = bitmap_font.text_height_px(sub_size)
+            layout = routine_progress_layout(
+                center_x=w / 2.0,
+                center_y=(
+                    sub_y
+                    + (
+                        subtitle_height
+                        + ROUTINE_PROGRESS_TITLE_TO_BAR_GAP * layout_scale
+                        + ROUTINE_PROGRESS_BAR_HEIGHT * layout_scale
+                    )
+                    / 2.0
+                ),
+                title_height=subtitle_height,
+                scale=layout_scale,
+            )
 
-            add_quad_px(bar_x0, bar_y0, bar_x1, bar_y1, self._progress_track_rgba)
+            add_quad_px(
+                layout.bar_left,
+                layout.bar_top,
+                layout.bar_right,
+                layout.bar_bottom,
+                self._progress_track_rgba,
+            )
             for fill_x0, fill_x1 in progress_segments(
-                bar_x0, bar_x1, self._progress_fraction
+                layout.bar_left, layout.bar_right, self._progress_fraction
             ):
                 add_quad_px(
-                    fill_x0, bar_y0, fill_x1, bar_y1, self._progress_fill_rgba
+                    fill_x0,
+                    layout.bar_top,
+                    fill_x1,
+                    layout.bar_bottom,
+                    self._progress_fill_rgba,
                 )
+            bar_bottom_y = layout.bar_bottom
             table_start_offset = 82.0 * layout_scale
         else:
             table_start_offset = 96.0 * layout_scale
@@ -1061,28 +1083,37 @@ class ControlsOverlay:
         label = "Jumping to the selected point"
         layout_scale = progress_layout_scale(window_size)
         text_size = OPENGL_PROGRESS_LABEL_TEXT_SIZE * layout_scale
-        text_width = bitmap_font.text_width_px(label, text_size)
-        bar_cy = h / 2.0
-        label_y = bar_cy - OPENGL_PROGRESS_LABEL_OFFSET * layout_scale
+        bounds = bitmap_font.text_bounds_px(label, text_size)
+        text_width = bounds[2] - bounds[0]
+        layout = routine_progress_layout(
+            center_x=w / 2.0,
+            center_y=h / 2.0,
+            title_height=bounds[3] - bounds[1],
+            scale=layout_scale,
+        )
         add_text(
             label,
-            (w - text_width) / 2.0,
-            label_y,
+            (w - text_width) / 2.0 - bounds[0],
+            layout.title_top - bounds[1],
             text_size,
             _SPLASH_SUBTITLE_RGBA,
         )
-        bar_w = OPENGL_PROGRESS_BAR_WIDTH
-        bar_h = OPENGL_PROGRESS_BAR_HEIGHT
-        bar_x0 = (w - bar_w) / 2.0
-        bar_x1 = bar_x0 + bar_w
-        bar_y0 = bar_cy - bar_h / 2.0
-        bar_y1 = bar_y0 + bar_h
-        add_quad_px(bar_x0, bar_y0, bar_x1, bar_y1, self._progress_track_rgba)
+        add_quad_px(
+            layout.bar_left,
+            layout.bar_top,
+            layout.bar_right,
+            layout.bar_bottom,
+            self._progress_track_rgba,
+        )
         for fill_x0, fill_x1 in progress_segments(
-            bar_x0, bar_x1, self._progress_fraction
+            layout.bar_left, layout.bar_right, self._progress_fraction
         ):
             add_quad_px(
-                fill_x0, bar_y0, fill_x1, bar_y1, self._progress_fill_rgba
+                fill_x0,
+                layout.bar_top,
+                fill_x1,
+                layout.bar_bottom,
+                self._progress_fill_rgba,
             )
 
     # -- shared control-table drawing --------------------------------------------

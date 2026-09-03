@@ -1,9 +1,9 @@
 """Raster visual primitives owned by the Tk splash and library presentation.
 
 The Tk presentation modules stay responsible for widget creation and mutation.
-This module prepares background, progress-ring, and vector-icon images with
-Pillow so Canvas presentations can remain crisp on high-density displays
-without each caller implementing its own pixel geometry.
+This module prepares progress-ring and vector-icon images with Pillow so
+Canvas presentations can remain crisp on high-density displays without each
+caller implementing its own pixel geometry.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from functools import cache
 from typing import Literal, TypeAlias
 
-from PIL import Image, ImageColor, ImageDraw, ImageOps
+from PIL import Image, ImageColor, ImageDraw
 
 from caveviewer.resources import ui_icon_path
 
@@ -74,22 +74,6 @@ class VectorRectangle:
 
     bounds: tuple[float, float, float, float]
     fill_color: Color
-
-
-def fit_splash_background(
-    source: Image.Image,
-    *,
-    size: tuple[int, int],
-) -> Image.Image:
-    """Cover one splash target with a centered, high-quality image crop."""
-    width = max(1, int(size[0]))
-    height = max(1, int(size[1]))
-    return ImageOps.fit(
-        source.convert("RGB"),
-        (width, height),
-        method=Image.Resampling.LANCZOS,
-        centering=(0.5, 0.5),
-    )
 
 
 def progress_ring_supersample_factor(image_size: int | float) -> int:

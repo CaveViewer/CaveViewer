@@ -156,8 +156,9 @@ invent navigation, data, or controls for a marketing composition.
 
 Favor one focal mark, one primary message, and ample negative space. Avoid
 repeating the logo in navigation, loading, and content at the same time. The
-startup surface intentionally uses the dark cave photograph, a single sentence,
-and a flat progress bar without an additional logo or product title.
+startup surface uses the Void background with a sparse, static triangular mesh,
+a single sentence, and a flat progress bar without an additional logo or
+product title.
 
 ## Motion, voice, and accessibility
 
@@ -209,7 +210,7 @@ The current version-2 profile controls artwork roles and geometry-neutral
 `loading_progress` colors. Routine flat bars and the vector capture circle use
 the same tokens, so their color can be rebranded without replacing UI artwork.
 It does **not** control the Tk theme, typography, website CSS, startup
-photography or copy, screenshots, store metadata, signing identity, product
+background or copy, screenshots, store metadata, signing identity, product
 name, or platform application IDs. Those remain separate sources listed in the
 machine-readable contract. Adding any of them to the profile requires a
 versioned schema change and matching runtime, exporter, packaging, and test
@@ -236,7 +237,7 @@ Tk, OpenGL, or platform packaging tools.
 | Platform or area | User-visible surface | Semantic input | Derived or inherited output | Owner |
 | --- | --- | --- | --- | --- |
 | All desktop platforms | About page | About mark | Runtime RGBA image | GUI composition |
-| All desktop platforms | Initial startup | Dark cave background, launch copy, and shared progress colors | Text-and-bar launch surface gated by minimum display time and composed-main-screen readiness | GUI composition |
+| All desktop platforms | Initial startup | Solid Void background, launch copy, and shared progress colors | Text-and-bar launch surface gated by minimum display time and composed-main-screen readiness | GUI composition |
 | All desktop platforms | Routine loading progress | Semantic progress fill and track colors | Flat determinate or indeterminate bar across launch, viewer, Map Library, and updates | GUI presentation |
 | All desktop platforms | Capture countdown/status | Semantic progress fill and track colors | Standard vector circle with centered countdown or status text | GUI presentation |
 | Windows | Window upper-left icon, taskbar, title bar, native dialogs | Windows application icon | Runtime PNG and inherited window icon | GUI/platform adapter |
@@ -640,7 +641,7 @@ not change machine behavior may retain the current version.
       "desktop Tk theme",
       "desktop typography",
       "website CSS and fonts",
-      "startup photograph and copy",
+      "startup background and copy",
       "screenshots and store metadata",
       "DMG background or volume artwork",
       "stable product identity"
@@ -782,9 +783,10 @@ supported macOS architectures; do not treat a flattened approximation as a
 layered source.
 
 The initial startup surface intentionally carries no independent logo or
-product-title lockup. It uses the dark cave photograph, the sentence
-`Preparing to explore what lies beneath...`, and the same subdued-track/amber-
-fill flat progress language used by map loading. Composition milestones are
+product-title lockup. It uses the Void background with a sparse static
+triangular mesh, the sentence `Preparing to explore what lies beneath...`, and
+the same subdued-track/amber-fill flat progress language used by map loading.
+Composition milestones are
 monotonic and remain below 100 percent until the map library, Preferences
 surface, final geometry, and idle layout work needed by the first interactive
 frame are ready. The launch surface is then dismissed only after both that

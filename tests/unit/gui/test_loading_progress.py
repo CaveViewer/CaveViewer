@@ -6,13 +6,49 @@ import pytest
 
 from caveviewer.gui.loading_progress import (
     OPENGL_PROGRESS_LAYOUT_SCALE_MAX,
+    ROUTINE_PROGRESS_BAR_HEIGHT,
+    ROUTINE_PROGRESS_BAR_WIDTH,
+    ROUTINE_PROGRESS_BAR_TO_DESCRIPTION_GAP,
+    ROUTINE_PROGRESS_TITLE_TO_BAR_GAP,
     circular_progress_ranges,
     clamp_progress,
     hex_color_rgb,
     monotonic_progress,
     progress_layout_scale,
     progress_segments,
+    routine_progress_layout,
 )
+
+
+def test_routine_loading_geometry_is_shared_across_renderers():
+    assert ROUTINE_PROGRESS_BAR_WIDTH == 300.0
+    assert ROUTINE_PROGRESS_BAR_HEIGHT == 4.0
+    assert ROUTINE_PROGRESS_TITLE_TO_BAR_GAP == 40.0
+    assert ROUTINE_PROGRESS_BAR_TO_DESCRIPTION_GAP == 30.0
+
+
+def test_routine_loading_layout_uses_visible_gaps_and_collapses_description():
+    with_description = routine_progress_layout(
+        center_x=400.0,
+        center_y=300.0,
+        title_height=10.0,
+        description_height=5.0,
+        has_description=True,
+    )
+    without_description = routine_progress_layout(
+        center_x=400.0,
+        center_y=300.0,
+        title_height=10.0,
+    )
+
+    assert with_description.bar_top - with_description.title_bottom == 40.0
+    assert with_description.description_top is not None
+    assert with_description.description_top - with_description.bar_bottom == 30.0
+    assert without_description.description_top is None
+    assert without_description.description_bottom is None
+    assert without_description.bar_top - without_description.title_bottom == 40.0
+    assert without_description.bar_left == 250.0
+    assert without_description.bar_right == 550.0
 
 
 @pytest.mark.parametrize(
