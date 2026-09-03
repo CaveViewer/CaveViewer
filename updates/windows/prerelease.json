@@ -1,13 +1,13 @@
 {
   "authenticode_status": "unsigned-community",
-  "download_size_bytes": 57948617,
-  "download_size_bytes_windows_exe": 57948617,
-  "download_url": "https://github.com/CaveViewer/CaveViewer/releases/download/v1.0.95/CaveViewer-1.0.95-windows.exe",
-  "download_url_windows_exe": "https://github.com/CaveViewer/CaveViewer/releases/download/v1.0.95/CaveViewer-1.0.95-windows.exe",
+  "download_size_bytes": 59090102,
+  "download_size_bytes_windows_exe": 59090102,
+  "download_url": "https://github.com/CaveViewer/CaveViewer/releases/download/v1.0.96/CaveViewer-1.0.96-windows.exe",
+  "download_url_windows_exe": "https://github.com/CaveViewer/CaveViewer/releases/download/v1.0.96/CaveViewer-1.0.96-windows.exe",
   "install_channel": "windows_installer",
-  "latest_version": "1.0.95",
+  "latest_version": "1.0.96",
   "release_channel": "preview",
-  "release_notes": "Preview a refreshed cross-platform CaveViewer experience with new branding, safer preference backup and unsaved-change handling, improved Help diagnostics, smoother resumable imports, and clearer high-DPI controls.",
-  "sha256": "6eb3b1ce8c943f0af72c875fb03a60631d2608076d7b9727c8f4676dc153e557",
-  "sha256_windows_exe": "6eb3b1ce8c943f0af72c875fb03a60631d2608076d7b9727c8f4676dc153e557"
+  "release_notes": "CaveViewer preview release",
+  "sha256": "152365e83b23efb9f6da76d8a4ce08303979c4e6732834eb875401188c1c8281",
+  "sha256_windows_exe": "152365e83b23efb9f6da76d8a4ce08303979c4e6732834eb875401188c1c8281"
 }
