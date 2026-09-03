@@ -970,6 +970,7 @@ def test_launch_splash_uses_the_two_tone_product_wordmark():
 
     assert 'text="Cave"' in source
     assert 'text="Viewer"' in source
+    assert "text=_COPYRIGHT_SYMBOL" in source
     assert "_ABOUT_WORDMARK_ACCENT" in source
     assert "routine_progress_layout" in source
     assert "program_name" not in source
@@ -1008,7 +1009,7 @@ def test_launch_surface_uses_a_flat_milestone_progress_bar():
     assert calls[0] == ("delete", "launch_content")
     assert calls[1] == (
         "text",
-        (350.0, 267.0),
+        (343.0, 267.0),
         {
             "text": "Cave",
             "font": splash_screen._TYPOGRAPHY.display,
@@ -1019,8 +1020,70 @@ def test_launch_surface_uses_a_flat_milestone_progress_bar():
     )
     assert calls[2][2]["text"] == "Viewer"
     assert calls[2][2]["fill"] == splash_screen._TITLE_COLOR
-    assert calls[3][1] == (250.0, 329.0, 550.0, 333.0)
+    assert calls[3] == (
+        "text",
+        (447.0, 269.0),
+        {
+            "text": splash_screen._COPYRIGHT_SYMBOL,
+            "font": splash_screen._TYPOGRAPHY.supporting,
+            "fill": splash_screen._SUBTITLE_COLOR,
+            "anchor": "nw",
+            "tags": "launch_content",
+        },
+    )
+    assert calls[4][1] == (250.0, 329.0, 550.0, 333.0)
     assert [call[0] for call in calls].count("rectangle") == 2
+
+
+def test_launch_product_wordmark_centers_copyright_lockup(monkeypatch):
+    calls = []
+    metrics = {
+        "Cave": (40, 22),
+        "Viewer": (60, 22),
+        splash_screen._COPYRIGHT_SYMBOL: (9, 10),
+    }
+
+    class _Canvas:
+        def winfo_width(self):
+            return 800
+
+        def winfo_height(self):
+            return 600
+
+        def delete(self, _tag):
+            pass
+
+        def create_text(self, *coordinates, **options):
+            calls.append((coordinates, options))
+
+        def create_rectangle(self, *_coordinates, **_options):
+            pass
+
+    monkeypatch.setattr(
+        splash_screen,
+        "_canvas_text_metrics",
+        lambda _canvas, *, text, font, px: metrics[text],
+    )
+
+    splash_screen._render_launch_content(
+        _Canvas(),
+        progress=0.5,
+        px=lambda value: int(value),
+    )
+
+    cave, viewer, copyright = calls
+    assert [entry[1]["text"] for entry in calls] == [
+        "Cave",
+        "Viewer",
+        splash_screen._COPYRIGHT_SYMBOL,
+    ]
+    assert cave[0] == (343.5, 267.0)
+    assert viewer[0] == (383.5, 267.0)
+    assert copyright[0] == (447.5, 275.0)
+    copyright_right = (
+        copyright[0][0] + metrics[splash_screen._COPYRIGHT_SYMBOL][0]
+    )
+    assert (cave[0][0] + copyright_right) / 2 == 400
 
 
 def test_launch_logo_suppresses_only_amber_pixels_like_the_map_loader():
@@ -1320,6 +1383,27 @@ def test_themed_about_content_owns_the_brand_identity_while_launch_stays_quiet()
     assert "_load_brand_logo(" in content_source
     assert "_load_brand_logo(" not in launch_source
     assert 'text=f"Version {version}"' in content_source
+    caveviewer_wordmark_start = content_source.index(
+        'if program_name == "CaveViewer":'
+    )
+    caveviewer_wordmark_end = content_source.index(
+        "    else:", caveviewer_wordmark_start
+    )
+    caveviewer_wordmark_source = content_source[
+        caveviewer_wordmark_start:caveviewer_wordmark_end
+    ]
+    assert "text=_COPYRIGHT_SYMBOL" in caveviewer_wordmark_source
+    assert "font=_TYPOGRAPHY.supporting" in caveviewer_wordmark_source
+    assert "padx=(px(_WORDMARK_COPYRIGHT_GAP), 0)" in caveviewer_wordmark_source
+    assert "pady=(px(_WORDMARK_COPYRIGHT_OPTICAL_OFFSET * 2), 0)" in (
+        caveviewer_wordmark_source
+    )
+    generic_wordmark_source = content_source[
+        caveviewer_wordmark_end : content_source.index(
+            "    tk.Label(\n        identity_text,", caveviewer_wordmark_end
+        )
+    ]
+    assert "_COPYRIGHT_SYMBOL" not in generic_wordmark_source
     assert "version=version" in splash_source
     assert "_CREDITS_TEXT.strip()" in content_source
     assert "_ABOUT_WEBSITE_LINKS" in content_source
