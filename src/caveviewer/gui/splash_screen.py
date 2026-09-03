@@ -261,6 +261,9 @@ _BUTTON_BG = DARK_THEME.primary_button
 # The About wordmark uses a quieter gold that matches the refined About mark
 # without changing the brighter amber used for interactive controls.
 _ABOUT_WORDMARK_ACCENT = "#D99524"
+_COPYRIGHT_SYMBOL = "©"
+_WORDMARK_COPYRIGHT_GAP = 4
+_WORDMARK_COPYRIGHT_OPTICAL_OFFSET = 2
 _BUTTON_BORDER_COLOR = DARK_THEME.primary_button_border
 # Navigation uses a location marker rather than a button treatment.  The
 # background shift stays deliberately quiet; the amber rail and stronger label
@@ -706,13 +709,23 @@ def _render_launch_content(canvas, *, progress: float, px) -> None:
         font=wordmark_font,
         px=px,
     )
+    copyright_font = _TYPOGRAPHY.supporting
+    copyright_width, copyright_height = _canvas_text_metrics(
+        canvas,
+        text=_COPYRIGHT_SYMBOL,
+        font=copyright_font,
+        px=px,
+    )
+    copyright_gap = px(_WORDMARK_COPYRIGHT_GAP)
     layout = routine_progress_layout(
         center_x=width / 2,
         center_y=height / 2,
         title_height=wordmark_height,
         scale=px(1),
     )
-    wordmark_left = width / 2 - (cave_width + viewer_width) / 2
+    wordmark_left = width / 2 - (
+        cave_width + viewer_width + copyright_gap + copyright_width
+    ) / 2
     canvas.create_text(
         wordmark_left,
         layout.title_top,
@@ -728,6 +741,17 @@ def _render_launch_content(canvas, *, progress: float, px) -> None:
         text="Viewer",
         font=wordmark_font,
         fill=_TITLE_COLOR,
+        anchor="nw",
+        tags="launch_content",
+    )
+    canvas.create_text(
+        wordmark_left + cave_width + viewer_width + copyright_gap,
+        layout.title_top
+        + max(0, (wordmark_height - copyright_height) / 2)
+        + px(_WORDMARK_COPYRIGHT_OPTICAL_OFFSET),
+        text=_COPYRIGHT_SYMBOL,
+        font=copyright_font,
+        fill=_SUBTITLE_COLOR,
         anchor="nw",
         tags="launch_content",
     )
@@ -946,6 +970,20 @@ def _build_themed_about_content(
             bg=_BG_COLOR,
             borderwidth=0,
         ).pack(side="left")
+        # The asymmetric top inset moves the Pack-centered glyph down by half
+        # its value, aligning its visible circle with the lowercase wordmark.
+        tk.Label(
+            wordmark,
+            text=_COPYRIGHT_SYMBOL,
+            font=_TYPOGRAPHY.supporting,
+            fg=_SUBTITLE_COLOR,
+            bg=_BG_COLOR,
+            borderwidth=0,
+        ).pack(
+            side="left",
+            padx=(px(_WORDMARK_COPYRIGHT_GAP), 0),
+            pady=(px(_WORDMARK_COPYRIGHT_OPTICAL_OFFSET * 2), 0),
+        )
     else:
         tk.Label(
             wordmark,
