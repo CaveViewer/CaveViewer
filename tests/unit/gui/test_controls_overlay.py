@@ -183,28 +183,22 @@ def test_compact_loading_panel_uses_shared_responsive_label_scale(monkeypatch):
     )
 
 
-def test_keycap_tiers_share_widths_while_descriptive_controls_fit_labels(
+def test_keycap_unit_spans_fit_control_labels(
     monkeypatch,
 ):
     overlay = controls_overlay.ControlsOverlay.__new__(controls_overlay.ControlsOverlay)
     widths = {
         "W": 16.0,
         "A": 10.0,
+        "0": 10.0,
         "-": 4.0,
-        "Cmd": 22.0,
-        "Ctrl": 24.0,
-        "Shift": 32.0,
-        "Scroll": 36.0,
-        "Space": 30.0,
-        "Escape": 42.0,
-        "Del": 20.0,
-        "1–9": 34.0,
         "←": 10.0,
         "→": 10.0,
         "↑": 10.0,
         "↓": 10.0,
         "Left-drag": 58.0,
         "Minimap click": 64.0,
+        "+": 8.0,
     }
     monkeypatch.setattr(
         controls_overlay.bitmap_font,
@@ -215,32 +209,46 @@ def test_keycap_tiers_share_widths_while_descriptive_controls_fit_labels(
     assert overlay._keycap_width("W", 1.0, 4.0) == 24.0
     assert overlay._keycap_width("A", 1.0, 4.0) == 24.0
     assert overlay._keycap_width("-", 1.0, 4.0) == 24.0
-    assert overlay._keycap_width("Ctrl", 1.0, 4.0) == 44.0
-    assert overlay._keycap_width("Shift", 1.0, 4.0) == 44.0
-    assert overlay._keycap_width("Scroll", 1.0, 4.0) == 44.0
-    assert overlay._keycap_width("Space", 1.0, 4.0) == 50.0
-    assert overlay._keycap_width("Escape", 1.0, 4.0) == 50.0
-    assert overlay._keycap_width("Del", 1.0, 4.0) == 44.0
+    assert overlay._keycap_span_width(1, 1.0, 4.0) == 24.0
+    assert overlay._keycap_span_width(2, 1.0, 4.0) == 53.0
+    assert overlay._keycap_separator_width(1.0, 4.0) == 24.0
+    assert overlay._keycap_width("Cmd", 1.0, 4.0) == 53.0
+    assert overlay._keycap_width("Ctrl", 1.0, 4.0) == 53.0
+    assert overlay._keycap_width("Shift", 1.0, 4.0) == 53.0
+    assert overlay._keycap_width("Scroll", 1.0, 4.0) == 53.0
+    assert overlay._keycap_width("Space", 1.0, 4.0) == 53.0
+    assert overlay._keycap_width("Escape", 1.0, 4.0) == 53.0
+    assert overlay._keycap_width("Space", 1.0, 4.0) == overlay._keycap_width(
+        "Escape", 1.0, 4.0
+    )
+    assert overlay._keycap_width(
+        "Shift", 1.0, 4.0
+    ) == overlay._measure_keycap_sequence(
+        "E Q", 1.0, 4.0
+    )
+    assert overlay._keycap_width("Del", 1.0, 4.0) == 53.0
+    assert overlay._keycap_width("1–9", 1.0, 4.0) == 53.0
     assert overlay._keycap_width("Left-drag", 1.0, 4.0) == 111.0
     assert (
         overlay._keycap_width("Left-drag", 1.0, 4.0)
         == overlay._measure_keycap_sequence("← → ↑ ↓", 1.0, 4.0)
     )
-    assert overlay._keycap_width("Minimap click", 1.0, 4.0) == 120.0
+    assert overlay._measure_keycap_sequence("Ctrl + R", 1.0, 4.0) == 111.0
+    assert overlay._keycap_width("Minimap click", 1.0, 4.0) == 140.0
     assert (
         overlay._keycap_width("Minimap click", 1.0, 4.0)
         == overlay._measure_keycap_sequence("Del + 1–9", 1.0, 4.0)
     )
 
 
-def test_single_keycap_glyph_is_centered_in_its_shared_width(monkeypatch):
+def test_single_keycap_glyph_is_centered_from_its_tight_bounds(monkeypatch):
     overlay = controls_overlay.ControlsOverlay.__new__(controls_overlay.ControlsOverlay)
     overlay._keycap_parts = lambda _label: ["A"]
     overlay._keycap_width = lambda _part, _size, _pad: 24.0
     monkeypatch.setattr(
         controls_overlay.bitmap_font,
-        "text_width_px",
-        lambda _text, _size: 10.0,
+        "text_bounds_px",
+        lambda _text, _size: (2.0, 1.0, 12.0, 11.0),
     )
     monkeypatch.setattr(
         controls_overlay.bitmap_font,
@@ -251,7 +259,7 @@ def test_single_keycap_glyph_is_centered_in_its_shared_width(monkeypatch):
 
     overlay._draw_keycap_sequence(
         lambda *_args: None,
-        lambda text, x, *_args: text_calls.append((text, x)),
+        lambda text, x, y, *_args: text_calls.append((text, x, y)),
         "A",
         x=20.0,
         y=10.0,
@@ -260,10 +268,10 @@ def test_single_keycap_glyph_is_centered_in_its_shared_width(monkeypatch):
         key_pad_y=3.0,
     )
 
-    assert text_calls == [("A", 27.0)]
+    assert text_calls == [("A", 25.0, 13.0)]
 
 
-def test_capture_keycap_labels_are_centered_in_their_shared_width(monkeypatch):
+def test_capture_keycap_labels_are_centered_in_their_semantic_widths(monkeypatch):
     overlay = controls_overlay.ControlsOverlay.__new__(controls_overlay.ControlsOverlay)
     overlay._keycap_parts = lambda _label: ["Space", "Escape"]
     overlay._keycap_width = lambda _part, _size, _pad: 50.0
@@ -278,11 +286,20 @@ def test_capture_keycap_labels_are_centered_in_their_shared_width(monkeypatch):
         "text_height_px",
         lambda _size: 12.0,
     )
+    bounds = {
+        "Space": (1.0, 2.0, 29.0, 10.0),
+        "Escape": (2.0, 1.0, 40.0, 11.0),
+    }
+    monkeypatch.setattr(
+        controls_overlay.bitmap_font,
+        "text_bounds_px",
+        lambda text, _size: bounds[text],
+    )
     text_calls = []
 
     overlay._draw_keycap_sequence(
         lambda *_args: None,
-        lambda text, x, *_args: text_calls.append((text, x)),
+        lambda text, x, y, *_args: text_calls.append((text, x, y)),
         "Space Escape",
         x=20.0,
         y=10.0,
@@ -291,14 +308,14 @@ def test_capture_keycap_labels_are_centered_in_their_shared_width(monkeypatch):
         key_pad_y=3.0,
     )
 
-    assert text_calls == [("Space", 30.0), ("Escape", 79.0)]
+    assert text_calls == [("Space", 30.0, 13.0), ("Escape", 79.0, 13.0)]
 
 
-def test_compound_shortcut_plus_uses_one_centered_keycap_unit(monkeypatch):
+def test_compound_shortcut_plus_uses_one_centered_separator_span(monkeypatch):
     overlay = controls_overlay.ControlsOverlay.__new__(controls_overlay.ControlsOverlay)
     overlay._keycap_parts = lambda _label: ["Ctrl", "+", "R"]
     overlay._keycap_width = lambda _part, _size, _pad: 24.0
-    widths = {"Ctrl": 18.0, "+": 8.0, "R": 10.0}
+    widths = {"W": 16.0, "Ctrl": 18.0, "+": 8.0, "R": 10.0}
     monkeypatch.setattr(
         controls_overlay.bitmap_font,
         "text_width_px",
@@ -308,6 +325,11 @@ def test_compound_shortcut_plus_uses_one_centered_keycap_unit(monkeypatch):
         controls_overlay.bitmap_font,
         "text_height_px",
         lambda _size: 12.0,
+    )
+    monkeypatch.setattr(
+        controls_overlay.bitmap_font,
+        "text_bounds_px",
+        lambda text, _size: (0.0, 0.0, widths[text], 12.0),
     )
     text_calls = []
 
@@ -346,6 +368,11 @@ def test_compound_shortcuts_share_section_columns(monkeypatch):
         "text_height_px",
         lambda _size: 12.0,
     )
+    monkeypatch.setattr(
+        controls_overlay.bitmap_font,
+        "text_bounds_px",
+        lambda text, _size: (0.0, 0.0, widths[text], 12.0),
+    )
     overlay._keycap_width = lambda part, _size, _pad: {
         "W": 24.0,
         "Left click": 68.0,
@@ -382,6 +409,50 @@ def test_compound_shortcuts_share_section_columns(monkeypatch):
 
     assert text_calls[1] == ("+", 221.0)
     assert text_calls[4] == ("+", 221.0)
+
+
+def test_begin_prompt_keeps_its_compact_space_keycap(monkeypatch):
+    overlay = controls_overlay.ControlsOverlay.__new__(controls_overlay.ControlsOverlay)
+    widths = {
+        "Press": 30.0,
+        "Space": 30.0,
+        "Escape": 42.0,
+        "to begin": 40.0,
+    }
+    monkeypatch.setattr(
+        controls_overlay.bitmap_font,
+        "text_width_px",
+        lambda text, _size: widths[text],
+    )
+    monkeypatch.setattr(
+        controls_overlay.bitmap_font,
+        "text_height_px",
+        lambda _size: 12.0,
+    )
+    monkeypatch.setattr(
+        controls_overlay.bitmap_font,
+        "text_bounds_px",
+        lambda text, _size: (0.0, 0.0, widths[text], 12.0),
+    )
+    keycap_calls = []
+    overlay._draw_keycap = lambda *args: keycap_calls.append(args)
+    text_calls = []
+
+    bottom = overlay._draw_begin_prompt(
+        lambda *_args: None,
+        lambda text, x, y, *_args: text_calls.append((text, x, y)),
+        window_width=300.0,
+        y=10.0,
+        text_size=controls_overlay._FULLSCREEN_SUBTITLE_TEXT_SIZE,
+    )
+
+    assert keycap_calls[0][1:5] == (114.0, 10.0, 176.0, 32.0)
+    assert text_calls == [
+        ("Press", 74.0, 15.0),
+        ("Space", 130.0, 15.0),
+        ("to begin", 186.0, 15.0),
+    ]
+    assert bottom == 32.0
 
 
 def test_fullscreen_begin_prompt_respects_budget_limited_wanted_count():

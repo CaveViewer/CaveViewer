@@ -30,6 +30,7 @@ from caveviewer.gui.controls_catalog import (
     is_help_shortcut_visible,
     keyboard_control_sections,
     shortcut_keycap_parts,
+    shortcut_keycap_unit_count,
 )
 from caveviewer.gui.platform.presentation import (
     PresentationProfile,
@@ -83,8 +84,6 @@ _FULLSCREEN_BASE_WINDOW_SIZE = OPENGL_PROGRESS_BASE_WINDOW_SIZE
 _FULLSCREEN_LAYOUT_SCALE_MAX = OPENGL_PROGRESS_LAYOUT_SCALE_MAX
 _FULLSCREEN_SUBTITLE_TEXT_SIZE = OPENGL_PROGRESS_LABEL_TEXT_SIZE
 _CONTROL_KEYCAP_ROW_GAP = 4.0
-_MEDIUM_NAMED_KEYCAPS = frozenset({"Cmd", "Ctrl", "Del", "Scroll", "Shift"})
-_WIDE_NAMED_KEYCAPS = frozenset({"Escape", "Space"})
 _KEYCAP_SEQUENCE_GAP = 5.0
 
 
@@ -664,7 +663,10 @@ class ControlsOverlay:
         right_text = "to begin"
         left_w = bitmap_font.text_width_px(left_text, text_size)
         right_w = bitmap_font.text_width_px(right_text, text_size)
-        key_w = self._measure_keycap_sequence(key_label, key_size, key_pad_x)
+        key_w = max(
+            bitmap_font.text_width_px(key_label, key_size),
+            bitmap_font.text_width_px("Escape", key_size),
+        ) + key_pad_x * 2.0
         text_h = bitmap_font.text_height_px(text_size)
         key_h = bitmap_font.text_height_px(key_size) + key_pad_y * 2.0
         prompt_h = max(text_h, key_h)
@@ -676,7 +678,22 @@ class ControlsOverlay:
 
         add_text(left_text, x, text_y, text_size, _SPLASH_SUBTITLE_RGBA)
         x += left_w + gap
-        self._draw_keycap_sequence(add_quad_px, add_text, key_label, x, key_y, key_size, key_pad_x, key_pad_y)
+        self._draw_keycap(add_quad_px, x, key_y, x + key_w, key_y + key_h)
+        key_text_x, key_text_y = self._keycap_text_origin(
+            key_label,
+            key_size,
+            x,
+            key_y,
+            x + key_w,
+            key_y + key_h,
+        )
+        add_text(
+            key_label,
+            key_text_x,
+            key_text_y,
+            key_size,
+            _SPLASH_TITLE_RGBA,
+        )
         x += key_w + gap
         add_text(right_text, x, text_y, text_size, _SPLASH_SUBTITLE_RGBA)
 
@@ -936,85 +953,98 @@ class ControlsOverlay:
 
     def _measure_keycap_sequence(self, label, key_size, key_pad_x):
         total_w = 0.0
-        for part in self._keycap_parts(label):
+        parts = self._keycap_parts(label)
+        for index, part in enumerate(parts):
             if part == "+":
                 total_w += self._keycap_separator_width(key_size, key_pad_x)
             else:
                 total_w += self._keycap_width(part, key_size, key_pad_x)
-            total_w += _KEYCAP_SEQUENCE_GAP
-        return max(0.0, total_w - _KEYCAP_SEQUENCE_GAP)
+            if index + 1 < len(parts):
+                total_w += _KEYCAP_SEQUENCE_GAP
+        return total_w
 
     def _keycap_separator_width(self, key_size: float, key_pad_x: float) -> float:
-        """Reserve a borderless 1u lane for a compound shortcut separator."""
-        return self._keycap_width("W", key_size, key_pad_x)
+        """Return the width of one borderless 1u separator cell."""
+        return self._keycap_span_width(1, key_size, key_pad_x)
 
     def _keycap_width(self, part: str, key_size: float, key_pad_x: float) -> float:
-        """Return a semantic keycap width while preserving descriptive controls."""
-        content_width = bitmap_font.text_width_px(part, key_size) + key_pad_x * 2.0
-        if len(part) == 1:
-            # Use W as the shared single-key reference because it is the
-            # widest standard Latin key glyph in the overlay's bitmap font.
-            return bitmap_font.text_width_px("W", key_size) + key_pad_x * 2.0
-        if part in _MEDIUM_NAMED_KEYCAPS:
-            # Compact named controls form one visual family, so minor glyph
-            # differences (such as Shift versus Scroll) do not create noise.
-            return max(
-                bitmap_font.text_width_px(reference, key_size)
-                for reference in _MEDIUM_NAMED_KEYCAPS
-            ) + key_pad_x * 2.0
-        if part in _WIDE_NAMED_KEYCAPS:
-            # These standalone actions need a wider shared cap. The draw path
-            # below centers every label, including shorter Space, within it.
-            return max(
-                bitmap_font.text_width_px(reference, key_size)
-                for reference in _WIDE_NAMED_KEYCAPS
-            ) + key_pad_x * 2.0
+        """Return a fixed unit span or a natural descriptive-key width."""
+        unit_count = shortcut_keycap_unit_count(part)
+        if unit_count is not None:
+            return self._keycap_span_width(unit_count, key_size, key_pad_x)
         if part == "Left-drag":
             # Match the complete four-arrow row immediately below this
             # gesture while preserving their shared trailing edge.
-            unit_width = self._keycap_width("W", key_size, key_pad_x)
-            return unit_width * 4.0 + _KEYCAP_SEQUENCE_GAP * 3.0
+            return self._keycap_span_width(4, key_size, key_pad_x)
         if part == "Minimap click":
             # Align the standalone minimap control with the compound bookmark
             # delete shortcut immediately above it in the Navigate section.
-            return (
-                self._keycap_width("Del", key_size, key_pad_x)
-                + _KEYCAP_SEQUENCE_GAP
-                + self._keycap_separator_width(key_size, key_pad_x)
-                + _KEYCAP_SEQUENCE_GAP
-                + self._keycap_width("1–9", key_size, key_pad_x)
+            return self._measure_keycap_sequence(
+                "Del + 1–9",
+                key_size,
+                key_pad_x,
             )
-        return content_width
+        return bitmap_font.text_width_px(part, key_size) + key_pad_x * 2.0
+
+    def _keycap_span_width(
+        self,
+        unit_count: int,
+        key_size: float,
+        key_pad_x: float,
+    ) -> float:
+        """Return ``unit_count`` 1u caps plus their intervening gaps."""
+        unit_width = bitmap_font.text_width_px("W", key_size) + key_pad_x * 2.0
+        return unit_width * unit_count + _KEYCAP_SEQUENCE_GAP * (unit_count - 1)
 
     def _draw_keycap_sequence(
         self, add_quad_px, add_text, label, x, y, key_size, key_pad_x, key_pad_y
     ):
         cursor_x = x
         key_h = bitmap_font.text_height_px(key_size) + key_pad_y * 2.0
-        for part in self._keycap_parts(label):
-            part_w = bitmap_font.text_width_px(part, key_size)
+        parts = self._keycap_parts(label)
+        for index, part in enumerate(parts):
             if part == "+":
                 separator_w = self._keycap_separator_width(key_size, key_pad_x)
+                text_x, text_y = self._keycap_text_origin(
+                    part,
+                    key_size,
+                    cursor_x,
+                    y,
+                    cursor_x + separator_w,
+                    y + key_h,
+                )
                 add_text(
                     part,
-                    cursor_x + (separator_w - part_w) / 2.0,
-                    y + key_pad_y,
+                    text_x,
+                    text_y,
                     key_size,
                     _SPLASH_INSTRUCTION_RGBA,
                 )
-                cursor_x += separator_w + _KEYCAP_SEQUENCE_GAP
+                cursor_x += separator_w
+                if index + 1 < len(parts):
+                    cursor_x += _KEYCAP_SEQUENCE_GAP
                 continue
 
             key_w = self._keycap_width(part, key_size, key_pad_x)
             self._draw_keycap(add_quad_px, cursor_x, y, cursor_x + key_w, y + key_h)
+            text_x, text_y = self._keycap_text_origin(
+                part,
+                key_size,
+                cursor_x,
+                y,
+                cursor_x + key_w,
+                y + key_h,
+            )
             add_text(
                 part,
-                cursor_x + (key_w - part_w) / 2.0,
-                y + key_pad_y,
+                text_x,
+                text_y,
                 key_size,
                 _SPLASH_TITLE_RGBA,
             )
-            cursor_x += key_w + _KEYCAP_SEQUENCE_GAP
+            cursor_x += key_w
+            if index + 1 < len(parts):
+                cursor_x += _KEYCAP_SEQUENCE_GAP
 
     def _draw_compound_keycap_sequence(
         self,
@@ -1038,28 +1068,67 @@ class ControlsOverlay:
         separator_w = self._keycap_separator_width(key_size, key_pad_x)
 
         self._draw_keycap(add_quad_px, first_x, y, first_right, y + key_h)
+        first_text_x, first_text_y = self._keycap_text_origin(
+            first,
+            key_size,
+            first_x,
+            y,
+            first_right,
+            y + key_h,
+        )
         add_text(
             first,
-            first_x + (first_w - bitmap_font.text_width_px(first, key_size)) / 2.0,
-            y + key_pad_y,
+            first_text_x,
+            first_text_y,
             key_size,
             _SPLASH_TITLE_RGBA,
         )
+        separator_text_x, separator_text_y = self._keycap_text_origin(
+            "+",
+            key_size,
+            separator_left,
+            y,
+            separator_left + separator_w,
+            y + key_h,
+        )
         add_text(
             "+",
-            separator_left
-            + (separator_w - bitmap_font.text_width_px("+", key_size)) / 2.0,
-            y + key_pad_y,
+            separator_text_x,
+            separator_text_y,
             key_size,
             _SPLASH_INSTRUCTION_RGBA,
         )
         self._draw_keycap(add_quad_px, final_x, y, final_right, y + key_h)
+        final_text_x, final_text_y = self._keycap_text_origin(
+            final,
+            key_size,
+            final_x,
+            y,
+            final_right,
+            y + key_h,
+        )
         add_text(
             final,
-            final_x + (final_w - bitmap_font.text_width_px(final, key_size)) / 2.0,
-            y + key_pad_y,
+            final_text_x,
+            final_text_y,
             key_size,
             _SPLASH_TITLE_RGBA,
+        )
+
+    def _keycap_text_origin(
+        self,
+        text: str,
+        text_size: float,
+        x0: float,
+        y0: float,
+        x1: float,
+        y1: float,
+    ) -> tuple[float, float]:
+        """Center the glyph's actual rendered pixels inside a keycap area."""
+        min_x, min_y, max_x, max_y = bitmap_font.text_bounds_px(text, text_size)
+        return (
+            (x0 + x1) / 2.0 - (min_x + max_x) / 2.0,
+            (y0 + y1) / 2.0 - (min_y + max_y) / 2.0,
         )
 
     def _draw_keycap(self, add_quad_px, x0, y0, x1, y1):

@@ -12,6 +12,7 @@ from caveviewer.gui.controls_catalog import (
     KeyboardShortcutSection,
     is_help_shortcut_visible,
     shortcut_keycap_parts,
+    shortcut_keycap_unit_count,
 )
 from caveviewer.gui.dialog_style import (
     create_dialog_action_button,
@@ -100,6 +101,7 @@ _KEY_HELP_LAYOUT = (
     ("look", "Look", ("view",)),
     ("navigate", "Navigate", ("bookmarks", "map", "recorded-dive")),
 )
+_KEYCAP_SEQUENCE_GAP = 5
 
 
 def key_help_sections(
@@ -842,31 +844,46 @@ class HelpPanel:
         return self._font_line_height("keycap") + self._px(4) + 2
 
     def _keycap_width(self, part: str) -> int:
-        """Return a stable width for individual keys and a natural width otherwise."""
-        if len(part) == 1:
-            # Individual keycaps share the W width so narrow glyphs such as
-            # '-' and '=' neither shrink their caps nor look off-centre.
-            text_width = self._font_width("keycap", "W")
-        else:
-            text_width = self._font_width("keycap", part)
-        return text_width + self._px(12) + 2
+        """Return a fixed unit span or a natural descriptive-key width."""
+        unit_count = shortcut_keycap_unit_count(part)
+        if unit_count is not None:
+            return self._keycap_span_width(unit_count)
+        return self._font_width("keycap", part) + self._px(12) + 2
+
+    def _keycap_span_width(self, unit_count: int) -> int:
+        """Return ``unit_count`` 1u caps plus their intervening gaps."""
+        unit_width = self._font_width("keycap", "W") + self._px(12) + 2
+        return (
+            unit_width * unit_count
+            + self._px(_KEYCAP_SEQUENCE_GAP) * (unit_count - 1)
+        )
+
+    def _keycap_separator_width(self, part: str = "+") -> int:
+        """Return the width of one borderless 1u separator cell."""
+        del part
+        return self._keycap_span_width(1)
 
     def _draw_keycap_sequence(self, canvas, *, x: int, y: int, shortcut: str) -> None:
         style = self._style
         keycap_height = self._keycap_height(shortcut)
+        sequence_gap = self._px(_KEYCAP_SEQUENCE_GAP)
         cursor = x
-        for part in shortcut_keycap_parts(shortcut):
+        parts = shortcut_keycap_parts(shortcut)
+        for index, part in enumerate(parts):
             if part in {"+", "/"}:
+                separator_width = self._keycap_separator_width(part)
                 canvas.create_text(
-                    cursor,
+                    cursor + (separator_width / 2),
                     y + keycap_height / 2,
                     text=part,
                     font=self._canvas_font("action"),
                     fill=style.section_color,
-                    anchor="w",
+                    anchor="center",
                     tags="help-content",
                 )
-                cursor += self._font_width("action", part) + self._px(8)
+                cursor += separator_width
+                if index + 1 < len(parts):
+                    cursor += sequence_gap
                 continue
             keycap_width = self._keycap_width(part)
             canvas.create_rectangle(
@@ -888,7 +905,9 @@ class HelpPanel:
                 anchor="center",
                 tags="help-content",
             )
-            cursor += keycap_width + self._px(5)
+            cursor += keycap_width
+            if index + 1 < len(parts):
+                cursor += sequence_gap
 
     def _on_canvas_configure(self, event) -> None:
         self._render_table(event.width)

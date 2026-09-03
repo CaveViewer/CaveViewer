@@ -34,16 +34,39 @@ def test_help_panel_uses_a_compact_keys_table_without_redundant_labels():
     assert "help_section_column_count" not in source
 
 
-def test_help_keycaps_standardize_single_key_widths_and_center_glyphs():
+def test_help_keycaps_use_geometric_unit_spans_and_center_glyphs():
     panel = help_panel.HelpPanel.__new__(help_panel.HelpPanel)
-    widths = {"W": 11, "Escape": 38}
+    widths = {
+        "W": 11,
+        "Mouse": 33,
+        "+": 7,
+        "/": 5,
+    }
     panel._font_width = lambda _role, text: widths[text]
     panel._px = lambda value: value
 
     assert panel._keycap_width("-") == 25
     assert panel._keycap_width("=") == 25
-    assert panel._keycap_width("Escape") == 52
+    assert panel._keycap_span_width(1) == 25
+    assert panel._keycap_span_width(2) == 55
+    assert panel._keycap_width("Cmd") == 55
+    assert panel._keycap_width("Ctrl") == 55
+    assert panel._keycap_width("Del") == 55
+    assert panel._keycap_width("Scroll") == 55
+    assert panel._keycap_width("Shift") == 55
+    assert panel._keycap_width("Escape") == 55
+    assert panel._keycap_width("Space") == 55
+    assert panel._keycap_width("Space") == panel._keycap_width("Escape")
+    assert panel._keycap_width("1–9") == 55
+    assert panel._keycap_width("1–9") == panel._keycap_width("Ctrl")
+    assert panel._keycap_width("Shift") == (
+        panel._keycap_width("E") + 5 + panel._keycap_width("Q")
+    )
+    assert panel._keycap_width("Mouse") == 47
+    assert panel._keycap_separator_width("+") == 25
+    assert panel._keycap_separator_width("/") == 25
 
+    rectangle_calls = []
     text_calls = []
     panel._style = SimpleNamespace(
         keycap_background_color="#111111",
@@ -54,15 +77,124 @@ def test_help_keycaps_standardize_single_key_widths_and_center_glyphs():
     panel._keycap_height = lambda _shortcut: 20
     panel._canvas_font = lambda _role: "font"
     canvas = SimpleNamespace(
-        create_rectangle=lambda *_args, **_kwargs: None,
+        create_rectangle=lambda *args, **kwargs: rectangle_calls.append(
+            (args, kwargs)
+        ),
         create_text=lambda *args, **kwargs: text_calls.append((args, kwargs)),
     )
 
     panel._draw_keycap_sequence(canvas, x=10, y=20, shortcut="- =")
+    panel._draw_keycap_sequence(canvas, x=10, y=50, shortcut="Escape")
+    panel._draw_keycap_sequence(canvas, x=10, y=80, shortcut="Space")
 
     first_keycap = text_calls[0]
     assert first_keycap[0] == (22.5, 30.0)
     assert first_keycap[1]["anchor"] == "center"
+    assert rectangle_calls[1][0][0] - rectangle_calls[0][0][2] == 5
+    escape_rect = rectangle_calls[2][0]
+    space_rect = rectangle_calls[3][0]
+    assert escape_rect[2] - escape_rect[0] == space_rect[2] - space_rect[0]
+    assert text_calls[2][0] == (
+        (escape_rect[0] + escape_rect[2]) / 2,
+        (escape_rect[1] + escape_rect[3]) / 2,
+    )
+    assert text_calls[3][0] == (
+        (space_rect[0] + space_rect[2]) / 2,
+        (space_rect[1] + space_rect[3]) / 2,
+    )
+    assert text_calls[2][1]["anchor"] == text_calls[3][1]["anchor"] == "center"
+
+
+def test_help_compound_shortcut_centers_separator_between_keycaps():
+    panel = help_panel.HelpPanel.__new__(help_panel.HelpPanel)
+    widths = {
+        "W": 11,
+        "Cmd": 21,
+        "Ctrl": 24,
+        "Del": 18,
+        "Scroll": 30,
+        "Shift": 28,
+        "Escape": 38,
+        "Space": 25,
+        "1–9": 26,
+        "+": 7,
+    }
+    panel._font_width = lambda _role, text: widths[text]
+    panel._px = lambda value: value
+    panel._style = SimpleNamespace(
+        keycap_background_color="#111111",
+        keycap_border_color="#222222",
+        keycap_text_color="#eeeeee",
+        section_color="#cccccc",
+    )
+    panel._keycap_height = lambda _shortcut: 20
+    panel._canvas_font = lambda _role: "font"
+    rectangle_calls = []
+    text_calls = []
+    canvas = SimpleNamespace(
+        create_rectangle=lambda *args, **kwargs: rectangle_calls.append(
+            (args, kwargs)
+        ),
+        create_text=lambda *args, **kwargs: text_calls.append((args, kwargs)),
+    )
+
+    panel._draw_keycap_sequence(canvas, x=10, y=20, shortcut="Ctrl + 0")
+    first_right = rectangle_calls[0][0][2]
+    final_left = rectangle_calls[1][0][0]
+    separator = next(call for call in text_calls if call[1]["text"] == "+")
+    separator_x = separator[0][0]
+    assert first_right == 65
+    assert final_left == 100
+    assert separator_x == 82.5
+    assert separator[1]["anchor"] == "center"
+    assert separator_x - first_right == final_left - separator_x
+
+
+def test_help_compound_rows_share_the_same_separator_lane():
+    panel = help_panel.HelpPanel.__new__(help_panel.HelpPanel)
+    widths = {
+        "W": 11,
+        "Cmd": 21,
+        "Ctrl": 24,
+        "Del": 18,
+        "Scroll": 30,
+        "Shift": 28,
+        "Escape": 38,
+        "Space": 25,
+        "1–9": 26,
+        "+": 7,
+    }
+    panel._font_width = lambda _role, text: widths[text]
+    panel._px = lambda value: value
+    panel._style = SimpleNamespace(
+        keycap_background_color="#111111",
+        keycap_border_color="#222222",
+        keycap_text_color="#eeeeee",
+        section_color="#cccccc",
+    )
+    panel._keycap_height = lambda _shortcut: 20
+    panel._canvas_font = lambda _role: "font"
+    rectangle_calls = []
+    text_calls = []
+    canvas = SimpleNamespace(
+        create_rectangle=lambda *args, **kwargs: rectangle_calls.append(
+            (args, kwargs)
+        ),
+        create_text=lambda *args, **kwargs: text_calls.append((args, kwargs)),
+    )
+
+    panel._draw_keycap_sequence(canvas, x=10, y=20, shortcut="Ctrl + 0")
+    panel._draw_keycap_sequence(canvas, x=10, y=50, shortcut="Del + 1–9")
+
+    separator_xs = [
+        args[0]
+        for args, kwargs in text_calls
+        if kwargs["text"] == "+"
+    ]
+    assert separator_xs == [82.5, 82.5]
+    del_keycap = rectangle_calls[2][0]
+    range_keycap = rectangle_calls[3][0]
+    assert del_keycap[2] - del_keycap[0] == range_keycap[2] - range_keycap[0]
 
 
 def test_capture_help_has_its_own_tab_with_artifact_specific_guidance():
