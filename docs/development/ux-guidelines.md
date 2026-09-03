@@ -58,7 +58,9 @@ primitives remain documented in [design-system.md](design-system.md).
 - Recompute Windows adaptive density after a monitor move settles; do not resize
   continuously while the pointer is dragging. Rebuild the retained Tk shell
   off-screen, preserve its active surface and unsaved Preferences values, and
-  scale the current outer bounds by the destination/source ratio. Explicit
+  scale the last settled source-monitor normal bounds once by the
+  destination/source ratio. Use Windows' settled destination position without
+  treating its already DPI-adjusted dimensions as source bounds. Explicit
   development scaling overrides bypass adaptation so one override remains
   authoritative. Carry the settled destination measurements into the rebuild
   rather than remeasuring a withdrawn root, synchronize Tk point scaling before
@@ -66,7 +68,8 @@ primitives remain documented in [design-system.md](design-system.md).
   observer so one move produces one lifecycle transition. For a normal window,
   keep the larger of its proportionally scaled bounds and the destination's
   1040-by-740 logical-pixel default, then clamp to the destination work area;
-  preserve a maximized window as maximized.
+  preserve a maximized window as maximized and retain its transformed normal
+  restore bounds.
 - Use semantic typography roles from `caveviewer.gui.tk_typography`; do not
   introduce a new font size to solve a spacing problem.
 - Separate related content with the shared section-spacing tokens. Prefer

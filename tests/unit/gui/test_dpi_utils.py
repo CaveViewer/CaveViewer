@@ -351,12 +351,13 @@ def test_monitor_transition_detects_only_a_material_layout_scale_change():
 
 def test_window_geometry_scales_by_monitor_ratio_and_clamps_to_work_area():
     scaled = dpi_utils.scale_window_geometry(
-        TkWindowGeometry(width=2600, height=1800, x=3000, y=120),
+        TkWindowGeometry(width=2600, height=1800, x=100, y=80),
         current_scale=2.5,
         candidate_scale=2.0,
         minimum_size=(1680, 1200),
         preferred_size=(2080, 1480),
         work_area=(1920, 0, 3840, 1400),
+        destination_position=(3000, 120),
     )
 
     assert scaled == TkWindowGeometry(
@@ -401,6 +402,57 @@ def test_window_geometry_preserves_larger_user_size_after_scale_change():
         x=2200,
         y=80,
     )
+
+
+def test_window_geometry_uses_destination_position_without_observed_size():
+    scaled = dpi_utils.scale_window_geometry(
+        TkWindowGeometry(width=1482, height=1054, x=2200, y=80),
+        current_scale=1.425,
+        candidate_scale=2.5,
+        minimum_size=(2100, 1500),
+        preferred_size=(2600, 1850),
+        work_area=(0, 0, 3840, 2160),
+        destination_position=(300, 140),
+    )
+
+    assert scaled == TkWindowGeometry(
+        width=2600,
+        height=1850,
+        x=300,
+        y=140,
+    )
+
+
+def test_window_geometry_round_trip_converts_each_settled_source_once():
+    laptop = TkWindowGeometry(width=2600, height=1850, x=200, y=100)
+    desktop = dpi_utils.scale_window_geometry(
+        laptop,
+        current_scale=2.5,
+        candidate_scale=1.425,
+        minimum_size=(1197, 855),
+        preferred_size=(1482, 1054),
+        work_area=(3840, 0, 7680, 2160),
+        destination_position=(4200, 120),
+    )
+    returned = dpi_utils.scale_window_geometry(
+        desktop,
+        current_scale=1.425,
+        candidate_scale=2.5,
+        minimum_size=(2100, 1500),
+        preferred_size=(2600, 1850),
+        work_area=(0, 0, 3840, 2160),
+        destination_position=(240, 100),
+    )
+
+    assert desktop == TkWindowGeometry(
+        width=1482,
+        height=1055,
+        x=4200,
+        y=120,
+    )
+    assert abs(returned.width - laptop.width) <= 1
+    assert abs(returned.height - laptop.height) <= 1
+    assert (returned.x, returned.y) == (240, 100)
 
 
 def test_explicit_override_suppresses_monitor_recomposition():

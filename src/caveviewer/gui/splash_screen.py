@@ -178,6 +178,18 @@ class _SplashRecomposeRequest:
     resume_state: _SplashResumeState
 
 
+@dataclass(slots=True)
+class _SettledNormalWindowGeometry:
+    """Retain source-monitor bounds without accepting DPI-adjusted events."""
+
+    geometry: TkWindowGeometry
+
+    def observe(self, geometry: TkWindowGeometry, *, window_state: str) -> None:
+        """Remember normal bounds; maximized bounds are not restorable."""
+        if window_state == "normal":
+            self.geometry = geometry
+
+
 def _returning_library_needs_topmost(profile: PresentationProfile) -> bool:
     """Keep macOS focus recovery without rebuilding Windows' native frame."""
     return profile.platform_name == "darwin"
@@ -2851,6 +2863,14 @@ def _show_splash_composition(
             map_library_surface,
         ).tkraise()
         _settle_launch_layout(root, passes=1)
+    settled_normal_geometry = _SettledNormalWindowGeometry(
+        TkWindowGeometry(
+            width=window_w,
+            height=final_height,
+            x=pos_x,
+            y=pos_y,
+        )
+    )
     readiness_gate.mark_ready()
 
     map_open_error_presented = [False]
@@ -3006,9 +3026,7 @@ def _show_splash_composition(
                 viewer_settings.tk_scale if viewer_settings is not None else None
             ),
         )
-        if not display_scale_changed(display_metrics, candidate):
-            return
-        current_geometry = TkWindowGeometry(
+        observed_geometry = TkWindowGeometry(
             width=max(1, root.winfo_width()),
             height=max(1, root.winfo_height()),
             x=root.winfo_x(),
@@ -3018,8 +3036,15 @@ def _show_splash_composition(
             current_window_state = str(root.state())
         except Exception:
             current_window_state = "normal"
+        if not display_scale_changed(display_metrics, candidate):
+            settled_normal_geometry.observe(
+                observed_geometry,
+                window_state=current_window_state,
+            )
+            return
+        source_geometry = settled_normal_geometry.geometry
         scaled_geometry = scale_window_geometry(
-            current_geometry,
+            source_geometry,
             current_scale=display_metrics.layout_scale,
             candidate_scale=candidate.layout_scale,
             minimum_size=(
@@ -3031,6 +3056,7 @@ def _show_splash_composition(
                 int(round(_SPLASH_WINDOW_MIN_HEIGHT * candidate.layout_scale)),
             ),
             work_area=candidate.work_area,
+            destination_position=(observed_geometry.x, observed_geometry.y),
         )
         preferences_panel = preferences_panel_ref[0]
         recompose_request[0] = _SplashRecomposeRequest(
@@ -3050,13 +3076,16 @@ def _show_splash_composition(
         )
         _LOG.info(
             "Tk monitor transition: monitor=%s->%s, layout_scale=%.4f->%.4f, "
-            "window=%sx%s->%sx%s, state=%s.",
+            "source_window=%sx%s, observed_destination_window=%sx%s, "
+            "final_window=%sx%s, state=%s.",
             display_metrics.monitor_id,
             candidate.monitor_id,
             display_metrics.layout_scale,
             candidate.layout_scale,
-            current_geometry.width,
-            current_geometry.height,
+            source_geometry.width,
+            source_geometry.height,
+            observed_geometry.width,
+            observed_geometry.height,
             scaled_geometry.width,
             scaled_geometry.height,
             current_window_state,

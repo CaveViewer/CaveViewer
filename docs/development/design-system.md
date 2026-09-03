@@ -53,6 +53,10 @@ pixels-per-point value on the process-owned root, so monitor recomposition also
 synchronizes that value to the destination's native DPI divided by 72 before
 creating replacement widgets. This is the font conversion paired with, not an
 additional multiplier on, the independent DPI-divided-by-96 geometry scale.
+Window geometry follows the same single-conversion rule: retain the last
+settled source-monitor normal bounds, apply the destination/source layout-scale
+ratio once, and use Windows' settled destination position. Do not multiply
+dimensions that Windows or Tk has already adjusted for the destination DPI.
 
 The development-only `CAVEVIEWER_TK_SCALE` override is expressed in Tk pixels
 per point and is the only path that deliberately replaces Tk's native value;

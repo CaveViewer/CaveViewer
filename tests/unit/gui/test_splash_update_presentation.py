@@ -2128,6 +2128,21 @@ def test_public_splash_trampoline_recomposes_without_exposing_private_result(
     assert calls[1]["resume_state"] is resume
 
 
+def test_settled_normal_geometry_ignores_maximized_monitor_bounds():
+    initial = splash_screen.TkWindowGeometry(2600, 1850, 200, 100)
+    maximized = splash_screen.TkWindowGeometry(3840, 2160, 0, 0)
+    resized = splash_screen.TkWindowGeometry(2800, 1900, 240, 120)
+    settled = splash_screen._SettledNormalWindowGeometry(initial)
+
+    settled.observe(maximized, window_state="zoomed")
+
+    assert settled.geometry is initial
+
+    settled.observe(resized, window_state="normal")
+
+    assert settled.geometry is resized
+
+
 def test_splash_composition_observes_settled_windows_monitor_transitions():
     source = inspect.getsource(splash_screen._show_splash_composition)
 
@@ -2136,6 +2151,12 @@ def test_splash_composition_observes_settled_windows_monitor_transitions():
     assert "if splash_controller.closing or recompose_request[0] is not None:" in source
     assert "display_scale_changed(display_metrics, candidate)" in source
     assert "scale_window_geometry(" in source
+    assert "source_geometry = settled_normal_geometry.geometry" in source
+    assert (
+        "destination_position=(observed_geometry.x, observed_geometry.y)"
+        in source
+    )
+    assert "settled_normal_geometry.observe(" in source
     assert "preferred_size=(" in source
     assert "preferences_panel.snapshot()" in source
     assert "display_metrics=candidate" in source
