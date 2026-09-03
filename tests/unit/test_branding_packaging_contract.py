@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 
 from PIL import Image
+import pytest
 
 from caveviewer.branding import resolve_branding_assets, resolve_branding_profile
 from caveviewer.branding_export import export_branding_profile
@@ -33,6 +34,7 @@ def test_runtime_and_every_package_pipeline_select_the_same_profile_contract():
         assert "branding/default" in source, platform_name
 
 
+@pytest.mark.timeout(30)
 def test_export_summary_hashes_every_output_and_small_previews_are_rgba(tmp_path):
     destination = tmp_path / "brand"
     summary_path = export_branding_profile(
