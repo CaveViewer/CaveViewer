@@ -103,18 +103,23 @@ def test_preflight_hides_precompiled_cache_entry(tmp_path):
     assert preflight.decision.reason_code == "map_cache_rebuild_precompiled_map"
 
 
-def test_preflight_disables_unsafe_or_busy_generated_destination(tmp_path):
+def test_preflight_disables_unsafe_generated_destination(tmp_path):
     map_dir, _source, cache_dir = _map_with_source(tmp_path)
     outside_dir = tmp_path / "outside"
     outside_dir.mkdir()
-    cache_dir.symlink_to(outside_dir, target_is_directory=True)
+    try:
+        cache_dir.symlink_to(outside_dir, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks are unavailable for this test user")
 
     unsafe = map_cache_rebuild.probe_map_library_cache_rebuild(map_dir)
 
     assert unsafe.decision.state is FeatureState.DISABLED
     assert unsafe.decision.reason_code == "map_cache_rebuild_destination_unsafe"
 
-    cache_dir.unlink()
+
+def test_preflight_disables_busy_generated_destination(tmp_path):
+    map_dir, _source, cache_dir = _map_with_source(tmp_path)
     cache_dir.mkdir()
     lock = CacheBuildLock(cache_dir)
     lock.acquire()
