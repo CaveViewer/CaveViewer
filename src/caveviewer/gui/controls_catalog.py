@@ -38,6 +38,9 @@ _HELP_HIDDEN_SHORTCUT_IDS = frozenset(
 _SPACED_KEY_GROUPS = frozenset(
     {"W A S D", "E Q", "← → ↑ ↓", "J L I K", "Z X", "- ="}
 )
+_TWO_UNIT_KEYCAPS = frozenset(
+    {"Cmd", "Ctrl", "Del", "Scroll", "Shift", "1–9", "Escape", "Space"}
+)
 
 
 def is_help_shortcut_visible(shortcut: KeyboardShortcut) -> bool:
@@ -78,6 +81,17 @@ def shortcut_keycap_parts(shortcut: str) -> tuple[str, ...]:
     if label in _SPACED_KEY_GROUPS:
         return tuple(label.split())
     return (label,)
+
+
+def shortcut_keycap_unit_count(part: str) -> int | None:
+    """Return the fixed visual-unit count for one rendered keycap part."""
+    if part in {"+", "/"}:
+        return None
+    if len(part) == 1:
+        return 1
+    if part in _TWO_UNIT_KEYCAPS:
+        return 2
+    return None
 
 
 def keyboard_control_sections(

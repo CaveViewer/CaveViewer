@@ -6,6 +6,7 @@ from caveviewer.gui.controls_catalog import (
     is_help_shortcut_visible,
     keyboard_control_sections,
     shortcut_keycap_parts,
+    shortcut_keycap_unit_count,
 )
 from caveviewer.gui.platform.presentation import select_presentation_profile
 
@@ -120,3 +121,25 @@ def test_keycap_parts_keep_compound_shortcuts_readable():
         "P",
     )
     assert shortcut_keycap_parts("← → ↑ ↓") == ("←", "→", "↑", "↓")
+
+
+def test_keycap_unit_counts_define_complete_compact_spans():
+    for part in ("W", "Q", "←", "="):
+        assert shortcut_keycap_unit_count(part) == 1
+
+    for part in (
+        "Cmd",
+        "Ctrl",
+        "Del",
+        "Scroll",
+        "Shift",
+        "1–9",
+        "Escape",
+        "Space",
+    ):
+        assert shortcut_keycap_unit_count(part) == 2
+
+    assert shortcut_keycap_unit_count("Left-drag") is None
+    assert shortcut_keycap_unit_count("Minimap click") is None
+    assert shortcut_keycap_unit_count("+") is None
+    assert shortcut_keycap_unit_count("/") is None

@@ -81,6 +81,17 @@ Windows physical-density factor.
   UI scaling helper or spacing token rather than device-pixel literals. Do not
   add heading rules, cards, amber section decoration, or shortcut-row rules in
   Help; use whitespace to separate its rows.
+- Tk and OpenGL Help keycaps use geometric unit spans. One unit (`1u`) is the
+  standard single-key cap; an `n`-unit cap is exactly `n` single-key widths plus
+  the `n - 1` ordinary gaps those keys would contain as a row. Compact named
+  keys (`Cmd`, `Ctrl`, `Del`, `Scroll`, `Shift`, `1–9`, `Escape`, and `Space`)
+  are `2u`, so a standalone `Shift` aligns with an `E Q` row and `Escape`
+  aligns with `Space`. Center labels both horizontally and vertically within
+  their keycaps: Tk uses its centered canvas anchor, while OpenGL centers the
+  bitmap font's tight rendered bounds. A compound separator occupies one full
+  borderless 1u cell, with the ordinary inter-key gap on each side. This keeps
+  a `2u + 1u separator + 1u` shortcut aligned to the same four-column grid as
+  four adjacent 1u keys.
 
 Text hierarchy should come first from role, then from color and spacing.
 Do not create a new font size merely to distinguish a control state; use the
