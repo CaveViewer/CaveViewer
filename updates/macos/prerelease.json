@@ -1,13 +1,13 @@
 {
   "architecture": "arm64",
-  "download_size_bytes": 66192951,
-  "download_size_bytes_macosx_dmg": 66192951,
-  "download_url": "https://github.com/CaveViewer/CaveViewer/releases/download/v1.0.95/CaveViewer-1.0.95-macos-arm64.dmg",
-  "download_url_macosx_dmg": "https://github.com/CaveViewer/CaveViewer/releases/download/v1.0.95/CaveViewer-1.0.95-macos-arm64.dmg",
-  "latest_version": "1.0.95",
+  "download_size_bytes": 67671043,
+  "download_size_bytes_macosx_dmg": 67671043,
+  "download_url": "https://github.com/CaveViewer/CaveViewer/releases/download/v1.0.96/CaveViewer-1.0.96-macos-arm64.dmg",
+  "download_url_macosx_dmg": "https://github.com/CaveViewer/CaveViewer/releases/download/v1.0.96/CaveViewer-1.0.96-macos-arm64.dmg",
+  "latest_version": "1.0.96",
   "platform": "macos",
   "release_channel": "preview",
-  "release_notes": "Preview a refreshed cross-platform CaveViewer experience with new branding, safer preference backup and unsaved-change handling, improved Help diagnostics, smoother resumable imports, and clearer high-DPI controls.",
-  "sha256": "83e09a4303ba4c0076b62df6fec6c20c3839b0a85d9acdd4ea26132c478242eb",
-  "sha256_macosx_dmg": "83e09a4303ba4c0076b62df6fec6c20c3839b0a85d9acdd4ea26132c478242eb"
+  "release_notes": "CaveViewer preview release",
+  "sha256": "0a8f9931890cc7c04c1cf2ca0721708a8acaa270909dcd4edea184ec45efcb1c",
+  "sha256_macosx_dmg": "0a8f9931890cc7c04c1cf2ca0721708a8acaa270909dcd4edea184ec45efcb1c"
 }
