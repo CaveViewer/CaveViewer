@@ -235,8 +235,9 @@ def scale_window_geometry(
     minimum_size: tuple[int, int],
     preferred_size: tuple[int, int],
     work_area: tuple[int, int, int, int] | None,
+    destination_position: tuple[int, int] | None = None,
 ) -> TkWindowGeometry:
-    """Scale bounds, retain the destination default floor, and clamp them."""
+    """Scale source bounds once, place them on the destination, and clamp."""
     source = max(0.01, float(current_scale))
     ratio = max(0.01, float(candidate_scale)) / source
     width = max(
@@ -249,7 +250,10 @@ def scale_window_geometry(
         int(preferred_size[1]),
         int(round(geometry.height * ratio)),
     )
-    x, y = int(geometry.x), int(geometry.y)
+    if destination_position is None:
+        x, y = int(geometry.x), int(geometry.y)
+    else:
+        x, y = (int(value) for value in destination_position)
     if work_area is not None:
         left, top, right, bottom = (int(value) for value in work_area)
         available_width = max(1, right - left)
