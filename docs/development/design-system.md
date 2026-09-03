@@ -36,12 +36,15 @@ does not rewrite it during normal startup. Pixel geometry uses the effective
 window DPI divided by 96 exactly once. The shell then applies the same bounded
 physical-density factor to semantic fonts and logical geometry: monitors up to
 24 inches retain `1.00`, larger monitors use `clamp(24 / diagonal_inches,
-0.875, 1.00)`, and invalid or unavailable raw measurements retain `1.00`. This
-keeps monitors of approximately 27.4 inches and larger at the same modest
+0.95, 1.00)`, and invalid or unavailable raw measurements retain `1.00`. This
+keeps monitors of approximately 25.3 inches and larger at the same modest
 density floor. On a settled Windows monitor transition, CaveViewer recomputes
 the factor and rebuilds the
 retained Tk shell off-screen so semantic fonts and logical geometry adopt the
-destination scale together. The current outer window size changes by the same
+destination scale together. Before content fitting, the retained root is
+mapped invisibly on the destination display so Tk child geometry reflects the
+new monitor; impossible measurements such as a viewport taller than its root
+are rejected. The current outer window size changes by the same
 scale ratio. Normal windows retain at least the destination's 1040-by-740
 logical-pixel default when the work area permits, larger user sizing is
 preserved proportionally, and maximized windows remain maximized. All resulting

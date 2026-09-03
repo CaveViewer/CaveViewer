@@ -53,8 +53,8 @@ primitives remain documented in [design-system.md](design-system.md).
   one bounded density factor on monitors larger than 24 inches so typography,
   controls, icons, spacing, and window geometry remain proportional. Invalid or
   unavailable physical-monitor data preserves full density. Bound the physical
-  adjustment to `clamp(24 / diagonal_inches, 0.875, 1.00)` so monitors around
-  27.4 inches and larger retain a modest, readable common floor.
+  adjustment to `clamp(24 / diagonal_inches, 0.95, 1.00)` so monitors around
+  25.3 inches and larger retain a modest, readable common floor.
 - Recompute Windows adaptive density after a monitor move settles; do not resize
   continuously while the pointer is dragging. Rebuild the retained Tk shell
   off-screen, preserve its active surface and unsaved Preferences values, and
@@ -83,7 +83,13 @@ primitives remain documented in [design-system.md](design-system.md).
 - Size normal desktop windows for their complete primary content, then clamp
   them to the usable display area. Scrolling is the fallback for compact
   displays and accessibility scaling, not the default presentation on an
-  ordinary desktop.
+  ordinary desktop. Before first reveal, a normal main shell stages Preferences
+  at its rendered stacked-surface width, measures and verifies its tallest tab,
+  then restores the intended surface while preserving a larger restored height.
+  On a settled monitor recomposition, first map the retained root invisibly on
+  the destination display and reject stale child geometry whose viewport is
+  larger than the actual root before applying the same fit. Restore the intended
+  surface before reveal; unbounded Map Library lists remain scrollable.
 - Use the same compact primary-shell geometry on Windows, macOS, and Linux:
   1040 by 740 logical pixels by default and an 840 by 600 logical-pixel resize
   minimum.
