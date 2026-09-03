@@ -165,7 +165,12 @@ class MapImportController:
         self.pause_notice_note = ""
         return close_after
 
-    def render_pause_notice_if_active(self, panel, window) -> bool:
+    def render_pause_notice_if_active(
+        self,
+        panel,
+        window,
+        window_size: tuple[int, int] | None = None,
+    ) -> bool:
         until = self.pause_notice_until
         if until is None:
             return False
@@ -176,7 +181,7 @@ class MapImportController:
             return close_after
 
         panel.render(
-            window.size,
+            window_size or window.size,
             self.pause_notice_map_name or self.map_name or "map",
             self.pause_notice_stage,
             1.0,

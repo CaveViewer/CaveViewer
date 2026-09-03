@@ -15,6 +15,10 @@ def test_blank_stage_label_stays_blank():
     assert panel._stage_label("   ") == ""
 
 
+def test_import_progress_group_moves_up_eight_pixels_from_prior_anchor():
+    assert import_progress_panel._progress_bar_center_y(600.0) == 415.0
+
+
 def test_render_cache_finalization_phases_are_user_facing():
     panel = object.__new__(ImportProgressPanel)
 

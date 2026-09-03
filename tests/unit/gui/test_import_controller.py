@@ -131,6 +131,25 @@ def test_resuming_import_message_returns_to_normal_progress_after_three_seconds(
     assert controller.progress_note == controller.default_progress_note()
 
 
+def test_pause_notice_renders_at_the_supplied_framebuffer_size():
+    rendered = []
+
+    class FakePanel:
+        def render(self, *args, **kwargs):
+            rendered.append((args, kwargs))
+
+    controller, _logger, _calls = _controller()
+    controller.pause_notice_until = 1.0
+    controller.pause_notice_map_name = "cave.obj"
+    controller._perf_counter = lambda: 0.0
+    window = SimpleNamespace(size=(800, 600))
+
+    assert controller.render_pause_notice_if_active(
+        FakePanel(), window, (820, 600)
+    ) is True
+    assert rendered[0][0][0] == (820, 600)
+
+
 def test_close_after_paused_import_releases_the_viewer_without_a_notice():
     calls = []
     owner = SimpleNamespace(

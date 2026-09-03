@@ -3802,13 +3802,14 @@ class CaveViewerWindow(mglw.WindowConfig):
         return self._ensure_import_controller().render_pause_notice_if_active(
             self.import_progress_panel,
             self.wnd,
+            _viewer_ui_surface_size(self.wnd),
         )
 
     def _render_pending_import_splash(self) -> None:
         self._ensure_import_controller().render_pending_import_splash(
             CaveViewerWindow.cave_pending_import,
             self.import_progress_panel,
-            self.wnd.size,
+            _viewer_ui_surface_size(self.wnd),
         )
 
     def _render_startup_map_load_splash(self) -> None:
@@ -3817,7 +3818,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         map_name = os.path.basename(str(manifest.get("source_obj", "map")))
         self.ctx.clear(0.02, 0.02, 0.03)
         self.import_progress_panel.render(
-            self.wnd.size,
+            _viewer_ui_surface_size(self.wnd),
             map_name,
             "opening cave",
             None,
@@ -5605,7 +5606,7 @@ class CaveViewerWindow(mglw.WindowConfig):
                 t = time.perf_counter()
                 fraction = abs(math.sin(t * 1.2)) * 0.02
             self.import_progress_panel.render(
-                self.wnd.size, self._import_map_name,
+                _viewer_ui_surface_size(self.wnd), self._import_map_name,
                 self._import_progress_stage, fraction,
                 title=self._import_progress_title,
                 note=self._import_progress_note,
@@ -5774,7 +5775,7 @@ class CaveViewerWindow(mglw.WindowConfig):
             target = min(self._CHUNK_PREP_MAX_FRACTION, raw_fraction * self._CHUNK_PREP_MAX_FRACTION)
             self._chunk_prep_progress = max(self._chunk_prep_progress, target)
             self.import_progress_panel.render(
-                self.wnd.size, _map_name, "opening cave", self._chunk_prep_progress,
+                _viewer_ui_surface_size(self.wnd), _map_name, "opening cave", self._chunk_prep_progress,
                 title="", note="",
             )
             return
@@ -5786,7 +5787,7 @@ class CaveViewerWindow(mglw.WindowConfig):
                 return
             _map_name = os.path.basename(self.manifest.get("source_obj", "map"))
             self.import_progress_panel.render(
-                self.wnd.size, _map_name, "opening cave", 1.0,
+                _viewer_ui_surface_size(self.wnd), _map_name, "opening cave", 1.0,
                 title="", note="",
             )
             return
