@@ -66,7 +66,13 @@ def test_pages_workflow_builds_only_the_approved_production_artifact(
     )
 
     assert "website/scripts/build_site.py" in workflow
-    assert "${{ runner.temp }}/caveviewer-pages" in workflow
+    assert "$RUNNER_TEMP/caveviewer-pages" in workflow
+    assert "uses: actions/upload-pages-artifact" not in workflow
+    assert "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a" in workflow
+    assert 'name: github-pages' in workflow
+    assert "${{ runner.temp }}/artifact.tar" in workflow
+    assert "--hard-dereference" in workflow
+    assert '--exclude=".[^/]*"' in workflow
     assert '"website/**"' in workflow
     assert '"docs/development/**"' in workflow
     assert "github.ref == 'refs/heads/main'" in workflow
