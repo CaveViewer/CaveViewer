@@ -105,7 +105,8 @@ or cyan must not become a logo, highlight, progress, or primary-action color.
 
 Use the semantic token for the role instead of choosing the nearest amber by
 eye. The application theme currently lives in
-`src/caveviewer/gui/tk_theme.py`; website tokens live in `docs/index.html`;
+`src/caveviewer/gui/tk_theme.py`; website tokens live in
+`website/assets/css/global.css`;
 profile-controlled loading colors live in
 `src/caveviewer/resources/branding/default/branding.v2.json`. Where these
 surfaces intentionally use different amber values, preserve the role
@@ -129,11 +130,12 @@ resolved system sans-serif stack on Linux. Components use semantic roles from
 scale, accessibility scaling, and component mapping are documented in
 [Design system](design-system.md).
 
-The website uses three complementary families:
+The website uses its local system-font stacks:
 
-- Fraunces for expressive display headings;
-- Source Sans 3 for readable interface and body copy; and
-- IBM Plex Mono for technical data, compact labels, and code-like values.
+- Segoe UI, Inter, Helvetica, Arial, and sans-serif for display headings;
+- Inter, Segoe UI, Helvetica, Arial, and sans-serif for interface and body
+  copy; and
+- the local `ui-monospace` stack for technical values.
 
 Use sentence case for titles, labels, and actions unless a technical identifier
 requires exact casing. Keep body copy direct and readable. Do not use decorative
@@ -387,7 +389,7 @@ not change machine behavior may retain the current version.
     "desktop_theme": "src/caveviewer/gui/tk_theme.py",
     "desktop_typography": "src/caveviewer/gui/tk_typography.py",
     "platform_presentation": "src/caveviewer/gui/platform/presentation.py",
-    "website_tokens": "docs/index.html",
+    "website_tokens": "website/assets/css/global.css",
     "ux_rules": "docs/development/ux-guidelines.md",
     "design_system": "docs/development/design-system.md",
     "pyinstaller_spec": "packaging/pyinstaller/CaveViewer.spec"
@@ -564,10 +566,10 @@ not change machine behavior may retain the current version.
       ]
     },
     "website": {
-      "display": "Fraunces",
-      "body": "Source Sans 3",
-      "technical": "IBM Plex Mono",
-      "fallbacks_source": "docs/index.html"
+      "display": "Segoe UI, Inter, Helvetica, Arial, sans-serif",
+      "body": "Inter, Segoe UI, Helvetica, Arial, sans-serif",
+      "technical": "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+      "fallbacks_source": "website/assets/css/global.css"
     }
   },
   "imagery": {

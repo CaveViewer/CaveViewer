@@ -1,0 +1,225 @@
+/*
+ * App-aligned visual treatment for the static preview.
+ *
+ * This stylesheet deliberately loads after page-specific styles. It derives
+ * interactive and surface colors from caveviewer.gui.tk_theme.DARK_THEME:
+ * charcoal surfaces, neutral borders, and amber only for primary meaning.
+ * Natural color inside cave imagery is left untouched.
+ */
+
+body {
+    background: var(--bg);
+    color: var(--text);
+}
+
+.page-home .hero,
+.page-home .home-product,
+.page-home .home-cta,
+.page-about .about-team,
+.page-contact .contact-page,
+.page-features .features-page,
+.page-media .media-page {
+    background-color: var(--bg);
+}
+
+.page-home .home-product,
+.page-home .home-cta {
+    border-color: var(--line);
+    background-image: linear-gradient(180deg, var(--bg) 0%, #0d0d12 54%, var(--bg) 100%);
+}
+
+.page-home .home-cta::after {
+    background: radial-gradient(circle at 72% 48%, rgba(var(--accent-rgb), .10), transparent 31%);
+}
+
+.page-home .hero h1,
+.page-about .about-team__header h1,
+.page-contact .contact-card h1,
+.page-features .features-page__header h1 {
+    color: var(--title);
+}
+
+.page-home .platform-download__primary {
+    border-color: var(--accent-border);
+    background: var(--accent);
+    color: var(--accent-text);
+    box-shadow: 0 18px 46px rgba(0, 0, 0, .28), inset 0 1px 0 rgba(255, 255, 255, .16);
+}
+
+.page-home .platform-download__primary:hover {
+    border-color: var(--accent);
+    background: var(--accent-hover);
+}
+
+.page-home .platform-download__primary small {
+    color: rgba(26, 20, 8, .72);
+}
+
+.page-home .platform-download__primary > b {
+    border-color: rgba(26, 20, 8, .35);
+    background: rgba(26, 20, 8, .09);
+}
+
+.page-home .platform-download__dialog {
+    border-color: var(--line-strong);
+    background: var(--panel);
+    color: var(--text);
+}
+
+.page-home .platform-download__dialog::backdrop {
+    background: rgba(10, 10, 13, .78);
+}
+
+.page-home .platform-download__dialog-header,
+.page-home .platform-download__mac-choices,
+.page-home .platform-download__options > a,
+.page-home .platform-download__mac-option > button {
+    border-color: var(--line);
+}
+
+.page-home .platform-download__dialog-header h2,
+.page-home .platform-download__options > a,
+.page-home .platform-download__mac-option > button,
+.page-home .platform-download__mac-choices a {
+    color: var(--text);
+}
+
+.page-home .platform-download__dialog-header > button,
+.page-home .platform-download__mac-choices a {
+    border-color: var(--line);
+    background: var(--panel-2);
+}
+
+.page-home .platform-download__dialog-header > button:hover,
+.page-home .platform-download__mac-choices a:hover {
+    border-color: var(--accent-border);
+}
+
+.page-home .platform-download__options,
+.page-home .platform-download__mac-choices {
+    background: var(--bg-soft);
+}
+
+.page-home .platform-download__options > a:hover,
+.page-home .platform-download__mac-option > button:hover {
+    background: #211b10;
+}
+
+.page-home .hero-rail,
+.page-home .hero-tile,
+.page-home .home-viewer__frame {
+    border-color: var(--line);
+    background-color: var(--panel);
+}
+
+.page-home .hero-tile::before {
+    background:
+        linear-gradient(135deg, transparent 0 62%, rgba(var(--accent-rgb), .10) 62% 63%, transparent 63%),
+        repeating-radial-gradient(ellipse at 10% 85%, transparent 0, transparent 10px, rgba(var(--accent-rgb), .13) 11px, transparent 12px);
+}
+
+.page-home .hero-tile:hover {
+    border-color: var(--accent-border);
+    background-color: #211b10;
+}
+
+.page-home .hero-tile__arrow {
+    color: var(--accent);
+}
+
+.page-home .hero-tile:hover .hero-tile__icon img,
+.page-home .hero-tile:focus-visible .hero-tile__icon img {
+    filter: brightness(0) invert(1) drop-shadow(0 0 16px rgba(var(--accent-rgb), .35));
+}
+
+.page-home .home-facts,
+.page-home .home-facts > div {
+    border-color: var(--line);
+}
+
+.page-about .about-team {
+    background:
+        radial-gradient(circle at 82% 18%, rgba(var(--accent-rgb), .08), transparent 22%),
+        radial-gradient(circle at 16% 4%, rgba(92, 92, 110, .10), transparent 28%),
+        linear-gradient(180deg, #12121a 0%, var(--bg) 46%, var(--bg) 100%);
+}
+
+.page-about .about-team__grid-bg {
+    background-image:
+        linear-gradient(rgba(var(--accent-rgb), .035) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(var(--accent-rgb), .035) 1px, transparent 1px);
+}
+
+.page-about .about-person__media {
+    border-color: var(--line);
+    background:
+        radial-gradient(circle at 68% 24%, rgba(var(--accent-rgb), .08), transparent 24%),
+        linear-gradient(155deg, var(--panel-2) 0%, var(--panel) 58%, var(--bg) 100%);
+}
+
+.page-about .about-person__media::after {
+    background:
+        linear-gradient(180deg, transparent 46%, rgba(10, 10, 13, .08) 64%, rgba(10, 10, 13, .56) 100%),
+        linear-gradient(90deg, rgba(var(--accent-rgb), .035) 1px, transparent 1px),
+        linear-gradient(rgba(var(--accent-rgb), .035) 1px, transparent 1px);
+}
+
+body.page-contact {
+    background:
+        radial-gradient(circle at 82% 14%, rgba(var(--accent-rgb), .12), transparent 24%),
+        radial-gradient(circle at 13% 88%, rgba(92, 92, 110, .11), transparent 28%),
+        linear-gradient(145deg, #12121a 0%, var(--bg) 54%, var(--bg) 100%);
+}
+
+.page-contact .contact-page {
+    background: transparent;
+}
+
+.page-contact .contact-page__grid,
+.page-features .features-page__grid {
+    background-image:
+        linear-gradient(rgba(var(--accent-rgb), .03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(var(--accent-rgb), .03) 1px, transparent 1px);
+}
+
+.page-contact .contact-card {
+    border-color: var(--line);
+    background: linear-gradient(145deg, var(--panel) 0%, var(--bg-soft) 100%);
+    box-shadow: 0 28px 80px rgba(0, 0, 0, .24);
+}
+
+.page-contact .contact-form label {
+    color: var(--title);
+}
+
+.page-contact .contact-form input:not([type="hidden"]),
+.page-contact .contact-form textarea {
+    border-color: var(--line);
+    color: var(--text);
+    background: var(--panel-2);
+}
+
+.page-contact .contact-form input:focus,
+.page-contact .contact-form textarea:focus {
+    border-color: var(--focus);
+    background: var(--panel-2);
+    box-shadow: 0 0 0 3px rgba(93, 111, 138, .24);
+}
+
+.page-features .features-page {
+    background:
+        radial-gradient(circle at 82% 8%, rgba(var(--accent-rgb), .08), transparent 24%),
+        linear-gradient(160deg, #17171f 0%, #111116 54%, #0d0d11 100%);
+}
+
+.page-media .media-page {
+    background:
+        radial-gradient(circle at 16% 14%, rgba(var(--accent-rgb), .1), transparent 28%),
+        linear-gradient(165deg, #101016 0%, #0c0c11 58%, #09090d 100%);
+}
+
+.page-features .feature-section h2,
+.page-advantages .feature-section h2,
+.page-media .feature-section h2 {
+    color: var(--title);
+}

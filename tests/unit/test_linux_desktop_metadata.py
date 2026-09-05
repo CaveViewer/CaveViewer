@@ -119,7 +119,9 @@ def test_linux_metadata_uses_one_stable_application_id():
     for url in screenshot_urls:
         assert url is not None
         assert url.startswith(RAW_GITHUB_MAIN_URL)
-        local_path = REPOSITORY_ROOT / url.removeprefix(RAW_GITHUB_MAIN_URL)
+        relative_path = url.removeprefix(RAW_GITHUB_MAIN_URL)
+        assert relative_path.startswith("docs/previous-site/images/")
+        local_path = REPOSITORY_ROOT / relative_path
         assert local_path.is_file(), url
 
 

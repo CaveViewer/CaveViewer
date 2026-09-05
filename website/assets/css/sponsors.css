@@ -1,0 +1,141 @@
+.page-sponsors main { overflow: hidden; }
+
+.sponsors-page {
+    position: relative;
+    padding: calc(var(--header-h) + clamp(40px, 5vw, 72px)) 0 122px;
+    background:
+        radial-gradient(circle at 82% 18%, rgba(46,158,198,.10), transparent 22%),
+        radial-gradient(circle at 16% 4%, rgba(25,92,117,.08), transparent 28%),
+        linear-gradient(180deg, #06121a 0%, #03080c 46%, #03080c 100%);
+}
+
+.sponsors-page__grid-bg {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    opacity: .22;
+    background-image:
+        linear-gradient(rgba(81,199,243,.04) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(81,199,243,.04) 1px, transparent 1px);
+    background-size: 68px 68px;
+    -webkit-mask-image: linear-gradient(180deg, rgba(0,0,0,.72), transparent 72%);
+    mask-image: linear-gradient(180deg, rgba(0,0,0,.72), transparent 72%);
+}
+
+.sponsors-page .shell { position: relative; z-index: 1; }
+
+/* Automatically adds columns and rows as sponsors are added to the markup. */
+.sponsors-page__grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr));
+    gap: clamp(14px, 1.6vw, 26px);
+    align-items: stretch;
+}
+
+.sponsor-card {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: clamp(250px, 25vw, 350px);
+    overflow: hidden;
+    outline: 1px solid rgba(145,211,235,.12);
+    outline-offset: -1px;
+    background:
+        radial-gradient(circle at 78% 18%, rgba(81,199,243,.08), transparent 34%),
+        linear-gradient(155deg, #0a1921 0%, #061118 58%, #03090d 100%);
+    color: inherit;
+    text-decoration: none;
+    transition: outline-color .18s ease, background .18s ease;
+}
+
+.sponsor-card:hover {
+    outline-color: rgba(var(--accent-rgb), .58);
+    background:
+        radial-gradient(circle at 78% 18%, rgba(var(--accent-rgb), .11), transparent 34%),
+        linear-gradient(155deg, #0a1921 0%, #061118 58%, #03090d 100%);
+}
+
+.sponsor-card:focus-visible {
+    outline: 2px solid rgba(242,217,140,.82);
+    outline-offset: 4px;
+}
+
+.sponsor-card__media {
+    position: relative;
+    display: grid;
+    flex: 1;
+    min-height: clamp(170px, 18vw, 246px);
+    padding: clamp(28px, 5vw, 60px);
+    overflow: hidden;
+    place-items: center;
+    border-bottom: 1px solid rgba(145,211,235,.12);
+}
+
+.sponsor-card__media::after {
+    position: absolute;
+    inset: 0;
+    content: "";
+    pointer-events: none;
+    background:
+        radial-gradient(circle at 50% 50%, rgba(81,199,243,.08), transparent 48%),
+        linear-gradient(90deg, rgba(81,199,243,.045) 1px, transparent 1px),
+        linear-gradient(rgba(81,199,243,.045) 1px, transparent 1px);
+    background-size: auto, 44px 44px, 44px 44px;
+}
+
+.sponsor-card__media picture {
+    position: relative;
+    z-index: 1;
+    display: block;
+    max-width: 100%;
+}
+
+.sponsor-card__media img {
+    display: block;
+    width: auto;
+    height: auto;
+    max-width: 100%;
+}
+
+.sponsor-card--kiss .sponsor-card__media img { width: min(100%, 395px); }
+
+.sponsor-card--xdeep .sponsor-card__media img { width: min(100%, 190px); }
+
+.sponsor-card--seal .sponsor-card__media img { width: min(100%, 360px); }
+
+.sponsor-card--agisoft .sponsor-card__media img { width: min(100%, 220px); }
+
+.sponsor-card--synergy .sponsor-card__media img {
+    width: min(100%, 310px);
+    filter: brightness(2.1);
+}
+
+.sponsor-card__caption {
+    padding: 18px 20px 22px;
+}
+
+.sponsor-card__caption h2 {
+    margin: 0;
+    color: #f1f6f7;
+    font-family: var(--display);
+    font-size: clamp(21px, 1.8vw, 28px);
+    font-weight: var(--display-weight);
+    line-height: 1.05;
+    letter-spacing: -.035em;
+}
+
+.sponsor-card__caption p {
+    margin: 8px 0 0;
+    color: var(--cyan);
+    font-size: var(--small-text-min);
+    font-weight: 750;
+    line-height: 1.5;
+    letter-spacing: .11em;
+    text-transform: uppercase;
+}
+
+@media (max-width: 620px) {
+    .sponsors-page { padding: calc(var(--header-h) + 32px) 0 78px; }
+
+    .sponsor-card__caption { padding: 16px 18px 20px; }
+}

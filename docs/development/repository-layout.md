@@ -176,9 +176,8 @@ CaveViewer/
 │   └── integration/
 ├── benchmarks/
 ├── docs/
-│   ├── index.html
-│   ├── images/
-│   └── development/
+│   ├── development/
+│   └── previous-site/
 ├── packaging/
 │   ├── linux/
 │   ├── pyinstaller/
@@ -186,6 +185,11 @@ CaveViewer/
 ├── scripts/
 │   └── benchmark/
 ├── updates/
+├── website/
+│   ├── assets/
+│   ├── storage/
+│   ├── scripts/
+│   └── tests/
 └── .github/
     └── workflows/
 ```
@@ -196,9 +200,12 @@ tests and review.
 
 ## Paths that remain stable
 
-- Keep `docs/index.html` and `docs/images/` at the documentation root so the
-  dedicated GitHub Pages workflow can publish `docs/` without transforming or
-  copying the site.
+- Keep the public source routes, `assets/`, `storage/`, and `CNAME` under
+  `website/`. The Pages artifact is built only from those sources plus
+  `docs/development/` at its existing `/development/` path.
+- Keep `docs/previous-site/` as the tracked, non-published archive of the
+  former landing page and images. It is excluded from the Pages artifact and
+  may be used for comparison or an explicitly approved recovery.
 - Keep `updates/<platform>/...` paths stable because installed clients resolve
   those public URLs. Windows uses `updates/windows/`; Linux uses
   `updates/linux/x86_64/`; macOS uses `updates/macos/{arm64,x86_64}/`. Retain
