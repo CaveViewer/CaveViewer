@@ -1,0 +1,551 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#0a0a0d">
+    <title>Docs — CaveViewer</title>
+    <meta name="description" content="CaveViewer system requirements, installation guidance, and map-performance tuning reference.">
+    <meta name="robots" content="noindex">
+    <link rel="stylesheet" href="assets/css/global.css?v=20260826-7">
+    <link rel="stylesheet" href="assets/css/navigation-dropdown.css?v=20260905-1">
+    <link rel="stylesheet" href="assets/css/readability.css">
+    <link rel="stylesheet" href="assets/css/docs.css?v=20260826-2">
+    <link rel="stylesheet" href="assets/css/app-theme.css">
+</head>
+<body class="page-docs">
+<a class="skip-link" href="#main-content">Skip to main content</a>
+<header class="site-header" data-site-header>
+    <div class="site-header__inner">
+        <a class="site-home" href="index.html" aria-label="CaveViewer home"><img class="site-home__mark" src="assets/icons/caveviewer-logo-faceted-rim-beam.svg" width="64" height="32" alt=""></a>
+        <nav class="primary-nav" aria-label="Primary navigation">
+            <a href="advantage.html">Why CaveViewer</a>
+            <details class="primary-nav__dropdown">
+                <summary aria-current="page">Docs</summary>
+                <div class="primary-nav__dropdown-menu">
+                    <a href="docs.html#system-requirements">System Requirements</a>
+                    <a href="docs.html#installation">Installation</a>
+                    <a href="docs.html#before-you-change-anything">Performance Tuning</a>
+                    <a href="docs.html#troubleshooting-by-symptom">Troubleshooting</a>
+                </div>
+            </details>
+            <details class="primary-nav__dropdown">
+                <summary>Team &amp; Partners</summary>
+                <div class="primary-nav__dropdown-menu">
+                    <a href="about.html">Team</a>
+                    <a href="media.html">Mapping Projects</a>
+                    <a href="sponsors.html">Sponsors</a>
+                </div>
+            </details>
+            <a href="contact.html">Contact</a>
+        </nav>
+        <a class="header-download" href="docs.html#installation" aria-label="Download CaveViewer"><span class="header-download__label">Download</span><svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path d="M12 3v11m0 0 4-4m-4 4-4-4M5 17v3h14v-3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></a>
+        <button class="menu-toggle" type="button" aria-label="Open navigation" aria-expanded="false" data-menu-toggle>
+            <span></span><span></span><span class="sr-only">Toggle navigation</span>
+        </button>
+    </div>
+</header>
+<main id="main-content" tabindex="-1">
+    <section class="docs-page" aria-labelledby="docs-title">
+        <div class="docs-page__grid" aria-hidden="true"></div>
+        <div class="shell docs-layout">
+<article class="docs-article">
+<h1 class="sr-only" id="docs-title">CaveViewer Documentation</h1>
+<h2 id="system-requirements">System Requirements and Compatibility</h2>
+<p>CaveViewer is a desktop application for recent Windows, macOS, and
+Linux computers. A dedicated graphics card is not required, although
+faster hardware can load and display complex maps more quickly.</p>
+<table class="docs-requirements-table docs-mobile-table--requirements">
+<thead>
+<tr class="header">
+<th>Area</th>
+<th>Guidance</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><strong>Operating system</strong></td>
+<td>Windows 10 or 11, macOS on Apple silicon or Intel, or Linux on
+x86_64. CaveViewer is not designed for phones or tablets.</td>
+</tr>
+<tr class="even">
+<td><strong>Memory</strong></td>
+<td>16 GB of RAM is a practical starting point. Available memory limits
+how much nearby geometry and texture data can remain loaded.</td>
+</tr>
+<tr class="odd">
+<td><strong>Storage</strong></td>
+<td>Allow roughly 256 GB of free disk space when working with large
+source maps. CaveViewer builds a local cache during the first import,
+so the source files and generated cache both need room.</td>
+</tr>
+<tr class="even">
+<td><strong>Graphics</strong></td>
+<td>Integrated graphics are supported. CaveViewer adjusts map residency
+to its detected graphics-memory budget; very large textures may appear
+softer when a smaller size is needed to stay within that budget.</td>
+</tr>
+<tr class="odd">
+<td><strong>Map formats</strong></td>
+<td>Open a textured OBJ map with its matching MTL and texture files, or
+a GLB map. Keep all companion files together and accessible when
+importing or rebuilding a cache.</td>
+</tr>
+</tbody>
+</table>
+<p>Performance depends on the map's physical scale, geometry density,
+texture sizes, and the computer running CaveViewer. The defaults suit
+most systems; use the tuning guidance below only when you encounter a
+specific limitation.</p>
+<h2 id="installation">Installation</h2>
+<!-- installation-guidance:start -->
+<!-- Generated from assets/data/release.json by scripts/sync_release.py. -->
+<div class="docs-install-grid">
+<section class="docs-install-card" aria-labelledby="install-windows">
+<h3 id="install-windows">Windows</h3>
+<p>Run the setup file. Windows may identify CaveViewer as an unrecognized app. Microsoft does not yet recognize its publisher. Confirm that the installer came from the official CaveViewer site before proceeding. Depending on your Windows version, select More info → Run anyway.</p>
+<div class="docs-install-card__actions">
+<p class="docs-install-card__downloads"><a href="https://github.com/CaveViewer/CaveViewer/releases/download/v1.0.98/CaveViewer-1.0.98-windows.exe" aria-label="Download CaveViewer for Windows"><span>Windows</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v11m0 0 4-4m-4 4-4-4M5 17v3h14v-3"/></svg></a></p>
+</div>
+</section>
+<section class="docs-install-card" aria-labelledby="install-macos">
+<h3 id="install-macos">macOS</h3>
+<p>Choose the download for Apple silicon or Intel Mac, then drag CaveViewer into Applications. macOS may be unable to verify CaveViewer. Apple does not yet recognize its developer. After confirming the download source, go to System Settings → Privacy &amp; Security → Open Anyway. Do not override a warning that says the app will damage your computer.</p>
+<div class="docs-install-card__actions">
+<p class="docs-install-card__downloads"><a href="https://github.com/CaveViewer/CaveViewer/releases/download/v1.0.98/CaveViewer-1.0.98-macos-arm64.dmg" aria-label="Download CaveViewer for Apple silicon"><span>Apple silicon</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v11m0 0 4-4m-4 4-4-4M5 17v3h14v-3"/></svg></a><a href="https://github.com/CaveViewer/CaveViewer/releases/download/v1.0.98/CaveViewer-1.0.98-macos-x86_64.dmg" aria-label="Download CaveViewer for Intel Mac"><span>Intel Mac</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v11m0 0 4-4m-4 4-4-4M5 17v3h14v-3"/></svg></a></p>
+</div>
+</section>
+<section class="docs-install-card" aria-labelledby="install-linux">
+<h3 id="install-linux">Linux</h3>
+<p>Allow the x86_64 AppImage to run, then open it. Linux does not display an equivalent publisher-verification warning.</p>
+<div class="docs-install-card__actions">
+<p class="docs-install-card__downloads"><a href="https://github.com/CaveViewer/CaveViewer/releases/download/v1.0.98/CaveViewer-1.0.98-x86_64.AppImage" aria-label="Download CaveViewer for Linux"><span>Linux</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v11m0 0 4-4m-4 4-4-4M5 17v3h14v-3"/></svg></a></p>
+</div>
+</section>
+</div>
+<!-- installation-guidance:end -->
+<h2 id="before-you-change-anything">Before You Tune</h2>
+<p>Open <strong>Preferences</strong> from the CaveViewer home screen.
+The settings covered here are divided between two tabs:</p>
+<ul>
+<li><strong>Import</strong> controls how a map cache is built. Changes
+affect new imports. To apply them to an existing map, select the map in
+<strong>Map Library</strong> and choose <strong>Rebuild
+cache</strong>.</li>
+<li><strong>Streaming</strong> controls how the compiled map is loaded
+and sent to the graphics processor while you explore it. These settings
+do not require a cache rebuild.</li>
+</ul>
+<p>Change one setting at a time and test the same part of the map after
+each change. This makes it much easier to identify what helped.</p>
+<h2 id="quick-recommendations">Quick Recommendations</h2>
+<table class="docs-mobile-table--recommendations">
+<thead>
+<tr class="header">
+<th>What you notice</th>
+<th>Change first</th>
+<th>Direction</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>CaveViewer uses too much system memory</td>
+<td><strong>System RAM target</strong></td>
+<td>Lower it</td>
+</tr>
+<tr class="even">
+<td>Textures or geometry use too much graphics memory</td>
+<td><strong>GPU memory target</strong></td>
+<td>Lower it</td>
+</tr>
+<tr class="odd">
+<td>Graphics-memory detection appears wrong</td>
+<td><strong>GPU memory override</strong></td>
+<td>Enter a conservative value in GB</td>
+</tr>
+<tr class="even">
+<td>Movement pauses while new areas appear</td>
+<td><strong>Upload budget</strong></td>
+<td>Lower it gradually</td>
+</tr>
+<tr class="odd">
+<td>New areas take too long to appear</td>
+<td><strong>Upload budget</strong></td>
+<td>Raise it gradually</td>
+</tr>
+<tr class="even">
+<td>Import makes the computer unresponsive</td>
+<td><strong>Cache-building worker limit</strong></td>
+<td>Lower it</td>
+</tr>
+<tr class="odd">
+<td>Import is slow and the computer has spare CPU and memory</td>
+<td><strong>Cache-building worker limit</strong></td>
+<td>Raise it gradually</td>
+</tr>
+<tr class="even">
+<td>Tight or winding passages load inefficiently</td>
+<td><strong>Import chunk size</strong></td>
+<td>Try a smaller value, then rebuild</td>
+</tr>
+<tr class="odd">
+<td>Long, open passages contain too many small chunks</td>
+<td><strong>Import chunk size</strong></td>
+<td>Try a larger value, then rebuild</td>
+</tr>
+<tr class="even">
+<td>A dense map causes noticeable upload stalls</td>
+<td><strong>Max upload group size</strong></td>
+<td>Lower it, then rebuild</td>
+</tr>
+</tbody>
+</table>
+<h2 id="import-settings">Import Tuning</h2>
+<figure class="docs-figure">
+<picture>
+<source type="image/webp" srcset="assets/images/features/preferences-import-800.webp 800w, assets/images/features/preferences-import-1600.webp 1600w" sizes="(max-width: 960px) calc(100vw - 48px), 880px">
+<img src="assets/images/features/preferences-import.png" width="2420" height="1634" loading="lazy" decoding="async" alt="CaveViewer Preferences with the Import tab selected, showing cache and worker settings">
+</picture>
+<figcaption>The Import preferences control cache structure, upload grouping, and cache-building workload.</figcaption>
+</figure>
+<p>Import settings determine the structure of the generated map cache.
+They apply to the next map you import. To use them with a map that is
+already in the Map Library, choose <strong>Rebuild cache</strong> for
+that map.</p>
+<p>Rebuilding is safe: CaveViewer prepares the replacement separately
+and keeps the existing cache available until the new one is complete.
+Keep the original OBJ or GLB file and its texture files accessible;
+CaveViewer needs the source to rebuild the cache.</p>
+<h3 id="map-structure-and-upload-size">Chunk and Upload Size</h3>
+<table class="docs-mobile-table--settings">
+<thead>
+<tr class="header">
+<th>Setting</th>
+<th style="text-align: right;">Default</th>
+<th>What it controls</th>
+<th>Guidance</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><strong>Import chunk size</strong></td>
+<td style="text-align: right;">50</td>
+<td>Edge length of the spatial regions created during import. The value
+uses the map's coordinate units.</td>
+<td>Smaller chunks improve fine-grained loading and culling in tight,
+winding caves but create more chunks. Larger chunks reduce chunk count
+in long, open passages but make each chunk heavier to load and
+retain.</td>
+</tr>
+<tr class="even">
+<td><strong>Max upload group size</strong></td>
+<td style="text-align: right;">16 MB</td>
+<td>Maximum geometry-buffer payload for dense material groups.</td>
+<td>Lower it if dense geometry causes noticeable pauses during upload. A
+lower value creates more, smaller upload units.</td>
+</tr>
+</tbody>
+</table>
+<p>There is no universally best chunk size. It depends on the scale of
+the source model, passage geometry, material layout, and the target
+computer. Start at 50 and test a smaller or larger value only when the
+map's behavior suggests it.</p>
+<h3 id="obj-import-workload">OBJ Import Workload</h3>
+<p>These settings affect OBJ files. GLB imports do not use the
+OBJ-specific controls.</p>
+<table class="docs-mobile-table--settings">
+<thead>
+<tr class="header">
+<th>Setting</th>
+<th style="text-align: right;">Default</th>
+<th>What it controls</th>
+<th>Guidance</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><strong>.obj scan throttle</strong></td>
+<td style="text-align: right;">0 ms on macOS/Linux; 1 ms on Windows</td>
+<td>Brief pauses while CaveViewer scans a large OBJ file.</td>
+<td>Increase it if scanning monopolizes disk or CPU resources. Lower it
+for maximum import speed when the computer remains responsive.</td>
+</tr>
+<tr class="even">
+<td><strong>Faces per .obj batch</strong></td>
+<td style="text-align: right;">200 thousand</td>
+<td>Number of triangulated faces processed in one batch.</td>
+<td>Lower it to reduce temporary memory pressure. Raise it cautiously
+when plenty of memory is available and import overhead is
+significant.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="cache-building">Cache Building</h3>
+<table class="docs-mobile-table--settings">
+<thead>
+<tr class="header">
+<th>Setting</th>
+<th style="text-align: right;">Default</th>
+<th>What it controls</th>
+<th>Guidance</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><strong>Cache-building worker limit</strong></td>
+<td style="text-align: right;">1</td>
+<td>Maximum number of worker threads used to build cache chunks.</td>
+<td>Increase gradually to speed up imports on systems with spare CPU,
+memory, and disk bandwidth. Reduce it if imports fail or make the system
+unresponsive.</td>
+</tr>
+<tr class="even">
+<td><strong>Cache-build CPUs to keep free</strong></td>
+<td style="text-align: right;">2</td>
+<td>Logical processors reserved while the cache is built.</td>
+<td>Raise it to preserve responsiveness. Lower it only when import speed
+matters more than running other work.</td>
+</tr>
+</tbody>
+</table>
+<p>More workers are not always faster. Large photogrammetry models can
+become limited by memory or storage speed, and excessive parallelism can
+make the entire import slower.</p>
+<h2 id="streaming-settings">Streaming Tuning</h2>
+<figure class="docs-figure">
+<picture>
+<source type="image/webp" srcset="assets/images/features/preferences-streaming-800.webp 800w, assets/images/features/preferences-streaming-1600.webp 1600w" sizes="(max-width: 960px) calc(100vw - 48px), 880px">
+<img src="assets/images/features/preferences-streaming.png" width="2420" height="1634" loading="lazy" decoding="async" alt="CaveViewer Preferences with the Streaming tab selected, showing memory, loading, and upload settings">
+</picture>
+<figcaption>The Streaming preferences control memory use, background loading, and per-frame uploads.</figcaption>
+</figure>
+<p>Streaming settings affect maps immediately after you apply them. They
+control memory use, background loading, and how much upload work
+CaveViewer may perform during each rendered frame.</p>
+<h3 id="memory">Memory Limits</h3>
+<table class="docs-mobile-table--settings">
+<thead>
+<tr class="header">
+<th>Setting</th>
+<th style="text-align: right;">Default</th>
+<th>What it controls</th>
+<th>When to change it</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><strong>System RAM target</strong></td>
+<td style="text-align: right;">8%</td>
+<td>Percentage of available system memory used for loaded map
+chunks.</td>
+<td>Lower it if CaveViewer competes with other applications or the
+system begins swapping. Raise it cautiously if you have abundant memory
+and nearby geometry reloads too often.</td>
+</tr>
+<tr class="even">
+<td><strong>GPU memory target</strong></td>
+<td style="text-align: right;">70%</td>
+<td>Percentage of detected graphics memory used for textures and
+geometry.</td>
+<td>Lower it on integrated graphics, virtual machines, or systems
+showing graphics-memory pressure.</td>
+</tr>
+<tr class="odd">
+<td><strong>GPU memory override</strong></td>
+<td style="text-align: right;">Automatic</td>
+<td>Manual ceiling used when CaveViewer cannot determine the usable
+graphics-memory budget correctly.</td>
+<td>Leave blank unless detection is unavailable or clearly wrong. Enter
+the usable budget in GB, not the total system RAM.</td>
+</tr>
+</tbody>
+</table>
+<p>Lowering a memory target does not reduce the selected viewing
+distance. It limits the amount of work that can remain resident and may
+cause map data to be reloaded more often.</p>
+<h3 id="background-loading">Background Loading</h3>
+<table class="docs-mobile-table--settings">
+<thead>
+<tr class="header">
+<th>Setting</th>
+<th style="text-align: right;">Default</th>
+<th>What it controls</th>
+<th>Guidance</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><strong>Loading worker limit</strong></td>
+<td style="text-align: right;">2</td>
+<td>Maximum number of background threads that prepare map chunks.</td>
+<td>The default is intentionally conservative. Increase it only when
+loading is slow and the computer has spare CPU and memory.</td>
+</tr>
+<tr class="even">
+<td><strong>Loading CPUs to keep free</strong></td>
+<td style="text-align: right;">3</td>
+<td>Logical processors reserved for CaveViewer, the operating system,
+and other work.</td>
+<td>Raise it if background loading makes the computer feel unresponsive.
+Lower it only on a high-core-count system with substantial
+headroom.</td>
+</tr>
+</tbody>
+</table>
+<p>CaveViewer may start with fewer loading workers than the configured
+maximum and increase the number only when available memory permits.</p>
+<h3 id="per-frame-uploads">Per-Frame Uploads</h3>
+<table class="docs-mobile-table--settings">
+<thead>
+<tr class="header">
+<th>Setting</th>
+<th style="text-align: right;">Default</th>
+<th>What it controls</th>
+<th>Guidance</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><strong>Chunk uploads per frame</strong></td>
+<td style="text-align: right;">1</td>
+<td>Number of ready chunks allowed to advance during a frame.</td>
+<td>Keep this at 1 unless map loading is clearly too slow and frame rate
+remains stable.</td>
+</tr>
+<tr class="even">
+<td><strong>Upload operations per frame</strong></td>
+<td style="text-align: right;">1</td>
+<td>Number of geometry or texture upload slices advanced from a ready
+chunk during a frame.</td>
+<td>Keep this at 1 on laptops, integrated graphics, and virtual
+machines. Increase gradually on faster dedicated GPUs.</td>
+</tr>
+<tr class="odd">
+<td><strong>Upload budget</strong></td>
+<td style="text-align: right;">3 ms</td>
+<td>Soft time target for map uploads during each frame.</td>
+<td>Use 1–3 ms for constrained systems and roughly 2–5 ms for typical
+desktops. Lower values favor smooth movement; higher values fill in the
+map faster.</td>
+</tr>
+</tbody>
+</table>
+<p>During initial loading, CaveViewer may temporarily exceed the normal
+per-frame limits while the loading screen hides the map. It may also
+briefly accelerate uploads when nearby chunks are ready but not yet
+visible.</p>
+<h2 id="recommended-tuning-profiles">Tuning Profiles</h2>
+<p>These are starting points, not requirements. Leave settings not
+listed here at their defaults.</p>
+<h3
+id="constrained-laptop-integrated-graphics-or-virtual-machine">Constrained
+Hardware</h3>
+<ul>
+<li><strong>System RAM target:</strong> 6%</li>
+<li><strong>GPU memory target:</strong> 50%</li>
+<li><strong>Chunk uploads per frame:</strong> 1</li>
+<li><strong>Upload operations per frame:</strong> 1</li>
+<li><strong>Upload budget:</strong> 2 ms</li>
+<li><strong>Cache-building worker limit:</strong> 1</li>
+</ul>
+<p>This profile prioritizes stability and smooth interaction over rapid
+map fill-in.</p>
+<h3 id="typical-desktop">Typical Desktop</h3>
+<ul>
+<li>Begin with all defaults.</li>
+<li>If map sections appear too slowly while movement remains smooth,
+raise <strong>Upload budget</strong> from 3 ms toward 5 ms.</li>
+<li>If the system has ample CPU and memory, try <strong>Cache-building
+worker limit</strong> at 2 for the next import or rebuild.</li>
+</ul>
+<h3 id="high-performance-workstation">High-Performance Workstation</h3>
+<ul>
+<li>Begin with all defaults and measure before increasing anything.</li>
+<li>Increase <strong>Loading worker limit</strong>, <strong>Upload
+operations per frame</strong>, and <strong>Upload budget</strong> one
+step at a time.</li>
+<li>Increase <strong>Cache-building worker limit</strong> only while
+monitoring memory use and import responsiveness.</li>
+</ul>
+<p>Higher values can reduce waiting, but they can also produce
+frame-time spikes or overwhelm storage. The best configuration is the
+lowest setting that removes the bottleneck you can actually see.</p>
+<h2 id="restore-the-defaults">Restore Default Settings</h2>
+<p>Don’t worry about messing up your preferences—you can always save, import, and restore them in the app. Note that platform-specific settings, such as directory paths, will not be restored.</p>
+<figure class="docs-figure">
+<picture>
+<source type="image/webp" srcset="assets/images/features/preferences-backup-800.webp 800w, assets/images/features/preferences-backup-1600.webp 1600w" sizes="(max-width: 960px) calc(100vw - 48px), 880px">
+<img src="assets/images/features/preferences-backup.png" width="2420" height="1634" loading="lazy" decoding="async" alt="CaveViewer Preferences with the Backup tab selected, showing controls to save, load, and restore preferences">
+</picture>
+</figure>
+<p>After restoring Import defaults, rebuild a map only if you previously
+rebuilt it with different Import settings. Streaming defaults take
+effect without rebuilding the cache.</p>
+<h2 id="troubleshooting-by-symptom">Troubleshooting</h2>
+<h3 id="movement-stutters-as-new-areas-load">Movement Stutters as New
+Areas Load</h3>
+<ol type="1">
+<li>Reduce <strong>Upload budget</strong> toward 2 ms, then 1 ms if
+needed.</li>
+<li>Keep <strong>Chunk uploads per frame</strong> and <strong>Upload
+operations per frame</strong> at 1.</li>
+<li>If graphics memory is constrained, lower <strong>GPU memory
+target</strong>.</li>
+<li>For one unusually dense map, lower <strong>Max upload group
+size</strong> and rebuild its cache.</li>
+</ol>
+<h3 id="geometry-or-textures-appear-too-slowly">Geometry or Textures
+Appear Too Slowly</h3>
+<ol type="1">
+<li>Raise <strong>Upload budget</strong> one millisecond at a time.</li>
+<li>If movement remains smooth, try raising <strong>Upload operations
+per frame</strong> by one.</li>
+<li>If CPU and memory use are low, raise <strong>Loading worker
+limit</strong> by one.</li>
+<li>Stop when loading becomes acceptable; aggressive values can trade
+faster fill-in for uneven movement.</li>
+</ol>
+<h3 id="import-is-too-slow">Import Is Too Slow</h3>
+<ol type="1">
+<li>Confirm that the computer still has spare CPU, memory, and disk
+capacity.</li>
+<li>Increase <strong>Cache-building worker limit</strong> from 1 to
+2.</li>
+<li>For OBJ maps, consider a larger <strong>Faces per .obj
+batch</strong> only if plenty of memory remains available.</li>
+<li>Avoid changing chunk size solely to shorten import time; chunk size
+also changes runtime behavior.</li>
+</ol>
+<h3 id="import-fails-or-the-computer-becomes-unresponsive">Import Fails
+or the Computer Becomes Unresponsive</h3>
+<ol type="1">
+<li>Set <strong>Cache-building worker limit</strong> to 1.</li>
+<li>For OBJ maps, lower <strong>Faces per .obj batch</strong>.</li>
+<li>Increase <strong>.obj scan throttle</strong> slightly if scanning
+overwhelms the system.</li>
+<li>Make sure the cache location has enough free disk space and is
+writable.</li>
+</ol>
+<h3 id="one-map-performs-poorly-while-other-maps-are-smooth">One Map
+Performs Poorly While Other Maps Are Smooth</h3>
+<p>The problem is probably related to that map's chunk layout or
+geometry density rather than the global streaming configuration. Try a
+different <strong>Import chunk size</strong> or a smaller <strong>Max
+upload group size</strong>, then rebuild only that map's cache.</p>
+<h3 id="getting-help">Getting Help</h3>
+<p>Open <strong>Help</strong> and choose the <strong>Troubleshooting</strong> tab to inspect the latest application log. Copy any error message you find, then include it with a short description of the problem when you <a href="contact.html">contact support</a>.</p>
+<figure class="docs-figure">
+<picture>
+<source type="image/webp" srcset="assets/images/features/help-troubleshooting-800.webp 800w, assets/images/features/help-troubleshooting-1600.webp 1600w" sizes="(max-width: 960px) calc(100vw - 48px), 880px">
+<img src="assets/images/features/help-troubleshooting.png" width="2420" height="1634" loading="lazy" decoding="async" alt="CaveViewer Help with the Troubleshooting tab selected, showing the latest application log and last error controls">
+</picture>
+</figure>
+
+            </article>
+        </div>
+    </section>
+</main>
+<footer class="site-endcap"><div class="site-endcap__inner"><span class="site-endcap__copyright">&copy; 2026 CaveViewer</span><a class="site-endcap__partner" href="https://www.bottomlineprojects.com/">Bottomline Projects, Florida Chapter</a></div></footer>
+<script src="assets/js/app.js?v=20260826" defer></script>
+</body>
+</html>

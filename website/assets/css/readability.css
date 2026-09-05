@@ -1,0 +1,19 @@
+/* Shared content scale and gutters. Page CSS owns component-specific layout. */
+body {
+    font-size: 16px;
+    line-height: 1.6;
+}
+
+@media (max-width: 760px) {
+    .shell,
+    .site-header__inner {
+        width: min(calc(100% - 32px), var(--max));
+    }
+}
+
+@media (max-width: 420px) {
+    .shell,
+    .site-header__inner {
+        width: min(calc(100% - 26px), var(--max));
+    }
+}

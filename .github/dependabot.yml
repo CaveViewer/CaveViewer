@@ -34,3 +34,20 @@ updates:
       - "release-security"
     commit-message:
       prefix: "build(deps)"
+
+  # Keep the isolated browser-test harness current.
+  - package-ecosystem: "npm"
+    directory: "/website/tests/browser"
+    schedule:
+      interval: "weekly"
+      day: "tuesday"
+      time: "09:00"
+      timezone: "Europe/Zagreb"
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 1
+    labels:
+      - "dependencies"
+      - "website"
+    commit-message:
+      prefix: "test(deps)"

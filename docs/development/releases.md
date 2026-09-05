@@ -552,14 +552,24 @@ whose architecture does not match the package target.
 ## GitHub Pages
 
 GitHub Pages deployment is independent from application releases. The
-[`Pages`](../../.github/workflows/pages.yml) workflow packages only `docs/` and
-deploys it through the `github-pages` environment. It runs after changes to
-`docs/**` or its own workflow reach `main`, and it can also be dispatched
-manually from `main`. Release workflows do not call or depend on it.
+[`Pages`](../../.github/workflows/pages.yml) workflow uses
+`website/scripts/build_site.py` to create a bounded artifact: the public site
+routes, `assets/`, `storage/`, and `CNAME`, plus the retained
+`docs/development/` tree at `/development/`. The prior-site archive under
+`docs/previous-site/`, tests, scripts, and repository metadata are excluded.
+It runs after changes to `website/**`, `docs/development/**`, or its own
+workflow reach `main`, and it can also be dispatched manually from `main`.
+Release workflows do not call or depend on it.
 
 Repository Pages settings must use **GitHub Actions** as the publishing source,
 not the legacy `main` branch `/docs` source. Keep the `github-pages` environment
 restricted to `main` so a manual dispatch from another branch cannot publish.
+
+The public website intentionally uses `noindex` and its maintained release
+chooser currently offers the Stable channel. Update
+`website/assets/data/release.json` after a selected Stable release, regenerate
+the marked HTML with `website/scripts/sync_release.py`, and run its `--check`
+mode before publishing any website change.
 
 ## Existing tags and channel separation
 

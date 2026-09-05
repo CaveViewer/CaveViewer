@@ -1,0 +1,6 @@
+_site/
+.work/
+__pycache__/
+tests/browser/node_modules/
+tests/browser/test-results/
+tests/browser/playwright-report/
