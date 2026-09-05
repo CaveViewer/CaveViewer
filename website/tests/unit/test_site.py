@@ -1032,8 +1032,12 @@ def test_wide_home_hero_has_explicit_art_direction_and_aligned_gutters() -> None
     assert "@media (min-width: 1600px) and (min-height: 900px)" in home_styles
     assert ".page-home .hero__content { align-items: center; }" in home_styles
     assert ".hero__media {\n    --hero-photo:" in home_styles
-    assert "100% 100%, 100% 100%, 100% 100%, 100% 100%, cover" in home_styles
-    assert "background-position: center, center, center, center, center;" in home_styles
+    assert "--hero-survey-mesh: url('../images/ginnie1-faceted-survey-mesh.svg');" in home_styles
+    assert "100% 100%, 100% 100%, 100% 100%, 100% 100%, cover, cover;" in home_styles
+    assert "background-position: center, center, center, center, center, center;" in home_styles
+    assert "60% center, 60% center;" in home_styles
+    assert "--hero-survey-mesh: none;" in home_styles
+    assert (SITE_ROOT / "assets/images/ginnie1-faceted-survey-mesh.svg").is_file()
     assert "clamp(176px, 11vw, 320px)" in home_styles
     assert "max(32px, calc((100% - var(--max)) / 2))" in home_styles
     assert "auto 100%" not in home_styles
