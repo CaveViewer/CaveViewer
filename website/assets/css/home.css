@@ -9,23 +9,27 @@
     overflow: hidden;
 }
 .hero__media {
-    --hero-photo: url('../images/ginnie1.jpg');
+    --hero-photo: url('../images/ginnie1-faceted-survey.png');
+    --hero-survey-mesh: url('../images/ginnie1-faceted-survey-mesh.svg');
     position: absolute;
     inset: 0;
     z-index: -4;
     /*
-       The first four layers feather the photograph into the hero background.
-       The photo remains the final layer so its rectangular edges never show.
+       The first four layers feather the artwork into the hero background while
+       keeping a dark left-side lane for the copy. The aligned survey mesh sits
+       over the cave face before the photo, so the fades still keep it subdued.
+       The image remains the final layer so its rectangular edges never show.
     */
     background-image:
-        linear-gradient(180deg, #02070a 0%, rgba(2,7,10,.98) 3%, rgba(2,7,10,.84) 8%, rgba(2,7,10,.42) 16%, transparent 28%),
-        linear-gradient(90deg, #02070a 0%, #02070a 21%, rgba(2,7,10,.94) 28%, rgba(2,7,10,.54) 36%, transparent 47%),
-        linear-gradient(0deg, #02070a 0%, rgba(2,7,10,.82) 8%, rgba(2,7,10,.34) 18%, transparent 29%),
-        linear-gradient(270deg, #02070a 0%, rgba(2,7,10,.74) 3%, rgba(2,7,10,.20) 8%, transparent 13%),
+        linear-gradient(180deg, #02070a 0%, rgba(2,7,10,.96) 3%, rgba(2,7,10,.70) 8%, rgba(2,7,10,.26) 16%, transparent 28%),
+        linear-gradient(90deg, #02070a 0%, #02070a 19%, rgba(2,7,10,.90) 27%, rgba(2,7,10,.40) 36%, transparent 48%),
+        linear-gradient(0deg, #02070a 0%, rgba(2,7,10,.64) 8%, rgba(2,7,10,.20) 18%, transparent 29%),
+        linear-gradient(270deg, #02070a 0%, rgba(2,7,10,.58) 3%, rgba(2,7,10,.14) 8%, transparent 13%),
+        var(--hero-survey-mesh),
         var(--hero-photo);
-    background-repeat: no-repeat;
-    background-size: 100% 100%, 100% 100%, 100% 100%, 100% 100%, cover;
-    background-position: center, center, center, center, center;
+    background-repeat: no-repeat, no-repeat, no-repeat, no-repeat, no-repeat, no-repeat;
+    background-size: 100% 100%, 100% 100%, 100% 100%, 100% 100%, cover, cover;
+    background-position: center, center, center, center, center, center;
     transform: scale(1);
     transform-origin: 78% center;
     animation: hero-breathe 14s ease-out both;
@@ -34,7 +38,7 @@
     position: absolute;
     inset: 0;
     z-index: -3;
-    opacity: .80;
+    opacity: .58;
     background:
         linear-gradient(180deg, #02080c 0%, rgba(2,8,12,.94) 6%, rgba(2,8,12,.68) 12%, rgba(2,8,12,.28) 20%, transparent 31%),
         linear-gradient(180deg, rgba(0,5,8,.96) 0%, rgba(1,7,11,.90) 26%, rgba(2,9,14,.58) 46%, rgba(0,4,7,.24) 66%, rgba(0,3,5,.20) 100%),
@@ -46,7 +50,7 @@
     inset: auto 0 0;
     height: 34svh;
     z-index: -2;
-    background: linear-gradient(0deg, #03080c 0%, rgba(3,8,12,.66) 54%, transparent 100%);
+    background: linear-gradient(0deg, #03080c 0%, rgba(3,8,12,.52) 54%, transparent 100%);
     pointer-events: none;
 }
 .hero__content {
@@ -484,7 +488,7 @@ body.platform-dialog-open { overflow: hidden; }
 /* First-screen fitting: tablet and phone keep all destinations visible. */
 @media (max-width: 1180px) {
     .hero { --hero-tile-h: clamp(96px, 13svh, 124px); }
-    .hero__media { background-size: 100% 100%, 100% 100%, 100% 100%, 100% 100%, cover; background-position: center, center, center, center, 60% center; }
+    .hero__media { background-size: 100% 100%, 100% 100%, 100% 100%, 100% 100%, cover, cover; background-position: center, center, center, center, 60% center, 60% center; }
     .hero__copy { max-width: min(680px, 60vw); }
     .hero h1 { font-size: var(--hero-title-size); }
 }
@@ -495,8 +499,9 @@ body.platform-dialog-open { overflow: hidden; }
         height: auto;
         min-height: calc(100svh - var(--site-endcap-h));
     }
-    .hero__media { background-size: 100% 100%, 100% 100%, 100% 100%, 100% 100%, cover; background-position: center, center, center, center, 64% center; }
+    .hero__media { --hero-survey-mesh: none; background-size: 100% 100%, 100% 100%, 100% 100%, 100% 100%, cover, cover; background-position: center, center, center, center, 64% center, 64% center; }
     .hero__veil {
+        opacity: .72;
         background:
             linear-gradient(180deg, #02080c 0%, rgba(2,8,12,.92) 7%, rgba(2,8,12,.48) 16%, transparent 28%),
             linear-gradient(90deg, rgba(0,5,8,.96) 0%, rgba(0,5,8,.74) 62%, rgba(0,5,8,.22) 100%),
@@ -716,11 +721,11 @@ body.platform-dialog-open { overflow: hidden; }
 
 /* Modern browsers receive smaller WebP art; the JPEG/PNG variables above
    remain the static fallback for engines without image-set support. */
-@supports (background-image: image-set(url('../images/ginnie1.webp') type('image/webp') 1x)) {
+@supports (background-image: image-set(url('../images/ginnie1-faceted-survey.webp') type('image/webp') 1x)) {
     .hero__media {
         --hero-photo: image-set(
-            url('../images/ginnie1.webp') type('image/webp') 1x,
-            url('../images/ginnie1.jpg') type('image/jpeg') 1x
+            url('../images/ginnie1-faceted-survey.webp') type('image/webp') 1x,
+            url('../images/ginnie1-faceted-survey.png') type('image/png') 1x
         );
     }
 

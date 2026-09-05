@@ -531,7 +531,7 @@ def test_website_uses_one_header_and_has_no_member_profile_routes() -> None:
 
         assert text.count('class="site-home"') == 1
         assert 'href="index.html" aria-label="CaveViewer home"><img' in text
-        assert 'src="assets/icons/caveviewer-logo.svg" width="64" height="32"' in text
+        assert 'src="assets/icons/caveviewer-logo-faceted-rim-beam.svg" width="64" height="32"' in text
         assert '<nav class="primary-nav" aria-label="Primary navigation">' in text
         nav_start = text.index(
             '<nav class="primary-nav" aria-label="Primary navigation">'
@@ -911,7 +911,7 @@ def test_image_delivery_uses_responsive_webp_and_reserves_layout_space() -> None
         "Home": (
             1_300_000,
             (
-                "assets/images/ginnie1.webp",
+                "assets/images/ginnie1-faceted-survey.webp",
                 "assets/images/software-hero-cave-strokes-full.webp",
             ),
         ),
@@ -965,11 +965,25 @@ def test_image_delivery_uses_responsive_webp_and_reserves_layout_space() -> None
     assert "KISS Rebreathers and XDEEP logo WebP images" in readme
     assert "two privacy-enhanced YouTube embeds" in readme
 
-    assert "ginnie1.webp" in home_styles
+    for asset in (
+        "assets/images/ginnie1.jpg",
+        "assets/images/ginnie1.webp",
+        "assets/images/ginnie1-faceted-survey.png",
+        "assets/images/ginnie1-faceted-survey.webp",
+    ):
+        assert (SITE_ROOT / asset).is_file()
+    assert "ginnie1-faceted-survey.png" in home_styles
+    assert "ginnie1-faceted-survey.webp" in home_styles
+    assert "ginnie1.jpg" not in home_styles
+    assert "ginnie1.webp" not in home_styles
     assert "software-hero-cave-strokes-full.webp" in home_styles
     assert "image-set(" in home_styles
     assert (SITE_ROOT / "assets/icons/caveviewer-logo.svg").is_file()
-    assert 'src="assets/icons/caveviewer-logo.svg" width="64" height="32"' in index
+    assert (SITE_ROOT / "assets/icons/caveviewer-logo-mesh.svg").is_file()
+    assert (SITE_ROOT / "assets/icons/caveviewer-logo-mesh-expanded.svg").is_file()
+    assert (SITE_ROOT / "assets/icons/caveviewer-logo-faceted-rim.svg").is_file()
+    assert (SITE_ROOT / "assets/icons/caveviewer-logo-faceted-rim-beam.svg").is_file()
+    assert 'src="assets/icons/caveviewer-logo-faceted-rim-beam.svg" width="64" height="32"' in index
 
     assert advantage.count("<picture>") == 4
     for source in (

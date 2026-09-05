@@ -2,8 +2,8 @@
   "schema_version": 1,
   "product": "CaveViewer",
   "repository": "https://github.com/CaveViewer/CaveViewer",
-  "channel": "Preview",
-  "version": "1.0.97",
+  "channel": "Stable",
+  "version": "1.0.98",
   "release_date": "2026-09-05",
   "chooser": {
     "other_platforms_label": "Other platforms",
@@ -16,7 +16,7 @@
       "label": "Windows",
       "primary_label": "Get CaveViewer for Windows",
       "detail": "Windows 10 or 11",
-      "artifact": "CaveViewer-1.0.97-windows.exe",
+      "artifact": "CaveViewer-1.0.98-windows.exe",
       "install_note": "Run the setup file. Windows may identify CaveViewer as an unrecognized app.",
       "security": {
         "explanation": "Microsoft does not yet recognize its publisher. Confirm that the installer came from the official CaveViewer site before proceeding.",
@@ -37,12 +37,12 @@
         "arm64": {
           "label": "Apple silicon",
           "detail": "M1 or newer",
-          "artifact": "CaveViewer-1.0.97-macos-arm64.dmg"
+          "artifact": "CaveViewer-1.0.98-macos-arm64.dmg"
         },
         "x86_64": {
           "label": "Intel Mac",
           "detail": "Intel processor",
-          "artifact": "CaveViewer-1.0.97-macos-x86_64.dmg"
+          "artifact": "CaveViewer-1.0.98-macos-x86_64.dmg"
         }
       }
     },
@@ -50,7 +50,7 @@
       "label": "Linux",
       "primary_label": "Get CaveViewer for Linux",
       "detail": "x86_64 AppImage",
-      "artifact": "CaveViewer-1.0.97-x86_64.AppImage",
+      "artifact": "CaveViewer-1.0.98-x86_64.AppImage",
       "install_note": "Allow the x86_64 AppImage to run, then open it. Linux does not display an equivalent publisher-verification warning."
     }
   }

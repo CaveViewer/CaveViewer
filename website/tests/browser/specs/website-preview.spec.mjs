@@ -589,7 +589,8 @@ test("modern browsers choose responsive images with reserved layout geometry", a
     const heroBackground = await page.locator(".hero__media").evaluate(
         element => getComputedStyle(element).backgroundImage,
     );
-    expect(heroBackground).toContain("ginnie1.webp");
+    expect(heroBackground).toContain("ginnie1-faceted-survey.webp");
+    expect(heroBackground).toContain("ginnie1-faceted-survey.png");
 
     await page.goto("advantage.html", { waitUntil: "networkidle" });
     const renderingImage = page.locator("#rendering picture img");

@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1533 1026" aria-hidden="true">
+  <!-- The canvas matches ginnie1-faceted-survey so cover positioning keeps the
+       triangular survey marks pinned to the central-right cave face. -->
+  <g fill="none" stroke="#6cc4d5" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.25" stroke-opacity=".21">
+    <!-- Every bounded face is a three-edge triangular facet. -->
+    <path d="M 790 166 L 920 128 M 920 128 L 838 338 M 838 338 L 790 166
+             M 920 128 L 1048 194 M 1048 194 L 962 406 M 962 406 L 920 128
+             M 962 406 L 838 338 M 1048 194 L 1086 330 M 1086 330 L 962 406
+             M 1048 194 L 1182 166 M 1182 166 L 1086 330 M 1182 166 L 1316 262
+             M 1316 262 L 1230 356 M 1230 356 L 1182 166 M 1230 356 L 1086 330
+             M 1086 330 L 1156 522 M 1156 522 L 1230 356 M 962 406 L 1156 522
+             M 962 406 L 919 530 M 919 530 L 1156 522 M 919 530 L 838 338
+             M 919 530 L 1030 606 M 1030 606 L 1156 522 M 1230 356 L 1322 449
+             M 1322 449 L 1156 522 M 1316 262 L 1322 449"/>
+  </g>
+  <g fill="#d6a667" fill-opacity=".18">
+    <circle cx="790" cy="166" r="1.8"/>
+    <circle cx="920" cy="128" r="1.8"/>
+    <circle cx="1048" cy="194" r="1.8"/>
+    <circle cx="1182" cy="166" r="1.8"/>
+    <circle cx="1316" cy="262" r="1.8"/>
+    <circle cx="1230" cy="356" r="1.8"/>
+    <circle cx="1086" cy="330" r="1.8"/>
+    <circle cx="962" cy="406" r="1.8"/>
+    <circle cx="838" cy="338" r="1.8"/>
+    <circle cx="919" cy="530" r="1.8"/>
+    <circle cx="1030" cy="606" r="1.8"/>
+    <circle cx="1156" cy="522" r="1.8"/>
+    <circle cx="1322" cy="449" r="1.8"/>
+  </g>
+</svg>

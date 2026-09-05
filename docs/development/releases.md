@@ -566,8 +566,8 @@ not the legacy `main` branch `/docs` source. Keep the `github-pages` environment
 restricted to `main` so a manual dispatch from another branch cannot publish.
 
 The public website intentionally uses `noindex` and its maintained release
-chooser currently offers the Preview channel. Update
-`website/assets/data/release.json` after a selected Preview release, regenerate
+chooser currently offers the Stable channel. Update
+`website/assets/data/release.json` after a selected Stable release, regenerate
 the marked HTML with `website/scripts/sync_release.py`, and run its `--check`
 mode before publishing any website change.
 

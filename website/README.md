@@ -9,7 +9,7 @@ HTML routes, `assets/`, `storage/`, `CNAME`, and the retained
 The artifact does not publish tests, scripts, Git metadata, or the archived
 previous website under `docs/previous-site/`. `CNAME` remains
 `www.caveviewer.com`. The site intentionally retains `noindex` while the
-product uses the Preview download channel.
+product uses the Stable download channel.
 
 ## Local build and review
 
@@ -38,7 +38,7 @@ npm test
 
 ## Release and contact maintenance
 
-`assets/data/release.json` is the source of truth for the Preview download
+`assets/data/release.json` is the source of truth for the Stable download
 chooser and Docs installation cards. After changing it, regenerate both marked
 HTML blocks with `python3 scripts/sync_release.py`, then run `--check`; do not
 edit generated blocks by hand.
@@ -55,7 +55,7 @@ intrinsic dimensions to reserve layout space before images load.
 
 | Route | Preferred modern candidates | Budget |
 | --- | --- | ---: |
-| Home | `ginnie1.webp`, `software-hero-cave-strokes-full.webp` | 1.30 MB |
+| Home | `ginnie1-faceted-survey.webp`, `software-hero-cave-strokes-full.webp` | 1.30 MB |
 | Why CaveViewer | Rendering, Map Library, Capture, and Streaming WebP images | 0.45 MB |
 | Documentation | Import, Streaming, Backup, and Troubleshooting WebP images | 0.13 MB |
 | Team | Six responsive portrait WebP images | 0.80 MB |
