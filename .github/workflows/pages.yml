@@ -35,10 +35,27 @@ jobs:
           python3 website/scripts/build_site.py
           --output "$RUNNER_TEMP/caveviewer-pages"
 
+      # `upload-pages-artifact` v5 delegates to an action revision blocked by
+      # this repository's allowlist. Keep its Linux archive format, then use
+      # the repository-approved pinned uploader directly.
+      - name: Archive GitHub Pages artifact
+        run: |
+          tar \
+            --dereference --hard-dereference \
+            --directory "$RUNNER_TEMP/caveviewer-pages" \
+            -cvf "$RUNNER_TEMP/artifact.tar" \
+            --exclude=.git \
+            --exclude=.github \
+            --exclude=".[^/]*" \
+            .
+
       - name: Upload GitHub Pages artifact
-        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          path: ${{ runner.temp }}/caveviewer-pages
+          name: github-pages
+          path: ${{ runner.temp }}/artifact.tar
+          retention-days: 1
+          if-no-files-found: error
 
   deploy:
     name: Deploy Pages
