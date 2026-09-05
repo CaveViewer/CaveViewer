@@ -99,6 +99,17 @@ test("navigation current and focus states have non-color indicators", async ({ p
     await expect(focusedControl).toHaveCSS("outline-style", "solid");
 });
 
+test("desktop dropdown chevrons align optically with their labels", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto("advantage.html", { waitUntil: "networkidle" });
+
+    const offsets = await page.locator(".primary-nav__dropdown > summary").evaluateAll(
+        summaries => summaries.map(summary => getComputedStyle(summary, "::after").top),
+    );
+
+    expect(offsets).toEqual(["-1px", "-1px"]);
+});
+
 test("the mobile navigation is keyboard-operable", async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto("index.html", { waitUntil: "networkidle" });
