@@ -773,69 +773,6 @@ test("the generated release manifest preserves the Windows primary action and ma
     await expect(dialog.locator('[data-release-platform="linux"]')).toHaveCSS("opacity", "0.38");
 });
 
-test("Docs selects a detected Intel Mac package and updates one download action", async ({ page }) => {
-    await page.addInitScript(() => {
-        Object.defineProperty(navigator, "userAgentData", {
-            configurable: true,
-            value: {
-                platform: "macOS",
-                getHighEntropyValues: async () => ({ architecture: "x86" }),
-            },
-        });
-        Object.defineProperty(navigator, "platform", {
-            configurable: true,
-            value: "MacIntel",
-        });
-    });
-    await page.goto("docs.html", { waitUntil: "networkidle" });
-
-    const control = page.locator("[data-macos-download]");
-    const selector = control.locator("[data-macos-architecture]");
-    const download = control.locator("[data-macos-download-link]");
-    const appleSilicon = selector.locator('option[value="arm64"]');
-    const intel = selector.locator('option[value="x86_64"]');
-    const appleSiliconUrl = await appleSilicon.getAttribute("data-download-url");
-    const intelUrl = await intel.getAttribute("data-download-url");
-
-    await expect(selector).toHaveValue("x86_64");
-    await expect(download).toHaveAttribute("href", intelUrl);
-    await expect(download).toHaveAttribute("aria-label", "Download CaveViewer for Intel Mac");
-    await expect(download).toContainText("Intel Mac");
-
-    const pageUrl = page.url();
-    await selector.selectOption("arm64");
-    await expect(selector).toHaveValue("arm64");
-    await expect(download).toHaveAttribute("href", appleSiliconUrl);
-    await expect(download).toHaveAttribute("aria-label", "Download CaveViewer for Apple silicon");
-    await expect(download).toContainText("Apple silicon");
-    expect(page.url()).toBe(pageUrl);
-});
-
-test("Docs falls back to Apple silicon when Mac architecture cannot be detected", async ({ page }) => {
-    await page.addInitScript(() => {
-        Object.defineProperty(navigator, "userAgentData", {
-            configurable: true,
-            value: { platform: "macOS" },
-        });
-        Object.defineProperty(navigator, "platform", {
-            configurable: true,
-            value: "MacIntel",
-        });
-    });
-    await page.goto("docs.html", { waitUntil: "networkidle" });
-
-    const control = page.locator("[data-macos-download]");
-    const selector = control.locator("[data-macos-architecture]");
-    const download = control.locator("[data-macos-download-link]");
-    const appleSiliconUrl = await selector
-        .locator('option[value="arm64"]')
-        .getAttribute("data-download-url");
-
-    await expect(selector).toHaveValue("arm64");
-    await expect(download).toHaveAttribute("href", appleSiliconUrl);
-    await expect(download).toHaveAttribute("aria-label", "Download CaveViewer for Apple silicon");
-});
-
 test.describe("wide Home hero art direction", () => {
     for (const viewport of wideHeroViewports) {
         test(`${viewport.name} keeps the cave image as a centered full-hero background`, async ({ page }) => {

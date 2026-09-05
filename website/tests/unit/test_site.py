@@ -325,9 +325,6 @@ def test_release_manifest_generates_every_download_reference() -> None:
     script = (SITE_ROOT / "assets/js/platform-download.js").read_text(
         encoding="utf-8"
     )
-    macos_script = (SITE_ROOT / "assets/js/macos-download.js").read_text(
-        encoding="utf-8"
-    )
 
     generated = subprocess.run(
         [sys.executable, str(generator), "--check"],
@@ -372,26 +369,14 @@ def test_release_manifest_generates_every_download_reference() -> None:
     assert 'class="docs-install-card__help"' not in docs
     assert "learn.microsoft.com" not in docs
     assert "support.apple.com" not in docs
-    assert docs.count('class="docs-install-card__downloads') == 3
-    assert 'assets/js/macos-download.js' in docs
-    assert 'data-macos-download-link' in docs
-    assert '<select data-macos-architecture>' in docs
-    assert (
-        f'value="arm64" data-download-url="{expected_urls["macos-arm64"]}"'
-        in docs
-    )
-    assert (
-        f'value="x86_64" data-download-url="{expected_urls["macos-x86_64"]}"'
-        in docs
-    )
-    assert 'value="arm64"' in docs and " selected>Apple silicon" in docs
+    assert docs.count('class="docs-install-card__downloads"') == 3
     for label in (
         "Download CaveViewer for Windows",
         "Download CaveViewer for Apple silicon",
+        "Download CaveViewer for Intel Mac",
         "Download CaveViewer for Linux",
     ):
         assert f'aria-label="{label}"' in docs
-    assert 'data-download-aria-label="Download CaveViewer for Intel Mac"' in docs
 
     assert "<!-- installation-guidance:start -->" in docs
     assert "<!-- installation-guidance:end -->" in docs
@@ -422,8 +407,6 @@ def test_release_manifest_generates_every_download_reference() -> None:
         )
     )
     assert "data-release-data" in script
-    assert "getHighEntropyValues" in macos_script
-    assert "fallbackArchitecture" in macos_script
 
 
 def test_reveal_content_is_visible_without_javascript() -> None:

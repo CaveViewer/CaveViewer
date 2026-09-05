@@ -252,16 +252,13 @@ def render_installation_guidance(release: dict[str, Any]) -> str:
     mac_intel = macos["architectures"]["x86_64"]
     mac_arm_url = _release_url(release, mac_arm["artifact"])
     mac_intel_url = _release_url(release, mac_intel["artifact"])
-    mac_arm_accessible_label = f"Download CaveViewer for {mac_arm['label']}"
-    mac_intel_accessible_label = f"Download CaveViewer for {mac_intel['label']}"
-
-    glyph = (
-        '<svg viewBox="0 0 24 24" aria-hidden="true">'
-        '<path d="M12 3v11m0 0 4-4m-4 4-4-4M5 17v3h14v-3"/>'
-        "</svg>"
-    )
 
     def download_link(url: str, label: str, accessible_label: str) -> str:
+        glyph = (
+            '<svg viewBox="0 0 24 24" aria-hidden="true">'
+            '<path d="M12 3v11m0 0 4-4m-4 4-4-4M5 17v3h14v-3"/>'
+            "</svg>"
+        )
         return (
             f'<a href="{_attribute(url)}" aria-label="{_attribute(accessible_label)}">'
             f'<span>{_text(label)}</span>{glyph}</a>'
@@ -282,18 +279,7 @@ def render_installation_guidance(release: dict[str, Any]) -> str:
             '<h3 id="install-macos">macOS</h3>',
             f'<p>{_text(macos["install_note"])} {_text(macos["security"]["explanation"])} {_text(macos["security"]["action"])}</p>',
             '<div class="docs-install-card__actions">',
-            '<div class="docs-install-card__downloads docs-install-card__downloads--macos" data-macos-download>',
-            f'    <a href="{_attribute(mac_arm_url)}" aria-label="{_attribute(mac_arm_accessible_label)}" data-macos-download-link>',
-            f'        <span data-macos-download-label>{_text(mac_arm["label"])}</span>{glyph}',
-            "    </a>",
-            '    <label class="docs-install-card__architecture">',
-            '        <span>Mac architecture</span>',
-            '        <select data-macos-architecture>',
-            f'            <option value="arm64" data-download-url="{_attribute(mac_arm_url)}" data-download-label="{_attribute(mac_arm["label"])}" data-download-aria-label="{_attribute(mac_arm_accessible_label)}" selected>{_text(mac_arm["label"])} ({_text(mac_arm["detail"])})</option>',
-            f'            <option value="x86_64" data-download-url="{_attribute(mac_intel_url)}" data-download-label="{_attribute(mac_intel["label"])}" data-download-aria-label="{_attribute(mac_intel_accessible_label)}">{_text(mac_intel["label"])} ({_text(mac_intel["detail"])})</option>',
-            "        </select>",
-            "    </label>",
-            "</div>",
+            f'<p class="docs-install-card__downloads">{download_link(mac_arm_url, mac_arm["label"], "Download CaveViewer for Apple silicon")}{download_link(mac_intel_url, mac_intel["label"], "Download CaveViewer for Intel Mac")}</p>',
             "</div>",
             "</section>",
             '<section class="docs-install-card" aria-labelledby="install-linux">',
