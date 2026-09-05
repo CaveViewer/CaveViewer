@@ -107,7 +107,6 @@ def test_pages_workflow_builds_only_the_approved_production_artifact(
     }
     assert (artifact / "CNAME").read_text(encoding="utf-8") == "www.caveviewer.com"
     assert (artifact / "development" / "AGENTS.md").is_file()
-    assert not (artifact / "previous-site").exists()
 
 
 def test_ci_and_dependency_workflows_keep_the_website_supply_chain_bounded() -> None:
@@ -896,7 +895,7 @@ def test_website_documents_its_public_static_boundary() -> None:
     assert "exported static artifact" in normalized
     assert "www.caveviewer.com" in readme
     assert "noindex" in readme
-    assert "docs/previous-site/" in readme
+    assert "does not publish tests, scripts, Git metadata, or packaging sources" in normalized
 
 
 def test_image_delivery_uses_responsive_webp_and_reserves_layout_space() -> None:

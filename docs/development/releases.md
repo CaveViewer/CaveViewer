@@ -555,8 +555,8 @@ GitHub Pages deployment is independent from application releases. The
 [`Pages`](../../.github/workflows/pages.yml) workflow uses
 `website/scripts/build_site.py` to create a bounded artifact: the public site
 routes, `assets/`, `storage/`, and `CNAME`, plus the retained
-`docs/development/` tree at `/development/`. The prior-site archive under
-`docs/previous-site/`, tests, scripts, and repository metadata are excluded.
+`docs/development/` tree at `/development/`. Tests, scripts, packaging
+resources, and repository metadata are excluded.
 It runs after changes to `website/**`, `docs/development/**`, or its own
 workflow reach `main`, and it can also be dispatched manually from `main`.
 Release workflows do not call or depend on it.

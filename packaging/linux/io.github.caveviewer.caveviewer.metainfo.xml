@@ -29,19 +29,19 @@
   <url type="vcs-browser">https://github.com/CaveViewer/CaveViewer</url>
   <screenshots>
     <screenshot type="default">
-      <image>https://raw.githubusercontent.com/CaveViewer/CaveViewer/main/docs/previous-site/images/screenshot-hero.jpg</image>
+      <image>https://raw.githubusercontent.com/CaveViewer/CaveViewer/main/packaging/linux/screenshots/screenshot-hero.jpg</image>
       <caption>Exploring a streamed 3D cave survey</caption>
     </screenshot>
     <screenshot>
-      <image>https://raw.githubusercontent.com/CaveViewer/CaveViewer/main/docs/previous-site/images/screenshot-splash.png</image>
+      <image>https://raw.githubusercontent.com/CaveViewer/CaveViewer/main/packaging/linux/screenshots/screenshot-splash.png</image>
       <caption>Opening a cave map folder</caption>
     </screenshot>
     <screenshot>
-      <image>https://raw.githubusercontent.com/CaveViewer/CaveViewer/main/docs/previous-site/images/screenshot-importing.png</image>
+      <image>https://raw.githubusercontent.com/CaveViewer/CaveViewer/main/packaging/linux/screenshots/screenshot-importing.png</image>
       <caption>Importing a large cave survey</caption>
     </screenshot>
     <screenshot>
-      <image>https://raw.githubusercontent.com/CaveViewer/CaveViewer/main/docs/previous-site/images/screenshot-map-library.png</image>
+      <image>https://raw.githubusercontent.com/CaveViewer/CaveViewer/main/packaging/linux/screenshots/screenshot-map-library.png</image>
       <caption>Choosing a standard library map</caption>
     </screenshot>
   </screenshots>
