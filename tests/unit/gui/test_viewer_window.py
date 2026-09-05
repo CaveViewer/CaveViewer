@@ -3672,6 +3672,15 @@ def test_map_load_reset_restores_initial_chunk_readiness_state():
     window._chunk_prep_progress = 1.0
     window._chunk_prep_complete_until = 12.0
     window._chunk_prep_completion_armed = True
+    window.manifest = {"source_obj": "/maps/cave.obj"}
+    session = viewer_window.MapOpeningProgressSession()
+    window._map_opening_progress_session = session
+    import_frame = session.observe_import(
+        "cave.obj",
+        "writing chunk files",
+        1.0,
+        note="",
+    )
     calls = []
     window.import_progress_panel = SimpleNamespace(
         reset_progress=lambda: calls.append("reset")
@@ -3689,7 +3698,10 @@ def test_map_load_reset_restores_initial_chunk_readiness_state():
     assert window._chunk_prep_progress == 0.0
     assert window._chunk_prep_complete_until is None
     assert window._chunk_prep_completion_armed is False
-    assert calls == ["reset"]
+    assert calls == []
+    streaming_frame = session.observe_streaming("cave.obj", 0.0)
+    assert streaming_frame.session_id == import_frame.session_id
+    assert streaming_frame.fraction == pytest.approx(0.90)
 
 
 class _FakeMoveCamera:
@@ -4643,8 +4655,28 @@ def test_pending_import_splash_renders_logo_before_import_starts(monkeypatch):
     rendered = []
 
     class FakeImportProgressPanel:
-        def render(self, window_size, map_name, stage, fraction, *, title, note):
-            rendered.append((window_size, map_name, stage, fraction, title, note))
+        def render(
+            self,
+            window_size,
+            map_name,
+            stage,
+            fraction,
+            *,
+            title,
+            note,
+            progress_session_id=None,
+        ):
+            rendered.append(
+                (
+                    window_size,
+                    map_name,
+                    stage,
+                    fraction,
+                    title,
+                    note,
+                    progress_session_id,
+                )
+            )
 
     monkeypatch.setattr(
         viewer_window.CaveViewerWindow,
@@ -4666,6 +4698,7 @@ def test_pending_import_splash_renders_logo_before_import_starts(monkeypatch):
             0.0,
             "",
             "First-time setup in progress. Next time, this map will open faster.",
+            1,
         )
     ]
 
@@ -4675,8 +4708,28 @@ def test_present_pending_import_splash_swaps_when_backend_supports_it(monkeypatc
     calls = []
 
     class FakeImportProgressPanel:
-        def render(self, window_size, map_name, stage, fraction, *, title, note):
-            rendered.append((window_size, map_name, stage, fraction, title, note))
+        def render(
+            self,
+            window_size,
+            map_name,
+            stage,
+            fraction,
+            *,
+            title,
+            note,
+            progress_session_id=None,
+        ):
+            rendered.append(
+                (
+                    window_size,
+                    map_name,
+                    stage,
+                    fraction,
+                    title,
+                    note,
+                    progress_session_id,
+                )
+            )
 
     monkeypatch.setattr(
         viewer_window.CaveViewerWindow,
@@ -4693,15 +4746,40 @@ def test_present_pending_import_splash_swaps_when_backend_supports_it(monkeypatc
 
     assert window._present_pending_import_splash_now() is True
     assert calls == ["swap"]
-    assert rendered[0][1:5] == ("cave.obj", "starting import", 0.0, "")
+    assert rendered[0][1:5] == (
+        "cave.obj",
+        "starting import",
+        0.0,
+        "",
+    )
 
 
 def test_present_pending_import_splash_renders_without_swap_support(monkeypatch):
     rendered = []
 
     class FakeImportProgressPanel:
-        def render(self, window_size, map_name, stage, fraction, *, title, note):
-            rendered.append((window_size, map_name, stage, fraction, title, note))
+        def render(
+            self,
+            window_size,
+            map_name,
+            stage,
+            fraction,
+            *,
+            title,
+            note,
+            progress_session_id=None,
+        ):
+            rendered.append(
+                (
+                    window_size,
+                    map_name,
+                    stage,
+                    fraction,
+                    title,
+                    note,
+                    progress_session_id,
+                )
+            )
 
     monkeypatch.setattr(
         viewer_window.CaveViewerWindow,
@@ -4714,7 +4792,12 @@ def test_present_pending_import_splash_renders_without_swap_support(monkeypatch)
     window.import_progress_panel = FakeImportProgressPanel()
 
     assert window._present_pending_import_splash_now() is False
-    assert rendered[0][1:5] == ("cave.obj", "starting import", 0.0, "")
+    assert rendered[0][1:5] == (
+        "cave.obj",
+        "starting import",
+        0.0,
+        "",
+    )
 
 
 def test_startup_render_presents_splash_before_starting_import():
@@ -4785,8 +4868,28 @@ def test_ready_cache_startup_splash_is_indeterminate():
     rendered = []
 
     class FakeImportProgressPanel:
-        def render(self, window_size, map_name, stage, fraction, *, title, note):
-            rendered.append((window_size, map_name, stage, fraction, title, note))
+        def render(
+            self,
+            window_size,
+            map_name,
+            stage,
+            fraction,
+            *,
+            title,
+            note,
+            progress_session_id=None,
+        ):
+            rendered.append(
+                (
+                    window_size,
+                    map_name,
+                    stage,
+                    fraction,
+                    title,
+                    note,
+                    progress_session_id,
+                )
+            )
 
     window = object.__new__(viewer_window.CaveViewerWindow)
     window.ctx = SimpleNamespace(clear=lambda *color: clear_calls.append(color))
@@ -4806,10 +4909,11 @@ def test_ready_cache_startup_splash_is_indeterminate():
         (
             (820, 600),
             "devils_eye.obj",
-            "opening cave",
+            "preparing cave",
             None,
             "",
-            "Preparing map…",
+            "",
+            1,
         )
     ]
 
@@ -5006,8 +5110,28 @@ def test_import_progress_render_draws_every_callback_without_sleep(monkeypatch):
     monkeypatch.setattr(viewer_window.bitmap_font, "set_raster_scale", lambda _scale: None)
 
     class FakeProgressPanel:
-        def render(self, window_size, map_name, stage, fraction, *, title, note):
-            render_calls.append((window_size, map_name, stage, fraction, title, note))
+        def render(
+            self,
+            window_size,
+            map_name,
+            stage,
+            fraction,
+            *,
+            title,
+            note,
+            progress_session_id=None,
+        ):
+            render_calls.append(
+                (
+                    window_size,
+                    map_name,
+                    stage,
+                    fraction,
+                    title,
+                    note,
+                    progress_session_id,
+                )
+            )
 
     window = object.__new__(viewer_window.CaveViewerWindow)
     window._window_setup_complete = True
@@ -5042,9 +5166,9 @@ def test_import_progress_render_draws_every_callback_without_sleep(monkeypatch):
         (0.02, 0.02, 0.03),
     ]
     assert render_calls == [
-        ((820, 600), "cave.obj", "building cache", 0.5, "", ""),
-        ((820, 600), "cave.obj", "building cache", 0.5, "", ""),
-        ((820, 600), "cave.obj", "building cache", 0.5, "", ""),
+        ((820, 600), "cave.obj", "building cache", 0.45, "", "", 1),
+        ((820, 600), "cave.obj", "building cache", 0.45, "", "", 1),
+        ((820, 600), "cave.obj", "building cache", 0.45, "", "", 1),
     ]
 
 

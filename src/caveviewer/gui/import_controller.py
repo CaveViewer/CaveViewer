@@ -28,6 +28,8 @@ _IMPORT_SHUTDOWN_TIMEOUT_SECONDS = 2.0
 _IMPORT_STALE_LOG_SECONDS = 30.0
 _IMPORT_CLOSE_PAUSE_TIMEOUT_SECONDS = 3.0
 _IMPORT_RESUME_NOTICE_SECONDS = 3.0
+_IMPORT_PAUSE_NOTE = "Saving a resume point."
+_IMPORT_RESUME_NOTE = "Using saved work from the previous session."
 
 
 class MapImportController:
@@ -108,6 +110,14 @@ class MapImportController:
         self.progress_title = title
         self.progress_note = note
 
+    def transient_progress_note(self) -> str | None:
+        """Return an actionable note that may briefly override session copy."""
+        return (
+            self.progress_note
+            if self.progress_note in {_IMPORT_PAUSE_NOTE, _IMPORT_RESUME_NOTE}
+            else None
+        )
+
     def update_progress_message_for_stage(self, stage: str) -> None:
         normalized = " ".join(str(stage or "").strip().lower().split())
         if normalized == "resuming import" and not self.resuming_from_checkpoint:
@@ -119,7 +129,7 @@ class MapImportController:
         if self.pause_requested or normalized == "pausing import":
             self.set_progress_message(
                 "",
-                "Saving a resume point.",
+                _IMPORT_PAUSE_NOTE,
             )
         elif (
             self.resuming_from_checkpoint
@@ -128,7 +138,7 @@ class MapImportController:
         ):
             self.set_progress_message(
                 "",
-                "Using saved work from the previous session.",
+                _IMPORT_RESUME_NOTE,
             )
         else:
             self.set_progress_message(
@@ -195,6 +205,8 @@ class MapImportController:
         pending_import: dict | None,
         panel,
         window_size: tuple[int, int],
+        *,
+        opening_session=None,
     ) -> None:
         pending = pending_import or {}
         model_descriptor = pending.get("model_descriptor") or {}
@@ -204,13 +216,29 @@ class MapImportController:
             or ""
         )
         map_name = os.path.basename(source_path) if source_path else "map"
+        if opening_session is None:
+            panel.render(
+                window_size,
+                map_name,
+                "starting import",
+                0.0,
+                title="",
+                note=self.default_progress_note(),
+            )
+            return
+
+        frame = opening_session.begin_import(
+            map_name,
+            note=self.default_progress_note(),
+        )
         panel.render(
             window_size,
-            map_name,
-            "starting import",
-            0.0,
-            title="",
-            note=self.default_progress_note(),
+            frame.map_name,
+            frame.stage,
+            frame.fraction,
+            title=frame.title,
+            note=frame.note,
+            progress_session_id=frame.session_id,
         )
 
     def start_async(
@@ -450,6 +478,7 @@ class MapImportController:
             elif kind == "cancelled":
                 finish_console_progress_line()
                 self._clear_active_references()
+                self._abandon_opening_presentation()
                 break
             elif kind == "paused":
                 self._handle_paused_message(msg)
@@ -474,6 +503,7 @@ class MapImportController:
                 )
         except Exception as exc:
             self.log.error("Failed to load imported map manifest: %s", exc)
+            self._abandon_opening_presentation()
             if self.is_startup:
                 self._report_startup_failure(str(exc), "")
                 self.log.error("Closing -- no map to show without a valid cache manifest.")
@@ -492,6 +522,7 @@ class MapImportController:
         error_trace = msg[2] if len(msg) > 2 else ""
         error_suggestion = msg[3] if len(msg) > 3 else ""
         self._clear_active_references()
+        self._abandon_opening_presentation()
         self.log.error(f"Import failed: {error_msg}")
         if error_suggestion:
             self.log.error("Suggestion: %s", error_suggestion)
@@ -509,6 +540,7 @@ class MapImportController:
         was_startup_import = self.is_startup
         map_name = self.map_name
         self._clear_active_references()
+        self._abandon_opening_presentation()
         if resume_dir:
             self.log.info("Import paused. Resume checkpoint: %s", resume_dir)
         self.log.info("Open this map again to resume the import.")
@@ -532,6 +564,12 @@ class MapImportController:
                 self.log.info(
                     "Viewer will close after showing the paused import message."
                 )
+
+    def _abandon_opening_presentation(self) -> None:
+        """End a failed or paused opening session without touching import state."""
+        abandon = getattr(self._owner, "_abandon_map_opening_progress", None)
+        if callable(abandon):
+            abandon()
 
     def _clear_active_references(self) -> None:
         self.active = False
@@ -590,7 +628,7 @@ class MapImportController:
         self.progress_stage = "pausing import"
         self.set_progress_message(
             "",
-            "Saving a resume point.",
+            _IMPORT_PAUSE_NOTE,
         )
         if self.command_queue is not None:
             self.command_queue.put(("pause",))

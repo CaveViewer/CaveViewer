@@ -191,13 +191,25 @@ repeat close requests until the writer has finished.
 Routine viewer waits use the shared flat progress bar: full-screen import and
 initial streaming keep their stage hierarchy, while minimap and bookmark
 repositioning use centered **Jumping to the selected point** text and the same
-300-by-4 logical-pixel bar. Every routine indicator measures the visible title
-bottom to bar top at 40 logical pixels and the bar bottom to an optional
-description at 30 logical pixels; omitting a description collapses that space.
+300-by-4 logical-pixel bar. The bar midpoint is anchored at the usable
+viewport's horizontal and vertical center. Every routine indicator measures the
+visible title bottom to bar top at 40 logical pixels and the bar bottom to an
+optional description at 30 logical pixels; omitting a description collapses
+only that optional space, never the title or bar position.
 The initial Tk launch surface uses the same measured layout and control scale,
 while launch, initial streaming, and first-time map building share the solid
 Void background. Renderer-specific font technology remains separate: Tk uses
 the platform family and OpenGL uses its scaled bitmap renderer.
+For map opening, source import/cache construction and initial streaming are
+one user-facing progress session: keep the bar continuous and retain the
+current stage as the primary message. Do not add a separate operation title;
+reset only for a new or terminally abandoned open. The bar remains non-numeric;
+any bounded phase milestone is based on the existing measured work state rather
+than an elapsed-time estimate.
+For a first-time source import, the supporting message is one stable, concise
+centered line for the full session; it does not change when the stage reaches
+initial streaming. A cache-only opening uses no routine supporting message,
+because `Preparing cave…` already identifies its brief work.
 Capture countdown/status feedback uses a standard vector circle with the
 remaining seconds or status symbol centered inside it. The circle uses the same
 semantic fill/track colors and four-logical-pixel thickness as the flat loading

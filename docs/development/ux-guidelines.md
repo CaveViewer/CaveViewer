@@ -215,7 +215,10 @@ primitives remain documented in [design-system.md](design-system.md).
 ## Progress and waiting
 
 - Prefer a flat progress bar for routine determinate and indeterminate work.
-  Place it below the primary stage label and above the supporting description.
+  Anchor its midpoint at the horizontal and vertical center of the usable
+  content viewport, then place it below the primary stage label and above the
+  supporting description. An optional description may wrap or be omitted, but
+  must never move the stage label or bar.
 - Use that same geometry for launch, viewer import and streaming, repositioning,
   Map Library transfers and cache work, and update transfer or verification.
   Full-surface launch and map-loading states also share the branded Void
@@ -239,6 +242,17 @@ primitives remain documented in [design-system.md](design-system.md).
 - Startup progress blends real milestones with smooth visual advancement,
   remains below completion while work or the minimum interval is outstanding,
   and reaches completion only when the transition may proceed.
+- When source import/cache construction hands off to initial scene streaming,
+  retain one stable progress session with stage-specific copy and monotonic
+  visual progress. Keep the current stage as the primary message; do not add a
+  duplicate operation title. Reset only for a genuinely new map open or a
+  terminal cancel, failure, or pause; any visual milestone band must be driven
+  by real measured phase state and must not claim a numeric estimate.
+- For a first-time source import, use one concise task-level explanation for
+  the entire map-opening session rather than replacing it at the import-to-
+  streaming handoff. Render it as one centered supporting line below the bar.
+  A cache-only open omits this routine subtitle unless it supplies new,
+  actionable information.
 - Loading and progress presentation must not hide cancellation, failure, or
   shutdown state. Long-running work exposes an explicit state model rather than
   relying on changing labels alone.

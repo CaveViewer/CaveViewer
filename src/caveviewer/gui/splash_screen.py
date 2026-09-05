@@ -719,7 +719,7 @@ def _render_launch_content(canvas, *, progress: float, px) -> None:
     copyright_gap = px(_WORDMARK_COPYRIGHT_GAP)
     layout = routine_progress_layout(
         center_x=width / 2,
-        center_y=height / 2,
+        bar_center_y=height / 2,
         title_height=wordmark_height,
         scale=px(1),
     )

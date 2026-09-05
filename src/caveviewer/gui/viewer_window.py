@@ -62,6 +62,10 @@ from caveviewer.gui.import_process import (
 )
 from caveviewer.gui.import_controller import MapImportController
 from caveviewer.gui.map_opening import pick_folder_dialog, resolve_selected_map_folder
+from caveviewer.gui.map_opening_progress import (
+    MapOpeningProgressFrame,
+    MapOpeningProgressSession,
+)
 from caveviewer.gui import recording
 from caveviewer.gui import bitmap_font
 from caveviewer.gui import manual_dive_trace
@@ -823,6 +827,7 @@ class CaveViewerWindow(mglw.WindowConfig):
                 "constructing this window."
             )
 
+        self._map_opening_progress_session = MapOpeningProgressSession()
         self.import_progress_panel = None
         self._pending_import_splash_rendered = False
         if have_pending_import:
@@ -3752,6 +3757,10 @@ class CaveViewerWindow(mglw.WindowConfig):
             _LOG.info(f"Found cache manifest in selected directory: {open_target.cache_dir}")
             _LOG.info(f"Switching to prebuilt map: {open_target.map_name}")
             _LOG.info(f"Using cache directory: {open_target.cache_dir}")
+            self._ensure_map_opening_progress_session().begin_cached(
+                open_target.map_name,
+                new_operation=True,
+            )
             self.load_new_map(
                 open_target.cache_dir,
                 open_target.textures_dir,
@@ -3810,21 +3819,43 @@ class CaveViewerWindow(mglw.WindowConfig):
             CaveViewerWindow.cave_pending_import,
             self.import_progress_panel,
             _viewer_ui_surface_size(self.wnd),
+            opening_session=self._ensure_map_opening_progress_session(),
         )
+
+    def _ensure_map_opening_progress_session(self) -> MapOpeningProgressSession:
+        """Return the GUI-only presentation state for the active map open."""
+        session = getattr(self, "_map_opening_progress_session", None)
+        if session is None:
+            session = MapOpeningProgressSession()
+            self._map_opening_progress_session = session
+        return session
+
+    def _render_map_opening_progress(
+        self,
+        frame: MapOpeningProgressFrame,
+    ) -> None:
+        """Render one opening frame without giving lifecycle ownership to the panel."""
+        self.import_progress_panel.render(
+            _viewer_ui_surface_size(self.wnd),
+            frame.map_name,
+            frame.stage,
+            frame.fraction,
+            title=frame.title,
+            note=frame.note,
+            progress_session_id=frame.session_id,
+        )
+
+    def _abandon_map_opening_progress(self) -> None:
+        """End the presentation session after cancellation, failure, or pause."""
+        self._ensure_map_opening_progress_session().abandon()
 
     def _render_startup_map_load_splash(self) -> None:
         pending = getattr(self, "_startup_map_load_pending", None)
         manifest = pending[2] if pending is not None else {}
         map_name = os.path.basename(str(manifest.get("source_obj", "map")))
         self.ctx.clear(0.02, 0.02, 0.03)
-        self.import_progress_panel.render(
-            _viewer_ui_surface_size(self.wnd),
-            map_name,
-            "opening cave",
-            None,
-            title="",
-            note="Preparing map…",
-        )
+        frame = self._ensure_map_opening_progress_session().begin_cached(map_name)
+        self._render_map_opening_progress(frame)
 
     def _load_startup_map_after_splash(self) -> None:
         pending = getattr(self, "_startup_map_load_pending", None)
@@ -3882,7 +3913,13 @@ class CaveViewerWindow(mglw.WindowConfig):
         map_name: str,
         is_startup: bool = False,
     ) -> None:
-        self._ensure_import_controller().start_async(
+        controller = self._ensure_import_controller()
+        if not controller.active:
+            self._ensure_map_opening_progress_session().begin_import(
+                map_name,
+                new_operation=not is_startup,
+            )
+        controller.start_async(
             model_descriptor,
             textures_dir,
             map_name,
@@ -4274,9 +4311,14 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._chunk_prep_progress = 0.0
         self._chunk_prep_complete_until = None
         self._chunk_prep_completion_armed = False
-        panel = getattr(self, "import_progress_panel", None)
-        if panel is not None:
-            panel.reset_progress()
+        manifest = getattr(self, "manifest", {})
+        source_obj = (
+            manifest.get("source_obj", "map")
+            if isinstance(manifest, Mapping)
+            else "map"
+        )
+        map_name = os.path.basename(str(source_obj or "map"))
+        self._ensure_map_opening_progress_session().begin_streaming(map_name)
 
     def _startup_visual_prefetch_is_active(self) -> bool:
         overlay = getattr(self, "controls_overlay", None)
@@ -5134,7 +5176,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         failed_wanted = max(0, int(stats.get("failed_wanted", 0)))
         max_loaded = max(1, int(getattr(self.world.config, "max_loaded_chunks", self._INITIAL_LOAD_MIN_CHUNKS)))
         needed = self._initial_chunk_load_needed(stats, max_loaded)
-        # Give partial credit so the ring moves as soon as background
+        # Give partial credit so the bar moves as soon as background
         # decode starts, not only once GPU uploads complete:
         #   pending  0.25  decode in progress
         #   ready    0.75  decode done, upload queued
@@ -5597,7 +5639,7 @@ class CaveViewerWindow(mglw.WindowConfig):
             self.ctx.clear(0.02, 0.02, 0.03)
             fraction = self._import_progress_fraction
             # When the real fraction is near zero (numpy is crunching
-            # faces and can't report sub-step progress), pulse the ring
+            # faces and can't report sub-step progress), pulse the indicator
             # gently between 0 and 2 % so it looks alive.  The pulse is
             # capped below the first real progress step (3 %) so the
             # max() inside import_progress_panel takes over cleanly once
@@ -5605,12 +5647,15 @@ class CaveViewerWindow(mglw.WindowConfig):
             if fraction < 0.021:
                 t = time.perf_counter()
                 fraction = abs(math.sin(t * 1.2)) * 0.02
-            self.import_progress_panel.render(
-                _viewer_ui_surface_size(self.wnd), self._import_map_name,
-                self._import_progress_stage, fraction,
-                title=self._import_progress_title,
+            import_controller = self._ensure_import_controller()
+            frame = self._ensure_map_opening_progress_session().observe_import(
+                self._import_map_name,
+                self._import_progress_stage,
+                fraction,
                 note=self._import_progress_note,
+                supporting_note_override=import_controller.transient_progress_note(),
             )
+            self._render_map_opening_progress(frame)
             return
         frame_scheduler.reset_throttle("import_progress")
 
@@ -5774,10 +5819,11 @@ class CaveViewerWindow(mglw.WindowConfig):
             raw_fraction = self._initial_chunk_load_progress(stats)
             target = min(self._CHUNK_PREP_MAX_FRACTION, raw_fraction * self._CHUNK_PREP_MAX_FRACTION)
             self._chunk_prep_progress = max(self._chunk_prep_progress, target)
-            self.import_progress_panel.render(
-                _viewer_ui_surface_size(self.wnd), _map_name, "opening cave", self._chunk_prep_progress,
-                title="", note="",
+            frame = self._ensure_map_opening_progress_session().observe_streaming(
+                _map_name,
+                self._chunk_prep_progress,
             )
+            self._render_map_opening_progress(frame)
             return
 
         if self._chunk_prep_complete_until is not None and now < self._chunk_prep_complete_until:
@@ -5786,13 +5832,12 @@ class CaveViewerWindow(mglw.WindowConfig):
                 self.close()
                 return
             _map_name = os.path.basename(self.manifest.get("source_obj", "map"))
-            self.import_progress_panel.render(
-                _viewer_ui_surface_size(self.wnd), _map_name, "opening cave", 1.0,
-                title="", note="",
-            )
+            frame = self._ensure_map_opening_progress_session().complete(_map_name)
+            self._render_map_opening_progress(frame)
             return
 
         self._chunk_prep_complete_until = None
+        self._ensure_map_opening_progress_session().finish()
         if benchmark_active:
             self._sync_render_mode_loading_policy()
 

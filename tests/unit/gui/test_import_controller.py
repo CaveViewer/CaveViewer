@@ -7,6 +7,7 @@ import threading
 from types import SimpleNamespace
 
 from caveviewer.gui.import_controller import MapImportController
+from caveviewer.gui.map_opening_progress import MapOpeningProgressSession
 
 
 class FakeLogger:
@@ -103,6 +104,7 @@ def test_close_requests_obj_checkpoint_with_a_bounded_deadline():
     assert controller._close_pause_deadline == 13.0
     assert controller.progress_title == ""
     assert controller.progress_note == "Saving a resume point."
+    assert controller.transient_progress_note() == controller.progress_note
     assert logger.info_messages == [
         "Import pause requested; waiting for the current safe checkpoint."
     ]
@@ -123,12 +125,14 @@ def test_resuming_import_message_returns_to_normal_progress_after_three_seconds(
 
     assert controller.progress_title == ""
     assert controller.progress_note == "Using saved work from the previous session."
+    assert controller.transient_progress_note() == controller.progress_note
 
     clock[0] = 13.0
     controller.update_progress_message_for_stage("resuming import")
 
     assert controller.progress_title == ""
     assert controller.progress_note == controller.default_progress_note()
+    assert controller.transient_progress_note() is None
 
 
 def test_pause_notice_renders_at_the_supplied_framebuffer_size():
@@ -148,6 +152,32 @@ def test_pause_notice_renders_at_the_supplied_framebuffer_size():
         FakePanel(), window, (820, 600)
     ) is True
     assert rendered[0][0][0] == (820, 600)
+
+
+def test_pending_import_splash_uses_the_shared_opening_presentation_session_without_a_duplicate_title():
+    rendered = []
+
+    class FakePanel:
+        def render(self, *args, **kwargs):
+            rendered.append((args, kwargs))
+
+    controller, _logger, _calls = _controller()
+    session = MapOpeningProgressSession()
+
+    controller.render_pending_import_splash(
+        {"model_descriptor": {"obj_path": "/maps/cave.obj"}},
+        FakePanel(),
+        (820, 600),
+        opening_session=session,
+    )
+
+    args, kwargs = rendered[0]
+    assert args == ((820, 600), "cave.obj", "starting import", 0.0)
+    assert kwargs["title"] == ""
+    assert kwargs["note"] == (
+        "First-time setup in progress. Next time, this map will open faster."
+    )
+    assert kwargs["progress_session_id"] == session.session_id
 
 
 def test_close_after_paused_import_releases_the_viewer_without_a_notice():
@@ -300,6 +330,77 @@ def test_done_message_loads_map_with_original_source_dir():
     ]
     assert controller.active is False
     assert controller.source_dir is None
+
+
+def test_done_message_keeps_the_opening_session_for_initial_streaming():
+    manifest = {"chunks": {}}
+    calls = []
+    owner = SimpleNamespace(
+        load_new_map=lambda *args, **kwargs: calls.append((args, kwargs)),
+        _abandon_map_opening_progress=lambda: calls.append("abandon"),
+    )
+    controller, _logger, _calls = _controller()
+    controller._owner = owner
+    controller._chunker = lambda: SimpleNamespace(
+        load_manifest=lambda _cache_dir: manifest
+    )
+    controller.active = True
+    controller.event_queue = queue.Queue()
+    controller.event_queue.put(("done", "/cache/cave", "/cache/cave"))
+
+    controller.drain_queue()
+
+    assert calls == [
+        (("/cache/cave", "/cache/cave", manifest), {"source_dir": None})
+    ]
+
+
+def test_cancelled_import_abandons_only_the_presentation_session():
+    abandoned = []
+    owner = SimpleNamespace(
+        _abandon_map_opening_progress=lambda: abandoned.append(True),
+    )
+    controller, _logger, _calls = _controller()
+    controller._owner = owner
+    controller.active = True
+    controller.event_queue = queue.Queue()
+    controller.event_queue.put(("cancelled",))
+
+    controller.drain_queue()
+
+    assert controller.active is False
+    assert abandoned == [True]
+
+
+def test_failed_or_paused_import_abandons_the_presentation_session():
+    failed = []
+    failed_owner = SimpleNamespace(
+        _abandon_map_opening_progress=lambda: failed.append(True),
+    )
+    controller, _logger, _calls = _controller()
+    controller._owner = failed_owner
+    controller.active = True
+    controller.event_queue = queue.Queue()
+    controller.event_queue.put(("error", "could not build cache"))
+
+    controller.drain_queue()
+
+    paused = []
+    paused_owner = SimpleNamespace(
+        _has_map_loaded=False,
+        _abandon_map_opening_progress=lambda: paused.append(True),
+    )
+    pause_controller, _logger, _calls = _controller()
+    pause_controller._owner = paused_owner
+    pause_controller.active = True
+    pause_controller.map_name = "cave.obj"
+    pause_controller.event_queue = queue.Queue()
+    pause_controller.event_queue.put(("paused", "/cache/.cave.resume"))
+
+    pause_controller.drain_queue()
+
+    assert failed == [True]
+    assert paused == [True]
 
 
 def test_startup_import_failure_is_reported_before_the_empty_viewer_closes():

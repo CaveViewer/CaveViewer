@@ -1009,7 +1009,7 @@ def test_launch_surface_uses_a_flat_milestone_progress_bar():
     assert calls[0] == ("delete", "launch_content")
     assert calls[1] == (
         "text",
-        (343.0, 267.0),
+        (343.0, 236.0),
         {
             "text": "Cave",
             "font": splash_screen._TYPOGRAPHY.display,
@@ -1022,7 +1022,7 @@ def test_launch_surface_uses_a_flat_milestone_progress_bar():
     assert calls[2][2]["fill"] == splash_screen._TITLE_COLOR
     assert calls[3] == (
         "text",
-        (447.0, 269.0),
+        (447.0, 238.0),
         {
             "text": splash_screen._COPYRIGHT_SYMBOL,
             "font": splash_screen._TYPOGRAPHY.supporting,
@@ -1031,7 +1031,7 @@ def test_launch_surface_uses_a_flat_milestone_progress_bar():
             "tags": "launch_content",
         },
     )
-    assert calls[4][1] == (250.0, 329.0, 550.0, 333.0)
+    assert calls[4][1] == (250.0, 298.0, 550.0, 302.0)
     assert [call[0] for call in calls].count("rectangle") == 2
 
 
@@ -1077,9 +1077,9 @@ def test_launch_product_wordmark_centers_copyright_lockup(monkeypatch):
         "Viewer",
         splash_screen._COPYRIGHT_SYMBOL,
     ]
-    assert cave[0] == (343.5, 267.0)
-    assert viewer[0] == (383.5, 267.0)
-    assert copyright[0] == (447.5, 275.0)
+    assert cave[0] == (343.5, 236.0)
+    assert viewer[0] == (383.5, 236.0)
+    assert copyright[0] == (447.5, 244.0)
     copyright_right = (
         copyright[0][0] + metrics[splash_screen._COPYRIGHT_SYMBOL][0]
     )
