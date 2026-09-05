@@ -92,9 +92,10 @@
     gap: 8px;
     justify-content: center;
 }
-.docs-install-card[aria-labelledby="install-macos"] .docs-install-card__downloads {
+.docs-install-card__downloads--macos {
     display: grid;
-    grid-template-columns: minmax(0, 176px);
+    grid-template-columns: minmax(0, 220px);
+    gap: 10px;
     justify-content: center;
 }
 .docs-article .docs-install-card__downloads a {
@@ -110,11 +111,37 @@
     line-height: 1.2;
     text-decoration: none;
 }
-.docs-article .docs-install-card[aria-labelledby="install-macos"] .docs-install-card__downloads a {
+.docs-article .docs-install-card__downloads--macos a {
     min-width: 0;
     justify-content: center;
     width: 100%;
     white-space: nowrap;
+}
+.docs-install-card__architecture {
+    display: grid;
+    gap: 5px;
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: .04em;
+    line-height: 1.3;
+}
+.docs-install-card__architecture select {
+    width: 100%;
+    min-height: 38px;
+    padding: 7px 10px;
+    border: 1px solid rgba(242, 217, 140, .34);
+    border-radius: 0;
+    background: rgba(10, 10, 15, .88);
+    color: var(--title);
+    color-scheme: dark;
+    font: inherit;
+    letter-spacing: 0;
+}
+.docs-install-card__architecture select:hover,
+.docs-install-card__architecture select:focus-visible {
+    border-color: var(--accent);
+    outline: none;
 }
 .docs-install-card__downloads svg {
     width: 17px;
