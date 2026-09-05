@@ -15,19 +15,21 @@ def test_blank_stage_label_stays_blank():
     assert panel._stage_label("   ") == ""
 
 
-def test_import_progress_group_moves_up_eight_pixels_from_prior_anchor():
-    assert import_progress_panel._progress_bar_center_y(600.0) == 415.0
+def test_import_progress_bar_uses_the_viewport_midpoint_as_its_anchor():
+    assert import_progress_panel._progress_bar_center_y(600.0) == 300.0
 
 
 def test_render_cache_finalization_phases_are_user_facing():
     panel = object.__new__(ImportProgressPanel)
 
+    assert panel._stage_label("building cache") == "Building map cache…"
     assert panel._stage_label("assembling render manifest") == (
         "Assembling render manifest…"
     )
     assert panel._stage_label("building Guided Dive identity") == (
         "Creating dive plan identity…"
     )
+    assert panel._stage_label("preparing cave") == "Preparing cave…"
 
 
 def test_resume_stage_uses_the_active_scanning_label():
@@ -98,7 +100,7 @@ def test_bar_labels_use_compact_progress_layout(monkeypatch):
     panel._add_bar_labels(
         add_quad_px=lambda *_args: None,
         center_x=400.0,
-        center_y=300.0,
+        bar_center_y=300.0,
         window_width=800.0,
         title="Preparing Map",
         stage="Building map chunksâ€¦",
@@ -109,14 +111,52 @@ def test_bar_labels_use_compact_progress_layout(monkeypatch):
         ("Preparing Map", 164.0, ImportProgressPanel.TITLE_TEXT_SIZE),
         (
             "Building map chunksâ€¦",
-            pytest.approx(260.755),
+            pytest.approx(255.45),
             ImportProgressPanel.STAGE_TEXT_SIZE,
         ),
         (
             "First-time setup in progress.",
-            pytest.approx(337.305),
+            pytest.approx(332.0),
             ImportProgressPanel.NOTE_TEXT_SIZE,
         ),
+    ]
+
+
+def test_bar_note_flattens_line_breaks_to_one_supporting_line(monkeypatch):
+    panel = object.__new__(ImportProgressPanel)
+    text_calls = []
+    note = "First-time setup in progress.\nNext time, this map will open faster."
+    flattened_note = "First-time setup in progress. Next time, this map will open faster."
+
+    monkeypatch.setattr(
+        import_progress_panel.bitmap_font,
+        "text_bounds_px",
+        lambda text, pixel_size: (0.0, 0.0, len(text) * pixel_size, pixel_size),
+    )
+    monkeypatch.setattr(
+        import_progress_panel.bitmap_font,
+        "iter_text_pixels",
+        lambda text, x, y, pixel_size: text_calls.append((text, x, y, pixel_size))
+        or (),
+    )
+
+    panel._add_bar_labels(
+        add_quad_px=lambda *_args: None,
+        center_x=400.0,
+        bar_center_y=300.0,
+        window_width=800.0,
+        title="",
+        stage="",
+        note=note,
+    )
+
+    assert text_calls == [
+        (
+            flattened_note,
+            pytest.approx(400.0 - len(flattened_note) * 1.94 / 2.0),
+            pytest.approx(332.0),
+            pytest.approx(1.94),
+        )
     ]
 
 
@@ -146,24 +186,24 @@ def test_progress_labels_match_fullscreen_prompt_scaling(monkeypatch):
     panel._add_bar_labels(
         add_quad_px=lambda *_args: None,
         center_x=400.0,
-        center_y=300.0,
+        bar_center_y=300.0,
         window_width=800.0,
-        title="Opening map",
+        title="Preparing map",
         stage="Building map chunks",
         note="First-time setup in progress.",
         layout_scale=1.25,
     )
 
     assert text_calls == [
-        ("Opening map", pytest.approx(130.0), pytest.approx(3.1875)),
+        ("Preparing map", pytest.approx(130.0), pytest.approx(3.1875)),
         (
             "Building map chunks",
-            pytest.approx(250.94375),
+            pytest.approx(244.3125),
             pytest.approx(3.1875),
         ),
         (
             "First-time setup in progress.",
-            pytest.approx(346.63125),
+            pytest.approx(340.0),
             pytest.approx(2.425),
         ),
     ]
@@ -199,6 +239,38 @@ def test_import_stage_change_keeps_the_current_progress_fraction():
     assert panel._progress_token == ("cave.obj", False)
 
 
+def test_explicit_opening_session_does_not_reset_at_the_import_streaming_handoff():
+    panel = object.__new__(ImportProgressPanel)
+    panel._display_fraction = 0.90
+    panel._progress_token = ("map-opening", 7)
+
+    panel._begin_progress_run(
+        map_name="cave.obj",
+        indeterminate=False,
+        fraction=0.0,
+        progress_session_id=7,
+    )
+
+    assert panel._display_fraction == pytest.approx(0.90)
+    assert panel._progress_token == ("map-opening", 7)
+
+
+def test_new_opening_session_resets_the_panel_after_a_completed_map():
+    panel = object.__new__(ImportProgressPanel)
+    panel._display_fraction = 1.0
+    panel._progress_token = ("map-opening", 7)
+
+    panel._begin_progress_run(
+        map_name="next-cave.obj",
+        indeterminate=False,
+        fraction=0.0,
+        progress_session_id=8,
+    )
+
+    assert panel._display_fraction == 0.0
+    assert panel._progress_token == ("map-opening", 8)
+
+
 def test_import_progress_uses_shared_routine_layout_tokens():
     assert ImportProgressPanel.PROGRESS_BAR_WIDTH == (
         import_progress_panel.ROUTINE_PROGRESS_BAR_WIDTH
@@ -211,6 +283,46 @@ def test_import_progress_uses_shared_routine_layout_tokens():
     )
     assert import_progress_panel.ROUTINE_PROGRESS_TITLE_TO_BAR_GAP == 40.0
     assert import_progress_panel.ROUTINE_PROGRESS_BAR_TO_DESCRIPTION_GAP == 30.0
+
+
+def test_import_progress_note_does_not_move_the_stage_or_bar(monkeypatch):
+    panel = object.__new__(ImportProgressPanel)
+    monkeypatch.setattr(
+        import_progress_panel.bitmap_font,
+        "text_bounds_px",
+        lambda text, pixel_size: (
+            0.0,
+            0.0,
+            len(text) * pixel_size,
+            pixel_size * (2.0 if text.startswith("First-time") else 1.0),
+        ),
+    )
+
+    without_note = panel._routine_progress_layout(
+        center_x=400.0,
+        bar_center_y=300.0,
+        window_width=800.0,
+        stage="Opening cave…",
+        note="",
+        layout_scale=1.0,
+    )
+    with_note = panel._routine_progress_layout(
+        center_x=400.0,
+        bar_center_y=300.0,
+        window_width=800.0,
+        stage="Scanning map…",
+        note="First-time setup in progress.",
+        layout_scale=1.0,
+    )
+
+    assert with_note.title_top == without_note.title_top
+    assert with_note.title_bottom == without_note.title_bottom
+    assert with_note.bar_left == without_note.bar_left
+    assert with_note.bar_top == without_note.bar_top == 298.0
+    assert with_note.bar_right == without_note.bar_right
+    assert with_note.bar_bottom == without_note.bar_bottom == 302.0
+    assert with_note.description_top == 332.0
+    assert with_note.description_bottom == pytest.approx(335.88)
 
 
 def test_import_progress_uses_the_shared_void_background():

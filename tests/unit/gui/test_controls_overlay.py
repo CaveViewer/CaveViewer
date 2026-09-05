@@ -108,15 +108,11 @@ def test_fullscreen_controls_use_opaque_backdrop_and_spaced_prompt_gap():
     )
     layout = controls_overlay.routine_progress_layout(
         center_x=768.0,
-        center_y=(
+        bar_center_y=(
             864 * 0.12
-            + (
-                subtitle_height
-                + controls_overlay.ROUTINE_PROGRESS_TITLE_TO_BAR_GAP
-                * layout_scale
-                + controls_overlay.ROUTINE_PROGRESS_BAR_HEIGHT * layout_scale
-            )
-            / 2.0
+            + subtitle_height
+            + controls_overlay.ROUTINE_PROGRESS_TITLE_TO_BAR_GAP * layout_scale
+            + controls_overlay.ROUTINE_PROGRESS_BAR_HEIGHT * layout_scale / 2.0
         ),
         title_height=subtitle_height,
         scale=layout_scale,
@@ -150,7 +146,7 @@ def test_compact_loading_panel_uses_text_and_flat_progress_without_logo(monkeypa
     )
     layout = controls_overlay.routine_progress_layout(
         center_x=400.0,
-        center_y=300.0,
+        bar_center_y=300.0,
         title_height=bounds[3] - bounds[1],
         scale=layout_scale,
     )

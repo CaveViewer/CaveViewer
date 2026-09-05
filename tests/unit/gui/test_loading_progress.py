@@ -27,23 +27,43 @@ def test_routine_loading_geometry_is_shared_across_renderers():
     assert ROUTINE_PROGRESS_BAR_TO_DESCRIPTION_GAP == 30.0
 
 
-def test_routine_loading_layout_uses_visible_gaps_and_collapses_description():
-    with_description = routine_progress_layout(
+def test_routine_loading_layout_anchors_title_and_bar_when_description_changes():
+    with_short_description = routine_progress_layout(
         center_x=400.0,
-        center_y=300.0,
+        bar_center_y=300.0,
         title_height=10.0,
         description_height=5.0,
         has_description=True,
     )
+    with_tall_description = routine_progress_layout(
+        center_x=400.0,
+        bar_center_y=300.0,
+        title_height=10.0,
+        description_height=45.0,
+        has_description=True,
+    )
     without_description = routine_progress_layout(
         center_x=400.0,
-        center_y=300.0,
+        bar_center_y=300.0,
         title_height=10.0,
     )
 
-    assert with_description.bar_top - with_description.title_bottom == 40.0
-    assert with_description.description_top is not None
-    assert with_description.description_top - with_description.bar_bottom == 30.0
+    assert with_short_description.title_top == without_description.title_top
+    assert with_short_description.title_bottom == without_description.title_bottom
+    assert with_tall_description.title_top == without_description.title_top
+    assert with_tall_description.title_bottom == without_description.title_bottom
+    assert with_short_description.bar_top == without_description.bar_top == 298.0
+    assert with_short_description.bar_bottom == without_description.bar_bottom == 302.0
+    assert with_tall_description.bar_top == without_description.bar_top
+    assert with_tall_description.bar_bottom == without_description.bar_bottom
+    assert with_short_description.bar_top - with_short_description.title_bottom == 40.0
+    assert with_short_description.description_top is not None
+    assert (
+        with_short_description.description_top
+        - with_short_description.bar_bottom
+        == 30.0
+    )
+    assert with_tall_description.description_bottom == 377.0
     assert without_description.description_top is None
     assert without_description.description_bottom is None
     assert without_description.bar_top - without_description.title_bottom == 40.0

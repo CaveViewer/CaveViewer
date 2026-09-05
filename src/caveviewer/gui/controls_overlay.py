@@ -604,14 +604,14 @@ class ControlsOverlay:
             subtitle_height = bitmap_font.text_height_px(sub_size)
             layout = routine_progress_layout(
                 center_x=w / 2.0,
-                center_y=(
+                # The controls-reference prompt intentionally follows its
+                # preceding subtitle instead of using the routine full-surface
+                # viewport anchor.
+                bar_center_y=(
                     sub_y
-                    + (
-                        subtitle_height
-                        + ROUTINE_PROGRESS_TITLE_TO_BAR_GAP * layout_scale
-                        + ROUTINE_PROGRESS_BAR_HEIGHT * layout_scale
-                    )
-                    / 2.0
+                    + subtitle_height
+                    + ROUTINE_PROGRESS_TITLE_TO_BAR_GAP * layout_scale
+                    + ROUTINE_PROGRESS_BAR_HEIGHT * layout_scale / 2.0
                 ),
                 title_height=subtitle_height,
                 scale=layout_scale,
@@ -1156,7 +1156,7 @@ class ControlsOverlay:
         text_width = bounds[2] - bounds[0]
         layout = routine_progress_layout(
             center_x=w / 2.0,
-            center_y=h / 2.0,
+            bar_center_y=h / 2.0,
             title_height=bounds[3] - bounds[1],
             scale=layout_scale,
         )

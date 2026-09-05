@@ -54,18 +54,9 @@ void main() {
 """
 
 
-_PANEL_HEIGHT = 310.0
-_PANEL_TOP_FRACTION = 0.33
-_PROGRESS_BAR_CENTER_OFFSET = 62.0
-
-
 def _progress_bar_center_y(window_height: float) -> float:
-    """Return the vertically balanced center for the import progress group."""
-    return (
-        float(window_height) * _PANEL_TOP_FRACTION
-        + _PANEL_HEIGHT * 0.50
-        + _PROGRESS_BAR_CENTER_OFFSET
-    )
+    """Return the stable bar anchor at the usable viewer viewport midpoint."""
+    return float(window_height) / 2.0
 
 _FRAG_SRC = """
 #version 330
@@ -151,21 +142,34 @@ class ImportProgressPanel:
         map_name: str,
         indeterminate: bool,
         fraction: float,
+        progress_session_id: object | None = None,
     ) -> None:
-        """Keep one monotonic progress value while the import stage changes."""
-        token = (map_name, indeterminate)
+        """Keep one monotonic value while one loading presentation continues."""
+        token = (
+            ("map-opening", progress_session_id)
+            if progress_session_id is not None
+            else (map_name, indeterminate)
+        )
         if self._progress_token != token:
             self.reset_progress()
             self._progress_token = token
 
         # If this panel is reused for the same map right after a full run,
-        # allow the newly started import to begin with an empty bar.
-        if fraction <= 0.05 and self._display_fraction >= 0.95:
+        # allow the newly started import to begin with an empty bar. A caller
+        # with an explicit session identity owns that reset boundary instead,
+        # so a phase handoff cannot look like a new operation.
+        if (
+            progress_session_id is None
+            and fraction <= 0.05
+            and self._display_fraction >= 0.95
+        ):
             self._display_fraction = 0.0
 
     def render(self, window_size: tuple[int, int], map_name: str, stage: str, fraction: float | None,
                title: str = "Preparing Map",
-               note: str = "First-time setup in progress. Next time, this map will open much faster.") -> None:
+               note: str = "",
+               *,
+               progress_session_id: object | None = None) -> None:
         verts = []
         w, h = window_size
 
@@ -192,6 +196,7 @@ class ImportProgressPanel:
             map_name=map_name,
             indeterminate=indeterminate,
             fraction=fraction_clamped,
+            progress_session_id=progress_session_id,
         )
 
         if not indeterminate:
@@ -199,10 +204,10 @@ class ImportProgressPanel:
 
         bar_cx = w / 2.0
         layout_scale = _progress_label_layout_scale(window_size)
-        bar_cy = _progress_bar_center_y(h)
+        bar_center_y = _progress_bar_center_y(h)
         layout = self._routine_progress_layout(
             center_x=bar_cx,
-            center_y=bar_cy,
+            bar_center_y=bar_center_y,
             window_width=w,
             stage=self._stage_label(stage),
             note=note,
@@ -231,7 +236,7 @@ class ImportProgressPanel:
         self._add_bar_labels(
             add_quad_px=add_quad_px,
             center_x=bar_cx,
-            center_y=bar_cy,
+            bar_center_y=bar_center_y,
             window_width=w,
             title=title,
             stage=self._stage_label(stage),
@@ -281,7 +286,7 @@ class ImportProgressPanel:
         *,
         add_quad_px,
         center_x: float,
-        center_y: float,
+        bar_center_y: float,
         window_width: float,
         title: str | None = None,
         stage: str | None = None,
@@ -291,7 +296,7 @@ class ImportProgressPanel:
         """Append the import title, stage, and note around the flat progress bar."""
         layout = self._routine_progress_layout(
             center_x=center_x,
-            center_y=center_y,
+            bar_center_y=bar_center_y,
             window_width=window_width,
             stage=stage,
             note=note,
@@ -302,7 +307,7 @@ class ImportProgressPanel:
             center_x=center_x,
             window_width=window_width,
             title=title,
-            title_y=center_y - 136.0 * layout_scale,
+            title_y=bar_center_y - 136.0 * layout_scale,
             stage=stage,
             stage_y=layout.title_top,
             note=note,
@@ -315,7 +320,7 @@ class ImportProgressPanel:
         cls,
         *,
         center_x: float,
-        center_y: float,
+        bar_center_y: float,
         window_width: float,
         stage: str | None,
         note: str | None,
@@ -324,7 +329,7 @@ class ImportProgressPanel:
         """Measure bitmap labels before applying the shared loading layout."""
         return routine_progress_layout(
             center_x=center_x,
-            center_y=center_y,
+            bar_center_y=bar_center_y,
             title_height=cls._label_height(
                 stage,
                 cls.STAGE_TEXT_SIZE,
@@ -703,13 +708,15 @@ class ImportProgressPanel:
             "assembling render manifest": "Assembling render manifest…",
             "building guided dive identity": "Creating dive plan identity…",
             "writing manifest": "Finalizing map cache…",
+            "building cache": "Building map cache…",
             "loading cached map": "Loading cached map…",
             "resuming import": "Scanning map…",
             "continuing saved import": "Continuing saved import…",
             "pausing import": "Pausing import…",
             "resume point saved": "Resume point saved",
-            "loading chunks": "Opening cave…",
-            "opening cave": "Opening cave…",
+            "loading chunks": "Preparing cave…",
+            "opening cave": "Preparing cave…",
+            "preparing cave": "Preparing cave…",
             "thinking": "Looking for a path…",
             "done": "Finishing…",
         }

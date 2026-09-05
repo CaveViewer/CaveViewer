@@ -29,7 +29,7 @@ class RoutineProgressGeometry:
 
 @dataclass(frozen=True)
 class RoutineProgressLayout:
-    """Measured bounds for a centered routine-loading indicator."""
+    """Measured bounds for a bar-anchored routine-loading indicator."""
 
     title_top: float
     title_bottom: float
@@ -60,36 +60,27 @@ def routine_progress_geometry(scale: float = 1.0) -> RoutineProgressGeometry:
 def routine_progress_layout(
     *,
     center_x: float,
-    center_y: float,
+    bar_center_y: float,
     title_height: float,
     description_height: float = 0.0,
     has_description: bool = False,
     scale: float = 1.0,
 ) -> RoutineProgressLayout:
-    """Lay out a title, bar, and optional description using visible gaps.
+    """Lay out a title, bar, and optional description around a stable bar.
 
     Callers supply measured text heights in their renderer's coordinate system.
-    Omitting the description collapses its spacing rather than reserving an
-    empty line.
+    ``bar_center_y`` is the stable visual anchor: description presence and
+    height do not move the title or bar. Omitting the description collapses its
+    own spacing rather than reserving an empty line.
     """
     geometry = routine_progress_geometry(scale)
     normalized_title_height = max(0.0, float(title_height))
     normalized_description_height = max(0.0, float(description_height))
     include_description = bool(has_description and normalized_description_height)
-    total_height = (
-        normalized_title_height
-        + geometry.title_to_bar_gap
-        + geometry.bar_height
-    )
-    if include_description:
-        total_height += (
-            geometry.bar_to_description_gap + normalized_description_height
-        )
-    top = float(center_y) - total_height / 2.0
-    title_top = top
-    title_bottom = title_top + normalized_title_height
-    bar_top = title_bottom + geometry.title_to_bar_gap
+    bar_top = float(bar_center_y) - geometry.bar_height / 2.0
     bar_bottom = bar_top + geometry.bar_height
+    title_bottom = bar_top - geometry.title_to_bar_gap
+    title_top = title_bottom - normalized_title_height
     description_top = None
     description_bottom = None
     if include_description:
