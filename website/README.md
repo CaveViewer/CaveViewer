@@ -6,10 +6,9 @@ workflow builds an exported static artifact containing only the seven public
 HTML routes, `assets/`, `storage/`, `CNAME`, and the retained
 `/development/` documentation copied from `docs/development/`.
 
-The artifact does not publish tests, scripts, Git metadata, or the archived
-previous website under `docs/previous-site/`. `CNAME` remains
-`www.caveviewer.com`. The site intentionally retains `noindex` while the
-product uses the Stable download channel.
+The artifact does not publish tests, scripts, Git metadata, or packaging
+sources. `CNAME` remains `www.caveviewer.com`. The site intentionally retains
+`noindex` while the product uses the Stable download channel.
 
 ## Local build and review
 
