@@ -1,13 +1,13 @@
 {
   "authenticode_status": "unsigned-community",
-  "download_size_bytes": 59090102,
-  "download_size_bytes_windows_exe": 59090102,
-  "download_url": "https://github.com/CaveViewer/CaveViewer/releases/download/v1.0.96/CaveViewer-1.0.96-windows.exe",
-  "download_url_windows_exe": "https://github.com/CaveViewer/CaveViewer/releases/download/v1.0.96/CaveViewer-1.0.96-windows.exe",
+  "download_size_bytes": 59092608,
+  "download_size_bytes_windows_exe": 59092608,
+  "download_url": "https://github.com/CaveViewer/CaveViewer/releases/download/v1.0.97/CaveViewer-1.0.97-windows.exe",
+  "download_url_windows_exe": "https://github.com/CaveViewer/CaveViewer/releases/download/v1.0.97/CaveViewer-1.0.97-windows.exe",
   "install_channel": "windows_installer",
-  "latest_version": "1.0.96",
+  "latest_version": "1.0.97",
   "release_channel": "preview",
-  "release_notes": "CaveViewer preview release",
-  "sha256": "152365e83b23efb9f6da76d8a4ce08303979c4e6732834eb875401188c1c8281",
-  "sha256_windows_exe": "152365e83b23efb9f6da76d8a4ce08303979c4e6732834eb875401188c1c8281"
+  "release_notes": "Latest release with sync'ed UI.",
+  "sha256": "ce31ff5bbcbeb8432cb8d9273cf0d4db91227cbc98fb572b9677ef3c8ab8dcca",
+  "sha256_windows_exe": "ce31ff5bbcbeb8432cb8d9273cf0d4db91227cbc98fb572b9677ef3c8ab8dcca"
 }
