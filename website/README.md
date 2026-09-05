@@ -37,10 +37,22 @@ npm test
 
 ## Release and contact maintenance
 
-`assets/data/release.json` is the source of truth for the Stable download
-chooser and Docs installation cards. After changing it, regenerate both marked
-HTML blocks with `python3 scripts/sync_release.py`, then run `--check`; do not
-edit generated blocks by hand.
+`assets/data/release.json` is the presentation template for the Stable download
+chooser and Docs installation cards. `build_site.py` copies that template into
+the staged Pages artifact, then derives its version, release date, and four
+package names from the reconciled Stable update manifests and matching
+AppStream release entry. The repository source is never rewritten during that
+step.
+
+Pages is triggered by those four Stable manifests only after the reviewed
+`release/next` metadata PR reaches `main`; Preview manifests do not trigger a
+deployment. After a Stable release merge, inspect the Pages run for that merge
+rather than opening a second website PR. For ordinary presentation-copy edits,
+regenerate the source template's marked HTML blocks with
+`python3 scripts/sync_release.py`, then run `--check`; do not edit generated
+blocks by hand. If the four Stable manifests do not agree, Pages fails before
+uploading an artifact so the prior website remains live; complete or repair the
+release metadata, then let the matching `main` update trigger Pages again.
 
 The Contact page retains its approved FormSubmit action and honeypot. Its
 default CAPTCHA remains enabled: do not add `_captcha=false` or automate a real
