@@ -17,6 +17,11 @@ updates:
       - "github-actions"
     commit-message:
       prefix: "ci(deps)"
+    # Major workflow action changes need explicit compatibility review.
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
 
   # Update only the isolated, hash-locked privileged finalizer dependencies.
   - package-ecosystem: "pip"
@@ -34,6 +39,12 @@ updates:
       - "release-security"
     commit-message:
       prefix: "build(deps)"
+    # Major API or wheel-compatibility changes need an explicit finalizer
+    # review. Security updates remain visible and go through normal CI/review.
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
 
   # Keep the isolated browser-test harness current.
   - package-ecosystem: "npm"
@@ -51,3 +62,8 @@ updates:
       - "website"
     commit-message:
       prefix: "test(deps)"
+    # Major browser-harness changes need explicit compatibility review.
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
