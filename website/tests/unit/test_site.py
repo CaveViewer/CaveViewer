@@ -3,6 +3,7 @@
 import json
 import importlib.util
 import re
+import shutil
 import subprocess
 import sys
 from datetime import date
@@ -66,9 +67,23 @@ def test_pages_workflow_builds_only_the_approved_production_artifact(
     )
 
     assert "website/scripts/build_site.py" in workflow
-    assert "${{ runner.temp }}/caveviewer-pages" in workflow
+    assert "$RUNNER_TEMP/caveviewer-pages" in workflow
+    assert "uses: actions/upload-pages-artifact" not in workflow
+    assert "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a" in workflow
+    assert 'name: github-pages' in workflow
+    assert "${{ runner.temp }}/artifact.tar" in workflow
+    assert "--hard-dereference" in workflow
+    assert '--exclude=".[^/]*"' in workflow
     assert '"website/**"' in workflow
     assert '"docs/development/**"' in workflow
+    for stable_manifest in (
+        "updates/windows/stable.json",
+        "updates/linux/x86_64/stable.json",
+        "updates/macos/arm64/stable.json",
+        "updates/macos/x86_64/stable.json",
+    ):
+        assert f'"{stable_manifest}"' in workflow
+    assert '"updates/**"' not in workflow
     assert "github.ref == 'refs/heads/main'" in workflow
     assert (SITE_ROOT / "CNAME").read_text(encoding="utf-8") == "www.caveviewer.com"
 
@@ -101,7 +116,108 @@ def test_pages_workflow_builds_only_the_approved_production_artifact(
     }
     assert (artifact / "CNAME").read_text(encoding="utf-8") == "www.caveviewer.com"
     assert (artifact / "development" / "AGENTS.md").is_file()
-    assert not (artifact / "previous-site").exists()
+    expected_release = _sync_release_module().published_stable_release_data()
+    staged_release = json.loads(
+        (artifact / "assets/data/release.json").read_text(encoding="utf-8")
+    )
+    assert staged_release == expected_release
+    assert expected_release["version"] in (artifact / "index.html").read_text(
+        encoding="utf-8"
+    )
+
+
+def test_published_stable_metadata_refreshes_only_the_staged_website(
+    tmp_path: Path,
+) -> None:
+    sync_release = _sync_release_module()
+    staged = tmp_path / "website"
+    (staged / "assets/data").mkdir(parents=True)
+    for path in ("index.html", "docs.html"):
+        shutil.copy2(SITE_ROOT / path, staged / path)
+    template_path = staged / "assets/data/release.json"
+    release = json.loads(
+        (SITE_ROOT / "assets/data/release.json").read_text(encoding="utf-8")
+    )
+    stale_version = "0.0.1"
+    release["version"] = stale_version
+    release["release_date"] = "2026-01-01"
+    release["platforms"]["windows"]["artifact"] = (
+        f"CaveViewer-{stale_version}-windows.exe"
+    )
+    release["platforms"]["linux"]["artifact"] = (
+        f"CaveViewer-{stale_version}-x86_64.AppImage"
+    )
+    release["platforms"]["macos"]["architectures"]["arm64"]["artifact"] = (
+        f"CaveViewer-{stale_version}-macos-arm64.dmg"
+    )
+    release["platforms"]["macos"]["architectures"]["x86_64"]["artifact"] = (
+        f"CaveViewer-{stale_version}-macos-x86_64.dmg"
+    )
+    template_path.write_text(f"{json.dumps(release, indent=2)}\n", encoding="utf-8")
+
+    assert not sync_release.synchronize_published_stable_release(
+        website_root=staged,
+        repository_root=REPOSITORY_ROOT,
+        check=True,
+    )
+    assert not sync_release.synchronize_published_stable_release(
+        website_root=staged,
+        repository_root=REPOSITORY_ROOT,
+    )
+    assert sync_release.synchronize_published_stable_release(
+        website_root=staged,
+        repository_root=REPOSITORY_ROOT,
+        check=True,
+    )
+
+    expected_release = sync_release.published_stable_release_data(
+        template_path=SITE_ROOT / "assets/data/release.json",
+        repository_root=REPOSITORY_ROOT,
+    )
+    assert json.loads(template_path.read_text(encoding="utf-8")) == expected_release
+    index = (staged / "index.html").read_text(encoding="utf-8")
+    docs = (staged / "docs.html").read_text(encoding="utf-8")
+    assert expected_release["version"] in index
+    assert expected_release["release_date"] in index
+    assert expected_release["version"] in docs
+
+
+def test_published_stable_metadata_rejects_mismatched_manifest_versions(
+    tmp_path: Path,
+) -> None:
+    sync_release = _sync_release_module()
+    staged_repository = tmp_path / "repository"
+    stable_manifests = (
+        "updates/windows/stable.json",
+        "updates/linux/x86_64/stable.json",
+        "updates/macos/arm64/stable.json",
+        "updates/macos/x86_64/stable.json",
+    )
+    for relative_path in stable_manifests:
+        source = REPOSITORY_ROOT / relative_path
+        destination = staged_repository / relative_path
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+    appstream = "packaging/linux/io.github.caveviewer.caveviewer.metainfo.xml"
+    destination = staged_repository / appstream
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(REPOSITORY_ROOT / appstream, destination)
+
+    linux_manifest_path = staged_repository / "updates/linux/x86_64/stable.json"
+    linux_manifest = json.loads(linux_manifest_path.read_text(encoding="utf-8"))
+    linux_manifest["latest_version"] = "1.0.99"
+    linux_manifest["download_url"] = (
+        "https://github.com/CaveViewer/CaveViewer/releases/download/v1.0.99/"
+        "CaveViewer-1.0.99-x86_64.AppImage"
+    )
+    linux_manifest_path.write_text(
+        f"{json.dumps(linux_manifest, indent=2)}\n", encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match="one matching version"):
+        sync_release.published_stable_release_data(
+            repository_root=staged_repository
+        )
 
 
 def test_ci_and_dependency_workflows_keep_the_website_supply_chain_bounded() -> None:
@@ -890,7 +1006,7 @@ def test_website_documents_its_public_static_boundary() -> None:
     assert "exported static artifact" in normalized
     assert "www.caveviewer.com" in readme
     assert "noindex" in readme
-    assert "docs/previous-site/" in readme
+    assert "does not publish tests, scripts, Git metadata, or packaging sources" in normalized
 
 
 def test_image_delivery_uses_responsive_webp_and_reserves_layout_space() -> None:

@@ -555,8 +555,8 @@ GitHub Pages deployment is independent from application releases. The
 [`Pages`](../../.github/workflows/pages.yml) workflow uses
 `website/scripts/build_site.py` to create a bounded artifact: the public site
 routes, `assets/`, `storage/`, and `CNAME`, plus the retained
-`docs/development/` tree at `/development/`. The prior-site archive under
-`docs/previous-site/`, tests, scripts, and repository metadata are excluded.
+`docs/development/` tree at `/development/`. Tests, scripts, packaging
+resources, and repository metadata are excluded.
 It runs after changes to `website/**`, `docs/development/**`, or its own
 workflow reach `main`, and it can also be dispatched manually from `main`.
 Release workflows do not call or depend on it.
@@ -566,10 +566,26 @@ not the legacy `main` branch `/docs` source. Keep the `github-pages` environment
 restricted to `main` so a manual dispatch from another branch cannot publish.
 
 The public website intentionally uses `noindex` and its maintained release
-chooser currently offers the Stable channel. Update
-`website/assets/data/release.json` after a selected Stable release, regenerate
-the marked HTML with `website/scripts/sync_release.py`, and run its `--check`
-mode before publishing any website change.
+chooser currently offers the Stable channel. A Stable metadata PR changes all
+four canonical `stable.json` manifests on `release/next`; once that PR is
+reviewed and merged into `main`, the Pages path trigger starts a deployment.
+`website/scripts/build_site.py` reads those reconciled manifests and the
+matching AppStream release record, then writes the version, release date,
+package names, and generated download markup only into the staged Pages
+artifact. It does not alter `main`, create a pull request, or participate in
+release publication. Preview manifest changes do not trigger Pages.
+
+`website/assets/data/release.json` remains the validated presentation template
+for the Stable chooser and Docs cards. For ordinary website copy changes,
+regenerate its marked source HTML with `website/scripts/sync_release.py` and
+run its `--check` mode. After a Stable release merge, verify the Pages run from
+that `main` commit instead of preparing a second website change.
+
+The staged build rejects a missing, non-Stable, noncanonical, or
+version-mismatched platform manifest, and it requires an AppStream record for
+that exact Stable version. This deliberately leaves the previous Pages artifact
+live during an intentionally partial or incomplete release; finish or repair
+the four-manifest reconciliation before retrying the website deployment.
 
 ## Existing tags and channel separation
 
@@ -678,6 +694,9 @@ same required-check PR. Never publish locally from `main` or a feature branch.
   dependency, or release-script changes.
 - For stable releases, verify the GitHub release is not marked as a GitHub prerelease and
   that the “latest release” link resolves to the new tag.
+- After the Stable metadata PR reaches `main`, confirm its Pages run deployed
+  download data for that tag. The deployment reads the reconciled Stable
+  manifests and does not require or create a separate website PR.
 - Smoke-test install, launch, map import, and background update download on
   each available platform/architecture. Confirm macOS, Linux, and Windows ZIP
   migration packages remain reveal-only. On a signed Windows installer build,

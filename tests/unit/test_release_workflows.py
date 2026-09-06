@@ -449,12 +449,25 @@ def test_pages_workflow_deploys_public_site_independently_from_releases():
     assert "branches:\n      - main" in workflow
     assert '      - "website/**"' in workflow
     assert '      - "docs/development/**"' in workflow
+    for stable_manifest in (
+        "updates/windows/stable.json",
+        "updates/linux/x86_64/stable.json",
+        "updates/macos/arm64/stable.json",
+        "updates/macos/x86_64/stable.json",
+    ):
+        assert f'      - "{stable_manifest}"' in workflow
+    assert '      - "updates/**"' not in workflow
     assert '      - ".github/workflows/pages.yml"' in workflow
     assert "release:" not in workflow
     assert "actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6" in workflow
-    assert "actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5" in workflow
+    assert "uses: actions/upload-pages-artifact" not in workflow
+    assert "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7" in workflow
     assert "website/scripts/build_site.py" in workflow
-    assert 'path: ${{ runner.temp }}/caveviewer-pages' in workflow
+    assert '--directory "$RUNNER_TEMP/caveviewer-pages"' in workflow
+    assert 'path: ${{ runner.temp }}/artifact.tar' in workflow
+    assert "name: github-pages" in workflow
+    assert "retention-days: 1" in workflow
+    assert "if-no-files-found: error" in workflow
     assert "actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5" in workflow
     assert "name: github-pages" in workflow
     assert "pages: write" in workflow
@@ -504,10 +517,6 @@ def test_external_actions_are_pinned_to_reviewed_commits():
         "actions/upload-artifact": (
             "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
             "v7",
-        ),
-        "actions/upload-pages-artifact": (
-            "fc324d3547104276b827a68afc52ff2a11cc49c9",
-            "v5",
         ),
     }
     observed_actions = set()

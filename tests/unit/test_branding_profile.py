@@ -20,7 +20,7 @@ from caveviewer.branding import (
 )
 
 
-def test_bundled_default_profile_uses_original_mark_for_windows_and_about():
+def test_bundled_default_profile_uses_candidate_12_hero_and_platform_roles():
     profile = resolve_branding_profile(environ={}, frozen=False)
 
     assert profile.profile_id == "default"
@@ -28,8 +28,12 @@ def test_bundled_default_profile_uses_original_mark_for_windows_and_about():
     assert profile.asset_for("application_mark").width >= 1024
     assert profile.asset_for("application_mark").height >= 1024
     assert profile.asset_for("application_mark").alpha_required is True
-    assert profile.asset_for("about_mark").path.name == "about-mark-semi-flat.png"
-    assert profile.asset_for("application_mark").path.name == "caveviewer-mark.png"
+    application_mark = profile.asset_for("application_mark")
+    about_mark = profile.asset_for("about_mark")
+
+    assert application_mark.path.name == "caveviewer-mark.png"
+    assert about_mark.path.name == "about-mark-layered-rim.png"
+    assert application_mark.sha256 == about_mark.sha256
     assert profile.asset_for("windows_app_icon").path.name == (
         "windows-small-mark.png"
     )

@@ -177,9 +177,9 @@ CaveViewer/
 ├── benchmarks/
 ├── docs/
 │   ├── development/
-│   └── previous-site/
 ├── packaging/
 │   ├── linux/
+│   │   └── screenshots/
 │   ├── pyinstaller/
 │   └── windows/
 ├── scripts/
@@ -203,9 +203,9 @@ tests and review.
 - Keep the public source routes, `assets/`, `storage/`, and `CNAME` under
   `website/`. The Pages artifact is built only from those sources plus
   `docs/development/` at its existing `/development/` path.
-- Keep `docs/previous-site/` as the tracked, non-published archive of the
-  former landing page and images. It is excluded from the Pages artifact and
-  may be used for comparison or an explicitly approved recovery.
+- Keep the Linux AppStream screenshots under `packaging/linux/screenshots/`;
+  the metadata references those raw-GitHub resources. The former Pages site is
+  recoverable from Git history rather than a tracked archive.
 - Keep `updates/<platform>/...` paths stable because installed clients resolve
   those public URLs. Windows uses `updates/windows/`; Linux uses
   `updates/linux/x86_64/`; macOS uses `updates/macos/{arm64,x86_64}/`. Retain
