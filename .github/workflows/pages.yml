@@ -9,6 +9,12 @@ on:
     paths:
       - "website/**"
       - "docs/development/**"
+      # Stable release metadata reaches main only after release/next is reviewed
+      # and merged. Building from it keeps public download links in lockstep.
+      - "updates/windows/stable.json"
+      - "updates/linux/x86_64/stable.json"
+      - "updates/macos/arm64/stable.json"
+      - "updates/macos/x86_64/stable.json"
       - ".github/workflows/pages.yml"
 
 permissions:

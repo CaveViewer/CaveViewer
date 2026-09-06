@@ -7,6 +7,8 @@ import argparse
 import shutil
 from pathlib import Path
 
+from sync_release import synchronize_published_stable_release
+
 
 WEBSITE_ROOT = Path(__file__).resolve().parents[1]
 REPOSITORY_ROOT = WEBSITE_ROOT.parent
@@ -66,6 +68,10 @@ def build_site(output: Path, *, replace: bool = False) -> Path:
     for directory_name in ("assets", "storage"):
         shutil.copytree(WEBSITE_ROOT / directory_name, output / directory_name)
     shutil.copytree(DEVELOPMENT_ROOT, output / "development")
+    synchronize_published_stable_release(
+        website_root=output,
+        repository_root=REPOSITORY_ROOT,
+    )
     return output
 
 

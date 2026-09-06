@@ -4,19 +4,26 @@
 from __future__ import annotations
 
 import argparse
+import copy
 from datetime import date
 import html
 import json
 import re
 import sys
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
 
 
-REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-RELEASE_DATA_PATH = REPOSITORY_ROOT / "assets/data/release.json"
-INDEX_PATH = REPOSITORY_ROOT / "index.html"
-DOCS_PATH = REPOSITORY_ROOT / "docs.html"
+WEBSITE_ROOT = Path(__file__).resolve().parents[1]
+REPOSITORY_ROOT = WEBSITE_ROOT.parent
+RELEASE_DATA_PATH = WEBSITE_ROOT / "assets/data/release.json"
+INDEX_PATH = WEBSITE_ROOT / "index.html"
+DOCS_PATH = WEBSITE_ROOT / "docs.html"
+APPSTREAM_PATH = (
+    REPOSITORY_ROOT
+    / "packaging/linux/io.github.caveviewer.caveviewer.metainfo.xml"
+)
 START_MARKER = "<!-- release-picker:start -->"
 END_MARKER = "<!-- release-picker:end -->"
 DOCS_START_MARKER = "<!-- installation-guidance:start -->"
@@ -24,6 +31,28 @@ DOCS_END_MARKER = "<!-- installation-guidance:end -->"
 OFFICIAL_RELEASE_REPOSITORY = "https://github.com/CaveViewer/CaveViewer"
 RELEASE_VERSION_PATTERN = re.compile(r"\d+\.\d+\.\d+")
 RELEASE_CHANNELS = {"Preview", "Stable"}
+STABLE_MANIFEST_SOURCES = (
+    (
+        "Windows",
+        Path("updates/windows/stable.json"),
+        "CaveViewer-{version}-windows.exe",
+    ),
+    (
+        "Linux x86_64",
+        Path("updates/linux/x86_64/stable.json"),
+        "CaveViewer-{version}-x86_64.AppImage",
+    ),
+    (
+        "macOS Apple silicon",
+        Path("updates/macos/arm64/stable.json"),
+        "CaveViewer-{version}-macos-arm64.dmg",
+    ),
+    (
+        "macOS Intel",
+        Path("updates/macos/x86_64/stable.json"),
+        "CaveViewer-{version}-macos-x86_64.dmg",
+    ),
+)
 
 
 def _text(value: object) -> str:
@@ -53,13 +82,8 @@ def _require_text(mapping: dict[str, Any], key: str, label: str) -> str:
     return value
 
 
-def load_release_data(path: Path = RELEASE_DATA_PATH) -> dict[str, Any]:
-    """Load and validate the small static manifest before rendering it."""
-
-    try:
-        release = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
-        raise ValueError(f"Unable to load {path}: {error}") from error
+def _validate_release_data(release: object) -> dict[str, Any]:
+    """Validate the presentation data shared by source and built site files."""
 
     release = _require_mapping(release, "release")
     if release.get("schema_version") != 1:
@@ -144,6 +168,113 @@ def load_release_data(path: Path = RELEASE_DATA_PATH) -> dict[str, Any]:
             "CaveViewer packages"
         )
     return release
+
+
+def load_release_data(path: Path = RELEASE_DATA_PATH) -> dict[str, Any]:
+    """Load and validate the small static manifest before rendering it."""
+
+    try:
+        release = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError(f"Unable to load {path}: {error}") from error
+    return _validate_release_data(release)
+
+
+def _expected_artifacts(version: str) -> dict[str, str]:
+    return {
+        "windows": f"CaveViewer-{version}-windows.exe",
+        "linux": f"CaveViewer-{version}-x86_64.AppImage",
+        "macos-arm64": f"CaveViewer-{version}-macos-arm64.dmg",
+        "macos-x86_64": f"CaveViewer-{version}-macos-x86_64.dmg",
+    }
+
+
+def _published_stable_version(repository_root: Path) -> str:
+    """Return the one Stable version advertised by all release manifests."""
+
+    versions: set[str] = set()
+    for label, relative_path, artifact_pattern in STABLE_MANIFEST_SOURCES:
+        path = repository_root / relative_path
+        try:
+            manifest = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise ValueError(f"Unable to load {path}: {error}") from error
+        manifest = _require_mapping(manifest, f"{label} Stable manifest")
+        version = manifest.get("latest_version")
+        if (
+            not isinstance(version, str)
+            or not RELEASE_VERSION_PATTERN.fullmatch(version)
+        ):
+            raise ValueError(
+                f"{label} Stable manifest must contain a three-component latest_version"
+            )
+        if manifest.get("release_channel") != "stable":
+            raise ValueError(f"{label} manifest is not a Stable release")
+        artifact = artifact_pattern.format(version=version)
+        expected_url = (
+            f"{OFFICIAL_RELEASE_REPOSITORY}/releases/download/v{version}/{artifact}"
+        )
+        if manifest.get("download_url") != expected_url:
+            raise ValueError(
+                f"{label} Stable manifest does not advertise its canonical {artifact}"
+            )
+        versions.add(version)
+
+    if len(versions) != 1:
+        advertised = ", ".join(sorted(versions)) or "none"
+        raise ValueError(
+            "Stable manifests must advertise one matching version; "
+            f"found {advertised}"
+        )
+    return versions.pop()
+
+
+def _published_stable_date(repository_root: Path, version: str) -> str:
+    """Read the matching AppStream entry rather than a newer Preview entry."""
+
+    path = repository_root / APPSTREAM_PATH.relative_to(REPOSITORY_ROOT)
+    try:
+        root = ET.parse(path).getroot()
+    except (OSError, ET.ParseError) as error:
+        raise ValueError(f"Unable to load {path}: {error}") from error
+
+    for entry in root.iter():
+        if entry.tag.rsplit("}", 1)[-1] != "release":
+            continue
+        if entry.attrib.get("version") != version:
+            continue
+        release_date = entry.attrib.get("date", "")
+        try:
+            date.fromisoformat(release_date)
+        except ValueError as error:
+            raise ValueError(
+                f"AppStream Stable release {version} must have a valid ISO date"
+            ) from error
+        return release_date
+    raise ValueError(f"AppStream does not contain Stable release {version}")
+
+
+def published_stable_release_data(
+    *,
+    template_path: Path = RELEASE_DATA_PATH,
+    repository_root: Path = REPOSITORY_ROOT,
+) -> dict[str, Any]:
+    """Derive deployed download data from the reconciled Stable manifests."""
+
+    release = copy.deepcopy(load_release_data(template_path))
+    if release["channel"] != "Stable":
+        raise ValueError("website release template must select the Stable channel")
+
+    version = _published_stable_version(repository_root)
+    release["version"] = version
+    release["release_date"] = _published_stable_date(repository_root, version)
+    artifacts = _expected_artifacts(version)
+    release["platforms"]["windows"]["artifact"] = artifacts["windows"]
+    release["platforms"]["linux"]["artifact"] = artifacts["linux"]
+    architectures = release["platforms"]["macos"]["architectures"]
+    architectures["arm64"]["artifact"] = artifacts["macos-arm64"]
+    architectures["x86_64"]["artifact"] = artifacts["macos-x86_64"]
+    return _validate_release_data(release)
 
 
 def render_release_picker(release: dict[str, Any]) -> str:
@@ -354,6 +485,65 @@ def render_docs(docs_text: str, release: dict[str, Any]) -> str:
     return f"{docs_text[:line_start]}{replacement}{docs_text[end_line_end:]}"
 
 
+def synchronize_release_data(
+    release: dict[str, Any],
+    *,
+    website_root: Path = WEBSITE_ROOT,
+    check: bool = False,
+    include_data: bool = False,
+) -> bool:
+    """Render one release-data document into a source tree or staging artifact.
+
+    Return ``True`` when every target was already current. In write mode, stale
+    files are updated and the return value still records that a change occurred.
+    Source-template checks preserve their existing JSON formatting; staged
+    builds pass ``include_data=True`` to replace the copied release document.
+    """
+
+    data_path = website_root / "assets/data/release.json"
+    index_path = website_root / "index.html"
+    docs_path = website_root / "docs.html"
+    try:
+        current_data = data_path.read_text(encoding="utf-8")
+        current_index = index_path.read_text(encoding="utf-8")
+        current_docs = docs_path.read_text(encoding="utf-8")
+    except OSError as error:
+        raise ValueError(f"Unable to load website release targets: {error}") from error
+
+    rendered_index = render_index(current_index, release)
+    rendered_docs = render_docs(current_docs, release)
+    rendered_data = f"{json.dumps(release, indent=2)}\n"
+    current = current_index == rendered_index and current_docs == rendered_docs
+    if include_data:
+        current = current and current_data == rendered_data
+    if not current and not check:
+        if include_data:
+            data_path.write_text(rendered_data, encoding="utf-8")
+        index_path.write_text(rendered_index, encoding="utf-8")
+        docs_path.write_text(rendered_docs, encoding="utf-8")
+    return current
+
+
+def synchronize_published_stable_release(
+    *,
+    website_root: Path = WEBSITE_ROOT,
+    repository_root: Path = REPOSITORY_ROOT,
+    check: bool = False,
+) -> bool:
+    """Sync a staged website from Stable metadata already reconciled in main."""
+
+    release = published_stable_release_data(
+        template_path=website_root / "assets/data/release.json",
+        repository_root=repository_root,
+    )
+    return synchronize_release_data(
+        release,
+        website_root=website_root,
+        check=check,
+        include_data=True,
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -361,29 +551,59 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="fail if generated HTML is out of date with assets/data/release.json",
     )
+    parser.add_argument(
+        "--published-stable",
+        action="store_true",
+        help=(
+            "derive the staged website release data from Stable update manifests "
+            "already reconciled in the repository"
+        ),
+    )
+    parser.add_argument(
+        "--website-root",
+        type=Path,
+        default=WEBSITE_ROOT,
+        help="website source tree or staged Pages artifact to synchronize",
+    )
+    parser.add_argument(
+        "--repository-root",
+        type=Path,
+        default=REPOSITORY_ROOT,
+        help="repository containing Stable manifests and AppStream metadata",
+    )
     args = parser.parse_args(argv)
 
     try:
-        release = load_release_data()
-        current_index = INDEX_PATH.read_text(encoding="utf-8")
-        current_docs = DOCS_PATH.read_text(encoding="utf-8")
-        rendered_index = render_index(current_index, release)
-        rendered_docs = render_docs(current_docs, release)
+        if args.published_stable:
+            current = synchronize_published_stable_release(
+                website_root=args.website_root,
+                repository_root=args.repository_root,
+                check=args.check,
+            )
+        else:
+            release = load_release_data(
+                args.website_root / "assets/data/release.json"
+            )
+            current = synchronize_release_data(
+                release, website_root=args.website_root, check=args.check
+            )
     except ValueError as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
 
-    if current_index == rendered_index and current_docs == rendered_docs:
+    if current:
         return 0
     if args.check:
+        command = (
+            "scripts/sync_release.py --published-stable"
+            if args.published_stable
+            else "scripts/sync_release.py"
+        )
         print(
-            "generated HTML is out of date; run scripts/sync_release.py",
+            f"generated release files are out of date; run {command}",
             file=sys.stderr,
         )
         return 1
-
-    INDEX_PATH.write_text(rendered_index, encoding="utf-8")
-    DOCS_PATH.write_text(rendered_docs, encoding="utf-8")
     return 0
 
 

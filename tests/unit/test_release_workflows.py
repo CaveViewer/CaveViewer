@@ -449,6 +449,14 @@ def test_pages_workflow_deploys_public_site_independently_from_releases():
     assert "branches:\n      - main" in workflow
     assert '      - "website/**"' in workflow
     assert '      - "docs/development/**"' in workflow
+    for stable_manifest in (
+        "updates/windows/stable.json",
+        "updates/linux/x86_64/stable.json",
+        "updates/macos/arm64/stable.json",
+        "updates/macos/x86_64/stable.json",
+    ):
+        assert f'      - "{stable_manifest}"' in workflow
+    assert '      - "updates/**"' not in workflow
     assert '      - ".github/workflows/pages.yml"' in workflow
     assert "release:" not in workflow
     assert "actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6" in workflow
