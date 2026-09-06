@@ -12,10 +12,61 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS_DIR = REPOSITORY_ROOT / ".github" / "workflows"
 RELEASE_SCRIPT = REPOSITORY_ROOT / "scripts" / "release.sh"
 MACOS_DMG_SMOKE_SCRIPT = REPOSITORY_ROOT / "scripts" / "macos" / "smoke_dmg.sh"
+_EXACT_PINNED_REQUIREMENT_LINE = re.compile(
+    r"(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*)=="
+    r"(?P<version>[A-Za-z0-9][A-Za-z0-9.!+_-]*)\s+\\"
+)
+_SHA256_HASH_LINE = re.compile(
+    r"--hash=sha256:(?P<hash>[0-9a-f]{64})(?P<continuation>\s+\\)?"
+)
 requires_executable_shell_scripts = pytest.mark.skipif(
     os.name == "nt",
     reason="release shell scripts are executed by Unix CI jobs",
 )
+
+
+def _parse_exact_hash_locked_requirements(
+    lock: str,
+) -> dict[str, tuple[str, tuple[str, ...]]]:
+    """Parse the restricted requirement syntax used by the finalizer lock."""
+    entries = {}
+    lines = lock.splitlines()
+    line_index = 0
+
+    while line_index < len(lines):
+        line = lines[line_index].strip()
+        if not line or line.startswith("#"):
+            line_index += 1
+            continue
+
+        requirement_match = _EXACT_PINNED_REQUIREMENT_LINE.fullmatch(line)
+        assert requirement_match is not None, (
+            "Release-finalizer requirements must use an exact pin followed by "
+            f"a continuation at line {line_index + 1}: {line}"
+        )
+        name = requirement_match["name"]
+        assert name not in entries, f"Duplicate release-finalizer requirement: {name}"
+        line_index += 1
+
+        hashes = []
+        while True:
+            assert line_index < len(lines), (
+                f"Release-finalizer requirement {name} has no SHA-256 hash"
+            )
+            hash_line = lines[line_index].strip()
+            hash_match = _SHA256_HASH_LINE.fullmatch(hash_line)
+            assert hash_match is not None, (
+                f"Release-finalizer requirement {name} has an invalid hash at "
+                f"line {line_index + 1}: {hash_line}"
+            )
+            hashes.append(hash_match["hash"])
+            line_index += 1
+            if not hash_match["continuation"]:
+                break
+
+        entries[name] = (requirement_match["version"], tuple(hashes))
+
+    return entries
 
 
 def test_macos_release_workflows_use_architecture_specific_contracts():
@@ -480,6 +531,21 @@ def test_dependabot_updates_actions_and_isolated_finalizer_lock():
 
     assert config_path.is_file()
     config = config_path.read_text(encoding="utf-8")
+    update_blocks = {
+        match["ecosystem"]: match["content"]
+        for match in re.finditer(
+            r'^  - package-ecosystem: "(?P<ecosystem>[^"]+)"\n'
+            r"(?P<content>.*?)(?=^  - package-ecosystem:|\Z)",
+            config,
+            re.MULTILINE | re.DOTALL,
+        )
+    }
+    major_update_policy = (
+        '    ignore:\n'
+        '      - dependency-name: "*"\n'
+        '        update-types:\n'
+        '          - "version-update:semver-major"\n'
+    )
 
     assert 'package-ecosystem: "github-actions"' in config
     assert 'directory: "/"' in config
@@ -495,33 +561,28 @@ def test_dependabot_updates_actions_and_isolated_finalizer_lock():
     assert 'package-ecosystem: "pip"' in config
     assert 'directory: "/requirements"' in config
     assert 'prefix: "build(deps)"' in config
+    assert set(update_blocks) == {"github-actions", "pip", "npm"}
+    for update_block in update_blocks.values():
+        assert major_update_policy in update_block
+        assert "version-update:semver-minor" not in update_block
+        assert "version-update:semver-patch" not in update_block
+        assert "allow:" not in update_block
 
 
-def test_external_actions_are_pinned_to_reviewed_commits():
+def test_external_actions_are_pinned_to_immutable_commits():
     expected_actions = {
-        "actions/checkout": ("3d3c42e5aac5ba805825da76410c181273ba90b1", "v7"),
-        "actions/configure-pages": ("45bfe0192ca1faeb007ade9deae92b16b8254a0d", "v6"),
-        "actions/create-github-app-token": (
-            "bcd2ba49218906704ab6c1aa796996da409d3eb1",
-            "v3.2.0",
-        ),
-        "actions/deploy-pages": ("cd2ce8fcbc39b97be8ca5fce6e763baed58fa128", "v5"),
-        "actions/download-artifact": (
-            "3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
-            "v8",
-        ),
-        "actions/setup-python": (
-            "5fda3b95a4ea91299a34e894583c3862153e4b97",
-            "v7.0.0",
-        ),
-        "actions/upload-artifact": (
-            "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
-            "v7",
-        ),
+        "actions/checkout",
+        "actions/configure-pages",
+        "actions/create-github-app-token",
+        "actions/deploy-pages",
+        "actions/download-artifact",
+        "actions/setup-python",
+        "actions/upload-artifact",
     }
     observed_actions = set()
     action_pattern = re.compile(
-        r"^\s*uses:\s+([\w.-]+/[\w.-]+)@([0-9a-f]{40})\s+#\s+(\S+)\s*$"
+        r"^\s*uses:\s+([\w.-]+/[\w.-]+)@([0-9a-f]{40})\s+#\s+"
+        r"(v\d+(?:\.\d+){0,2})\s*$"
     )
     for workflow_path in WORKFLOWS_DIR.glob("*.yml"):
         for line in workflow_path.read_text(encoding="utf-8").splitlines():
@@ -529,10 +590,12 @@ def test_external_actions_are_pinned_to_reviewed_commits():
                 continue
             match = action_pattern.match(line)
             assert match is not None, f"Unpinned Action in {workflow_path}: {line}"
-            action, revision, version = match.groups()
-            assert expected_actions.get(action) == (revision, version)
+            action, _revision, _version = match.groups()
+            assert action in expected_actions, (
+                f"Unexpected external Action in {workflow_path}: {line}"
+            )
             observed_actions.add(action)
-    assert observed_actions == set(expected_actions)
+    assert observed_actions == expected_actions
 
 
 def test_release_finalizer_dependency_lock_is_exact_and_hash_checked():
@@ -540,13 +603,53 @@ def test_release_finalizer_dependency_lock_is_exact_and_hash_checked():
     lock = lock_path.read_text(encoding="utf-8")
     workflow = (WORKFLOWS_DIR / "finalize-release.yml").read_text(encoding="utf-8")
 
-    assert "cryptography==50.0.0" in lock
-    assert "cffi==2.1.1" in lock
-    assert "pycparser==3.0" in lock
-    assert lock.count("--hash=sha256:") == 3
-    assert ">=" not in lock
+    requirements = _parse_exact_hash_locked_requirements(lock)
+
+    assert set(requirements) == {"cryptography", "cffi", "pycparser"}
+    assert all(hashes for _version, hashes in requirements.values())
     assert "--require-hashes -r requirements/release-finalizer-linux.txt" in workflow
     assert "--only-binary=:all:" in workflow
+
+
+def test_release_finalizer_lock_contract_accepts_updated_exact_versions():
+    requirements = _parse_exact_hash_locked_requirements(
+        "\n".join(
+            (
+                "cryptography==999.999.999 \\",
+                f"    --hash=sha256:{'a' * 64} \\",
+                f"    --hash=sha256:{'b' * 64}",
+                "",
+            )
+        )
+    )
+
+    assert requirements == {
+        "cryptography": ("999.999.999", ("a" * 64, "b" * 64))
+    }
+
+
+@pytest.mark.parametrize(
+    "lock",
+    (
+        "\n".join(
+            (
+                "cryptography>=50.0.1 \\",
+                f"    --hash=sha256:{'a' * 64}",
+                "",
+            )
+        ),
+        "\n".join(
+            (
+                "cryptography==50.0.1 \\",
+                "    --hash=sha256:not-a-sha256",
+                "",
+            )
+        ),
+    ),
+)
+def test_release_finalizer_lock_contract_rejects_unpinned_or_invalid_hashes(lock):
+    with pytest.raises(AssertionError):
+        _parse_exact_hash_locked_requirements(lock)
 
 
 def test_all_platform_release_workflow_builds_platforms_in_parallel_then_finalizes():

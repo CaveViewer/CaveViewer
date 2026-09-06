@@ -231,6 +231,16 @@ release it is dispatched on `release/next`, never on `main` or a feature branch.
 Package-only (`publish: false`) validation may run on another branch because it
 does not create a release or commit release metadata.
 
+### Dependabot maintenance policy
+
+Dependabot accepts routine SemVer patch and minor updates for GitHub Actions,
+the browser-test harness, and the isolated release-finalizer lock. Routine
+major updates are ignored because they require an explicit API or wheel
+compatibility review. The finalizer lock must remain exactly pinned and
+SHA-256-hashed, and external Actions must remain pinned to full commit SHAs
+with their version comments. The SemVer policy applies only to version updates;
+security updates remain visible for normal CI and human review.
+
 ### One-action release promotion
 
 Use **Release Promotion** after all intended changes have reached protected
