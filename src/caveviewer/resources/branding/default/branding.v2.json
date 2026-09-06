@@ -1,16 +1,16 @@
 {
   "schema_version": 2,
   "profile_id": "default",
-  "display_name": "CaveViewer Default Branding with Rich About Mark",
+  "display_name": "CaveViewer Default Branding with Candidate 12 Icon Family",
   "provenance": {
     "creator": "CaveViewer project",
     "license": "CaveViewer project artwork",
-    "source": "Monochromatic amber cave-map concept derived from the original CaveViewer app mark, with optical compositions for Windows, macOS, and GNOME plus self-contained Linux vector variants"
+    "source": "Candidate 12 is the final high-resolution CaveViewer application and About hero, with a 5-percent-smaller rounded outer rim, inner-rim-free beam-exposure survey mesh, and simplified mesh-free Windows, macOS, Linux full-color, scalable, and symbolic masters derived from its cave contour; each platform retains its separate optical composition and the left-to-right light/beam metaphor"
   },
   "assets": {
     "caveviewer_mark": {
       "path": "caveviewer-mark.png",
-      "sha256": "7dd3215fb20dbe43c8c0e9f956df3fc5936f8c30dc78d1998a020b9357ddfde4",
+      "sha256": "06d559a9f6e70e82a60c23f37a6b4e3b1801630f6a50db628baef248a940b62d",
       "minimum_width": 2048,
       "minimum_height": 2048,
       "alpha": "required",
@@ -24,9 +24,17 @@
       "alpha": "required",
       "safe_area_inset": 0.0
     },
+    "about_layered_rim": {
+      "path": "about-mark-layered-rim.png",
+      "sha256": "06d559a9f6e70e82a60c23f37a6b4e3b1801630f6a50db628baef248a940b62d",
+      "minimum_width": 2048,
+      "minimum_height": 2048,
+      "alpha": "required",
+      "safe_area_inset": 0.0
+    },
     "windows_small_mark": {
       "path": "windows-small-mark.png",
-      "sha256": "51e51cf29940eb2d07f83e1d489df64ec00f3d852ac307976e2783948974fe76",
+      "sha256": "8b8bddb6e82839b5b48591d2c1aff23b5a2bc47499568a8e9d88629683440559",
       "minimum_width": 1024,
       "minimum_height": 1024,
       "alpha": "required",
@@ -34,7 +42,7 @@
     },
     "macos_app_mark": {
       "path": "macos-app-mark.png",
-      "sha256": "7b502bbc107e10fe6033694dbeb3c3847711e05096e10a85fc96ae5e4e471298",
+      "sha256": "99403e72ee511d83de8769dc1f53b2ef4b4e73abbe375d3c8b8a004cabd45c60",
       "minimum_width": 1024,
       "minimum_height": 1024,
       "alpha": "required",
@@ -42,7 +50,7 @@
     },
     "linux_app_mark": {
       "path": "linux-app-mark.png",
-      "sha256": "9695bd0da5b792d5821462c6047599d51e63636bf706595ac415e2f440ecf78c",
+      "sha256": "75f073c441508bb76531c278dfc640ccca5157211dd71d022ffe14fff42ac225",
       "minimum_width": 1024,
       "minimum_height": 1024,
       "alpha": "required",
@@ -50,7 +58,7 @@
     },
     "linux_scalable_mark": {
       "path": "linux-app-icon.svg",
-      "sha256": "90fc559d9fdd656c3c44192b14b7c650f737fc63d3fd4374d3c02c049a193cdb",
+      "sha256": "d4e6b5e287f8248dc4c4dc2a43d14cf9dd10f1d72acb50e8c201bfae1a1d7431",
       "minimum_width": 128,
       "minimum_height": 128,
       "alpha": "required",
@@ -58,7 +66,7 @@
     },
     "linux_symbolic_mark": {
       "path": "linux-app-icon-symbolic.svg",
-      "sha256": "2e3080d646a4737e730346192f5a4ef775699a878692db3c54f38146e5188aa0",
+      "sha256": "a1cee41fb39f9cd54d40a905a81282befafcb9abf030b233bf228953df128e1b",
       "minimum_width": 128,
       "minimum_height": 128,
       "alpha": "required",
@@ -67,7 +75,7 @@
   },
   "roles": {
     "application_mark": "caveviewer_mark",
-    "about_mark": "about_semi_flat",
+    "about_mark": "about_layered_rim",
     "windows_app_icon": "windows_small_mark",
     "macos_app_icon": "macos_app_mark",
     "linux_app_icon": "linux_app_mark",
