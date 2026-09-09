@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from caveviewer.core.chunking import builder as chunker
 from caveviewer.gui.viewer_session import (
     PendingImportRequest,
     ViewerBenchmarkConfig,
@@ -15,7 +16,12 @@ from caveviewer.gui.viewer_session import (
 
 
 def test_ready_cache_config_snapshots_its_manifest_mapping():
-    manifest = {"version": 1}
+    manifest = {
+        "version": 1,
+        "chunk_size": 12.5,
+        "max_upload_group_mb": 16.0,
+        "chunks": {},
+    }
 
     config = ViewerSessionConfig(
         mode=ViewerLaunchMode.READY_CACHE,
@@ -25,9 +31,23 @@ def test_ready_cache_config_snapshots_its_manifest_mapping():
     )
     manifest["version"] = 2
 
-    assert config.manifest == {"version": 1}
+    assert config.manifest["version"] == 1
+    assert chunker.manifest_chunk_size(config.manifest) == 12.5
+    assert chunker.manifest_max_upload_group_mb(config.manifest) == 16.0
     with pytest.raises(TypeError):
         config.manifest["version"] = 3
+
+
+def test_benchmark_session_manifest_remains_runtime_compatible():
+    config = ViewerSessionConfig(
+        mode=ViewerLaunchMode.BENCHMARK,
+        cache_dir="/cache",
+        textures_dir="/textures",
+        manifest={"version": 1, "chunk_size": 25.0, "chunks": {}},
+        benchmark=ViewerBenchmarkConfig(object(), "/results", {}),
+    )
+
+    assert chunker.manifest_chunk_size(config.manifest) == 25.0
 
 
 def test_pending_import_config_snapshots_its_model_descriptor():

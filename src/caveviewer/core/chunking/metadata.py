@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import math
 import os
 
@@ -115,22 +116,26 @@ def load_manifest(cache_dir):
     return manifest
 
 
-def manifest_chunk_size(manifest: dict | None) -> float | None:
+def manifest_chunk_size(
+    manifest: Mapping[str, object] | None,
+) -> float | None:
     """Return the chunk size recorded in a cache manifest, if valid."""
-    if not isinstance(manifest, dict):
+    if not isinstance(manifest, Mapping):
         return None
     try:
         chunk_size = float(manifest.get("chunk_size"))
     except (TypeError, ValueError):
         return None
-    if chunk_size <= 0.0:
+    if not math.isfinite(chunk_size) or chunk_size <= 0.0:
         return None
     return chunk_size
 
 
-def manifest_max_upload_group_mb(manifest: dict | None) -> float | None:
+def manifest_max_upload_group_mb(
+    manifest: Mapping[str, object] | None,
+) -> float | None:
     """Return the upload-group MB limit recorded in a cache manifest."""
-    if not isinstance(manifest, dict):
+    if not isinstance(manifest, Mapping):
         return None
     try:
         value = float(manifest.get("max_upload_group_mb"))
@@ -175,9 +180,14 @@ def cache_is_valid(obj_path: str) -> bool:
     )
 
 
-def _has_current_chunk_cache(cache_dir: str, manifest: dict) -> bool:
+def _has_current_chunk_cache(
+    cache_dir: str,
+    manifest: Mapping[str, object],
+) -> bool:
     """Return whether a manifest points at the active render-chunk layout."""
-    if not isinstance(manifest, dict) or manifest.get("version") != _VERSION:
+    if not isinstance(manifest, Mapping) or manifest.get("version") != _VERSION:
+        return False
+    if manifest_chunk_size(manifest) is None:
         return False
     if not isinstance(manifest.get("chunks"), dict):
         return False
