@@ -15,7 +15,7 @@ The benchmark records:
 - `summary.json`: aggregate FPS/frame-time metrics and pass/fail inputs.
 - `frames.jsonl`: one JSON object per measured frame.
 - `environment.json`: app, Python, platform, OpenGL, runner, and tuning details.
-- `benchmark.log` and workflow `console.log`: parse-friendly debug output.
+- `benchmark.log` and `orchestration.log`: parse-friendly debug output.
 
 Each summary includes both user-visible wall-clock FPS and lower-level render
 work timing. Use `wall_clock_fps` as the primary release gate: it is frames
@@ -330,38 +330,13 @@ different scenarios.
 ## Threshold file
 
 `benchmarks/viewer-thresholds.v1.json` is the default threshold policy for local
-and workflow comparisons. Keep threshold changes separate from route changes
+comparisons. Keep threshold changes separate from route changes
 where practical: a route change invalidates baseline data, while a threshold
 change changes release policy.
 
 The comparison script accepts one-off numeric overrides for calibration, but
-routine checks should use the tracked threshold file so local and GitHub Actions
-runs agree.
-
-## CI workflow
-
-Run `.github/workflows/viewer-benchmark.yml` manually from GitHub Actions.
-
-Required production input:
-
-- `benchmark_map_url`: an HTTPS URL to a zip that contains the precompiled chunk
-  cache.
-
-Recommended inputs:
-
-- `benchmark_map_sha256`: expected SHA-256 for the zip.
-- `benchmark_cache_subdir`: subdirectory inside the zip that contains
-  `manifest.json`; leave as `.` when the zip root is the cache.
-- `baseline_ref`: `main` for PR-style checks, or the previous release tag for a
-  release comparison.
-- `candidate_ref`: leave empty for the workflow SHA, or provide a branch/tag/SHA.
-- `threshold_config_path`: threshold JSON from the candidate checkout; defaults
-  to `benchmarks/viewer-thresholds.v1.json`.
-- `runner_label`: use a stable GPU/display runner when available.
-
-When `benchmark_map_url` is omitted, the workflow exits successfully after
-printing setup guidance. This keeps the workflow available before a benchmark
-map artifact is published without creating noisy CI failures.
+routine checks should use the tracked threshold file so separate local runs use
+the same policy.
 
 ## Calibration policy
 

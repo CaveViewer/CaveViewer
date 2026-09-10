@@ -1,0 +1,10 @@
+name: CaveViewer CodeQL configuration
+
+# Local benchmark tooling is excluded by project policy. Keep this list narrow
+# so default setup continues to scan every shipped and hosted product surface.
+paths-ignore:
+  - "benchmarks/**"
+  - "scripts/benchmark/**"
+  - "src/caveviewer/benchmark.py"
+  - "src/caveviewer/benchmarking/**"
+  - "tests/unit/benchmarking/**"

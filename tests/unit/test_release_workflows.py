@@ -468,29 +468,6 @@ def test_macos_dmg_smoke_script_exposes_bounded_architecture_interface():
     assert "unsupported macOS architecture" in invalid_arch.stderr
 
 
-def test_viewer_benchmark_workflow_compares_refs_and_uploads_artifacts():
-    workflow = (WORKFLOWS_DIR / "viewer-benchmark.yml").read_text(
-        encoding="utf-8"
-    )
-
-    assert "name: Viewer Benchmark" in workflow
-    assert "workflow_dispatch:" in workflow
-    assert "benchmark_map_url:" in workflow
-    assert "threshold_config_path:" in workflow
-    assert "default: benchmarks/viewer-thresholds.v1.json" in workflow
-    assert "No benchmark_map_url was supplied." in workflow
-    assert "ref: ${{ inputs.baseline_ref }}" in workflow
-    assert "inputs.candidate_ref != '' && inputs.candidate_ref || github.sha" in workflow
-    assert "python -m venv .venv-benchmark" in workflow
-    assert workflow.count("caveviewer-benchmark") >= 2
-    assert "set -o pipefail" in workflow
-    assert "scripts/benchmark/compare_benchmark_results.py" in workflow
-    assert "--thresholds \"$GITHUB_WORKSPACE/candidate/${{ inputs.threshold_config_path }}\"" in workflow
-    assert "compare_args+=(--max-median-fps-drop-pct" in workflow
-    assert "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7" in workflow
-    assert "benchmark-artifacts/" in workflow
-
-
 def test_pages_workflow_deploys_public_site_independently_from_releases():
     workflow = (WORKFLOWS_DIR / "pages.yml").read_text(encoding="utf-8")
 
