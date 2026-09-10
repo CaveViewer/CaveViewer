@@ -2,6 +2,8 @@
 
 from types import SimpleNamespace
 
+import pytest
+
 from caveviewer.gui import viewer_input
 
 
@@ -125,3 +127,97 @@ def test_key_event_press_or_repeat_policy_supports_explicit_and_legacy_backends(
     assert not viewer_input.key_event_is_press_or_repeat(explicit_keys, 0)
     assert not viewer_input.key_event_is_press_or_repeat(explicit_keys, 3)
     assert viewer_input.key_event_is_press_or_repeat(legacy_keys, 2)
+
+
+def _pointer_facts(**overrides):
+    values = {
+        "setup_complete": True,
+        "input_suppressed": False,
+        "waiting_for_begin": False,
+        "help_visible": False,
+        "recording_hides_hud": False,
+        "is_left_button": True,
+        "is_look_button": True,
+        "option_look_active": False,
+    }
+    values.update(overrides)
+    return viewer_input.PointerPressFacts(**values)
+
+
+def test_pointer_press_policy_preserves_modal_and_mouse_look_priority():
+    assert viewer_input.pointer_press_intent(
+        _pointer_facts(setup_complete=False)
+    ).kind is viewer_input.PointerPressKind.IGNORE
+    assert viewer_input.pointer_press_intent(
+        _pointer_facts(help_visible=True)
+    ).kind is viewer_input.PointerPressKind.DISMISS_HELP
+
+    option_look = viewer_input.pointer_press_intent(
+        _pointer_facts(
+            recording_hides_hud=True,
+            is_look_button=False,
+            option_look_active=True,
+        )
+    )
+    assert option_look.kind is viewer_input.PointerPressKind.START_MOUSE_LOOK
+    assert option_look.option_left_look is True
+    assert viewer_input.pointer_press_intent(
+        _pointer_facts(
+            recording_hides_hud=True,
+            is_left_button=False,
+            is_look_button=False,
+        )
+    ).kind is viewer_input.PointerPressKind.IGNORE
+    assert viewer_input.pointer_press_intent(
+        _pointer_facts(is_look_button=False)
+    ).kind is viewer_input.PointerPressKind.HUD
+
+
+def test_pointer_release_policy_cleans_up_option_and_platform_look_buttons():
+    facts = viewer_input.PointerReleaseFacts(
+        setup_complete=True,
+        input_suppressed=False,
+        is_left_button=True,
+        is_look_button=False,
+        option_left_look_active=True,
+        mouse_look_active=True,
+    )
+    assert (
+        viewer_input.pointer_release_kind(facts)
+        is viewer_input.PointerReleaseKind.STOP_OPTION_LOOK
+    )
+    assert viewer_input.pointer_release_kind(
+        viewer_input.PointerReleaseFacts(
+            setup_complete=True,
+            input_suppressed=False,
+            is_left_button=False,
+            is_look_button=True,
+            option_left_look_active=False,
+            mouse_look_active=True,
+        )
+    ) is viewer_input.PointerReleaseKind.STOP_MOUSE_LOOK
+    assert viewer_input.pointer_release_kind(
+        viewer_input.PointerReleaseFacts(
+            setup_complete=True,
+            input_suppressed=False,
+            is_left_button=True,
+            is_look_button=False,
+            option_left_look_active=False,
+            mouse_look_active=False,
+        )
+    ) is viewer_input.PointerReleaseKind.RELEASE_COLOR_PICKER
+
+
+def test_minimap_teleport_pose_faces_distant_target_without_nearby_jitter():
+    far_pose = viewer_input.minimap_teleport_pose(
+        (10.0, 2.0, 20.0),
+        (10.0, 8.0, 30.0),
+    )
+    near_pose = viewer_input.minimap_teleport_pose(
+        (10.0, 2.0, 20.0),
+        (10.2, 8.0, 20.2),
+    )
+
+    assert far_pose.position == (10.0, 8.0, 30.0)
+    assert far_pose.yaw == pytest.approx(1.5707963267948966)
+    assert near_pose.yaw is None

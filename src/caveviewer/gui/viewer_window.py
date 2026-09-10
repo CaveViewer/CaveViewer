@@ -7207,219 +7207,283 @@ class CaveViewerWindow(mglw.WindowConfig):
 
     mouse_drag_event = on_mouse_drag_event
 
-    def on_mouse_press_event(self, x, y, button):
-        # A press can arrive through the same native callback path before
-        # `controls_overlay` is available; treat it as non-actionable.
-        if (
-            not getattr(self, "_window_setup_complete", False)
-            or self._input_is_suppressed()
-        ):
+    def _pointer_press_intent(self, button) -> viewer_input.PointerPressIntent:
+        """Normalize backend and modal state into one pointer intent."""
+        setup_complete = bool(getattr(self, "_window_setup_complete", False))
+        input_suppressed = (
+            self._input_is_suppressed() if setup_complete else False
+        )
+        if not setup_complete or input_suppressed:
+            return viewer_input.pointer_press_intent(
+                viewer_input.PointerPressFacts(
+                    setup_complete=setup_complete,
+                    input_suppressed=input_suppressed,
+                    waiting_for_begin=False,
+                    help_visible=False,
+                    recording_hides_hud=False,
+                    is_left_button=False,
+                    is_look_button=False,
+                    option_look_active=False,
+                )
+            )
+
+        look_button_name = (
+            self._active_presentation_profile().mouse_look_button_name
+        )
+        left_button = self.wnd.mouse.left
+        look_button = (
+            left_button
+            if look_button_name == "left"
+            else self.wnd.mouse.right
+        )
+        return viewer_input.pointer_press_intent(
+            viewer_input.PointerPressFacts(
+                setup_complete=True,
+                input_suppressed=False,
+                waiting_for_begin=self.controls_overlay.is_waiting_for_begin,
+                help_visible=self.controls_overlay.is_manual_mode,
+                recording_hides_hud=self._recording_hides_hud(),
+                is_left_button=button == left_button,
+                is_look_button=button == look_button,
+                option_look_active=self._option_look_active(),
+            )
+        )
+
+    def _resolve_hud_pointer_intent(
+        self,
+        x: float,
+        y: float,
+    ) -> viewer_input.PointerPressIntent:
+        """Resolve pure HUD hit results before applying any state change."""
+        column = self._right_column_layout(self.wnd.size)
+        stepper_hits = (
+            (
+                "brightness",
+                self.light_stepper,
+                column["brightness_anchor"],
+            ),
+            (
+                "ambient",
+                self.ambient_stepper,
+                column["ambient_anchor"],
+            ),
+            (
+                "render_distance",
+                self.render_distance_stepper,
+                column["render_distance_anchor"],
+            ),
+        )
+        for target, stepper, anchor in stepper_hits:
+            adjustment = stepper.adjustment_for_click(x, y, *anchor)
+            if adjustment is not None:
+                return viewer_input.PointerPressIntent(
+                    viewer_input.PointerPressKind.STEPPER,
+                    target=target,
+                    adjustment=adjustment,
+                )
+
+        clicked_button = self.render_mode_buttons.button_for_click(
+            x,
+            y,
+            self.wnd.size,
+            column["buttons_top_y"],
+            column["button_right_inset"],
+        )
+        if clicked_button is not None:
+            if self._buttons_locked_for_loading():
+                return viewer_input.PointerPressIntent(
+                    viewer_input.PointerPressKind.IGNORE
+                )
+            return viewer_input.PointerPressIntent(
+                viewer_input.PointerPressKind.VIEW_BUTTON,
+                target=clicked_button,
+            )
+
+        if self.color_picker.is_active:
+            kind = (
+                viewer_input.PointerPressKind.COLOR_PICKER
+                if self.color_picker.hit_test_panel(x, y, self.wnd.size)
+                else viewer_input.PointerPressKind.DISMISS_COLOR_PICKER
+            )
+            return viewer_input.PointerPressIntent(kind)
+
+        if self._has_map_loaded and self.minimap is not None:
+            world_xz = self.minimap.world_xz_for_click(x, y, self.wnd.size)
+            if world_xz is not None:
+                return viewer_input.PointerPressIntent(
+                    viewer_input.PointerPressKind.MINIMAP_TELEPORT,
+                    world_xz=world_xz,
+                )
+
+        if self._active_presentation_profile().mouse_look_button_name == "left":
+            return viewer_input.PointerPressIntent(
+                viewer_input.PointerPressKind.START_MOUSE_LOOK
+            )
+        return viewer_input.PointerPressIntent(viewer_input.PointerPressKind.IGNORE)
+
+    def _start_pointer_mouse_look(self, *, option_left: bool = False) -> None:
+        """Apply backend capture state for a resolved mouse-look press."""
+        self._mouse_look_active = True
+        if option_left:
+            self._mouse_look_left_option_active = True
+        self._last_mouse_pos = None
+        self.wnd.mouse_exclusivity = True
+
+    def _apply_view_button_intent(self, target: str) -> None:
+        """Apply a resolved right-column button action."""
+        self.render_mode_buttons.apply_button_click(target)
+        if target == "shade":
+            self._apply_shading_toggle()
+        elif target == "help":
+            if self.controls_overlay.is_manual_mode:
+                self.controls_overlay.hide_help()
+            else:
+                self.controls_overlay.show_help()
+        elif target == "color":
+            if self.color_picker.is_active:
+                self.color_picker.hide()
+            else:
+                self.color_picker.show()
+        elif target == "open":
+            self._handle_open_button_click()
+
+    def _apply_minimap_teleport(self, world_xz: tuple[float, float]) -> None:
+        """Apply one resolved minimap landing on the render-thread camera."""
+        if self._recorded_dive_is_active():
+            self._stop_recorded_dive(reason="minimap_teleport")
+        trace_pose_before_teleport = self._manual_dive_trace_pose()
+        target_x, target_z = world_xz
+        landing = chunker.find_landing_position(
+            self.manifest,
+            target_x,
+            target_z,
+            preferred_y=float(self.camera.position[1]),
+        )
+        pose = viewer_input.minimap_teleport_pose(
+            self.camera.position,
+            landing,
+        )
+        self.camera.position[:] = pose.position
+        if pose.yaw is not None:
+            self.camera.yaw = pose.yaw
+            self.camera.pitch = 0.0
+            self.camera.roll = 0.0
+        self._mark_manual_dive_trace_discontinuity(
+            trace_pose_before_teleport,
+            reason="minimap_teleport",
+        )
+        self.controls_overlay.show_panel()
+
+    def _apply_pointer_press_intent(
+        self,
+        intent: viewer_input.PointerPressIntent,
+        *,
+        x: float,
+        y: float,
+    ) -> None:
+        """Apply a typed pointer action to window-owned state."""
+        if intent.kind is viewer_input.PointerPressKind.IGNORE:
             return
-        if self.controls_overlay.is_waiting_for_begin:
-            return
-        if self.controls_overlay.is_manual_mode:
+        if intent.kind is viewer_input.PointerPressKind.DISMISS_HELP:
             self.controls_overlay.hide_help()
             return
-
-        look_button_name = self._active_presentation_profile().mouse_look_button_name
-        look_button = self.wnd.mouse.left if look_button_name == "left" else self.wnd.mouse.right
-
-        if self._recording_hides_hud():
-            if button == self.wnd.mouse.left and self._option_look_active():
-                self._mouse_look_active = True
-                self._mouse_look_left_option_active = True
-                self._last_mouse_pos = None
-                self.wnd.mouse_exclusivity = True
-                return
-            if button == look_button:
-                self._mouse_look_active = True
-                self._last_mouse_pos = None
-                self.wnd.mouse_exclusivity = True
-            return
-
-        if button == self.wnd.mouse.left:
-            # macOS-friendly mouse-look: Option + left-drag avoids relying
-            # on right-click behavior (which can vary across trackpads/mice).
-            if self._option_look_active():
-                self._mouse_look_active = True
-                self._mouse_look_left_option_active = True
-                self._last_mouse_pos = None
-                self.wnd.mouse_exclusivity = True
-                return
-
-            # Check order: all three steppers, then mesh/texture toggle
-            # buttons, then minimap. All four pieces (brightness, global
-            # light, render distance, button block) now live together in
-            # the same bottom-right column -- check order only matters in
-            # the sense that each needs to happen before falling through
-            # to the next, since their hit areas don't overlap.
-            column = self._right_column_layout(self.wnd.size)
-            brightness_anchor_x, brightness_anchor_y = column["brightness_anchor"]
-            ambient_anchor_x, ambient_anchor_y = column["ambient_anchor"]
-            render_distance_anchor_x, render_distance_anchor_y = column["render_distance_anchor"]
-            buttons_top_y = column["buttons_top_y"]
-
-            # While map-loading overlays are active (startup fullscreen or
-            # teleport panel), keep the right-side button block inert.
-            # Manual HELP mode is intentionally excluded so the same
-            # buttons remain usable when the user explicitly opens help.
-            buttons_locked_for_loading = self._buttons_locked_for_loading()
-
-            if self.light_stepper.on_mouse_press(x, y, brightness_anchor_x, brightness_anchor_y):
-                return
-
-            if self.ambient_stepper.on_mouse_press(x, y, ambient_anchor_x, ambient_anchor_y):
-                return
-
-            if self.render_distance_stepper.on_mouse_press(x, y, render_distance_anchor_x, render_distance_anchor_y):
-                return
-
-            if buttons_locked_for_loading:
-                if (
-                    self.render_mode_buttons.hit_test_mesh(x, y, self.wnd.size, buttons_top_y, column["button_right_inset"])
-                    or self.render_mode_buttons.hit_test_texture(x, y, self.wnd.size, buttons_top_y, column["button_right_inset"])
-                    or self.render_mode_buttons.hit_test_shade(x, y, self.wnd.size, buttons_top_y, column["button_right_inset"])
-                    or self.render_mode_buttons.hit_test_help(x, y, self.wnd.size, buttons_top_y, column["button_right_inset"])
-                    or self.render_mode_buttons.hit_test_color(x, y, self.wnd.size, buttons_top_y, column["button_right_inset"])
-                    or self.render_mode_buttons.hit_test_open(x, y, self.wnd.size, buttons_top_y, column["button_right_inset"])
-                ):
-                    return
-
-            clicked_button = self.render_mode_buttons.on_mouse_press(
-                x, y, self.wnd.size, buttons_top_y, column["button_right_inset"]
+        if intent.kind is viewer_input.PointerPressKind.START_MOUSE_LOOK:
+            self._start_pointer_mouse_look(
+                option_left=intent.option_left_look,
             )
-            if clicked_button == "shade":
-                self._apply_shading_toggle()
-                return
-            elif clicked_button == "help":
-                # Toggle: if the help screen is already showing (manual
-                # mode), a second click closes it; otherwise show it.
-                # Showing help intentionally overrides whatever loading
-                # overlay might currently be active (e.g. a brief teleport
-                # panel) -- an explicit click is a clear request to see
-                # the controls right now, which should win over a
-                # transient loading indicator.
-                if self.controls_overlay.is_manual_mode:
-                    self.controls_overlay.hide_help()
-                else:
-                    self.controls_overlay.show_help()
-                return
-            elif clicked_button == "color":
-                if self.color_picker.is_active:
-                    self.color_picker.hide()
-                else:
-                    self.color_picker.show()
-                return
-            elif clicked_button == "open":
-                self._handle_open_button_click()
-                return
-            elif clicked_button is not None:
-                # "mesh" or "texture" -- already toggled internally by
-                # render_mode_buttons.on_mouse_press, nothing further needed here.
-                return
-
-            # While the color picker panel is open, it behaves like a
-            # modal -- clicks inside the panel interact with its sliders.
-            # A click outside closes the picker and is consumed so that
-            # dismissing it cannot also trigger unrelated world/UI actions
-            # underneath on the same click.
-            if self.color_picker.is_active:
-                if self.color_picker.hit_test_panel(x, y, self.wnd.size):
-                    self.color_picker.on_mouse_press(x, y, self.wnd.size)
-                else:
-                    self.color_picker.hide()
-                return
-
-            minimap_target = None
-            if self._has_map_loaded and self.minimap is not None:
-                minimap_target = self.minimap.world_xz_for_click(x, y, self.wnd.size)
-            if minimap_target is not None:
-                if self._recorded_dive_is_active():
-                    self._stop_recorded_dive(reason="minimap_teleport")
-                target_x, target_z = minimap_target
-                trace_pose_before_teleport = self._manual_dive_trace_pose()
-                # Land at an actual occupied height near that X/Z, rather
-                # than blindly keeping the camera's previous Y -- a click
-                # on the (top-down, height-blind) minimap doesn't tell us
-                # which vertical level was meant, so we look up real chunk
-                # bounds at that column and pick whichever level is
-                # closest to the camera's current height (see
-                # find_landing_position in caveviewer.core.chunking.metadata).
-                # This is what prevents landing above or below the actual
-                # passage.
-                old_x = float(self.camera.position[0])
-                old_z = float(self.camera.position[2])
-                landing_x, landing_y, landing_z = chunker.find_landing_position(
-                    self.manifest, target_x, target_z,
-                    preferred_y=float(self.camera.position[1]),
-                )
-                self.camera.position[0] = landing_x
-                self.camera.position[1] = landing_y
-                self.camera.position[2] = landing_z
-
-                # Reorient toward the teleport direction so the camera looks
-                # into the new area rather than potentially facing blank space.
-                # Only rotate when the click is far enough away to give a
-                # meaningful direction (>0.5 m threshold avoids jitter for
-                # near-by clicks that don't imply a clear travel direction).
-                dx = landing_x - old_x
-                dz = landing_z - old_z
-                if math.hypot(dx, dz) > 0.5:
-                    self.camera.yaw   = math.atan2(dz, dx)
-                    self.camera.pitch = 0.0
-                    self.camera.roll  = 0.0
-                self._mark_manual_dive_trace_discontinuity(
-                    trace_pose_before_teleport,
-                    reason="minimap_teleport",
-                )
-
-                # Show the controls panel briefly while the newly-teleported
-                # area's chunks stream in around the camera -- same content
-                # as the full-screen startup overlay, just smaller since
-                # teleporting is quick and shouldn't block the whole view.
-                self.controls_overlay.show_panel()
-                return
-
-            # On Windows/Linux, left-click that doesn't hit any UI activates mouse look
-            if look_button_name == "left":
-                self._mouse_look_active = True
-                self._last_mouse_pos = None
-                self.wnd.mouse_exclusivity = True
             return
-        if button == look_button and look_button_name == "right":
-            self._mouse_look_active = True
-            self._last_mouse_pos = None
-            self.wnd.mouse_exclusivity = True
+        if intent.kind is viewer_input.PointerPressKind.HUD:
+            self._apply_pointer_press_intent(
+                self._resolve_hud_pointer_intent(x, y),
+                x=x,
+                y=y,
+            )
+            return
+        if intent.kind is viewer_input.PointerPressKind.STEPPER:
+            stepper = {
+                "brightness": self.light_stepper,
+                "ambient": self.ambient_stepper,
+                "render_distance": self.render_distance_stepper,
+            }[intent.target]
+            if intent.adjustment < 0:
+                stepper.decrement()
+            else:
+                stepper.increment()
+            return
+        if intent.kind is viewer_input.PointerPressKind.VIEW_BUTTON:
+            self._apply_view_button_intent(intent.target)
+            return
+        if intent.kind is viewer_input.PointerPressKind.COLOR_PICKER:
+            self.color_picker.on_mouse_press(x, y, self.wnd.size)
+            return
+        if intent.kind is viewer_input.PointerPressKind.DISMISS_COLOR_PICKER:
+            self.color_picker.hide()
+            return
+        if intent.kind is viewer_input.PointerPressKind.MINIMAP_TELEPORT:
+            self._apply_minimap_teleport(intent.world_xz)
+
+    def on_mouse_press_event(self, x, y, button):
+        """Normalize, resolve, and apply one backend pointer press."""
+        self._apply_pointer_press_intent(
+            self._pointer_press_intent(button),
+            x=x,
+            y=y,
+        )
 
     mouse_press_event = on_mouse_press_event
 
-    def on_mouse_release_event(self, x, y, button):
-        # Win32 may send a release before construction initializes the mouse
-        # state. Match the other mouse entry points and ignore it safely.
-        if (
-            not getattr(self, "_window_setup_complete", False)
-            or self._input_is_suppressed()
-        ):
-            return
-        look_button_name = self._active_presentation_profile().mouse_look_button_name
-        look_button = self.wnd.mouse.left if look_button_name == "left" else self.wnd.mouse.right
+    def _pointer_release_kind(self, button) -> viewer_input.PointerReleaseKind:
+        """Normalize one backend release into a testable cleanup action."""
+        setup_complete = bool(getattr(self, "_window_setup_complete", False))
+        input_suppressed = (
+            self._input_is_suppressed() if setup_complete else False
+        )
+        if setup_complete and not input_suppressed:
+            look_button_name = (
+                self._active_presentation_profile().mouse_look_button_name
+            )
+            left_button = self.wnd.mouse.left
+            look_button = (
+                left_button
+                if look_button_name == "left"
+                else self.wnd.mouse.right
+            )
+            is_left_button = button == left_button
+            is_look_button = button == look_button
+        else:
+            is_left_button = False
+            is_look_button = False
+        return viewer_input.pointer_release_kind(
+            viewer_input.PointerReleaseFacts(
+                setup_complete=setup_complete,
+                input_suppressed=input_suppressed,
+                is_left_button=is_left_button,
+                is_look_button=is_look_button,
+                option_left_look_active=bool(
+                    getattr(self, "_mouse_look_left_option_active", False)
+                ),
+                mouse_look_active=bool(
+                    getattr(self, "_mouse_look_active", False)
+                ),
+            )
+        )
 
-        if button == self.wnd.mouse.left:
-            if self._mouse_look_left_option_active:
-                self._mouse_look_left_option_active = False
-                self._mouse_look_active = False
-                self.wnd.mouse_exclusivity = False
-                return
-            # On Windows/Linux, left-click release ends mouse look
-            if self._mouse_look_active and look_button_name == "left":
-                self._mouse_look_active = False
-                self.wnd.mouse_exclusivity = False
-                return
-            self.color_picker.on_mouse_release()
+    def on_mouse_release_event(self, x, y, button):
+        """Apply one normalized backend pointer release."""
+        del x, y
+        kind = self._pointer_release_kind(button)
+        if kind is viewer_input.PointerReleaseKind.IGNORE:
             return
-        if button == look_button and look_button_name == "right":
+        if kind is viewer_input.PointerReleaseKind.STOP_OPTION_LOOK:
+            self._mouse_look_left_option_active = False
             self._mouse_look_active = False
             self.wnd.mouse_exclusivity = False
+            return
+        if kind is viewer_input.PointerReleaseKind.STOP_MOUSE_LOOK:
+            self._mouse_look_active = False
+            self.wnd.mouse_exclusivity = False
+            return
+        self.color_picker.on_mouse_release()
 
     mouse_release_event = on_mouse_release_event
 
