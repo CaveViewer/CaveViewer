@@ -806,6 +806,13 @@ only after the prior runtime is released. A failed replacement releases every
 resource already attached to the unpublished runtime and leaves the window
 with an empty map runtime.
 
+`gui.viewer_scene_presentation` owns the render-thread OpenGL operations for
+scene uniforms, solid and wireframe mesh passes, alternate recording-framebuffer
+draws, and shared HUD backplates and scrims. The window computes the visible
+chunk set and invokes these stages in callback order. The component restores
+wireframe, framebuffer, viewport, depth, cull, and blend state before returning.
+Its right-column geometry is a pure calculation shared by drawing and hit tests.
+
 Tk and OpenGL objects are main-thread resources. Background threads may parse,
 read, decode, and prepare bytes, but may not mutate widgets or create/release GL
 objects.

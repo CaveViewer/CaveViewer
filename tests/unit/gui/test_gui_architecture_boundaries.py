@@ -40,6 +40,7 @@ VIEWER_RENDER_THREAD_COMPONENT_MODULES = (
     GUI_ROOT / "texture_manager.py",
     GUI_ROOT / "viewer_capture_runtime.py",
     GUI_ROOT / "viewer_map_runtime.py",
+    GUI_ROOT / "viewer_scene_presentation.py",
 )
 VIEWER_BACKEND_CALLBACK_ALIASES = {
     "close": "on_close",

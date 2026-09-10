@@ -107,6 +107,8 @@ from caveviewer.gui.viewer_capture_runtime import (
     PendingManualDiveTraceWriter as _PendingManualDiveTraceWriter,
     ViewerCaptureRuntime,
 )
+from caveviewer.gui import viewer_scene_presentation
+from caveviewer.gui.viewer_scene_presentation import ViewerScenePresentation
 from caveviewer.gui import viewer_streaming_runtime
 from caveviewer.gui.viewer_streaming_runtime import ViewerStreamingRuntime
 from caveviewer.gui.viewer_session import (
@@ -1092,6 +1094,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._hud_panel_vao = None
         self._status_panel_vbo = None
         self._status_panel_vao = None
+        self._scene_presentation = None
         self.import_progress_panel = None
         self.light_stepper = None
         self.render_distance_stepper = None
@@ -1627,6 +1630,29 @@ class CaveViewerWindow(mglw.WindowConfig):
             runtime = ViewerCaptureRuntime()
             self._capture_runtime = runtime
         return runtime
+
+    def _ensure_scene_presentation(self) -> ViewerScenePresentation:
+        """Return the render-thread scene and shared HUD drawing owner."""
+        presentation = getattr(self, "_scene_presentation", None)
+        if presentation is None:
+            presentation = ViewerScenePresentation(
+                ctx=self.ctx,
+                program=self.program,
+                hud_panel_vbo=self._hud_panel_vbo,
+                hud_panel_vao=self._hud_panel_vao,
+                status_panel_vbo=self._status_panel_vbo,
+                status_panel_vao=self._status_panel_vao,
+                perf_counter=time.perf_counter,
+            )
+            self._scene_presentation = presentation
+        else:
+            presentation.ctx = self.ctx
+            presentation.program = self.program
+            presentation.hud_panel_vbo = self._hud_panel_vbo
+            presentation.hud_panel_vao = self._hud_panel_vao
+            presentation.status_panel_vbo = self._status_panel_vbo
+            presentation.status_panel_vao = self._status_panel_vao
+        return presentation
 
     def _ensure_action_dispatcher(self) -> ViewerActionDispatcher:
         """Return the ordered key-action coordinator for this viewer session."""
@@ -5063,7 +5089,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         if window_size == self._layout_cache_size:
             return self._layout_cache_result
 
-        w, h = window_size
+        _width, h = window_size
 
         # Label reserve matches StepperControl.render's own label metrics so
         # this stays correct if that label styling ever changes (rather
@@ -5077,7 +5103,6 @@ class CaveViewerWindow(mglw.WindowConfig):
             StepperControl.FIXED_TEXT_SCALE * panel_label_text_scale,
         )
         label_height = bitmap_font.text_height_px(fixed_label_size)
-        label_reserve = label_height + 8 * panel_scale
         label_widths = (
             bitmap_font.text_width_px(self.light_stepper.label, fixed_label_size),
             bitmap_font.text_width_px(self.ambient_stepper.label, fixed_label_size),
@@ -5096,60 +5121,38 @@ class CaveViewerWindow(mglw.WindowConfig):
         content_bottom_inset = (
             self.RIGHT_COLUMN_PANEL_BOTTOM_MARGIN + self.RIGHT_COLUMN_PANEL_BOTTOM_PAD
         ) * viewer_ui_scale
-
-        # Build the stack from the BOTTOM up: button block's bottom sits
-        # RIGHT_COLUMN_BOTTOM_MARGIN above the window's bottom edge.
         buttons_bottom_y = h - content_bottom_inset
         buttons_top_y = buttons_bottom_y - button_block_height
-
-        # RenderModeButtons may adjust its effective scale for the available
-        # height. Use that same width here so the panel, rendering, and hit
-        # testing share one horizontal geometry.
         button_layout = self.render_mode_buttons._group_layout(
             window_size,
             buttons_top_y,
         )
         button_width = RenderModeButtons.BUTTON_WIDTH * button_layout["scale"]
-
-        # Size the interior for the widest rendered item, then center every
-        # child in it. Previously the steppers and buttons were independently
-        # right-aligned before the panel grew left to include wider labels.
-        content_width = max(*stepper_widths, *label_widths, button_width)
-        side_pad = self.RIGHT_COLUMN_PANEL_SIDE_PAD * viewer_ui_scale
-        panel_right = w - (self.RIGHT_COLUMN_PANEL_RIGHT_MARGIN * viewer_ui_scale)
-        panel_left = panel_right - content_width - 2 * side_pad
-        content_center_x = panel_left + side_pad + content_width / 2.0
-
-        render_distance_bottom_y = buttons_top_y - self.RIGHT_COLUMN_BUTTON_GROUP_GAP * panel_scale
-        render_distance_anchor_y = render_distance_bottom_y - self.render_distance_stepper.total_height()
-
-        ambient_bottom_y = render_distance_anchor_y - label_reserve - self.RIGHT_COLUMN_GAP * panel_scale
-        ambient_anchor_y = ambient_bottom_y - self.ambient_stepper.total_height()
-
-        brightness_bottom_y = ambient_anchor_y - label_reserve - self.RIGHT_COLUMN_GAP * panel_scale
-        brightness_anchor_y = brightness_bottom_y - self.light_stepper.total_height()
-
-        brightness_anchor_x = content_center_x - stepper_widths[0] / 2.0
-        ambient_anchor_x = content_center_x - stepper_widths[1] / 2.0
-        render_distance_anchor_x = content_center_x - stepper_widths[2] / 2.0
-        label_gap = self.RIGHT_COLUMN_PANEL_LABEL_GAP * panel_scale
-        panel_top = min(
-            brightness_anchor_y - label_height - label_gap,
-            ambient_anchor_y - label_height - label_gap,
-            render_distance_anchor_y - label_height - label_gap,
-        ) - (self.RIGHT_COLUMN_PANEL_TOP_PAD * viewer_ui_scale)
-        panel_bottom = h - (self.RIGHT_COLUMN_PANEL_BOTTOM_MARGIN * viewer_ui_scale)
-
-        result = {
-            "brightness_anchor": (brightness_anchor_x, brightness_anchor_y),
-            "ambient_anchor": (ambient_anchor_x, ambient_anchor_y),
-            "render_distance_anchor": (render_distance_anchor_x, render_distance_anchor_y),
-            "buttons_top_y": buttons_top_y,
-            "button_right_inset": w - (content_center_x + button_width / 2.0),
-            "content_bottom_inset": content_bottom_inset,
-            "content_center_x": content_center_x,
-            "panel_rect": (panel_left, panel_top, panel_right, panel_bottom),
-        }
+        result = viewer_scene_presentation.right_column_layout(
+            viewer_scene_presentation.RightColumnLayoutInput(
+                window_size=window_size,
+                stepper_widths=stepper_widths,
+                stepper_heights=(
+                    self.light_stepper.total_height(),
+                    self.ambient_stepper.total_height(),
+                    self.render_distance_stepper.total_height(),
+                ),
+                label_widths=label_widths,
+                label_height=label_height,
+                button_width=button_width,
+                button_height=button_block_height,
+                panel_scale=panel_scale,
+                ui_scale=viewer_ui_scale,
+                bottom_margin=self.RIGHT_COLUMN_PANEL_BOTTOM_MARGIN,
+                bottom_padding=self.RIGHT_COLUMN_PANEL_BOTTOM_PAD,
+                right_margin=self.RIGHT_COLUMN_PANEL_RIGHT_MARGIN,
+                side_padding=self.RIGHT_COLUMN_PANEL_SIDE_PAD,
+                top_padding=self.RIGHT_COLUMN_PANEL_TOP_PAD,
+                label_gap=self.RIGHT_COLUMN_PANEL_LABEL_GAP,
+                column_gap=self.RIGHT_COLUMN_GAP,
+                button_group_gap=self.RIGHT_COLUMN_BUTTON_GROUP_GAP,
+            )
+        ).as_dict()
         self._layout_cache_size = window_size
         self._layout_cache_result = result
         return result
@@ -5164,47 +5167,13 @@ class CaveViewerWindow(mglw.WindowConfig):
         """Draw a shared translucent panel behind the right-side HUD controls."""
         if column is None:
             column = self._right_column_layout(window_size)
-
-        x0, y0, x1, y1 = self._right_column_panel_rect(window_size, column)
-        w, h = window_size
-        verts = []
-
-        def px_to_ndc(x: float, y: float) -> tuple[float, float]:
-            nx = (x / w) * 2.0 - 1.0
-            ny = 1.0 - (y / h) * 2.0
-            return nx, ny
-
-        def add_quad_px(qx0: float, qy0: float, qx1: float, qy1: float, rgba: tuple[float, float, float, float]) -> None:
-            nx0, ny0 = px_to_ndc(qx0, qy0)
-            nx1, ny1 = px_to_ndc(qx1, qy1)
-            top, bottom = max(ny0, ny1), min(ny0, ny1)
-            left, right = min(nx0, nx1), max(nx0, nx1)
-            quad = [
-                (left, bottom), (right, bottom), (right, top),
-                (left, bottom), (right, top), (left, top),
-            ]
-            for vx, vy in quad:
-                verts.append((vx, vy, *rgba))
-
-        add_quad_px(x0, y0, x1, y1, self.RIGHT_COLUMN_PANEL_FILL_RGBA)
-
-        border = self.RIGHT_COLUMN_PANEL_BORDER_PX
-        border_color = self.RIGHT_COLUMN_PANEL_BORDER_RGBA
-        add_quad_px(x0, y0, x1, y0 + border, border_color)
-        add_quad_px(x0, y1 - border, x1, y1, border_color)
-        add_quad_px(x0, y0, x0 + border, y1, border_color)
-        add_quad_px(x1 - border, y0, x1, y1, border_color)
-
-        data = np.array(verts, dtype=np.float32)
-        self._hud_panel_vbo.write(data.tobytes())
-
-        self.ctx.disable(moderngl.CULL_FACE)
-        self.ctx.disable(moderngl.DEPTH_TEST)
-        self.ctx.enable(moderngl.BLEND)
-        self._hud_panel_vao.render(moderngl.TRIANGLES, vertices=len(verts))
-        self.ctx.disable(moderngl.BLEND)
-        self.ctx.enable(moderngl.DEPTH_TEST)
-        self.ctx.enable(moderngl.CULL_FACE)
+        self._ensure_scene_presentation().render_right_column_panel(
+            window_size=window_size,
+            panel_rect=self._right_column_panel_rect(window_size, column),
+            fill_rgba=self.RIGHT_COLUMN_PANEL_FILL_RGBA,
+            border_px=self.RIGHT_COLUMN_PANEL_BORDER_PX,
+            border_rgba=self.RIGHT_COLUMN_PANEL_BORDER_RGBA,
+        )
 
     def _render_minimap(self, window_size: tuple[int, int]) -> None:
         """Draw the minimap in the normal HUD, keeping it out of recordings."""
@@ -5251,36 +5220,10 @@ class CaveViewerWindow(mglw.WindowConfig):
 
     def _render_recording_countdown_scrim(self, window_size: tuple[int, int], alpha: float = 0.62) -> None:
         """Darken the cave view behind the countdown ring without hiding it."""
-        w, h = window_size
-        verts = []
-
-        def px_to_ndc(x: float, y: float) -> tuple[float, float]:
-            return (x / w) * 2.0 - 1.0, 1.0 - (y / h) * 2.0
-
-        def add_quad_px(qx0: float, qy0: float, qx1: float, qy1: float,
-                        rgba: tuple[float, float, float, float]) -> None:
-            nx0, ny0 = px_to_ndc(qx0, qy0)
-            nx1, ny1 = px_to_ndc(qx1, qy1)
-            top, bottom = max(ny0, ny1), min(ny0, ny1)
-            left, right = min(nx0, nx1), max(nx0, nx1)
-            quad = [
-                (left, bottom), (right, bottom), (right, top),
-                (left, bottom), (right, top), (left, top),
-            ]
-            for vx, vy in quad:
-                verts.append((vx, vy, *rgba))
-
-        add_quad_px(0, 0, w, h, (0.001, 0.002, 0.005, alpha))
-        data = np.array(verts, dtype=np.float32)
-        self._status_panel_vbo.write(data.tobytes())
-
-        self.ctx.disable(moderngl.CULL_FACE)
-        self.ctx.disable(moderngl.DEPTH_TEST)
-        self.ctx.enable(moderngl.BLEND)
-        self._status_panel_vao.render(moderngl.TRIANGLES, vertices=len(verts))
-        self.ctx.disable(moderngl.BLEND)
-        self.ctx.enable(moderngl.DEPTH_TEST)
-        self.ctx.enable(moderngl.CULL_FACE)
+        self._ensure_scene_presentation().render_scrim(
+            window_size,
+            alpha=alpha,
+        )
 
     def _frame_phase(self) -> ViewerFramePhase:
         """Select this callback's non-GL session phase."""
@@ -5431,27 +5374,18 @@ class CaveViewerWindow(mglw.WindowConfig):
 
         self._render_interactive_frame(current_time, frame_time)
 
-    def _render_interactive_frame(
+    def _update_interactive_input(
         self,
-        current_time: float,
         frame_time: float,
-    ) -> None:
-        """Render one interactive frame after non-GL session scheduling."""
-        frame_start = time.perf_counter()
-        benchmark_controller = self._active_benchmark_controller()
-        benchmark_active = (
-            benchmark_controller is not None
-            and not benchmark_controller.finished
-        )
-        self._update_texture_validation()
-
-        # Sleep/wake (or a debugger stop) can yield a very large frame_time
-        # and leave input/capture state stale (e.g. key-release never seen).
-        # Reset transient input flags on these discontinuities.
+        *,
+        benchmark_controller: BenchmarkController | None,
+        benchmark_active: bool,
+    ) -> float:
+        """Apply navigation and workflow updates before streaming begins."""
         if frame_time > 2.0:
             self._reset_transient_input_state("long frame gap")
 
-        t_input = time.perf_counter()
+        started = time.perf_counter()
         dt = max(frame_time, 1e-4)
         if benchmark_active:
             if benchmark_controller.started:
@@ -5470,29 +5404,24 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._update_manual_dive_trace()
         if self._slice_work_pending():
             self._update_slice_export()
-        input_ms = (time.perf_counter() - t_input) * 1000.0
+        return (time.perf_counter() - started) * 1000.0
 
-        # Apply the render-distance control's current value before the
-        # streaming world recalculates this frame -- a click on +/- takes
-        # effect immediately rather than waiting for the camera to move
-        # (see the matching check in StreamingWorld.update(), which
-        # detects a changed load_radius_cells on its own, not just a
-        # moved camera -- this assignment is what actually gives it a
-        # changed value to detect).
+    def _advance_interactive_streaming(self) -> tuple[float, dict, dict]:
+        """Advance render-thread world and upload work for one frame."""
         target_load_radius = self._target_streaming_load_radius()
         if self.world.config.load_radius_cells != target_load_radius:
             self.world.config.load_radius_cells = target_load_radius
 
-        t0 = time.perf_counter()
+        started = time.perf_counter()
         streaming_timing = self._new_streaming_frame_timing()
         self._streaming_frame_timing = streaming_timing
         try:
-            t_update = time.perf_counter()
+            update_started = time.perf_counter()
             self.world.update(
                 self.camera.position.astype(np.float32),
                 cell_priority_key=self._streaming_cell_priority_key(),
             )
-            update_elapsed_s = time.perf_counter() - t_update
+            update_elapsed_s = time.perf_counter() - update_started
             streaming_timing["update_ms"] = update_elapsed_s * 1000.0
             self._log_main_thread_stall("streaming update", update_elapsed_s)
 
@@ -5504,14 +5433,15 @@ class CaveViewerWindow(mglw.WindowConfig):
             ) = self._streaming_upload_limits(pre_drain_stats)
             self._current_upload_operations_per_chunk = upload_operations_per_chunk
             self._current_upload_time_budget_ms = upload_time_budget_ms
-            t_drain = time.perf_counter()
-            t_ready_drain = time.perf_counter()
+            drain_started = time.perf_counter()
+            ready_drain_started = time.perf_counter()
             self.world.drain_ready_chunks(
-                self._on_chunk_ready, self._on_chunk_unload,
+                self._on_chunk_ready,
+                self._on_chunk_unload,
                 max_per_frame=upload_chunks_per_frame,
                 time_budget_ms=upload_time_budget_ms,
             )
-            ready_drain_elapsed_s = time.perf_counter() - t_ready_drain
+            ready_drain_elapsed_s = time.perf_counter() - ready_drain_started
             streaming_timing["ready_drain_ms"] = ready_drain_elapsed_s * 1000.0
             self._log_main_thread_stall(
                 "ready chunk drain",
@@ -5521,213 +5451,169 @@ class CaveViewerWindow(mglw.WindowConfig):
                 max_per_frame=upload_chunks_per_frame,
                 time_budget_ms=upload_time_budget_ms,
             )
-            t_failure_drain = time.perf_counter()
+            failure_drain_started = time.perf_counter()
             self._drain_streaming_worker_failures()
             streaming_timing["failure_drain_ms"] = (
-                time.perf_counter() - t_failure_drain
+                time.perf_counter() - failure_drain_started
             ) * 1000.0
-            streaming_timing["drain_ms"] = (time.perf_counter() - t_drain) * 1000.0
+            streaming_timing["drain_ms"] = (
+                time.perf_counter() - drain_started
+            ) * 1000.0
             self._record_upload_slice_sizes(streaming_timing)
         finally:
             upload_manager = getattr(self, "_chunk_upload_manager", None)
             if upload_manager is not None:
                 upload_manager.clear_frame_timing()
             self._streaming_frame_timing = None
-        streaming_ms = (time.perf_counter() - t0) * 1000.0
-        stats = self.world.stats()
+        return (
+            (time.perf_counter() - started) * 1000.0,
+            streaming_timing,
+            self.world.stats(),
+        )
+
+    def _render_initial_streaming_state(
+        self,
+        stats: dict,
+        *,
+        benchmark_controller: BenchmarkController | None,
+        benchmark_active: bool,
+    ) -> bool:
+        """Render startup progress when the map is not ready for interaction."""
         if not self._initial_chunks_loaded and self._initial_chunk_load_is_ready(stats):
             self._initial_chunks_loaded = True
             self._log_initial_compilation_complete(stats)
 
-        # As soon as prep crosses the readiness threshold, hold a brief
-        # fully-complete frame so the progress bar doesn't disappear abruptly.
         if self._initial_chunks_loaded and not self._chunk_prep_completion_armed:
             self._chunk_prep_completion_armed = True
             self._chunk_prep_complete_until = (
                 time.perf_counter() + self._CHUNK_PREP_COMPLETE_HOLD_SECONDS
             )
 
-        # Show a loading indicator while the initial chunks stream in from disk.
-        # Without this the screen is black until the first chunk arrives, which
-        # can take several seconds on slow hardware or large maps.
         now = time.perf_counter()
         if not self._initial_chunks_loaded:
             if benchmark_active and benchmark_controller.exceeded_max_runtime(now):
                 self._finish_benchmark(reason="max_runtime_exceeded")
                 self.close()
-                return
-            _map_name = os.path.basename(self.manifest.get("source_obj", "map"))
+                return True
+            map_name = os.path.basename(self.manifest.get("source_obj", "map"))
             raw_fraction = self._initial_chunk_load_progress(stats)
-            target = min(self._CHUNK_PREP_MAX_FRACTION, raw_fraction * self._CHUNK_PREP_MAX_FRACTION)
+            target = min(
+                self._CHUNK_PREP_MAX_FRACTION,
+                raw_fraction * self._CHUNK_PREP_MAX_FRACTION,
+            )
             self._chunk_prep_progress = max(self._chunk_prep_progress, target)
             frame = self._ensure_map_opening_progress_session().observe_streaming(
-                _map_name,
+                map_name,
                 self._chunk_prep_progress,
             )
             self._render_map_opening_progress(frame)
-            return
+            return True
 
-        if self._chunk_prep_complete_until is not None and now < self._chunk_prep_complete_until:
+        if (
+            self._chunk_prep_complete_until is not None
+            and now < self._chunk_prep_complete_until
+        ):
             if benchmark_active and benchmark_controller.exceeded_max_runtime(now):
                 self._finish_benchmark(reason="max_runtime_exceeded")
                 self.close()
-                return
-            _map_name = os.path.basename(self.manifest.get("source_obj", "map"))
-            frame = self._ensure_map_opening_progress_session().complete(_map_name)
+                return True
+            map_name = os.path.basename(self.manifest.get("source_obj", "map"))
+            frame = self._ensure_map_opening_progress_session().complete(map_name)
             self._render_map_opening_progress(frame)
-            return
+            return True
 
         self._chunk_prep_complete_until = None
         self._ensure_map_opening_progress_session().finish()
         if benchmark_active:
             self._sync_render_mode_loading_policy()
+        return False
 
-        t_scene_setup = time.perf_counter()
-        self.ctx.clear(*self.color_picker.color)  # background ("void") color, adjustable via the COLOR button
-
+    def _render_interactive_scene(
+        self,
+        stats: dict,
+    ) -> viewer_scene_presentation.PresentedScene:
+        """Cull and draw the cave scene, returning facts for later stages."""
         aspect = self.wnd.size[0] / max(self.wnd.size[1], 1)
         view = self.camera.view_matrix()
-        proj = self.camera.projection_matrix(aspect)
-
-        self.program["u_view"].write(view.T.tobytes())
-        self.program["u_projection"].write(proj.T.tobytes())
-        _pos = self.camera.position
-        self.program["u_camera_pos"].value = (float(_pos[0]), float(_pos[1]), float(_pos[2]))
-        self.program["u_light_color"].value = (1.0, 0.95, 0.85)  # warm headlamp tone
-        self.program["u_light_intensity"].value = float(self.light_stepper.value)
-        # GLOBAL LIGHT stepper (0-10) maps linearly onto the shader's
-        # actual ambient range -- see _AMBIENT_MIN/_AMBIENT_MAX's
-        # docstring above for why 0 reproduces the app's original fixed
-        # ambient value rather than true darkness.
+        projection = self.camera.projection_matrix(aspect)
         ambient_t = self.ambient_stepper.value / self.ambient_stepper.max_value
-        ambient_value = self._AMBIENT_MIN + ambient_t * (self._AMBIENT_MAX - self._AMBIENT_MIN)
-        self.program["u_ambient"].value = ambient_value
-        self.program["u_texture_enabled"].value = self.render_mode_buttons.texture_enabled
-        scene_setup_ms = (time.perf_counter() - t_scene_setup) * 1000.0
-
-        t0 = time.perf_counter()
-
-        # Solid pass (textured, or plain gray if Texture is off) only
-        # draws when at least one of "show texture" or "wireframe is off"
-        # is true. In other words: skip the solid pass entirely when the
-        # person has explicitly turned Texture off AND turned Mesh
-        # (wireframe) on -- that combination means "show me pure
-        # wireframe, nothing else", and the solid pass would otherwise
-        # always render underneath the wireframe lines regardless of the
-        # Texture toggle, which defeats the point of turning texture off
-        # in the first place when inspecting wireframe-only.
-        show_solid_pass = self.render_mode_buttons.texture_enabled or not self.render_mode_buttons.wireframe_enabled
-
-        # Frustum-cull loaded chunks against the current view before drawing.
-        # Build _visible_cells once so both solid and wireframe passes share
-        # the same culled set without repeating the test.
-        t_cull = time.perf_counter()
-        _visible_cells = self._visible_chunk_gpu_objects(view, proj)
-        _chunks_drawn = len(_visible_cells)
-        mesh_cull_ms = (time.perf_counter() - t_cull) * 1000.0
-        visual_stats = self._initial_visual_readiness_stats(
-            stats,
-            _chunks_drawn,
-            visible_cells=_visible_cells,
+        ambient_value = self._AMBIENT_MIN + ambient_t * (
+            self._AMBIENT_MAX - self._AMBIENT_MIN
+        )
+        presentation = self._ensure_scene_presentation()
+        setup_ms = presentation.configure_scene(
+            background=tuple(self.color_picker.color),
             view=view,
-            projection=proj,
+            projection=projection,
+            camera_position=self.camera.position,
+            light_intensity=float(self.light_stepper.value),
+            ambient=ambient_value,
+            texture_enabled=self.render_mode_buttons.texture_enabled,
         )
 
-        # u_texture always refers to sampler unit 0 -- set it once before
-        # the loop rather than redundantly on every single draw call.
-        def _draw_visible_mesh() -> None:
-            self.program["u_texture"].value = 0
-            if show_solid_pass:
-                for cell, vao_list in _visible_cells:
-                    for vao, vbo, mat_name, texture in vao_list:
-                        texture.use(location=0)
-                        vao.render(moderngl.TRIANGLES)
+        cull_started = time.perf_counter()
+        visible_cells = self._visible_chunk_gpu_objects(view, projection)
+        chunks_drawn = len(visible_cells)
+        cull_ms = (time.perf_counter() - cull_started) * 1000.0
+        visual_stats = self._initial_visual_readiness_stats(
+            stats,
+            chunks_drawn,
+            visible_cells=visible_cells,
+            view=view,
+            projection=projection,
+        )
+        draw_request = viewer_scene_presentation.SceneDrawRequest(
+            visible_cells=tuple(visible_cells),
+            solid_enabled=(
+                self.render_mode_buttons.texture_enabled
+                or not self.render_mode_buttons.wireframe_enabled
+            ),
+            wireframe_enabled=self.render_mode_buttons.wireframe_enabled,
+        )
+        draw_timing = presentation.draw_mesh(
+            draw_request,
+            gpu_timer_enabled=self._gpu_draw_timer_enabled,
+        )
+        self._last_gpu_draw_ms = draw_timing.gpu_draw_ms
+        return viewer_scene_presentation.PresentedScene(
+            view=view,
+            projection=projection,
+            draw_request=draw_request,
+            visual_stats=visual_stats,
+            chunks_drawn=chunks_drawn,
+            setup_ms=setup_ms,
+            cull_ms=cull_ms,
+            draw_ms=draw_timing.draw_ms,
+            submit_ms=draw_timing.submit_ms,
+            gpu_query_wait_ms=draw_timing.gpu_query_wait_ms,
+        )
 
-            # Wireframe pass: drawn whenever Mesh is toggled on. If the solid
-            # pass also drew (texture or gray surface visible), this overlays
-            # triangulation on top of it. If the solid pass was skipped (the
-            # texture-off + wireframe-on combination above), this is the only
-            # thing that draws -- true wireframe-only.
-            if self.render_mode_buttons.wireframe_enabled:
-                # NOTE: this draws coincident wireframe lines directly on top of
-                # the solid pass's geometry, which can show minor z-fighting/
-                # flicker on some GPUs since both passes write near-identical
-                # depth values. A polygon-offset bias would clean this up, but
-                # since the bias amount needs hand-tuning against moderngl's
-                # actual ctx.polygon_offset API (left out here rather than
-                # guess at a value that could silently do nothing or look
-                # wrong), this is a known minor cosmetic rough edge -- the
-                # wireframe is still fully readable, just not perfectly crisp
-                # in rare cases.
-                self.ctx.wireframe = True
-                for cell, vao_list in _visible_cells:
-                    for vao, vbo, mat_name, texture in vao_list:
-                        vao.render(moderngl.TRIANGLES)
-                self.ctx.wireframe = False
+    def _render_recording_scene_frame(
+        self,
+        scene: viewer_scene_presentation.PresentedScene,
+        framebuffer: moderngl.Framebuffer,
+        output_size: tuple[int, int],
+    ) -> None:
+        """Redraw the current scene into the recording framebuffer."""
+        output_width, output_height = output_size
+        recording_projection = self.camera.projection_matrix(
+            output_width / max(output_height, 1)
+        )
+        self._ensure_scene_presentation().render_recording_frame(
+            framebuffer=framebuffer,
+            output_size=output_size,
+            background=tuple(self.color_picker.color),
+            view=scene.view,
+            screen_projection=scene.projection,
+            recording_projection=recording_projection,
+            request=scene.draw_request,
+        )
 
-        mesh_gpu_query_wait_ms = 0.0
-        t_submit = time.perf_counter()
-        if self._gpu_draw_timer_enabled:
-            # GPU timer queries are useful diagnostics but reading the result
-            # in the same frame can block until the driver has completed the
-            # measured work. Keep that synchronization out of normal viewing;
-            # enable CAVEVIEWER_GPU_DRAW_TIMER=1 only while actively measuring
-            # GPU-side draw cost.
-            with self.ctx.query(time=True) as _gpu_q:
-                _draw_visible_mesh()
-            mesh_submit_ms = (time.perf_counter() - t_submit) * 1000.0
-            t_query_wait = time.perf_counter()
-            self._last_gpu_draw_ms = _gpu_q.elapsed / 1_000_000
-            mesh_gpu_query_wait_ms = (time.perf_counter() - t_query_wait) * 1000.0
-        else:
-            self._last_gpu_draw_ms = None
-            _draw_visible_mesh()
-            mesh_submit_ms = (time.perf_counter() - t_submit) * 1000.0
-        mesh_draw_ms = (time.perf_counter() - t0) * 1000.0
-
-        def _render_recording_frame(
-            framebuffer: moderngl.Framebuffer,
-            output_size: tuple[int, int],
-        ) -> None:
-            output_width, output_height = output_size
-            previous_fbo = getattr(self.ctx, "fbo", None)
-            previous_screen_viewport = getattr(self.ctx.screen, "viewport", None)
-            previous_framebuffer_viewport = getattr(framebuffer, "viewport", None)
-            recording_proj = self.camera.projection_matrix(
-                output_width / max(output_height, 1)
-            )
-            try:
-                framebuffer.use()
-                framebuffer.viewport = (0, 0, output_width, output_height)
-                self.ctx.clear(*self.color_picker.color)
-                self.program["u_projection"].write(recording_proj.T.tobytes())
-                self.program["u_view"].write(view.T.tobytes())
-                _draw_visible_mesh()
-            finally:
-                try:
-                    if previous_fbo is not None:
-                        previous_fbo.use()
-                    else:
-                        self.ctx.screen.use()
-                except Exception:
-                    try:
-                        self.ctx.screen.use()
-                    except Exception:
-                        pass
-                if previous_screen_viewport is not None:
-                    try:
-                        self.ctx.screen.viewport = previous_screen_viewport
-                    except Exception:
-                        pass
-                if previous_framebuffer_viewport is not None:
-                    try:
-                        framebuffer.viewport = previous_framebuffer_viewport
-                    except Exception:
-                        pass
-                self.ctx.wireframe = False
-                self.program["u_projection"].write(proj.T.tobytes())
-                self.program["u_view"].write(view.T.tobytes())
-
+    def _render_interactive_overlays(
+        self,
+        scene: viewer_scene_presentation.PresentedScene,
+    ) -> viewer_scene_presentation.OverlayTimings:
+        """Draw capture presentation or the ordinary HUD over the scene."""
         recording_read_ms = 0.0
         recording_stage_ms = 0.0
         recording_drain_ms = 0.0
@@ -5749,7 +5635,10 @@ class CaveViewerWindow(mglw.WindowConfig):
         )
         if capture_overlay_mode is CaptureOverlayMode.RECORDING:
             now = time.perf_counter()
-            if self._recording_countdown_until is not None and now < self._recording_countdown_until:
+            if (
+                self._recording_countdown_until is not None
+                and now < self._recording_countdown_until
+            ):
                 self._render_countdown_overlay(
                     now=now,
                     controller=self._ensure_recording_controller(),
@@ -5760,12 +5649,16 @@ class CaveViewerWindow(mglw.WindowConfig):
             else:
                 recording_read_ms = self._recording_update_after_scene(
                     now,
-                    render_frame=_render_recording_frame,
+                    render_frame=lambda framebuffer, output_size: (
+                        self._render_recording_scene_frame(
+                            scene,
+                            framebuffer,
+                            output_size,
+                        )
+                    ),
                 )
                 recording_stage_ms = self._recording_last_stage_ms
                 recording_drain_ms = self._recording_last_drain_ms
-                # The countdown has already explained the controls; leave the
-                # active recording view clear of a persistent status banner.
                 self._render_capture_status_message(self.wnd.size)
             overlay_ms = 0.0
         elif capture_overlay_mode is CaptureOverlayMode.MANUAL_DIVE_TRACE_COUNTDOWN:
@@ -5789,173 +5682,260 @@ class CaveViewerWindow(mglw.WindowConfig):
             )
             overlay_ms = 0.0
         else:
-            # Overlay HUD elements draw last, on top of the 3D scene, each with
-            # their own depth-disabled 2D pass.
-            t0 = time.perf_counter()
-
-            # Whole right-side column -- brightness, global light, render
-            # distance, then the Mesh/Texture/Shade/Open/Help/Color buttons -- is
-            # laid out as one group anchored to the bottom-right corner. See
-            # _right_column_layout()'s docstring for why this is computed in
-            # one place rather than each piece anchoring itself independently.
+            overlay_started = time.perf_counter()
             column = self._right_column_layout(self.wnd.size)
             brightness_anchor_x, brightness_anchor_y = column["brightness_anchor"]
             ambient_anchor_x, ambient_anchor_y = column["ambient_anchor"]
-            render_distance_anchor_x, render_distance_anchor_y = column["render_distance_anchor"]
+            distance_anchor_x, distance_anchor_y = column[
+                "render_distance_anchor"
+            ]
             buttons_top_y = column["buttons_top_y"]
 
             self._render_right_column_panel(self.wnd.size, column)
-            self.light_stepper.render(self.wnd.size, brightness_anchor_x, brightness_anchor_y, label_above=True)
-            self.ambient_stepper.render(self.wnd.size, ambient_anchor_x, ambient_anchor_y, label_above=True)
-            self.render_distance_stepper.render(self.wnd.size, render_distance_anchor_x, render_distance_anchor_y,
-                                                label_above=True)
-
+            self.light_stepper.render(
+                self.wnd.size,
+                brightness_anchor_x,
+                brightness_anchor_y,
+                label_above=True,
+            )
+            self.ambient_stepper.render(
+                self.wnd.size,
+                ambient_anchor_x,
+                ambient_anchor_y,
+                label_above=True,
+            )
+            self.render_distance_stepper.render(
+                self.wnd.size,
+                distance_anchor_x,
+                distance_anchor_y,
+                label_above=True,
+            )
             self._render_minimap(self.wnd.size)
-
-            self.render_mode_buttons.render(self.wnd.size, buttons_top_y,
-                              help_active=self.controls_overlay.is_manual_mode,
-                              color_active=self.color_picker.is_active,
-                              right_inset=column["button_right_inset"])
-
-            # Color picker panel draws on top of the regular HUD elements (it
-            # dims the 3D view behind it, same visual language as the Help
-            # screen) but still below the controls overlay, consistent with
-            # Help also losing to a loading overlay if both somehow overlap.
+            self.render_mode_buttons.render(
+                self.wnd.size,
+                buttons_top_y,
+                help_active=self.controls_overlay.is_manual_mode,
+                color_active=self.color_picker.is_active,
+                right_inset=column["button_right_inset"],
+            )
             self.color_picker.render(self.wnd.size)
-
-            # Controls/loading overlay draws last of all, on top of every
-            # other UI element -- while it's showing, it's meant to be the
-            # thing you're looking at (it's explaining what the other UI
-            # pieces do), so it should never be obscured by them.
-            self.controls_overlay.update(visual_stats)
+            self.controls_overlay.update(scene.visual_stats)
             self.controls_overlay.render(self.wnd.size)
             if not self._render_active_capture_instruction(self.wnd.size):
                 self._render_dive_status(self.wnd.size)
             self._render_capture_status_message(self.wnd.size)
-            overlay_ms = (time.perf_counter() - t0) * 1000.0
+            overlay_ms = (time.perf_counter() - overlay_started) * 1000.0
 
+        return viewer_scene_presentation.OverlayTimings(
+            overlay_ms=overlay_ms,
+            recording_read_ms=recording_read_ms,
+            recording_stage_ms=recording_stage_ms,
+            recording_drain_ms=recording_drain_ms,
+        )
+
+    def _update_interactive_benchmark(
+        self,
+        *,
+        benchmark_controller: BenchmarkController,
+        scene: viewer_scene_presentation.PresentedScene,
+        overlays: viewer_scene_presentation.OverlayTimings,
+        total_ms: float,
+        streaming_ms: float,
+        other_ms: float,
+        stats: dict,
+        streaming_timing: dict,
+    ) -> bool:
+        """Record benchmark readiness or frame metrics; return when frame ends."""
+        benchmark_now = time.perf_counter()
+        if not getattr(self, "_initial_visual_ready", False):
+            if benchmark_controller.exceeded_max_runtime(benchmark_now):
+                self._finish_benchmark(reason="max_runtime_exceeded")
+                self.close()
+            return True
+        if not benchmark_controller.started:
+            self.controls_overlay.dismiss_begin_screen()
+            benchmark_controller.update_camera(self.camera, benchmark_now)
+            return True
+        benchmark_complete = benchmark_controller.record_frame(
+            now=benchmark_now,
+            frame_ms=total_ms,
+            streaming_ms=streaming_ms,
+            scene_setup_ms=scene.setup_ms,
+            mesh_draw_ms=scene.draw_ms,
+            mesh_cull_ms=scene.cull_ms,
+            mesh_submit_ms=scene.submit_ms,
+            overlay_ms=overlays.overlay_ms,
+            other_ms=other_ms,
+            drawn_chunks=scene.chunks_drawn,
+            resident_chunks=len(self._chunk_gpu_objects),
+            world_stats=stats,
+            streaming_timing=streaming_timing,
+        )
+        if benchmark_complete:
+            self._finish_benchmark(reason="completed")
+            self.close()
+            return True
+        if benchmark_controller.exceeded_max_runtime(benchmark_now):
+            self._finish_benchmark(reason="max_runtime_exceeded")
+            self.close()
+            return True
+        return False
+
+    def _record_interactive_frame_telemetry(
+        self,
+        *,
+        benchmark_controller: BenchmarkController | None,
+        benchmark_active: bool,
+        scene: viewer_scene_presentation.PresentedScene,
+        overlays: viewer_scene_presentation.OverlayTimings,
+        total_ms: float,
+        input_ms: float,
+        streaming_ms: float,
+        other_ms: float,
+        streaming_timing: dict,
+    ) -> None:
+        """Publish spike diagnostics and periodic viewer throughput metrics."""
+        self._frame_time_history.append(total_ms)
+        if len(self._frame_time_history) > 30:
+            self._frame_time_history.pop(0)
+        rolling_avg = sum(self._frame_time_history) / len(self._frame_time_history)
+
+        if len(self._frame_time_history) >= 10 and total_ms > max(
+            rolling_avg * 3,
+            25.0,
+        ):
+            stats = self.world.stats()
+            gpu_draw_text = self._format_optional_ms(self._last_gpu_draw_ms)
+            _LOG.warning(
+                f"FRAME SPIKE: {total_ms:.1f}ms (avg {rolling_avg:.1f}ms) | "
+                f"input={input_ms:.1f}ms streaming={streaming_ms:.1f}ms "
+                f"scene_setup={scene.setup_ms:.1f}ms mesh_draw={scene.draw_ms:.1f}ms "
+                f"mesh_cull={scene.cull_ms:.1f}ms "
+                f"mesh_submit={scene.submit_ms:.1f}ms "
+                f"gpu_query_wait={scene.gpu_query_wait_ms:.1f}ms "
+                f"gpu_draw={gpu_draw_text} "
+                f"recording_read={overlays.recording_read_ms:.1f}ms "
+                f"recording_stage={overlays.recording_stage_ms:.1f}ms "
+                f"recording_drain={overlays.recording_drain_ms:.1f}ms "
+                f"overlay={overlays.overlay_ms:.1f}ms other={other_ms:.1f}ms | "
+                f"drawn={scene.chunks_drawn}/{len(self._chunk_gpu_objects)} "
+                f"loaded={stats['loaded']} pending={stats['pending']} "
+                f"ready={stats.get('ready', 0)} "
+                f"unload_pending={stats.get('unload_pending', 0)} "
+                f"wanted={stats.get('wanted', 0)}"
+            )
+            _LOG.warning(
+                "FRAME SPIKE STREAMING DETAIL: %s",
+                self._format_streaming_frame_timing(streaming_timing),
+            )
+
+        self._frame_active_time_s += total_ms / 1000.0
+        self._frame_count += 1
+        now = time.time()
+        if now - self._last_fps_print <= 2.0:
+            return
+
+        wall_interval_s = max(now - self._last_fps_print, 1e-6)
+        active_interval_s = max(self._frame_active_time_s, 1e-6)
+        rendered_fps = self._frame_count / active_interval_s
+        wall_fps = self._frame_count / wall_interval_s
+        if _LOG.isEnabledFor(logging.DEBUG):
+            stats = self.world.stats()
+            gpu_draw_text = self._format_optional_ms(self._last_gpu_draw_ms)
+            speed_label = "manual_speed"
+            displayed_speed = float(self.camera.move_speed)
+            if benchmark_active:
+                route_speed = getattr(
+                    benchmark_controller.scenario,
+                    "metadata",
+                    {},
+                ).get("actual_route_speed_m_per_second")
+                if isinstance(route_speed, (int, float)):
+                    speed_label = "route_speed"
+                    displayed_speed = float(route_speed)
+            _LOG.debug(
+                f"rendered_fps={rendered_fps:.1f} wall_fps={wall_fps:.1f} "
+                f"frame_cost={rolling_avg:.1f}ms "
+                f"| chunks loaded={stats['loaded']} "
+                f"pending={stats['pending']} "
+                f"unload_pending={stats.get('unload_pending', 0)} "
+                f"drawn={scene.chunks_drawn}/{len(self._chunk_gpu_objects)} "
+                f"| {speed_label}={displayed_speed:.1f}m/s "
+                f"| mesh_cull={scene.cull_ms:.1f}ms "
+                f"mesh_submit={scene.submit_ms:.1f}ms "
+                f"gpu_query_wait={scene.gpu_query_wait_ms:.1f}ms "
+                f"recording_read={overlays.recording_read_ms:.1f}ms "
+                f"recording_stage={overlays.recording_stage_ms:.1f}ms "
+                f"recording_drain={overlays.recording_drain_ms:.1f}ms "
+                f"gpu_draw={gpu_draw_text}"
+            )
+        self._frame_count = 0
+        self._frame_active_time_s = 0.0
+        self._last_fps_print = now
+
+    def _render_interactive_frame(
+        self,
+        current_time: float,
+        frame_time: float,
+    ) -> None:
+        """Render one interactive frame through explicit ordered stages."""
+        frame_start = time.perf_counter()
+        benchmark_controller = self._active_benchmark_controller()
+        benchmark_active = (
+            benchmark_controller is not None
+            and not benchmark_controller.finished
+        )
+        self._update_texture_validation()
+        input_ms = self._update_interactive_input(
+            frame_time,
+            benchmark_controller=benchmark_controller,
+            benchmark_active=benchmark_active,
+        )
+        streaming_ms, streaming_timing, stats = (
+            self._advance_interactive_streaming()
+        )
+        if self._render_initial_streaming_state(
+            stats,
+            benchmark_controller=benchmark_controller,
+            benchmark_active=benchmark_active,
+        ):
+            return
+
+        scene = self._render_interactive_scene(stats)
+        overlays = self._render_interactive_overlays(scene)
         total_ms = (time.perf_counter() - frame_start) * 1000.0
         other_ms = max(
             0.0,
             total_ms
             - input_ms
             - streaming_ms
-            - scene_setup_ms
-            - mesh_draw_ms
-            - recording_read_ms
-            - overlay_ms,
+            - scene.setup_ms
+            - scene.draw_ms
+            - overlays.recording_read_ms
+            - overlays.overlay_ms,
         )
-
-        if benchmark_active:
-            benchmark_now = time.perf_counter()
-            if not getattr(self, "_initial_visual_ready", False):
-                if benchmark_controller.exceeded_max_runtime(benchmark_now):
-                    self._finish_benchmark(reason="max_runtime_exceeded")
-                    self.close()
-                return
-            if not benchmark_controller.started:
-                self.controls_overlay.dismiss_begin_screen()
-                benchmark_controller.update_camera(self.camera, benchmark_now)
-                return
-            benchmark_complete = benchmark_controller.record_frame(
-                now=benchmark_now,
-                frame_ms=total_ms,
-                streaming_ms=streaming_ms,
-                scene_setup_ms=scene_setup_ms,
-                mesh_draw_ms=mesh_draw_ms,
-                mesh_cull_ms=mesh_cull_ms,
-                mesh_submit_ms=mesh_submit_ms,
-                overlay_ms=overlay_ms,
-                other_ms=other_ms,
-                drawn_chunks=_chunks_drawn,
-                resident_chunks=len(self._chunk_gpu_objects),
-                world_stats=stats,
-                streaming_timing=streaming_timing,
-            )
-            if benchmark_complete:
-                self._finish_benchmark(reason="completed")
-                self.close()
-                return
-            if benchmark_controller.exceeded_max_runtime(benchmark_now):
-                self._finish_benchmark(reason="max_runtime_exceeded")
-                self.close()
-                return
-
-        # Spike detection: track a short rolling average of frame times, and
-        # if a frame comes in notably above that average, print a one-line
-        # breakdown of where the time went. This is the diagnostic for
-        # tracking down any remaining stutter -- rather than guess at
-        # causes, the next time a stutter happens this will print exactly
-        # which section (chunk streaming, mesh draw, or overlay draw) was
-        # responsible, plus chunk-loading stats at that moment.
-        self._frame_time_history.append(total_ms)
-        if len(self._frame_time_history) > 30:
-            self._frame_time_history.pop(0)
-        rolling_avg = sum(self._frame_time_history) / len(self._frame_time_history)
-
-        if len(self._frame_time_history) >= 10 and total_ms > max(rolling_avg * 3, 25.0):
-            stats = self.world.stats()
-            gpu_draw_text = self._format_optional_ms(self._last_gpu_draw_ms)
-            _LOG.warning(f"FRAME SPIKE: {total_ms:.1f}ms (avg {rolling_avg:.1f}ms) | "
-                         f"input={input_ms:.1f}ms streaming={streaming_ms:.1f}ms "
-                         f"scene_setup={scene_setup_ms:.1f}ms mesh_draw={mesh_draw_ms:.1f}ms "
-                         f"mesh_cull={mesh_cull_ms:.1f}ms "
-                         f"mesh_submit={mesh_submit_ms:.1f}ms "
-                         f"gpu_query_wait={mesh_gpu_query_wait_ms:.1f}ms "
-                         f"gpu_draw={gpu_draw_text} "
-                         f"recording_read={recording_read_ms:.1f}ms "
-                         f"recording_stage={recording_stage_ms:.1f}ms "
-                         f"recording_drain={recording_drain_ms:.1f}ms "
-                         f"overlay={overlay_ms:.1f}ms other={other_ms:.1f}ms | "
-                         f"drawn={_chunks_drawn}/{len(self._chunk_gpu_objects)} "
-                         f"loaded={stats['loaded']} pending={stats['pending']} "
-                         f"ready={stats.get('ready', 0)} "
-                         f"unload_pending={stats.get('unload_pending', 0)} "
-                         f"wanted={stats.get('wanted', 0)}")
-            _LOG.warning(
-                "FRAME SPIKE STREAMING DETAIL: %s",
-                self._format_streaming_frame_timing(streaming_timing),
-            )
-
-        self._frame_active_time_s += (total_ms / 1000.0)
-        self._frame_count += 1
-        now = time.time()
-        if now - self._last_fps_print > 2.0:
-            wall_interval_s = max(now - self._last_fps_print, 1e-6)
-            active_interval_s = max(self._frame_active_time_s, 1e-6)
-            rendered_fps = self._frame_count / active_interval_s
-            wall_fps = self._frame_count / wall_interval_s
-            if _LOG.isEnabledFor(logging.DEBUG):
-                stats = self.world.stats()
-                gpu_draw_text = self._format_optional_ms(self._last_gpu_draw_ms)
-                speed_label = "manual_speed"
-                displayed_speed = float(self.camera.move_speed)
-                if benchmark_active:
-                    route_speed = getattr(
-                        benchmark_controller.scenario,
-                        "metadata",
-                        {},
-                    ).get("actual_route_speed_m_per_second")
-                    if isinstance(route_speed, (int, float)):
-                        speed_label = "route_speed"
-                        displayed_speed = float(route_speed)
-                _LOG.debug(f"rendered_fps={rendered_fps:.1f} wall_fps={wall_fps:.1f} "
-                           f"frame_cost={rolling_avg:.1f}ms "
-                           f"| chunks loaded={stats['loaded']} "
-                           f"pending={stats['pending']} "
-                           f"unload_pending={stats.get('unload_pending', 0)} "
-                           f"drawn={_chunks_drawn}/{len(self._chunk_gpu_objects)} "
-                           f"| {speed_label}={displayed_speed:.1f}m/s "
-                           f"| mesh_cull={mesh_cull_ms:.1f}ms "
-                           f"mesh_submit={mesh_submit_ms:.1f}ms "
-                           f"gpu_query_wait={mesh_gpu_query_wait_ms:.1f}ms "
-                           f"recording_read={recording_read_ms:.1f}ms "
-                           f"recording_stage={recording_stage_ms:.1f}ms "
-                           f"recording_drain={recording_drain_ms:.1f}ms "
-                           f"gpu_draw={gpu_draw_text}")
-            self._frame_count = 0
-            self._frame_active_time_s = 0.0
-            self._last_fps_print = now
+        if benchmark_active and self._update_interactive_benchmark(
+            benchmark_controller=benchmark_controller,
+            scene=scene,
+            overlays=overlays,
+            total_ms=total_ms,
+            streaming_ms=streaming_ms,
+            other_ms=other_ms,
+            stats=stats,
+            streaming_timing=streaming_timing,
+        ):
+            return
+        self._record_interactive_frame_telemetry(
+            benchmark_controller=benchmark_controller,
+            benchmark_active=benchmark_active,
+            scene=scene,
+            overlays=overlays,
+            total_ms=total_ms,
+            input_ms=input_ms,
+            streaming_ms=streaming_ms,
+            other_ms=other_ms,
+            streaming_timing=streaming_timing,
+        )
 
     render = on_render  # back-compat alias for older moderngl-window releases
 
