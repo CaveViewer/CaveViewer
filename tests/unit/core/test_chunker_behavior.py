@@ -7,6 +7,7 @@ import logging
 import os
 import threading
 from pathlib import Path
+from types import MappingProxyType
 
 import numpy as np
 import pytest
@@ -774,6 +775,8 @@ def test_build_cache_reports_progress_and_atomically_replaces_existing_cache(
     assert not (old_cache / "old-marker").exists()
     assert (old_cache / chunker.MANIFEST_NAME).is_file()
     manifest = chunker.load_manifest(str(old_cache))
+    assert chunker.cache_dir_is_valid(str(old_cache), str(source))
+    assert chunker.manifest_chunk_size(MappingProxyType(manifest)) == 50.0
     identity = guided_dive_cache_identity_from_manifest(manifest)
     assert identity == build_guided_dive_cache_identity(source, manifest)
     assert events[0] == ("computing face centroids", 0.0)
@@ -1853,7 +1856,14 @@ def test_manifest_chunk_size_helpers_reject_bad_values_and_io_failures(monkeypat
     assert chunker.manifest_chunk_size(None) is None
     assert chunker.manifest_chunk_size({"chunk_size": "invalid"}) is None
     assert chunker.manifest_chunk_size({"chunk_size": 0}) is None
+    assert chunker.manifest_chunk_size({"chunk_size": "nan"}) is None
+    assert chunker.manifest_chunk_size({"chunk_size": "inf"}) is None
     assert chunker.manifest_chunk_size({"chunk_size": "4.5"}) == 4.5
+    immutable_manifest = MappingProxyType(
+        {"chunk_size": "4.5", "max_upload_group_mb": "16"}
+    )
+    assert chunker.manifest_chunk_size(immutable_manifest) == 4.5
+    assert chunker.manifest_max_upload_group_mb(immutable_manifest) == 16
     assert chunker.manifest_max_upload_group_mb(None) is None
     assert (
         chunker.manifest_max_upload_group_mb({"max_upload_group_mb": "invalid"})
@@ -1883,6 +1893,10 @@ def test_chunk_cache_metadata_requires_current_version_chunks_and_directory(tmp_
     assert not chunker._has_current_chunk_cache(str(tmp_path), _current_manifest())
 
     (tmp_path / chunker.CHUNKS_DIRNAME).mkdir()
+    assert not chunker._has_current_chunk_cache(
+        str(tmp_path),
+        {"version": chunker._VERSION, "chunks": {}},
+    )
     assert chunker._has_current_chunk_cache(str(tmp_path), _current_manifest())
 
 
