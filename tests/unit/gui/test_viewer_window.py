@@ -21,7 +21,12 @@ from caveviewer.core.capabilities import (
 )
 from caveviewer.core.map import cache_paths
 from caveviewer.core.preferences import runtime_settings
-from caveviewer.gui import recording, viewer_window
+from caveviewer.gui import (
+    recording,
+    viewer_window,
+    viewer_window_capture_integration,
+    viewer_window_map_integration,
+)
 from caveviewer.gui.features import (
     FeatureDecision,
     FeatureId,
@@ -33,6 +38,16 @@ from caveviewer.gui.platform.app_identity import tk_root_options
 from caveviewer.gui.platform.presentation import select_presentation_profile
 from caveviewer.gui.platform.runtime import VideoRecordingPreflight, ViewerLaunchPreflight
 from caveviewer.gui.platform.viewer_launch import ViewerLaunchError
+
+
+def _patch_viewer_log(monkeypatch, logger) -> None:
+    """Patch the logger at every window-integration ownership boundary."""
+    for module in (
+        viewer_window,
+        viewer_window_capture_integration,
+        viewer_window_map_integration,
+    ):
+        monkeypatch.setattr(module, "_LOG", logger)
 
 
 def _viewer_session(*, platform_runtime=None):
@@ -61,6 +76,25 @@ def _pending_import_session():
 
 def test_viewer_default_framebuffer_uses_multisampling_for_graphics_edges():
     assert viewer_window.CaveViewerWindow.samples == 4
+
+
+def test_route_prefetch_telemetry_reads_the_streaming_runtime_owner():
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    runtime = viewer_window.ViewerStreamingRuntime()
+    runtime.initial_route_prefetch_expected_cells = 12
+    runtime.initial_route_prefetch_loaded_cells = 11
+    runtime.initial_route_prefetch_pending_cells = 1
+    runtime.initial_route_prefetch_failed_cells = 0
+    runtime.initial_route_prefetch_missing_cells = 0
+    runtime.initial_route_prefetch_coverage_pct = 91.67
+    window._streaming_runtime = runtime
+
+    assert window._initial_route_prefetch_expected_cells == 12
+    assert window._initial_route_prefetch_loaded_cells == 11
+    assert window._initial_route_prefetch_pending_cells == 1
+    assert window._initial_route_prefetch_failed_cells == 0
+    assert window._initial_route_prefetch_missing_cells == 0
+    assert window._initial_route_prefetch_coverage_pct == 91.67
 
 
 def test_viewer_constructor_keeps_callbacks_guarded_until_composition_finishes(
@@ -487,7 +521,11 @@ def test_recording_target_uses_shared_preflight_with_injected_runtime(monkeypatc
 
     window = _recording_window()
     window._platform_runtime = runtime_instance
-    monkeypatch.setattr(viewer_window, "video_recording_preflight", preflight_factory)
+    monkeypatch.setattr(
+        viewer_window_capture_integration,
+        "video_recording_preflight",
+        preflight_factory,
+    )
 
     assert window._recording_target_if_available() is target
     assert calls[0][0] == "/tmp"
@@ -517,7 +555,11 @@ def test_recording_target_uses_shared_preflight_without_runtime(monkeypatch):
         return preflight
 
     window = _recording_window()
-    monkeypatch.setattr(viewer_window, "video_recording_preflight", preflight_factory)
+    monkeypatch.setattr(
+        viewer_window_capture_integration,
+        "video_recording_preflight",
+        preflight_factory,
+    )
 
     assert window._recording_target_if_available() is target
     assert calls[0][0] == "/tmp"
@@ -1708,7 +1750,7 @@ def test_manual_trace_reveal_failure_keeps_saved_status(tmp_path, monkeypatch):
     output_path = tmp_path / "trace.jsonl"
     output_path.write_text('{"record": "trace_completed"}\n', encoding="utf-8")
     logger = FakeLogger()
-    monkeypatch.setattr(viewer_window, "_LOG", logger)
+    _patch_viewer_log(monkeypatch, logger)
 
     class FailingSavedArtifactRevealAdapter:
         def reveal_saved_artifact(self, path):
@@ -2101,7 +2143,7 @@ def test_recording_signal_writer_stop_replaces_full_frame_with_sentinel():
 
 def test_recording_enqueue_frame_reports_encoder_backpressure_once(monkeypatch):
     logger = FakeLogger()
-    monkeypatch.setattr(viewer_window, "_LOG", logger)
+    _patch_viewer_log(monkeypatch, logger)
     window = _recording_window()
     window._recording_frame_queue = queue.Queue(maxsize=1)
     window._recording_frame_queue.put_nowait(b"queued-frame")
@@ -2365,7 +2407,7 @@ def test_start_recording_encoder_uses_runtime_process_adapter(monkeypatch, tmp_p
 
 def test_recording_skips_framebuffer_read_when_writer_queue_is_full(monkeypatch):
     logger = FakeLogger()
-    monkeypatch.setattr(viewer_window, "_LOG", logger)
+    _patch_viewer_log(monkeypatch, logger)
 
     class FakeScreen:
         def __init__(self):
@@ -2551,7 +2593,7 @@ def test_recording_late_capture_drops_frames_instead_of_enqueuing_duplicates(
     monkeypatch,
 ):
     logger = FakeLogger()
-    monkeypatch.setattr(viewer_window, "_LOG", logger)
+    _patch_viewer_log(monkeypatch, logger)
     ticks = iter([50.0, 50.006])
     monkeypatch.setattr(viewer_window.time, "perf_counter", lambda: next(ticks))
 
@@ -2870,7 +2912,7 @@ def test_interrupted_recording_success_can_confirm_without_revealing():
 
 def test_recording_reveal_failure_keeps_saved_status(monkeypatch):
     logger = FakeLogger()
-    monkeypatch.setattr(viewer_window, "_LOG", logger)
+    _patch_viewer_log(monkeypatch, logger)
     monkeypatch.setattr(viewer_window.time, "perf_counter", lambda: 10.0)
 
     class FakeSavedArtifactRevealAdapter:
@@ -2978,7 +3020,7 @@ def test_escape_canceled_recording_releases_buffers_and_removes_mp4(tmp_path):
 
 def test_stop_recording_kills_encoder_after_timeout_and_reports_failure(monkeypatch):
     logger = FakeLogger()
-    monkeypatch.setattr(viewer_window, "_LOG", logger)
+    _patch_viewer_log(monkeypatch, logger)
     monkeypatch.setattr(viewer_window.time, "perf_counter", lambda: 20.0)
 
     class TimeoutProcess:
@@ -3129,8 +3171,10 @@ def test_open_action_uses_runtime_and_handles_unavailable_directory_selection(
         calls.append(platform_runtime)
         raise viewer_window.DesktopServiceError("Directory selection unavailable.")
 
-    monkeypatch.setattr(viewer_window, "_LOG", logger)
-    monkeypatch.setattr(viewer_window, "pick_folder_dialog", unavailable_picker)
+    _patch_viewer_log(monkeypatch, logger)
+    monkeypatch.setattr(
+        viewer_window_map_integration, "pick_folder_dialog", unavailable_picker
+    )
     window._platform_runtime = runtime
 
     window._handle_open_button_click()
@@ -4241,7 +4285,7 @@ def test_upload_limits_boost_while_current_wanted_set_is_incomplete():
 
 def test_drain_streaming_worker_failures_logs_bounded_batch(monkeypatch):
     logger = FakeLogger()
-    monkeypatch.setattr(viewer_window, "_LOG", logger)
+    _patch_viewer_log(monkeypatch, logger)
     window = object.__new__(viewer_window.CaveViewerWindow)
     window._STREAMING_FAILURES_PER_FRAME = 1
     failure = SimpleNamespace(
@@ -4267,7 +4311,7 @@ def test_drain_streaming_worker_failures_logs_bounded_batch(monkeypatch):
 
 def test_initial_compilation_completion_is_logged_once(monkeypatch):
     logger = FakeLogger()
-    monkeypatch.setattr(viewer_window, "_LOG", logger)
+    _patch_viewer_log(monkeypatch, logger)
     monkeypatch.setattr(viewer_window.time, "perf_counter", lambda: 12.25)
     window = object.__new__(viewer_window.CaveViewerWindow)
     window._initial_compilation_started_at = 10.0
@@ -4285,7 +4329,7 @@ def test_initial_compilation_completion_is_logged_once(monkeypatch):
 
 def test_main_thread_stall_log_reports_slow_phases_with_rate_limit(monkeypatch):
     logger = FakeLogger()
-    monkeypatch.setattr(viewer_window, "_LOG", logger)
+    _patch_viewer_log(monkeypatch, logger)
     ticks = iter([10.0, 10.5, 13.0])
     monkeypatch.setattr(viewer_window.time, "perf_counter", lambda: next(ticks))
     window = object.__new__(viewer_window.CaveViewerWindow)
@@ -5195,7 +5239,7 @@ def test_texture_validation_queues_without_blocking(monkeypatch):
     window._texture_validation_started_at = None
 
     monkeypatch.setattr(
-        viewer_window,
+        viewer_window_map_integration,
         "ThreadPoolExecutor",
         lambda **_kwargs: executor,
     )
@@ -5694,7 +5738,7 @@ def test_final_teardown_uses_bounded_streaming_shutdown():
 def test_request_import_pause_sends_child_command(monkeypatch):
     logger = FakeLogger()
     commands = queue.Queue()
-    monkeypatch.setattr(viewer_window, "_LOG", logger)
+    _patch_viewer_log(monkeypatch, logger)
     window = _import_window()
     window._import_active = True
     window._import_model_format = "obj"
@@ -5715,7 +5759,7 @@ def test_request_import_pause_sends_child_command(monkeypatch):
 def test_request_import_pause_warns_for_non_obj_import(monkeypatch):
     logger = FakeLogger()
     commands = queue.Queue()
-    monkeypatch.setattr(viewer_window, "_LOG", logger)
+    _patch_viewer_log(monkeypatch, logger)
     window = _import_window()
     window._import_active = True
     window._import_model_format = "glb"
@@ -5731,7 +5775,7 @@ def test_request_import_pause_warns_for_non_obj_import(monkeypatch):
 
 def test_drain_import_queue_handles_paused_import(monkeypatch):
     logger = FakeLogger()
-    monkeypatch.setattr(viewer_window, "_LOG", logger)
+    _patch_viewer_log(monkeypatch, logger)
     window = _import_window()
     window._has_map_loaded = True
     window._import_active = True
@@ -5763,7 +5807,7 @@ def test_drain_import_queue_handles_paused_import(monkeypatch):
 
 def test_drain_import_queue_paused_startup_sets_visible_notice(monkeypatch):
     logger = FakeLogger()
-    monkeypatch.setattr(viewer_window, "_LOG", logger)
+    _patch_viewer_log(monkeypatch, logger)
     monkeypatch.setattr(viewer_window.time, "perf_counter", lambda: 100.0)
     window = _import_window()
     window._has_map_loaded = False
@@ -5916,7 +5960,7 @@ def test_load_new_map_does_not_publish_or_remember_failed_replacement(monkeypatc
 
 def test_drain_import_queue_logs_actionable_error_without_traceback(monkeypatch):
     logger = FakeLogger()
-    monkeypatch.setattr(viewer_window, "_LOG", logger)
+    _patch_viewer_log(monkeypatch, logger)
 
     window = _import_window()
     window._import_active = True

@@ -745,6 +745,17 @@ native-window adapter. This permits the OpenGL implementation to be split into
 focused modules without hiding its thread affinity or reversing dependency
 direction.
 
+The adapter's render-thread integration is organized into map/streaming,
+capture, presentation, and input facets. These facets contribute methods to
+the same native-window instance; they do not create another thread or own a
+second copy of window state. Typed map, streaming, capture, workflow, and
+presentation objects remain the authoritative state and resource owners.
+`gui.viewer_window_sizing` owns pure desktop/framebuffer sizing,
+`gui.viewer_window_adapters` resolves the focused platform contracts, and
+`gui.viewer_window_launch` owns native loop and launch-request composition.
+`gui.viewer_window` retains thin compatibility wrappers for its established
+private helpers and the public `run_viewer*` entry points.
+
 The viewer boundary has four distinct responsibility groups:
 
 - the window adapter binds one launch session, retains the backend callbacks,
