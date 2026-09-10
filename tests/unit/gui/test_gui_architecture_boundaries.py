@@ -30,6 +30,7 @@ VIEWER_SESSION_COORDINATOR_MODULES = (
     GUI_ROOT / "viewer_action_dispatch.py",
     GUI_ROOT / "viewer_capture_workflow.py",
     GUI_ROOT / "viewer_frame_scheduler.py",
+    GUI_ROOT / "viewer_streaming_runtime.py",
     GUI_ROOT / "viewer_workflow.py",
 )
 VIEWER_RENDER_THREAD_COMPONENT_MODULES = (
