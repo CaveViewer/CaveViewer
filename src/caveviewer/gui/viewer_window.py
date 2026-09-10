@@ -103,6 +103,19 @@ from caveviewer.gui.viewer_frame_scheduler import (
     ViewerFrameScheduler,
     ViewerFrameState,
 )
+from caveviewer.gui.viewer_session import (
+    PendingImportRequest,
+    ViewerBenchmarkConfig,
+    ViewerLaunchMode,
+    ViewerSession,
+    ViewerSessionConfig,
+    ViewerSessionOutcome,
+)
+from caveviewer.gui.viewer_workflow import (
+    ViewerRenderRequest,
+    ViewerWorkflowCoordinator,
+    ViewerWorkflowSnapshot,
+)
 from caveviewer.gui.viewer_benchmark_composition import (
     environment_size as _benchmark_environment_size,
     streaming_settings_fingerprint as _benchmark_streaming_settings_fingerprint,
@@ -587,15 +600,6 @@ void main() {
 """
 
 
-@dataclass(frozen=True)
-class ViewerSessionOutcome:
-    """Describe why one native viewer session returned to its owner."""
-
-    kind: str = "window_closed"
-    message: str = ""
-    suggestion: str = ""
-
-
 class CaveViewerWindow(mglw.WindowConfig):
     gl_version = (3, 3)
     title = APP_NAME
@@ -610,35 +614,6 @@ class CaveViewerWindow(mglw.WindowConfig):
     # OpenGL HUD overlay into the default presentation framebuffer.
     samples = 4
     aspect_ratio = None  # don't letterbox; we recompute from actual window size
-
-    # Set on the class itself (not passed through __init__ kwargs) before
-    # calling mglw.run_window_config(). Different moderngl-window versions
-    # have changed how/whether run_window_config forwards extra keyword
-    # arguments into WindowConfig.__init__, so relying on that passthrough
-    # is fragile across versions. Class attributes are a stable mechanism
-    # regardless of moderngl-window's internal arg handling -- run_viewer()
-    # at the bottom of this file sets these right before launching.
-    cave_cache_dir: str = None
-    cave_textures_dir: str = None
-    cave_map_root: str | None = None
-    cave_manifest: dict = None
-    cave_benchmark_config: dict | None = None
-    cave_recorded_dive_trace: recorded_dive.RecordedDiveTrace | None = None
-    cave_platform_runtime: PlatformRuntime | None = None
-    cave_runtime_settings: RuntimeSettings | None = None
-    cave_session_outcome = ViewerSessionOutcome()
-
-    # Alternative to the three attributes above: set THIS instead when the
-    # map needs first-time import/chunking (no cache built yet) -- a dict
-    # with keys "obj_path", "mtl_path", "textures_dir". When set, the
-    # window opens immediately with no map loaded, and the actual import
-    # runs from inside on_render()'s first frame (see _run_pending_import),
-    # so the existing in-window ImportProgressPanel can show real progress
-    # the same way it already does for the OPEN button's mid-session
-    # imports -- rather than the old behavior of running the import
-    # entirely before any window existed, which could only show a plain
-    # console progress bar with nowhere graphical to draw into yet.
-    cave_pending_import: dict = None
 
     # Global UI text scale for all bitmap_font-rendered labels. This is
     # intentionally configured here so font sizing can be adjusted from
@@ -712,6 +687,13 @@ class CaveViewerWindow(mglw.WindowConfig):
     _import_pause_notice_note = _import_controller_property("pause_notice_note")
 
     def __init__(self, **kwargs):
+        session = getattr(type(self), "_viewer_session", None)
+        if not isinstance(session, ViewerSession):
+            raise RuntimeError(
+                "CaveViewerWindow requires a session-bound configuration class"
+            )
+        self._viewer_session = session
+        session_config = session.config
         record_runtime_stage(
             "viewer_config_initialization_begin",
             requested_window_size=getattr(type(self), "window_size", None),
@@ -739,10 +721,10 @@ class CaveViewerWindow(mglw.WindowConfig):
             window_backend=type(getattr(self, "wnd", None)).__name__,
         )
         self._window_setup_complete = False
-        self._platform_runtime = CaveViewerWindow.cave_platform_runtime
+        self._platform_runtime = session_config.platform_runtime
         self._branding_assets = _branding_assets_for_runtime(self._platform_runtime)
         self._runtime_settings = (
-            CaveViewerWindow.cave_runtime_settings
+            session_config.runtime_settings
             or getattr(self._platform_runtime, "runtime_settings", None)
         )
         self._viewer_runtime_settings: ViewerRuntimeSettings | None = (
@@ -816,18 +798,15 @@ class CaveViewerWindow(mglw.WindowConfig):
             * min(self._viewer_ui_scale, self.RIGHT_COLUMN_PANEL_TEXT_MAX_UI_SCALE)
         )
 
-        have_ready_cache = CaveViewerWindow.cave_cache_dir is not None
-        have_pending_import = CaveViewerWindow.cave_pending_import is not None
+        have_ready_cache = session_config.cache_dir is not None
+        have_pending_import = session_config.pending_import is not None
 
         if not have_ready_cache and not have_pending_import:
             raise RuntimeError(
-                "Neither CaveViewerWindow.cave_cache_dir nor .cave_pending_import "
-                "was set before launch. One or the other must be set by "
-                "run_viewer() / run_viewer_with_pending_import() before "
-                "constructing this window."
+                "The viewer session has neither a ready cache nor a pending import."
             )
 
-        self._map_opening_progress_session = MapOpeningProgressSession()
+        self._workflow_coordinator = ViewerWorkflowCoordinator(session)
         self.import_progress_panel = None
         self._pending_import_splash_rendered = False
         if have_pending_import:
@@ -881,16 +860,12 @@ class CaveViewerWindow(mglw.WindowConfig):
             else viewer_settings.gpu_draw_timer
         )
         self._streaming_frame_timing: dict | None = None
-        self._benchmark_controller: BenchmarkController | None = None
         self._last_input_reset_log = 0.0
         self._layout_cache_size: tuple | None = None
         self._layout_cache_result: dict | None = None
         self._is_iconified = False
         self._is_background_paused = False
-        self._frame_scheduler = ViewerFrameScheduler()
         self._closing_requested = False
-        self._capture_workflow = ViewerCaptureWorkflow()
-        self._action_dispatcher = ViewerActionDispatcher()
         self._slice_reveal_before_close = False
         self._slice_reveal_output_path: str | None = None
         self._slice_source_cache_dir: str | None = None
@@ -923,12 +898,8 @@ class CaveViewerWindow(mglw.WindowConfig):
             manual_dive_trace.ManualDiveTraceRecorder | None
         ) = None
         self._manual_dive_trace_writers: list[_PendingManualDiveTraceWriter] = []
-        self._manual_dive_trace_controller = ManualDiveTraceStateController()
-        self._slice_selection_controller = SliceSelectionController()
-        self._slice_export_controller = SliceExportController()
-        self._artifact_capture_presentation = ArtifactCapturePresentationController()
         self._pending_recorded_dive_trace = (
-            CaveViewerWindow.cave_recorded_dive_trace
+            session_config.recorded_dive_trace
         )
         self._recorded_dive_trace: recorded_dive.RecordedDiveTrace | None = None
         self._recorded_dive_controller: (
@@ -960,8 +931,8 @@ class CaveViewerWindow(mglw.WindowConfig):
             self._recording_output_dir = os.path.expanduser(
                 viewer_settings.recording.directory
             )
-        self._recording_controller = RecordingStateController(
-            frame_interval=1.0 / float(self._recording_fps)
+        self._workflow_coordinator.recording.frame_interval = (
+            1.0 / float(self._recording_fps)
         )
         self._recording_session: recording.RecordingEncoderSession | None = None
         self._recording_output_path: str | None = None
@@ -977,7 +948,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._recording_stop_thread: threading.Thread | None = None
         self._recording_stop_cancel_event: threading.Event | None = None
 
-        benchmark_config = CaveViewerWindow.cave_benchmark_config
+        benchmark_config = session_config.benchmark
         if benchmark_config is not None:
             wnd = getattr(self, "wnd", None)
             actual_window_size = _benchmark_environment_size(
@@ -994,14 +965,14 @@ class CaveViewerWindow(mglw.WindowConfig):
                     else _DEFAULT_WINDOW_SIZE,
                 )
             )
-            self._benchmark_controller = BenchmarkController(
-                scenario=benchmark_config["scenario"],
-                output_dir=benchmark_config["output_dir"],
+            benchmark_controller = BenchmarkController(
+                scenario=benchmark_config.scenario,
+                output_dir=benchmark_config.output_dir,
                 logger=_LOG,
                 perf_counter=lambda: time.perf_counter(),
-                environment=benchmark_config.get("environment", {}),
+                environment=benchmark_config.environment,
             )
-            self._benchmark_controller.update_environment(
+            benchmark_controller.update_environment(
                 {
                     "gl_vendor": str(self.ctx.info.get("GL_VENDOR", "")),
                     "gl_renderer": str(self.ctx.info.get("GL_RENDERER", "")),
@@ -1015,7 +986,10 @@ class CaveViewerWindow(mglw.WindowConfig):
                     "vsync": bool(getattr(self, "vsync", False)),
                 }
             )
-            self._benchmark_controller.prepare_output()
+            benchmark_controller.prepare_output()
+            self._workflow_coordinator.set_benchmark_controller(
+                benchmark_controller
+            )
 
         self._install_backend_modifier_probe()
 
@@ -1220,10 +1194,10 @@ class CaveViewerWindow(mglw.WindowConfig):
 
         if have_ready_cache:
             self._startup_map_load_pending = (
-                CaveViewerWindow.cave_cache_dir,
-                CaveViewerWindow.cave_textures_dir,
-                CaveViewerWindow.cave_manifest,
-                CaveViewerWindow.cave_map_root,
+                session_config.cache_dir,
+                session_config.textures_dir,
+                session_config.manifest,
+                session_config.map_root,
             )
         # else: have_pending_import is true instead -- the actual import
         # is deliberately NOT run here, before the window has rendered
@@ -1274,6 +1248,25 @@ class CaveViewerWindow(mglw.WindowConfig):
             getattr(self, "_platform_runtime", None)
         )
 
+    def _active_benchmark_controller(self) -> BenchmarkController | None:
+        """Return an injected test controller or the session-owned controller."""
+        controller = self.__dict__.get("_benchmark_controller")
+        if controller is not None:
+            return controller
+        workflows = self.__dict__.get("_workflow_coordinator")
+        return None if workflows is None else workflows.benchmark_controller
+
+    def _finish_benchmark(self, *, reason: str) -> bool:
+        """Finish benchmark output through its session lifecycle owner."""
+        workflows = self.__dict__.get("_workflow_coordinator")
+        if workflows is not None:
+            return workflows.finish_benchmark(reason=reason)
+        controller = self.__dict__.get("_benchmark_controller")
+        if controller is None or controller.finished:
+            return False
+        controller.finish(reason=reason)
+        return True
+
     def _acquire_import_inhibitor(self, map_name: str):
         """Use the runtime's shared desktop service for a map-import action."""
         runtime = getattr(self, "_platform_runtime", None)
@@ -1287,19 +1280,22 @@ class CaveViewerWindow(mglw.WindowConfig):
 
     def _ensure_import_controller(self) -> MapImportController:
         controller = self.__dict__.get("_import_controller")
-        if controller is None:
-            runtime_settings = getattr(self, "_runtime_settings", None)
+        if controller is not None:
+            return controller
 
-            def launch_import_process(model_descriptor: dict, textures_dir: str):
-                if runtime_settings is None:
-                    return start_import_process(model_descriptor, textures_dir)
-                return start_import_process(
-                    model_descriptor,
-                    textures_dir,
-                    runtime_settings=runtime_settings.import_configuration(),
-                )
+        runtime_settings = getattr(self, "_runtime_settings", None)
 
-            controller = MapImportController(
+        def launch_import_process(model_descriptor: dict, textures_dir: str):
+            if runtime_settings is None:
+                return start_import_process(model_descriptor, textures_dir)
+            return start_import_process(
+                model_descriptor,
+                textures_dir,
+                runtime_settings=runtime_settings.import_configuration(),
+            )
+
+        def create_controller() -> MapImportController:
+            return MapImportController(
                 self,
                 logger=lambda: _LOG,
                 chunker=lambda: chunker,
@@ -1311,71 +1307,154 @@ class CaveViewerWindow(mglw.WindowConfig):
                 monotonic=lambda: time.monotonic(),
                 report_startup_failure=self._record_startup_import_failure,
             )
-            self.__dict__["_import_controller"] = controller
+
+        workflows = self.__dict__.get("_workflow_coordinator")
+        if workflows is not None:
+            return workflows.ensure_import_controller(create_controller)
+        controller = create_controller()
+        self.__dict__["_import_controller"] = controller
         return controller
 
     def _record_startup_import_failure(self, message: str, suggestion: str) -> None:
         """Preserve a recoverable failure across native-window teardown."""
-        type(self).cave_session_outcome = ViewerSessionOutcome(
+        self._viewer_session.record_outcome(
             kind="import_failed",
-            message=str(message),
-            suggestion=str(suggestion),
+            message=message,
+            suggestion=suggestion,
         )
 
     def _ensure_recording_controller(self) -> RecordingStateController:
         controller = self.__dict__.get("_recording_controller")
         if controller is None:
-            controller = RecordingStateController()
-            self.__dict__["_recording_controller"] = controller
+            workflows = self.__dict__.get("_workflow_coordinator")
+            if workflows is not None:
+                return workflows.recording
+            controller = self.__dict__.setdefault(
+                "_recording_controller",
+                RecordingStateController(),
+            )
         return controller
 
     def _ensure_frame_scheduler(self) -> ViewerFrameScheduler:
         """Return the non-GL frame phase and throttling coordinator."""
         scheduler = self.__dict__.get("_frame_scheduler")
         if scheduler is None:
-            scheduler = ViewerFrameScheduler()
-            self.__dict__["_frame_scheduler"] = scheduler
+            workflows = self.__dict__.get("_workflow_coordinator")
+            if workflows is not None:
+                return workflows.frame_scheduler
+            scheduler = self.__dict__.setdefault(
+                "_frame_scheduler",
+                ViewerFrameScheduler(),
+            )
         return scheduler
 
     def _ensure_capture_workflow(self) -> ViewerCaptureWorkflow:
         """Return the non-GL workflow shared by the capture controllers."""
         workflow = self.__dict__.get("_capture_workflow")
         if workflow is None:
-            workflow = ViewerCaptureWorkflow()
-            self.__dict__["_capture_workflow"] = workflow
+            workflows = self.__dict__.get("_workflow_coordinator")
+            if workflows is not None:
+                return workflows.capture
+            workflow = self.__dict__.setdefault(
+                "_capture_workflow",
+                ViewerCaptureWorkflow(),
+            )
         return workflow
 
     def _ensure_action_dispatcher(self) -> ViewerActionDispatcher:
         """Return the ordered key-action coordinator for this viewer session."""
         dispatcher = self.__dict__.get("_action_dispatcher")
         if dispatcher is None:
-            dispatcher = ViewerActionDispatcher()
-            self.__dict__["_action_dispatcher"] = dispatcher
+            workflows = self.__dict__.get("_workflow_coordinator")
+            if workflows is not None:
+                return workflows.actions
+            dispatcher = self.__dict__.setdefault(
+                "_action_dispatcher",
+                ViewerActionDispatcher(),
+            )
         return dispatcher
 
     def _ensure_manual_dive_trace_controller(self) -> ManualDiveTraceStateController:
         controller = self.__dict__.get("_manual_dive_trace_controller")
         if controller is None:
-            controller = ManualDiveTraceStateController()
-            self.__dict__["_manual_dive_trace_controller"] = controller
+            workflows = self.__dict__.get("_workflow_coordinator")
+            if workflows is not None:
+                return workflows.manual_dive_trace
+            controller = self.__dict__.setdefault(
+                "_manual_dive_trace_controller",
+                ManualDiveTraceStateController(),
+            )
         return controller
 
     def _ensure_slice_selection_controller(self) -> SliceSelectionController:
         controller = self.__dict__.get("_slice_selection_controller")
         if controller is None:
-            controller = SliceSelectionController()
-            self.__dict__["_slice_selection_controller"] = controller
+            workflows = self.__dict__.get("_workflow_coordinator")
+            if workflows is not None:
+                return workflows.slice_selection
+            controller = self.__dict__.setdefault(
+                "_slice_selection_controller",
+                SliceSelectionController(),
+            )
         return controller
 
     def _ensure_slice_export_controller(self) -> SliceExportController:
         controller = self.__dict__.get("_slice_export_controller")
         if controller is None:
-            controller = SliceExportController()
-            self.__dict__["_slice_export_controller"] = controller
+            workflows = self.__dict__.get("_workflow_coordinator")
+            if workflows is not None:
+                return workflows.slice_export
+            controller = self.__dict__.setdefault(
+                "_slice_export_controller",
+                SliceExportController(),
+            )
         return controller
+
+    def _workflow_snapshot(self) -> ViewerWorkflowSnapshot:
+        """Adapt render-thread state for the non-GL workflow coordinator."""
+        manual_trace = self._ensure_manual_dive_trace_controller()
+        slice_selection = self._ensure_slice_selection_controller()
+        slice_export = self._ensure_slice_export_controller()
+        recording_armed = self._recording_is_armed()
+        return ViewerWorkflowSnapshot(
+            setup_complete=bool(getattr(self, "_window_setup_complete", False)),
+            closing_requested=bool(getattr(self, "_closing_requested", False)),
+            iconified=bool(getattr(self, "_is_iconified", False)),
+            import_active=bool(getattr(self, "_import_active", False)),
+            map_loaded=bool(getattr(self, "_has_map_loaded", False)),
+            capture_close_pending=self._capture_close_pending(),
+            recording_owned=(
+                recording_armed or self._recording_stop_in_progress()
+            ),
+            recording_armed=recording_armed,
+            recording_active=(
+                getattr(self, "_recording_session", None) is not None
+            ),
+            manual_dive_trace_countdown_active=manual_trace.countdown_active,
+            manual_dive_trace_active=(
+                getattr(self, "_manual_dive_trace", None) is not None
+            ),
+            manual_dive_trace_finalizing=bool(
+                getattr(self, "_manual_dive_trace_writers", None)
+            ),
+            slice_countdown_active=slice_selection.countdown_active,
+            slice_selection_active=slice_selection.selection_active,
+            slice_saving=slice_selection.saving,
+            slice_export_active=slice_export.active,
+        )
+
+    def _workflow_render_request(self) -> ViewerRenderRequest | None:
+        """Return aggregate non-GL decisions for a production viewer session."""
+        workflows = self.__dict__.get("_workflow_coordinator")
+        if workflows is None:
+            return None
+        return workflows.render_request(self._workflow_snapshot())
 
     def _slice_work_pending(self) -> bool:
         """Return whether a countdown or child export needs a frame-time poll."""
+        request = self._workflow_render_request()
+        if request is not None:
+            return request.slice_work_pending
         selection = self.__dict__.get("_slice_selection_controller")
         exporter = self.__dict__.get("_slice_export_controller")
         return bool(
@@ -1384,6 +1463,9 @@ class CaveViewerWindow(mglw.WindowConfig):
 
     def _slice_interaction_active(self) -> bool:
         """Return whether slice selection owns the capture interaction surface."""
+        request = self._workflow_render_request()
+        if request is not None:
+            return request.slice_interaction_active
         selection = self.__dict__.get("_slice_selection_controller")
         exporter = self.__dict__.get("_slice_export_controller")
         return bool(
@@ -1411,6 +1493,9 @@ class CaveViewerWindow(mglw.WindowConfig):
 
     def _capture_owner(self) -> CaptureOwner | None:
         """Return the countdown, active capture, or finalizer owning capture."""
+        request = self._workflow_render_request()
+        if request is not None:
+            return request.capture_owner
         return self._ensure_capture_workflow().owner_for(
             self._capture_ownership_state()
         )
@@ -1450,6 +1535,9 @@ class CaveViewerWindow(mglw.WindowConfig):
 
     def _active_capture_owner(self) -> CaptureOwner | None:
         """Return the owner that is actively collecting a video, trace, or slice."""
+        request = self._workflow_render_request()
+        if request is not None:
+            return request.active_capture_owner
         selection = self.__dict__.get("_slice_selection_controller")
         return self._ensure_capture_workflow().owner_for(
             CaptureOwnershipState(
@@ -1489,8 +1577,13 @@ class CaveViewerWindow(mglw.WindowConfig):
         """Return the shared post-save feedback and reveal scheduler."""
         controller = self.__dict__.get("_artifact_capture_presentation")
         if controller is None:
-            controller = ArtifactCapturePresentationController()
-            self.__dict__["_artifact_capture_presentation"] = controller
+            workflows = self.__dict__.get("_workflow_coordinator")
+            if workflows is not None:
+                return workflows.artifact_presentation
+            controller = self.__dict__.setdefault(
+                "_artifact_capture_presentation",
+                ArtifactCapturePresentationController(),
+            )
         return controller
 
     def _ensure_recording_capture(self) -> RecordingCaptureResources:
@@ -1873,7 +1966,7 @@ class CaveViewerWindow(mglw.WindowConfig):
                 f"Current {chunker.CHUNK_SIZE_ENV_VAR} setting is {configured_chunk_size:g}, "
                 "but existing/prebuilt caches stream using the chunk size recorded in manifest.json."
             )
-        benchmark_controller = getattr(self, "_benchmark_controller", None)
+        benchmark_controller = self._active_benchmark_controller()
         if benchmark_controller is not None:
             benchmark_radius = int(benchmark_controller.scenario.render_distance)
             clamped_radius = max(
@@ -2112,7 +2205,7 @@ class CaveViewerWindow(mglw.WindowConfig):
 
     def _configure_benchmark_route_prefetch(self, origin: np.ndarray) -> None:
         """Ask streaming to keep the benchmark route tube wanted during startup."""
-        benchmark_controller = getattr(self, "_benchmark_controller", None)
+        benchmark_controller = self._active_benchmark_controller()
         world = getattr(self, "world", None)
         if benchmark_controller is None or world is None:
             return
@@ -2192,7 +2285,7 @@ class CaveViewerWindow(mglw.WindowConfig):
 
     def _record_benchmark_streaming_environment(self) -> None:
         """Persist effective Streaming/texture settings for benchmark artifacts."""
-        benchmark_controller = getattr(self, "_benchmark_controller", None)
+        benchmark_controller = self._active_benchmark_controller()
         world = getattr(self, "world", None)
         if benchmark_controller is None or world is None:
             return
@@ -3659,13 +3752,6 @@ class CaveViewerWindow(mglw.WindowConfig):
         _release_attr(self, "_status_panel_vbo")
         _release_attr(self, "_hud_panel_program")
 
-        CaveViewerWindow.cave_cache_dir = None
-        CaveViewerWindow.cave_textures_dir = None
-        CaveViewerWindow.cave_map_root = None
-        CaveViewerWindow.cave_manifest = None
-        CaveViewerWindow.cave_pending_import = None
-        CaveViewerWindow.cave_recorded_dive_trace = None
-
     def load_new_map(
         self,
         cache_dir: str,
@@ -3815,8 +3901,17 @@ class CaveViewerWindow(mglw.WindowConfig):
         )
 
     def _render_pending_import_splash(self) -> None:
+        pending = self._viewer_session.config.pending_import
+        pending_payload = (
+            {
+                "model_descriptor": pending.model_descriptor,
+                "textures_dir": pending.textures_dir,
+            }
+            if pending is not None
+            else None
+        )
         self._ensure_import_controller().render_pending_import_splash(
-            CaveViewerWindow.cave_pending_import,
+            pending_payload,
             self.import_progress_panel,
             _viewer_ui_surface_size(self.wnd),
             opening_session=self._ensure_map_opening_progress_session(),
@@ -3826,6 +3921,9 @@ class CaveViewerWindow(mglw.WindowConfig):
         """Return the GUI-only presentation state for the active map open."""
         session = getattr(self, "_map_opening_progress_session", None)
         if session is None:
+            workflows = self.__dict__.get("_workflow_coordinator")
+            if workflows is not None:
+                return workflows.map_opening
             session = MapOpeningProgressSession()
             self._map_opening_progress_session = session
         return session
@@ -3932,7 +4030,7 @@ class CaveViewerWindow(mglw.WindowConfig):
     def _run_pending_import(self) -> None:
         """
         Runs the FIRST-TIME import for the map the program was launched
-        with, when CaveViewerWindow.cave_pending_import was set instead
+        with, when the viewer session carries a pending import instead
         of an already-built cache (see run_viewer_with_pending_import()
         at the bottom of this file, and main()'s use of it in
         caveviewer.app). Called once, from on_render()'s first frame --
@@ -3959,9 +4057,11 @@ class CaveViewerWindow(mglw.WindowConfig):
         the person staring at a permanently blank screen with no map and
         no way to get one without restarting the program anyway.
         """
-        pending = CaveViewerWindow.cave_pending_import
-        model_descriptor = pending["model_descriptor"]
-        textures_dir = pending["textures_dir"]
+        pending = self._viewer_session.config.pending_import
+        if pending is None:
+            raise RuntimeError("The viewer session has no pending import")
+        model_descriptor = dict(pending.model_descriptor)
+        textures_dir = pending.textures_dir
         source_path = model_descriptor.get("obj_path") or model_descriptor.get("glb_path")
         map_name = os.path.basename(source_path)
         self._start_import_async(model_descriptor, textures_dir, map_name, is_startup=True)
@@ -5087,7 +5187,7 @@ class CaveViewerWindow(mglw.WindowConfig):
             route_prefetch_missing,
             route_prefetch_coverage_pct,
         )
-        benchmark_controller = getattr(self, "_benchmark_controller", None)
+        benchmark_controller = self._active_benchmark_controller()
         if benchmark_controller is not None:
             benchmark_controller.update_environment(
                 {
@@ -5550,6 +5650,9 @@ class CaveViewerWindow(mglw.WindowConfig):
         closing_requested = bool(getattr(self, "_closing_requested", False))
         if not setup_complete or closing_requested:
             return ViewerFramePhase.INACTIVE
+        request = self._workflow_render_request()
+        if request is not None:
+            return request.phase
         return self._ensure_frame_scheduler().phase_for(
             ViewerFrameState(
                 setup_complete=setup_complete,
@@ -5697,7 +5800,7 @@ class CaveViewerWindow(mglw.WindowConfig):
     ) -> None:
         """Render one interactive frame after non-GL session scheduling."""
         frame_start = time.perf_counter()
-        benchmark_controller = getattr(self, "_benchmark_controller", None)
+        benchmark_controller = self._active_benchmark_controller()
         benchmark_active = (
             benchmark_controller is not None
             and not benchmark_controller.finished
@@ -5812,7 +5915,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         now = time.perf_counter()
         if not self._initial_chunks_loaded:
             if benchmark_active and benchmark_controller.exceeded_max_runtime(now):
-                benchmark_controller.finish(reason="max_runtime_exceeded")
+                self._finish_benchmark(reason="max_runtime_exceeded")
                 self.close()
                 return
             _map_name = os.path.basename(self.manifest.get("source_obj", "map"))
@@ -5828,7 +5931,7 @@ class CaveViewerWindow(mglw.WindowConfig):
 
         if self._chunk_prep_complete_until is not None and now < self._chunk_prep_complete_until:
             if benchmark_active and benchmark_controller.exceeded_max_runtime(now):
-                benchmark_controller.finish(reason="max_runtime_exceeded")
+                self._finish_benchmark(reason="max_runtime_exceeded")
                 self.close()
                 return
             _map_name = os.path.basename(self.manifest.get("source_obj", "map"))
@@ -5990,15 +6093,20 @@ class CaveViewerWindow(mglw.WindowConfig):
         recording_read_ms = 0.0
         recording_stage_ms = 0.0
         recording_drain_ms = 0.0
-        capture_overlay_mode = self._ensure_capture_workflow().overlay_mode_for(
-            CaptureOverlayState(
-                recording_armed=self._recording_hides_hud(),
-                manual_dive_trace_countdown_active=(
-                    self._ensure_manual_dive_trace_controller().countdown_active
-                ),
-                slice_countdown_active=(
-                    self._ensure_slice_selection_controller().countdown_active
-                ),
+        workflow_request = self._workflow_render_request()
+        capture_overlay_mode = (
+            workflow_request.capture_overlay_mode
+            if workflow_request is not None
+            else self._ensure_capture_workflow().overlay_mode_for(
+                CaptureOverlayState(
+                    recording_armed=self._recording_hides_hud(),
+                    manual_dive_trace_countdown_active=(
+                        self._ensure_manual_dive_trace_controller().countdown_active
+                    ),
+                    slice_countdown_active=(
+                        self._ensure_slice_selection_controller().countdown_active
+                    ),
+                )
             )
         )
         if capture_overlay_mode is CaptureOverlayMode.RECORDING:
@@ -6104,7 +6212,7 @@ class CaveViewerWindow(mglw.WindowConfig):
             benchmark_now = time.perf_counter()
             if not getattr(self, "_initial_visual_ready", False):
                 if benchmark_controller.exceeded_max_runtime(benchmark_now):
-                    benchmark_controller.finish(reason="max_runtime_exceeded")
+                    self._finish_benchmark(reason="max_runtime_exceeded")
                     self.close()
                 return
             if not benchmark_controller.started:
@@ -6127,11 +6235,11 @@ class CaveViewerWindow(mglw.WindowConfig):
                 streaming_timing=streaming_timing,
             )
             if benchmark_complete:
-                benchmark_controller.finish(reason="completed")
+                self._finish_benchmark(reason="completed")
                 self.close()
                 return
             if benchmark_controller.exceeded_max_runtime(benchmark_now):
-                benchmark_controller.finish(reason="max_runtime_exceeded")
+                self._finish_benchmark(reason="max_runtime_exceeded")
                 self.close()
                 return
 
@@ -7162,14 +7270,25 @@ class CaveViewerWindow(mglw.WindowConfig):
                 recording=lambda: self._handle_recording_hotkey(key, modifiers),
                 reset_view=lambda: self._handle_reset_view_shortcut(key, modifiers),
             )
-            if self._ensure_action_dispatcher().dispatch_key_press(actions):
+            workflows = self.__dict__.get("_workflow_coordinator")
+            action_handled = (
+                workflows.dispatch_key_press(actions)
+                if workflows is not None
+                else self._ensure_action_dispatcher().dispatch_key_press(actions)
+            )
+            if action_handled:
                 return
             self._keys_down.add(key)
         elif viewer_input.key_event_is_press_or_repeat(keys, action):
-            self._ensure_action_dispatcher().dispatch_key_repeat(
-                waiting_for_begin=self.controls_overlay.is_waiting_for_begin,
-                fly_speed=lambda: self._handle_fly_speed_hotkey(key, modifiers),
-            )
+            repeat_args = {
+                "waiting_for_begin": self.controls_overlay.is_waiting_for_begin,
+                "fly_speed": lambda: self._handle_fly_speed_hotkey(key, modifiers),
+            }
+            workflows = self.__dict__.get("_workflow_coordinator")
+            if workflows is not None:
+                workflows.dispatch_key_repeat(**repeat_args)
+            else:
+                self._ensure_action_dispatcher().dispatch_key_repeat(**repeat_args)
         elif action == keys.ACTION_RELEASE:
             self._keys_down.discard(key)
 
@@ -7721,36 +7840,43 @@ class CaveViewerWindow(mglw.WindowConfig):
 
     def _complete_window_close(self) -> None:
         """Release viewer resources after any active capture has finished."""
-        if self._closing_requested:
+        workflows = self.__dict__.get("_workflow_coordinator")
+        if workflows is not None:
+            if not workflows.begin_shutdown():
+                return
+        elif self._closing_requested:
             return
         self._closing_requested = True
-        self._ensure_capture_workflow().complete_close_workflows()
-        self._slice_reveal_before_close = False
-        self._slice_reveal_output_path = None
+        if workflows is None:
+            self._ensure_capture_workflow().complete_close_workflows()
+        try:
+            self._slice_reveal_before_close = False
+            self._slice_reveal_output_path = None
 
-        if hasattr(self, "wnd"):
-            try:
-                self.wnd.mouse_exclusivity = False
-            except Exception:
-                pass
+            if hasattr(self, "wnd"):
+                try:
+                    self.wnd.mouse_exclusivity = False
+                except Exception:
+                    pass
 
-        if getattr(self, "_import_active", False):
-            self._shutdown_active_import()
+            if getattr(self, "_import_active", False):
+                self._shutdown_active_import()
 
-        benchmark_controller = getattr(self, "_benchmark_controller", None)
-        if benchmark_controller is not None and not benchmark_controller.finished:
-            benchmark_controller.finish(reason="viewer_closed")
+            self._finish_benchmark(reason="viewer_closed")
 
-        if self._has_map_loaded:
-            self._teardown_current_map(final_shutdown=True)
-        self._release_window_resources()
+            if self._has_map_loaded:
+                self._teardown_current_map(final_shutdown=True)
+            self._release_window_resources()
 
-        # Ensure the backend window loop receives an explicit close request.
-        if hasattr(self, "wnd") and hasattr(self.wnd, "close"):
-            try:
-                self.wnd.close()
-            except Exception:
-                pass
+            # Ensure the backend window loop receives an explicit close request.
+            if hasattr(self, "wnd") and hasattr(self.wnd, "close"):
+                try:
+                    self.wnd.close()
+                except Exception:
+                    pass
+        finally:
+            if workflows is not None:
+                workflows.complete_shutdown()
 
     def on_close(self):
         if self._closing_requested:
@@ -7846,14 +7972,36 @@ def _run_moderngl_window_config(config_class: type, args=None) -> None:
         record_runtime_stage("viewer_window_cleanup_complete")
 
 
+def _session_window_config_class(
+    session: ViewerSession,
+    *,
+    window_size: tuple[int, int],
+) -> type[CaveViewerWindow]:
+    """Bind one immutable session to the class-based ModernGL launch API."""
+
+    return type(
+        "CaveViewerSessionWindow",
+        (CaveViewerWindow,),
+        {
+            "__module__": __name__,
+            "_viewer_session": session,
+            "window_size": window_size,
+            "vsync": session.config.vsync,
+        },
+    )
+
+
 def _launch_viewer_window(
-    *, window_size_override: tuple[int, int] | None = None
+    session: ViewerSession,
+    *,
+    window_size_override: tuple[int, int] | None = None,
 ) -> None:
     """Launch with dimensions expressed in the selected backend's coordinates."""
+    platform_runtime = session.config.platform_runtime
     record_runtime_stage("viewer_launch_preflight_begin")
     try:
         preflight = viewer_launch_preflight(
-            platform_runtime=CaveViewerWindow.cave_platform_runtime,
+            platform_runtime=platform_runtime,
         )
         target = authorized_viewer_launch_target(preflight)
     except BaseException as error:
@@ -7864,23 +8012,27 @@ def _launch_viewer_window(
         route=target.route_key,
     )
     if window_size_override is not None:
-        CaveViewerWindow.window_size = window_size_override
+        requested_window_size = window_size_override
         window_size_fraction = None
         fallback_window_size = window_size_override
     elif _presentation_profile_for_runtime(
-        CaveViewerWindow.cave_platform_runtime
+        platform_runtime
     ).viewer_uses_glfw_native_initial_size:
         # Linux GLFW sizing happens after the Wayland/X11 backend is selected,
         # using that backend's DPI-aware work-area coordinate system.
-        CaveViewerWindow.window_size = _DEFAULT_WINDOW_SIZE
+        requested_window_size = _DEFAULT_WINDOW_SIZE
         window_size_fraction = _DESKTOP_WINDOW_SCALE
         fallback_window_size = _DEFAULT_WINDOW_SIZE
     else:
-        CaveViewerWindow.window_size = _desktop_relative_window_size()
+        requested_window_size = _desktop_relative_window_size()
         window_size_fraction = _DESKTOP_WINDOW_SCALE
         fallback_window_size = _DEFAULT_WINDOW_SIZE
+    config_class = _session_window_config_class(
+        session,
+        window_size=requested_window_size,
+    )
     request = ViewerWindowLaunchRequest(
-        config_class=CaveViewerWindow,
+        config_class=config_class,
         runner=_run_moderngl_window_config,
         window_size_fraction=window_size_fraction,
         fallback_window_size=fallback_window_size,
@@ -7888,12 +8040,12 @@ def _launch_viewer_window(
     )
     record_runtime_stage(
         "viewer_native_launch_begin",
-        requested_window_size=CaveViewerWindow.window_size,
+        requested_window_size=requested_window_size,
         window_size_fraction=window_size_fraction,
     )
     try:
         _window_backend_adapter_for_runtime(
-            CaveViewerWindow.cave_platform_runtime
+            platform_runtime
         ).launch_viewer(
             target,
             request,
@@ -7925,33 +8077,27 @@ def run_viewer(
     map_root: str | os.PathLike[str] | None = None,
 ):
     manifest = chunker.load_manifest(cache_dir)
-
-    # Set as class attributes rather than passing through run_window_config's
-    # kwargs -- see the comment on CaveViewerWindow's class attributes above
-    # for why. This sidesteps moderngl-window version differences in how
-    # (or whether) run_window_config forwards extra keyword arguments.
-    CaveViewerWindow.cave_cache_dir = cache_dir
-    CaveViewerWindow.cave_textures_dir = textures_dir
-    CaveViewerWindow.cave_map_root = _normalize_map_root(map_root)
-    CaveViewerWindow.cave_manifest = manifest
-    CaveViewerWindow.cave_pending_import = None
-    CaveViewerWindow.cave_benchmark_config = None
-    CaveViewerWindow.cave_recorded_dive_trace = recorded_dive_trace
-    CaveViewerWindow.cave_platform_runtime = platform_runtime
-    CaveViewerWindow.cave_runtime_settings = runtime_settings
-    CaveViewerWindow.vsync = (
-        runtime_settings.viewer_configuration().vsync
-        if runtime_settings is not None
-        else _env_bool("CAVEVIEWER_VSYNC", True)
+    session = ViewerSession(
+        ViewerSessionConfig(
+            mode=ViewerLaunchMode.READY_CACHE,
+            cache_dir=cache_dir,
+            textures_dir=textures_dir,
+            map_root=_normalize_map_root(map_root),
+            manifest=manifest,
+            recorded_dive_trace=recorded_dive_trace,
+            platform_runtime=platform_runtime,
+            runtime_settings=runtime_settings,
+            vsync=(
+                runtime_settings.viewer_configuration().vsync
+                if runtime_settings is not None
+                else _env_bool("CAVEVIEWER_VSYNC", True)
+            ),
+        )
     )
 
     try:
-        _launch_viewer_window()
+        _launch_viewer_window(session)
     finally:
-        CaveViewerWindow.cave_map_root = None
-        CaveViewerWindow.cave_platform_runtime = None
-        CaveViewerWindow.cave_runtime_settings = None
-        CaveViewerWindow.vsync = True
         bitmap_font.clear_runtime_style()
 
 
@@ -7996,15 +8142,10 @@ def run_viewer_benchmark(
         benchmark_platform_runtime = create_platform_runtime(
             runtime_settings=runtime_settings
         )
-    CaveViewerWindow.cave_cache_dir = cache_dir
-    CaveViewerWindow.cave_textures_dir = textures_dir
-    CaveViewerWindow.cave_map_root = None
-    CaveViewerWindow.cave_manifest = manifest
-    CaveViewerWindow.cave_pending_import = None
-    CaveViewerWindow.cave_benchmark_config = {
-        "scenario": scenario,
-        "output_dir": output_dir,
-        "environment": {
+    benchmark_config = ViewerBenchmarkConfig(
+        scenario=scenario,
+        output_dir=output_dir,
+        environment={
             "app_version": APP_VERSION,
             "python": sys.version.split()[0],
             "platform": _platform.platform(),
@@ -8042,24 +8183,28 @@ def run_viewer_benchmark(
             ],
             "upload_time_budget_ms": streaming_settings["upload_time_budget_ms"],
         },
-    }
-    CaveViewerWindow.cave_recorded_dive_trace = None
-    CaveViewerWindow.cave_platform_runtime = benchmark_platform_runtime
-    CaveViewerWindow.cave_runtime_settings = runtime_settings
-    CaveViewerWindow.vsync = (
-        viewer_settings.vsync
-        if viewer_settings is not None
-        else _env_bool("CAVEVIEWER_VSYNC", True)
+    )
+    session = ViewerSession(
+        ViewerSessionConfig(
+            mode=ViewerLaunchMode.BENCHMARK,
+            cache_dir=cache_dir,
+            textures_dir=textures_dir,
+            manifest=manifest,
+            benchmark=benchmark_config,
+            platform_runtime=benchmark_platform_runtime,
+            runtime_settings=runtime_settings,
+            vsync=(
+                viewer_settings.vsync
+                if viewer_settings is not None
+                else _env_bool("CAVEVIEWER_VSYNC", True)
+            ),
+        )
     )
 
     try:
-        _launch_viewer_window()
+        _launch_viewer_window(session)
         return summary_path
     finally:
-        CaveViewerWindow.cave_benchmark_config = None
-        CaveViewerWindow.cave_platform_runtime = None
-        CaveViewerWindow.cave_runtime_settings = None
-        CaveViewerWindow.vsync = True
         bitmap_font.clear_runtime_style()
 
 
@@ -8090,29 +8235,28 @@ def run_viewer_with_pending_import(
     (see _run_pending_import) once the window is confirmed to have
     rendered and is genuinely on screen.
     """
-    CaveViewerWindow.cave_cache_dir = None
-    CaveViewerWindow.cave_textures_dir = None
-    CaveViewerWindow.cave_map_root = None
-    CaveViewerWindow.cave_manifest = None
-    CaveViewerWindow.cave_benchmark_config = None
-    CaveViewerWindow.cave_recorded_dive_trace = recorded_dive_trace
-    CaveViewerWindow.cave_platform_runtime = platform_runtime
-    CaveViewerWindow.cave_runtime_settings = runtime_settings
-    CaveViewerWindow.vsync = (
-        runtime_settings.viewer_configuration().vsync
-        if runtime_settings is not None
-        else _env_bool("CAVEVIEWER_VSYNC", True)
+    session = ViewerSession(
+        ViewerSessionConfig(
+            mode=ViewerLaunchMode.PENDING_IMPORT,
+            pending_import=PendingImportRequest(
+                model_descriptor=model_descriptor,
+                textures_dir=textures_dir,
+            ),
+            recorded_dive_trace=recorded_dive_trace,
+            platform_runtime=platform_runtime,
+            runtime_settings=runtime_settings,
+            vsync=(
+                runtime_settings.viewer_configuration().vsync
+                if runtime_settings is not None
+                else _env_bool("CAVEVIEWER_VSYNC", True)
+            ),
+        )
     )
-    CaveViewerWindow.cave_pending_import = {
-        "model_descriptor": model_descriptor,
-        "textures_dir": textures_dir,
-    }
-    CaveViewerWindow.cave_session_outcome = ViewerSessionOutcome()
 
     try:
-        _launch_viewer_window()
+        _launch_viewer_window(session)
     except BaseException as error:
-        outcome = CaveViewerWindow.cave_session_outcome
+        outcome = session.outcome
         # Some native backends surface a programmatic window close as
         # SystemExit. Suppress it only after the import controller has recorded
         # the recoverable startup failure that requested that close.
@@ -8124,18 +8268,13 @@ def run_viewer_with_pending_import(
         # is closed; let other RuntimeErrors propagate.
         msg = str(error)
         if isinstance(error, RuntimeError) and (
-            "Neither CaveViewerWindow.cave_cache_dir" in msg and "must be set" in msg
+            "viewer session has neither a ready cache" in msg.lower()
         ):
             # Clean exit without a traceback
             _LOG.info("Viewer exited without a preloaded map.")
             return outcome
         raise
     else:
-        return CaveViewerWindow.cave_session_outcome
+        return session.outcome
     finally:
-        CaveViewerWindow.cave_pending_import = None
-        CaveViewerWindow.cave_platform_runtime = None
-        CaveViewerWindow.cave_runtime_settings = None
-        CaveViewerWindow.cave_session_outcome = ViewerSessionOutcome()
-        CaveViewerWindow.vsync = True
         bitmap_font.clear_runtime_style()
