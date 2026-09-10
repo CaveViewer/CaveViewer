@@ -37,6 +37,7 @@ VIEWER_RENDER_THREAD_COMPONENT_MODULES = (
     GUI_ROOT / "minimap.py",
     GUI_ROOT / "recording_capture.py",
     GUI_ROOT / "texture_manager.py",
+    GUI_ROOT / "viewer_map_runtime.py",
 )
 VIEWER_BACKEND_CALLBACK_ALIASES = {
     "close": "on_close",

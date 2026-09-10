@@ -13,7 +13,7 @@ simple lookup-and-release.
 
 from __future__ import annotations
 
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 import hashlib
@@ -103,6 +103,7 @@ from caveviewer.gui.viewer_frame_scheduler import (
     ViewerFrameScheduler,
     ViewerFrameState,
 )
+from caveviewer.gui.viewer_map_runtime import ViewerMapRuntime
 from caveviewer.gui.viewer_session import (
     PendingImportRequest,
     ViewerBenchmarkConfig,
@@ -203,6 +204,25 @@ def _import_controller_property(attribute_name: str):
 
     def setter(self, value) -> None:
         setattr(self._ensure_import_controller(), attribute_name, value)
+
+    return property(getter, setter)
+
+
+def _map_runtime_property(attribute_name: str):
+    """Bridge transitional window attributes to the authoritative map owner."""
+
+    def runtime(window) -> ViewerMapRuntime:
+        value = getattr(window, "_map_runtime", None)
+        if value is None:
+            value = ViewerMapRuntime()
+            window._map_runtime = value
+        return value
+
+    def getter(window):
+        return getattr(runtime(window), attribute_name)
+
+    def setter(window, value):
+        setattr(runtime(window), attribute_name, value)
 
     return property(getter, setter)
 
@@ -686,6 +706,38 @@ class CaveViewerWindow(mglw.WindowConfig):
     _import_pause_notice_stage = _import_controller_property("pause_notice_stage")
     _import_pause_notice_note = _import_controller_property("pause_notice_note")
 
+    cache_dir = _map_runtime_property("cache_dir")
+    textures_dir = _map_runtime_property("textures_dir")
+    map_root = _map_runtime_property("map_root")
+    manifest = _map_runtime_property("manifest")
+    world = _map_runtime_property("world")
+    camera = _map_runtime_property("camera")
+    minimap = _map_runtime_property("minimap")
+    texture_manager = _map_runtime_property("texture_manager")
+    _chunk_upload_manager = _map_runtime_property("chunk_upload_manager")
+    _chunk_gpu_objects = _map_runtime_property("chunk_gpu_objects")
+    _chunk_upload_states = _map_runtime_property("chunk_upload_states")
+    _chunk_normal_cache = _map_runtime_property("chunk_normal_cache")
+    _chunk_aabbs = _map_runtime_property("chunk_aabbs")
+    _view_culling_cache = _map_runtime_property("view_culling_cache")
+    _chunk_visibility_generation = _map_runtime_property(
+        "chunk_visibility_generation"
+    )
+    _texture_validation_executor = _map_runtime_property(
+        "texture_validation_executor"
+    )
+    _texture_validation_future = _map_runtime_property("texture_validation_future")
+    _texture_validation_manager = _map_runtime_property(
+        "texture_validation_manager"
+    )
+    _texture_validation_cache_dir = _map_runtime_property(
+        "texture_validation_cache_dir"
+    )
+    _texture_validation_started_at = _map_runtime_property(
+        "texture_validation_started_at"
+    )
+    _has_map_loaded = _map_runtime_property("loaded")
+
     def __init__(self, **kwargs):
         session = getattr(type(self), "_viewer_session", None)
         if not isinstance(session, ViewerSession):
@@ -997,33 +1049,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         # from the one-time-per-window setup above, so the exact same
         # logic can run again later when switching to a different map via
         # the OPEN button -- see load_new_map() / _teardown_current_map().
-        self.cache_dir = None
-        self.textures_dir = None
-        self.map_root: str | None = None
-        self.manifest = None
-        self.world = None
-        self.camera = None
-        self.minimap = None
-        self.texture_manager = None
-        self._chunk_upload_manager: ChunkUploadManager | None = None
-        self._chunk_gpu_objects: dict[tuple, list] = {}
-        self._chunk_upload_states: dict[tuple, dict] = {}
-        # Per-chunk, per-material CPU-side data for instant SHADE toggle:
-        # each entry holds (mat_name, positions, uvs, smooth_normals, flat_normals)
-        # tuples in the same order as _chunk_gpu_objects, so toggling shading
-        # can zip the two lists and rewrite each VBO in place via vbo.write().
-        self._chunk_normal_cache: dict[tuple, list] = {}
-        # Per-cell world-space AABBs for frustum culling, populated as chunks
-        # become resident.
-        self._chunk_aabbs: dict[tuple, tuple] = {}
-        self._view_culling_cache = view_culling.FrustumCullingCache()
-        self._chunk_visibility_generation = 0
-        self._texture_validation_executor: ThreadPoolExecutor | None = None
-        self._texture_validation_future: Future | None = None
-        self._texture_validation_manager: TextureManager | None = None
-        self._texture_validation_cache_dir: str | None = None
-        self._texture_validation_started_at: float | None = None
-        self._has_map_loaded = False
+        self._map_runtime = ViewerMapRuntime()
         self._pending_import_started = False
         self._initial_chunks_loaded = False
         self._initial_visual_ready = False
@@ -1906,11 +1932,38 @@ class CaveViewerWindow(mglw.WindowConfig):
         be called first in that second case, to cleanly release the
         previous map's GPU/thread resources before this builds new ones.
         """
+        runtime = ViewerMapRuntime.for_map(
+            cache_dir=cache_dir,
+            textures_dir=textures_dir,
+            map_root=_normalize_map_root(map_root),
+            manifest=manifest,
+        )
+        self._map_runtime = runtime
+        pending_recorded_dive = getattr(
+            self, "_pending_recorded_dive_trace", None
+        )
+        try:
+            self._initialize_map_runtime()
+        except BaseException:
+            try:
+                runtime.release(
+                    streaming_shutdown_timeout=(
+                        _VIEWER_STREAMING_SHUTDOWN_TIMEOUT_SECONDS
+                    ),
+                    logger=_LOG,
+                )
+            except Exception:
+                _LOG.exception("Error while cleaning up a failed map load.")
+            self._recorded_dive_trace = None
+            self._recorded_dive_controller = None
+            self._pending_recorded_dive_trace = pending_recorded_dive
+            if self._map_runtime is runtime:
+                self._map_runtime = ViewerMapRuntime()
+            raise
+        runtime.loaded = True
+
+    def _initialize_map_runtime(self) -> None:
         load_started_at = time.perf_counter()
-        self.cache_dir = cache_dir
-        self.textures_dir = textures_dir
-        self.map_root = _normalize_map_root(map_root)
-        self.manifest = manifest
         pending_recorded_dive = getattr(
             self,
             "_pending_recorded_dive_trace",
@@ -1919,7 +1972,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         if pending_recorded_dive is not None:
             recorded_dive.validate_recorded_dive_manifest(
                 pending_recorded_dive,
-                manifest,
+                self.manifest,
             )
         self._initial_compilation_started_at = time.perf_counter()
         self._initial_compilation_logged = False
@@ -2159,7 +2212,7 @@ class CaveViewerWindow(mglw.WindowConfig):
 
         # One-time texture diagnostic: print material/texture summary to
         # console so atlas feasibility can be judged without guessing.
-        self._print_texture_diagnostics(manifest, textures_dir)
+        self._print_texture_diagnostics(self.manifest, self.textures_dir)
 
         # Keep GPU upload state scoped to the active map.  Large maps can have
         # tens or hundreds of thousands of manifest cells, so frustum-culling
@@ -2217,99 +2270,23 @@ class CaveViewerWindow(mglw.WindowConfig):
         _load_map() can keep the window event loop from responding long enough
         for the desktop shell to report "application not responding."
         """
-        texture_manager = getattr(self, "texture_manager", None)
-        if texture_manager is None:
-            return False
-
-        self._cancel_texture_validation()
-        executor: ThreadPoolExecutor | None = None
-        try:
-            executor = ThreadPoolExecutor(
-                max_workers=1,
-                thread_name_prefix="caveviewer-texture-validate",
-            )
-            future = executor.submit(texture_manager.validate_textures)
-        except Exception as exc:
-            if executor is not None:
-                executor.shutdown(wait=False, cancel_futures=True)
-            _LOG.warning(
-                "Could not start background texture validation: %s", exc
-            )
-            return False
-
-        self._texture_validation_executor = executor
-        self._texture_validation_future = future
-        self._texture_validation_manager = texture_manager
-        self._texture_validation_cache_dir = self.cache_dir
-        self._texture_validation_started_at = time.perf_counter()
-        return True
+        return self._map_runtime.start_texture_validation(
+            executor_factory=ThreadPoolExecutor,
+            perf_counter=time.perf_counter,
+            logger=_LOG,
+        )
 
     def _update_texture_validation(self) -> None:
-        future = getattr(self, "_texture_validation_future", None)
-        if future is None or not future.done():
-            return
-
-        executor = getattr(self, "_texture_validation_executor", None)
-        texture_manager = getattr(self, "_texture_validation_manager", None)
-        cache_dir = getattr(self, "_texture_validation_cache_dir", None)
-        started_at = getattr(self, "_texture_validation_started_at", None)
-
-        self._clear_texture_validation_state(shutdown_executor=False)
-        if executor is not None:
-            executor.shutdown(wait=False, cancel_futures=True)
-
-        if texture_manager is not getattr(self, "texture_manager", None):
-            return
-        if cache_dir != getattr(self, "cache_dir", None):
-            return
-
-        elapsed_s = (
-            max(0.0, time.perf_counter() - started_at)
-            if started_at is not None
-            else None
+        self._map_runtime.finish_texture_validation(
+            perf_counter=time.perf_counter,
+            logger=_LOG,
         )
-        try:
-            result = future.result()
-        except Exception as exc:
-            _LOG.warning("Background texture validation failed: %s", exc)
-            return
-
-        found = len(result.get("found", ())) if isinstance(result, dict) else None
-        missing = len(result.get("missing", ())) if isinstance(result, dict) else None
-        if elapsed_s is None:
-            _LOG.info(
-                "Background texture validation completed "
-                "(found=%s missing=%s).",
-                found,
-                missing,
-            )
-        else:
-            _LOG.info(
-                "Background texture validation completed in %.2fs "
-                "(found=%s missing=%s).",
-                elapsed_s,
-                found,
-                missing,
-            )
-
-    def _clear_texture_validation_state(self, *, shutdown_executor: bool) -> None:
-        executor = getattr(self, "_texture_validation_executor", None)
-        if shutdown_executor and executor is not None:
-            executor.shutdown(wait=False, cancel_futures=True)
-        self._texture_validation_executor = None
-        self._texture_validation_future = None
-        self._texture_validation_manager = None
-        self._texture_validation_cache_dir = None
-        self._texture_validation_started_at = None
 
     def _cancel_texture_validation(self) -> bool:
-        future = getattr(self, "_texture_validation_future", None)
+        future = self._map_runtime.texture_validation_future
         if future is None:
             return False
-        try:
-            future.cancel()
-        finally:
-            self._clear_texture_validation_state(shutdown_executor=True)
+        self._map_runtime.cancel_texture_validation()
         return True
 
     def _configure_benchmark_route_prefetch(self, origin: np.ndarray) -> None:
@@ -3734,66 +3711,41 @@ class CaveViewerWindow(mglw.WindowConfig):
         logs the unjoined worker instead of letting the viewer close callback
         block forever.
         """
-        self._cancel_texture_validation()
-        if not self._has_map_loaded:
+        runtime = getattr(self, "_map_runtime", None)
+        if runtime is None:
             return
 
-        self._stop_manual_dive_trace(
-            reason="viewer_closed" if final_shutdown else "map_changed"
-        )
-        slice_selection = self._ensure_slice_selection_controller()
-        if slice_selection.countdown_active:
-            slice_selection.cancel_countdown()
-            self._clear_slice_context()
-        elif slice_selection.selection_active:
-            slice_selection.cancel_selection()
-            self._clear_slice_context()
-        self._stop_recorded_dive(
-            reason="viewer_closed" if final_shutdown else "map_changed"
-        )
-        self._stop_recording()
+        if runtime.loaded:
+            self._stop_manual_dive_trace(
+                reason="viewer_closed" if final_shutdown else "map_changed"
+            )
+            slice_selection = self._ensure_slice_selection_controller()
+            if slice_selection.countdown_active:
+                slice_selection.cancel_countdown()
+                self._clear_slice_context()
+            elif slice_selection.selection_active:
+                slice_selection.cancel_selection()
+                self._clear_slice_context()
+            self._stop_recorded_dive(
+                reason="viewer_closed" if final_shutdown else "map_changed"
+            )
+            self._stop_recording()
+
         # Keep this callback bounded: on_close() runs inside the window/render
         # event path, and an unbounded join here can leave the viewer visually
         # frozen if a streaming worker is stuck in disk or callback code.
-        self.world.shutdown(timeout=_VIEWER_STREAMING_SHUTDOWN_TIMEOUT_SECONDS)
-
-        upload_manager = getattr(self, "_chunk_upload_manager", None)
-        if upload_manager is not None:
-            upload_manager.unload_all()
-            self._sync_chunk_upload_state_from_manager(upload_manager)
-        else:
-            for cell in list(getattr(self, "_chunk_upload_states", {}).keys()):
-                self._on_chunk_unload(cell)
-
-            for cell in list(self._chunk_gpu_objects.keys()):
-                self._on_chunk_unload(cell)
-
-        # belt-and-suspenders: if anything was somehow left behind (it
-        # shouldn't be, given the loop above), don't carry it into the
-        # next map's state
-        self._chunk_gpu_objects.clear()
-        self._chunk_upload_states.clear()
-        self._chunk_normal_cache.clear()
-        self._chunk_aabbs.clear()
-        self._chunk_upload_manager = None
-        self._invalidate_visible_chunk_cache()
-        self._recorded_dive_trace = None
-        self._recorded_dive_controller = None
-
-        if hasattr(self, "texture_manager") and self.texture_manager is not None:
-            self.texture_manager.shutdown()
-
-        if self.minimap is not None:
-            try:
-                self.minimap.release()
-            except Exception:
-                pass
-
-        self._has_map_loaded = False
-        self.world = None
-        self.camera = None
-        self.minimap = None
-        self.texture_manager = None
+        try:
+            runtime.release(
+                streaming_shutdown_timeout=(
+                    _VIEWER_STREAMING_SHUTDOWN_TIMEOUT_SECONDS
+                ),
+                logger=_LOG,
+            )
+        finally:
+            if self._map_runtime is runtime:
+                self._map_runtime = ViewerMapRuntime()
+            self._recorded_dive_trace = None
+            self._recorded_dive_controller = None
 
     def _release_window_resources(self) -> None:
         """Release non-map GPU/UI resources when closing the viewer window."""
