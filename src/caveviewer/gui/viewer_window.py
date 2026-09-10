@@ -15,7 +15,6 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass
 import hashlib
 import logging
 import math
@@ -104,6 +103,10 @@ from caveviewer.gui.viewer_frame_scheduler import (
     ViewerFrameState,
 )
 from caveviewer.gui.viewer_map_runtime import ViewerMapRuntime
+from caveviewer.gui.viewer_capture_runtime import (
+    PendingManualDiveTraceWriter as _PendingManualDiveTraceWriter,
+    ViewerCaptureRuntime,
+)
 from caveviewer.gui import viewer_streaming_runtime
 from caveviewer.gui.viewer_streaming_runtime import ViewerStreamingRuntime
 from caveviewer.gui.viewer_session import (
@@ -191,15 +194,6 @@ _RecordingStopResult = recording.RecordingStopResult
 _RecordingReadbackSlot = recording.RecordingReadbackSlot
 
 
-@dataclass(frozen=True)
-class _PendingManualDiveTraceWriter:
-    """One trace writer paired with its user-visible completion policy."""
-
-    recorder: manual_dive_trace.ManualDiveTraceRecorder
-    show_completion: bool
-    reveal_on_success: bool
-
-
 def _import_controller_property(attribute_name: str):
     def getter(self):
         return getattr(self._ensure_import_controller(), attribute_name)
@@ -244,6 +238,52 @@ def _streaming_runtime_property(attribute_name: str):
 
     def setter(window, value) -> None:
         setattr(runtime(window), attribute_name, value)
+
+    return property(getter, setter)
+
+
+def _capture_runtime_property(attribute_name: str):
+    """Bridge transitional capture attributes to the session runtime."""
+
+    def runtime(window) -> ViewerCaptureRuntime:
+        value = getattr(window, "_capture_runtime", None)
+        if value is None:
+            value = ViewerCaptureRuntime()
+            window._capture_runtime = value
+        return value
+
+    def getter(window):
+        return getattr(runtime(window), attribute_name)
+
+    def setter(window, value) -> None:
+        setattr(runtime(window), attribute_name, value)
+
+    return property(getter, setter)
+
+
+def _recording_resource_property(attribute_name: str):
+    """Bridge readback fields directly to their authoritative resource owner."""
+
+    def resources(window) -> RecordingCaptureResources:
+        return window._ensure_recording_capture()
+
+    def getter(window):
+        return getattr(resources(window), attribute_name)
+
+    def setter(window, value) -> None:
+        setattr(resources(window), attribute_name, value)
+
+    return property(getter, setter)
+
+
+def _recording_controller_property(attribute_name: str):
+    """Bridge legacy state attributes to the recording controller."""
+
+    def getter(window):
+        return getattr(window._ensure_recording_controller(), attribute_name)
+
+    def setter(window, value) -> None:
+        setattr(window._ensure_recording_controller(), attribute_name, value)
 
     return property(getter, setter)
 
@@ -811,6 +851,65 @@ class CaveViewerWindow(mglw.WindowConfig):
     _initial_visual_ready_logged = _streaming_runtime_property(
         "initial_visual_ready_logged"
     )
+    _manual_dive_trace = _capture_runtime_property("manual_dive_trace")
+    _manual_dive_trace_writers = _capture_runtime_property(
+        "manual_dive_trace_writers"
+    )
+    _pending_recorded_dive_trace = _capture_runtime_property(
+        "pending_recorded_dive_trace"
+    )
+    _recorded_dive_trace = _capture_runtime_property("recorded_dive_trace")
+    _recorded_dive_controller = _capture_runtime_property(
+        "recorded_dive_controller"
+    )
+    _recorded_dive_prefetch_cell_set = _capture_runtime_property(
+        "recorded_dive_prefetch_cell_set"
+    )
+    _recorded_dive_background_paused = _capture_runtime_property(
+        "recorded_dive_background_paused"
+    )
+    _slice_reveal_before_close = _capture_runtime_property(
+        "slice_reveal_before_close"
+    )
+    _slice_reveal_output_path = _capture_runtime_property(
+        "slice_reveal_output_path"
+    )
+    _slice_source_cache_dir = _capture_runtime_property("slice_source_cache_dir")
+    _slice_storage_parent = _capture_runtime_property("slice_storage_parent")
+    _slice_display_base = _capture_runtime_property("slice_display_base")
+    _slice_root_cave_name = _capture_runtime_property("slice_root_cave_name")
+    _recording_session = _capture_runtime_property("recording_session")
+    _recording_output_path = _capture_runtime_property("recording_output_path")
+    _recording_capture = _capture_runtime_property("recording_resources")
+    _recording_frame_queue = _capture_runtime_property("recording_frame_queue")
+    _recording_stop_results = _capture_runtime_property("recording_stop_results")
+    _recording_stop_thread = _capture_runtime_property("recording_stop_thread")
+    _recording_stop_cancel_event = _capture_runtime_property(
+        "recording_stop_cancel_event"
+    )
+    _recording_size = _recording_resource_property("output_size")
+    _recording_viewport = _recording_resource_property("capture_viewport")
+    _recording_readback_framebuffer = _recording_resource_property(
+        "readback_framebuffer"
+    )
+    _recording_readback_slots = _recording_resource_property("readback_slots")
+    _recording_readback_pending = _recording_resource_property("readback_pending")
+    _recording_readback_byte_count = _recording_resource_property(
+        "readback_byte_count"
+    )
+    _recording_countdown_started_at = _recording_controller_property(
+        "countdown_started_at"
+    )
+    _recording_countdown_until = _recording_controller_property("countdown_until")
+    _recording_last_stage_ms = _recording_controller_property("last_stage_ms")
+    _recording_last_drain_ms = _recording_controller_property("last_drain_ms")
+    _recording_next_frame_time = _recording_controller_property("next_frame_time")
+    _recording_frame_interval = _recording_controller_property("frame_interval")
+    _recording_dropped_frames = _recording_controller_property("dropped_frames")
+    _recording_status_message = _recording_controller_property("status_message")
+    _recording_status_detail = _recording_controller_property("status_detail")
+    _recording_status_kind = _recording_controller_property("status_kind")
+    _recording_status_until = _recording_controller_property("status_until")
 
     def __init__(self, **kwargs):
         session = getattr(type(self), "_viewer_session", None)
@@ -1001,6 +1100,9 @@ class CaveViewerWindow(mglw.WindowConfig):
         self.controls_overlay = None
         self.color_picker = None
         self._pending_import_splash_rendered = False
+        self._capture_runtime = ViewerCaptureRuntime(
+            pending_recorded_dive_trace=session_config.recorded_dive_trace
+        )
         self._initialize_interaction_and_timing_state()
         self._initialize_capture_state(session_config)
         self._initialize_map_state()
@@ -1030,12 +1132,6 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._is_iconified = False
         self._is_background_paused = False
         self._closing_requested = False
-        self._slice_reveal_before_close = False
-        self._slice_reveal_output_path: str | None = None
-        self._slice_source_cache_dir: str | None = None
-        self._slice_storage_parent: str | None = None
-        self._slice_display_base: str | None = None
-        self._slice_root_cave_name: str | None = None
         self._startup_focus_requested = False
         self._upload_chunks_per_frame = (
             _env_int("CAVEVIEWER_UPLOAD_CHUNKS_PER_FRAME", 1, 1, 16)
@@ -1060,24 +1156,9 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._bookmarks: viewer_bookmarks.BookmarkSlots = {}
 
     def _initialize_capture_state(
-        self, session_config: ViewerSessionConfig
+        self, _session_config: ViewerSessionConfig
     ) -> None:
         viewer_settings = self._viewer_runtime_settings
-        self._manual_dive_trace: (
-            manual_dive_trace.ManualDiveTraceRecorder | None
-        ) = None
-        self._manual_dive_trace_writers: list[_PendingManualDiveTraceWriter] = []
-        self._pending_recorded_dive_trace = (
-            session_config.recorded_dive_trace
-        )
-        self._recorded_dive_trace: recorded_dive.RecordedDiveTrace | None = None
-        self._recorded_dive_controller: (
-            recorded_dive.RecordedDivePlaybackController | None
-        ) = None
-        self._recorded_dive_prefetch_cell_set: frozenset[
-            tuple[int, int, int]
-        ] = frozenset()
-        self._recorded_dive_background_paused = False
         if viewer_settings is None:
             self._recording_fps = _env_int("CAVEVIEWER_RECORDING_FPS", 30, 1, 60)
             self._recording_max_height = _env_int(
@@ -1103,19 +1184,6 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._workflow_coordinator.recording.frame_interval = (
             1.0 / float(self._recording_fps)
         )
-        self._recording_session: recording.RecordingEncoderSession | None = None
-        self._recording_output_path: str | None = None
-        self._recording_capture: RecordingCaptureResources | None = None
-        self._recording_size: tuple[int, int] | None = None
-        self._recording_viewport: tuple[int, int, int, int] | None = None
-        self._recording_readback_framebuffer: moderngl.Framebuffer | None = None
-        self._recording_readback_slots: list[_RecordingReadbackSlot] = []
-        self._recording_readback_pending: list[_RecordingReadbackSlot] = []
-        self._recording_readback_byte_count = 0
-        self._recording_frame_queue: queue.Queue | None = None
-        self._recording_stop_results: queue.Queue[_RecordingStopResult] = queue.Queue()
-        self._recording_stop_thread: threading.Thread | None = None
-        self._recording_stop_cancel_event: threading.Event | None = None
 
     def _initialize_map_state(self) -> None:
         # Map-specific state (world, manifest, camera, minimap, texture manager,
@@ -1552,6 +1620,14 @@ class CaveViewerWindow(mglw.WindowConfig):
             )
         return workflow
 
+    def _ensure_capture_runtime(self) -> ViewerCaptureRuntime:
+        """Return the session's render-thread capture execution owner."""
+        runtime = getattr(self, "_capture_runtime", None)
+        if runtime is None:
+            runtime = ViewerCaptureRuntime()
+            self._capture_runtime = runtime
+        return runtime
+
     def _ensure_action_dispatcher(self) -> ViewerActionDispatcher:
         """Return the ordered key-action coordinator for this viewer session."""
         dispatcher = self.__dict__.get("_action_dispatcher")
@@ -1778,132 +1854,14 @@ class CaveViewerWindow(mglw.WindowConfig):
         return controller
 
     def _ensure_recording_capture(self) -> RecordingCaptureResources:
-        capture = self.__dict__.get("_recording_capture")
-        if capture is None:
-            capture = RecordingCaptureResources(
-                ctx=getattr(self, "ctx", None),
-                buffer_count=self.RECORDING_READBACK_BUFFER_COUNT,
-                readback_components=self.RECORDING_READBACK_COMPONENTS,
-                logger=_LOG,
-                perf_counter=lambda: time.perf_counter(),
-            )
-            self.__dict__["_recording_capture"] = capture
-        capture.ctx = getattr(self, "ctx", None)
-        capture.buffer_count = self.RECORDING_READBACK_BUFFER_COUNT
-        capture.readback_components = self.RECORDING_READBACK_COMPONENTS
-        capture.logger = _LOG
-        capture.output_size = getattr(self, "_recording_size", None)
-        capture.capture_viewport = getattr(self, "_recording_viewport", None)
-        capture.readback_framebuffer = getattr(
-            self,
-            "_recording_readback_framebuffer",
-            None,
+        runtime = self._ensure_capture_runtime()
+        return runtime.ensure_recording_resources(
+            ctx=getattr(self, "ctx", None),
+            buffer_count=self.RECORDING_READBACK_BUFFER_COUNT,
+            readback_components=self.RECORDING_READBACK_COMPONENTS,
+            logger=_LOG,
+            perf_counter=time.perf_counter,
         )
-        capture.readback_slots = getattr(self, "_recording_readback_slots", [])
-        capture.readback_pending = getattr(self, "_recording_readback_pending", [])
-        capture.readback_byte_count = int(
-            getattr(self, "_recording_readback_byte_count", 0)
-        )
-        return capture
-
-    def _sync_recording_capture_state_from_manager(self) -> None:
-        capture = self.__dict__.get("_recording_capture")
-        if capture is None:
-            return
-        self._recording_size = capture.output_size
-        self._recording_viewport = capture.capture_viewport
-        self._recording_readback_framebuffer = capture.readback_framebuffer
-        self._recording_readback_slots = capture.readback_slots
-        self._recording_readback_pending = capture.readback_pending
-        self._recording_readback_byte_count = capture.readback_byte_count
-
-    @property
-    def _recording_countdown_started_at(self) -> float | None:
-        return self._ensure_recording_controller().countdown_started_at
-
-    @_recording_countdown_started_at.setter
-    def _recording_countdown_started_at(self, value: float | None) -> None:
-        self._ensure_recording_controller().countdown_started_at = value
-
-    @property
-    def _recording_countdown_until(self) -> float | None:
-        return self._ensure_recording_controller().countdown_until
-
-    @_recording_countdown_until.setter
-    def _recording_countdown_until(self, value: float | None) -> None:
-        self._ensure_recording_controller().countdown_until = value
-
-    @property
-    def _recording_last_stage_ms(self) -> float:
-        return self._ensure_recording_controller().last_stage_ms
-
-    @_recording_last_stage_ms.setter
-    def _recording_last_stage_ms(self, value: float) -> None:
-        self._ensure_recording_controller().last_stage_ms = value
-
-    @property
-    def _recording_last_drain_ms(self) -> float:
-        return self._ensure_recording_controller().last_drain_ms
-
-    @_recording_last_drain_ms.setter
-    def _recording_last_drain_ms(self, value: float) -> None:
-        self._ensure_recording_controller().last_drain_ms = value
-
-    @property
-    def _recording_next_frame_time(self) -> float | None:
-        return self._ensure_recording_controller().next_frame_time
-
-    @_recording_next_frame_time.setter
-    def _recording_next_frame_time(self, value: float | None) -> None:
-        self._ensure_recording_controller().next_frame_time = value
-
-    @property
-    def _recording_frame_interval(self) -> float:
-        return self._ensure_recording_controller().frame_interval
-
-    @_recording_frame_interval.setter
-    def _recording_frame_interval(self, value: float) -> None:
-        self._ensure_recording_controller().frame_interval = value
-
-    @property
-    def _recording_dropped_frames(self) -> int:
-        return self._ensure_recording_controller().dropped_frames
-
-    @_recording_dropped_frames.setter
-    def _recording_dropped_frames(self, value: int) -> None:
-        self._ensure_recording_controller().dropped_frames = value
-
-    @property
-    def _recording_status_message(self) -> str | None:
-        return self._ensure_recording_controller().status_message
-
-    @_recording_status_message.setter
-    def _recording_status_message(self, value: str | None) -> None:
-        self._ensure_recording_controller().status_message = value
-
-    @property
-    def _recording_status_detail(self) -> str | None:
-        return self._ensure_recording_controller().status_detail
-
-    @_recording_status_detail.setter
-    def _recording_status_detail(self, value: str | None) -> None:
-        self._ensure_recording_controller().status_detail = value
-
-    @property
-    def _recording_status_kind(self) -> str | None:
-        return self._ensure_recording_controller().status_kind
-
-    @_recording_status_kind.setter
-    def _recording_status_kind(self, value: str | None) -> None:
-        self._ensure_recording_controller().status_kind = value
-
-    @property
-    def _recording_status_until(self) -> float | None:
-        return self._ensure_recording_controller().status_until
-
-    @_recording_status_until.setter
-    def _recording_status_until(self, value: float | None) -> None:
-        self._ensure_recording_controller().status_until = value
 
     def _claim_backend_escape_key(self) -> None:
         """Disable the backend's preemptive Escape close callback."""
@@ -2837,16 +2795,13 @@ class CaveViewerWindow(mglw.WindowConfig):
 
     def _release_recording_readback_framebuffer(self) -> None:
         self._ensure_recording_capture().release_framebuffer()
-        self._sync_recording_capture_state_from_manager()
 
     def _discard_recording_staged_frames(self) -> int:
         dropped = self._ensure_recording_capture().discard_staged_frames()
-        self._sync_recording_capture_state_from_manager()
         return dropped
 
     def _release_recording_readback_buffers(self) -> None:
         self._ensure_recording_capture().release_buffers()
-        self._sync_recording_capture_state_from_manager()
         self._ensure_recording_controller().reset_frame_timings()
 
     def _create_recording_readback_framebuffer(
@@ -2858,12 +2813,10 @@ class CaveViewerWindow(mglw.WindowConfig):
             capture_size,
             output_size,
         )
-        self._sync_recording_capture_state_from_manager()
         return framebuffer
 
     def _create_recording_readback_buffers(self, output_size: tuple[int, int]) -> None:
         self._ensure_recording_capture().create_buffers(output_size)
-        self._sync_recording_capture_state_from_manager()
 
     def _start_recording_encoder(self) -> bool:
         recording_target = self._recording_target_if_available()
@@ -2938,12 +2891,10 @@ class CaveViewerWindow(mglw.WindowConfig):
             self._ensure_recording_controller().clear_countdown()
             return False
 
-        self._recording_session = session
-        self._recording_frame_queue = session.frame_queue
-        self._recording_output_path = session.output_path
-        self._recording_size = session.output_size
-        self._recording_viewport = session.viewport
-        self._recording_readback_framebuffer = readback_framebuffer
+        self._ensure_capture_runtime().attach_recording(
+            session,
+            readback_framebuffer=readback_framebuffer,
+        )
         now = time.perf_counter()
         self._ensure_recording_controller().mark_encoder_started(now=now)
         _LOG.info(
@@ -3030,17 +2981,11 @@ class CaveViewerWindow(mglw.WindowConfig):
                 self._recording_stop_cancel_event.set()
             return
 
-        session = self._recording_session
-
         self._ensure_recording_controller().clear_countdown()
-        self._recording_session = None
-        self._recording_output_path = None
-        self._recording_size = None
-        self._recording_viewport = None
+        session = self._ensure_capture_runtime().detach_recording()
         self._release_recording_readback_buffers()
         self._release_recording_readback_framebuffer()
         self._recording_next_frame_time = None
-        self._recording_frame_queue = None
 
         if session is None:
             return
@@ -3206,22 +3151,16 @@ class CaveViewerWindow(mglw.WindowConfig):
         self,
         render_frame: Callable[[moderngl.Framebuffer, tuple[int, int]], None] | None = None,
     ) -> bool:
-        try:
-            return self._ensure_recording_capture().stage_frame(
-                render_frame=render_frame,
-            )
-        finally:
-            self._sync_recording_capture_state_from_manager()
+        return self._ensure_recording_capture().stage_frame(
+            render_frame=render_frame,
+        )
 
     def _recording_drain_staged_frames(self) -> float:
-        try:
-            return self._ensure_recording_capture().drain_staged_frames(
-                frame_queue=self._recording_frame_queue,
-                enqueue_frame=self._recording_enqueue_frame,
-                stop_recording=self._stop_recording,
-            )
-        finally:
-            self._sync_recording_capture_state_from_manager()
+        return self._ensure_recording_capture().drain_staged_frames(
+            frame_queue=self._recording_frame_queue,
+            enqueue_frame=self._recording_enqueue_frame,
+            stop_recording=self._stop_recording,
+        )
 
     def _recording_update_after_scene(
         self,
@@ -6188,10 +6127,7 @@ class CaveViewerWindow(mglw.WindowConfig):
         return os.path.splitext(os.path.basename(raw_name))[0] or "Cave"
 
     def _clear_slice_context(self) -> None:
-        self._slice_source_cache_dir = None
-        self._slice_storage_parent = None
-        self._slice_display_base = None
-        self._slice_root_cave_name = None
+        self._ensure_capture_runtime().clear_slice_context()
 
     def _slice_unavailable(self, detail: str) -> None:
         self._show_capture_status(
