@@ -662,13 +662,23 @@ def test_viewer_window_retains_backend_callback_surface():
 def test_viewer_window_composes_non_gl_state_through_workflow_coordinator():
     """Keep production controller identity on one session-scoped owner."""
     viewer_module = _parse_module(VIEWER_WINDOW_MODULE)
-    initializer = _class_method(viewer_module, "CaveViewerWindow", "__init__")
-    assert initializer is not None
-
-    coordinator_assignments = _assignment_values(
-        initializer,
-        "_workflow_coordinator",
+    viewer_class = next(
+        node
+        for node in viewer_module.body
+        if isinstance(node, ast.ClassDef) and node.name == "CaveViewerWindow"
     )
+    composition_methods = [
+        node
+        for node in viewer_class.body
+        if isinstance(node, ast.FunctionDef)
+        and (node.name == "__init__" or node.name.startswith("_initialize_"))
+    ]
+
+    coordinator_assignments = [
+        value
+        for method in composition_methods
+        for value in _assignment_values(method, "_workflow_coordinator")
+    ]
     assert any(
         isinstance(node, ast.Call)
         and isinstance(node.func, ast.Name)
@@ -691,11 +701,12 @@ def test_viewer_window_composes_non_gl_state_through_workflow_coordinator():
     violations = [
         Violation(
             VIEWER_WINDOW_MODULE,
-            initializer.lineno,
-            f"constructs independent self.{attribute_name} in __init__",
+            method.lineno,
+            f"constructs independent self.{attribute_name} during composition",
         )
+        for method in composition_methods
         for attribute_name in sorted(independently_owned_attributes)
-        if _assignment_values(initializer, attribute_name)
+        if _assignment_values(method, attribute_name)
     ]
 
     assert not violations, _format_violations(violations)

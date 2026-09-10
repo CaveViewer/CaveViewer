@@ -63,6 +63,108 @@ def test_viewer_default_framebuffer_uses_multisampling_for_graphics_edges():
     assert viewer_window.CaveViewerWindow.samples == 4
 
 
+def test_viewer_constructor_keeps_callbacks_guarded_until_composition_finishes(
+    monkeypatch,
+):
+    observed_setup_states = []
+
+    class FakeNativeWindow:
+        def destroy(self):
+            raise AssertionError("successful initialization must retain the window")
+
+    def initialize_base(window, **_kwargs):
+        window.wnd = FakeNativeWindow()
+
+    def initialize_window(window, session):
+        observed_setup_states.append(window._window_setup_complete)
+        assert session is window._viewer_session
+        return True, False
+
+    monkeypatch.setattr(viewer_window.mglw.WindowConfig, "__init__", initialize_base)
+    monkeypatch.setattr(
+        viewer_window.CaveViewerWindow,
+        "_initialize_window",
+        initialize_window,
+    )
+    config_class = type(
+        "BoundViewerWindow",
+        (viewer_window.CaveViewerWindow,),
+        {"_viewer_session": _viewer_session()},
+    )
+
+    window = config_class()
+
+    assert observed_setup_states == [False]
+    assert window._window_setup_complete is True
+
+
+def test_viewer_constructor_releases_resources_before_destroy_on_failure(monkeypatch):
+    calls = []
+
+    class FakeNativeWindow:
+        def destroy(self):
+            calls.append("destroy")
+
+    def initialize_base(window, **_kwargs):
+        window.wnd = FakeNativeWindow()
+
+    def fail_window_composition(window, _session):
+        window._window_resources_released = False
+        raise OSError("shader construction failed")
+
+    monkeypatch.setattr(viewer_window.mglw.WindowConfig, "__init__", initialize_base)
+    monkeypatch.setattr(
+        viewer_window.CaveViewerWindow,
+        "_initialize_window",
+        fail_window_composition,
+    )
+    monkeypatch.setattr(
+        viewer_window.CaveViewerWindow,
+        "_release_window_resources",
+        lambda _window: calls.append("release_resources"),
+    )
+    config_class = type(
+        "BoundViewerWindow",
+        (viewer_window.CaveViewerWindow,),
+        {"_viewer_session": _viewer_session()},
+    )
+
+    with pytest.raises(OSError, match="shader construction failed"):
+        config_class()
+
+    assert calls == ["release_resources", "destroy"]
+
+
+def test_viewer_constructor_destroys_backend_when_base_initialization_fails(
+    monkeypatch,
+):
+    calls = []
+
+    class FakeNativeWindow:
+        def destroy(self):
+            calls.append("destroy")
+
+    def fail_base_initialization(window, **_kwargs):
+        window.wnd = FakeNativeWindow()
+        raise OSError("native context failed")
+
+    monkeypatch.setattr(
+        viewer_window.mglw.WindowConfig,
+        "__init__",
+        fail_base_initialization,
+    )
+    config_class = type(
+        "BoundViewerWindow",
+        (viewer_window.CaveViewerWindow,),
+        {"_viewer_session": _viewer_session()},
+    )
+
+    with pytest.raises(OSError, match="native context failed"):
+        config_class()
+
+    assert calls == ["destroy"]
+
+
 def test_pyglet_close_event_is_claimed_before_the_default_close_handler():
     calls = []
 
@@ -4945,10 +5047,14 @@ def test_startup_render_starts_import_when_splash_was_already_presented():
 
 
 def test_ready_cache_startup_is_deferred_until_render_loop():
-    source = inspect.getsource(viewer_window.CaveViewerWindow.__init__)
+    initializer_source = inspect.getsource(viewer_window.CaveViewerWindow.__init__)
+    startup_source = inspect.getsource(
+        viewer_window.CaveViewerWindow._initialize_startup_request
+    )
 
-    assert "self._startup_map_load_pending =" in source
-    assert "self._load_map(" not in source
+    assert "self._startup_map_load_pending =" in startup_source
+    assert "self._load_map(" not in initializer_source
+    assert "self._load_map(" not in startup_source
 
 
 def test_ready_cache_startup_splash_is_indeterminate():
