@@ -2601,11 +2601,30 @@ def test_recording_late_capture_drops_frames_instead_of_enqueuing_duplicates(
 
 
 def test_frame_spike_log_reports_recording_read_time():
-    source = inspect.getsource(viewer_window.CaveViewerWindow._render_interactive_frame)
+    source = inspect.getsource(
+        viewer_window.CaveViewerWindow._record_interactive_frame_telemetry
+    )
 
     assert "recording_read=" in source
     assert "recording_stage=" in source
     assert "recording_drain=" in source
+
+
+def test_interactive_frame_invokes_named_stages_in_visible_order():
+    source = inspect.getsource(viewer_window.CaveViewerWindow._render_interactive_frame)
+
+    stages = (
+        "_update_texture_validation()",
+        "_update_interactive_input(",
+        "_advance_interactive_streaming()",
+        "_render_initial_streaming_state(",
+        "_render_interactive_scene(",
+        "_render_interactive_overlays(",
+        "_update_interactive_benchmark(",
+        "_record_interactive_frame_telemetry(",
+    )
+    offsets = [source.index(stage) for stage in stages]
+    assert offsets == sorted(offsets)
 
 
 def test_render_loop_uses_nonblocking_throttle_instead_of_sleep():
