@@ -105,16 +105,9 @@ tracked local pre-push hook template for pushes to `main`.
 
 GitHub CodeQL default setup scans Actions, JavaScript/TypeScript, and Python on
 non-fork pull requests targeting `main`, pushes to `main`, and its weekly
-schedule. The repository property `github-codeql-config-file` points to
-`.github/codeql/codeql-config.yml`, which GitHub merges into its generated
-default configuration.
-
-The configuration temporarily excludes only the local viewer benchmark inputs,
-scripts, source modules, and focused unit tests. The local benchmark uses
-machine-local maps and GPU/display hardware and is separate from shipped
-application behavior. Keep this exclusion list exact; changes require a
-deliberate security review and an update to
-`tests/unit/test_codeql_configuration.py`.
+schedule. No custom path configuration is active, so CodeQL analyzes the local
+viewer benchmark along with the rest of the supported repository code. The
+benchmark itself remains a local tool and has no runtime dependency on CodeQL.
 
 ## Cache and Guided Dive coverage
 
