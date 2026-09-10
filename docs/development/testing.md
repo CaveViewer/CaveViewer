@@ -88,20 +88,33 @@ should receive direct tests even when the aggregate floor already passes.
 
 ## Viewer FPS benchmark
 
-Streaming FPS regressions are measured by the manual Viewer Benchmark workflow
-and the `caveviewer-benchmark` CLI. This benchmark is intentionally separate
-from the always-on unit suite because it needs a real OpenGL/display stack and a
-large precompiled map cache.
+Streaming FPS regressions are measured locally with `caveviewer-map-benchmark`
+or the lower-level `caveviewer-benchmark` CLI. This benchmark is intentionally
+separate from the always-on unit suite because it needs a real OpenGL/display
+stack and a large precompiled map cache.
 
 Use `docs/development/benchmarking.md` for setup, scenario, artifact, and
-threshold policy. The workflow compares a candidate ref with a baseline ref and
-uploads logs plus per-frame metrics so failures can be inspected without
-re-running the viewer immediately.
+threshold policy.
 
 For machine-local private or oversized benchmark maps, use
 `caveviewer-map-benchmark`. It keeps benchmark history under the map-local
 ignored `_benchmarks/` directory by default and can be installed through the
 tracked local pre-push hook template for pushes to `main`.
+
+## CodeQL
+
+GitHub CodeQL default setup scans Actions, JavaScript/TypeScript, and Python on
+non-fork pull requests targeting `main`, pushes to `main`, and its weekly
+schedule. The repository property `github-codeql-config-file` points to
+`.github/codeql/codeql-config.yml`, which GitHub merges into its generated
+default configuration.
+
+The configuration temporarily excludes only the local viewer benchmark inputs,
+scripts, source modules, and focused unit tests. The local benchmark uses
+machine-local maps and GPU/display hardware and is separate from shipped
+application behavior. Keep this exclusion list exact; changes require a
+deliberate security review and an update to
+`tests/unit/test_codeql_configuration.py`.
 
 ## Cache and Guided Dive coverage
 

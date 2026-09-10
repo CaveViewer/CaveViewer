@@ -652,7 +652,7 @@ def test_release_workflows_have_focused_shared_pycharm_actions():
     assert {"Create Preview Release", "Create Stable Release"} <= configuration_names
     assert generic_workflows == workflow_names - {"preview-release-promotion.yml"}
     assert not any("Smoke" in name for name in configuration_names)
-    assert configuration_names.isdisjoint({"Pages", "Viewer Benchmark"})
+    assert configuration_names.isdisjoint({"Pages"})
 
 
 def test_release_documentation_preserves_branch_and_pycharm_policy():
