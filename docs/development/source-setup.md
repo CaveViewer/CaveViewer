@@ -860,14 +860,72 @@ examples, and `caveviewer-chunker` CLI options are listed in
 
 Unless overridden, CaveViewer stores files in these locations:
 
-| Kind | Linux default | macOS/Windows default |
-|---|---|---|
-| Preferences | `$XDG_CONFIG_HOME/caveviewer/preferences.json` (`~/.config/...` fallback) | `~/.caveviewer/preferences.json` |
-| Remembered chooser locations | `$XDG_STATE_HOME/caveviewer/` (`~/.local/state/...` fallback) | `~/.caveviewer/` |
-| Windows pre-splash diagnostics | — | `~/.caveviewer/diagnostics/startup.log` |
-| Application session diagnostics | `$XDG_STATE_HOME/caveviewer/diagnostics/viewer-session-<id>.log` and `.jsonl` (`~/.local/state/...` fallback) | `~/.caveviewer/diagnostics/viewer-session-<id>.log` and `.jsonl` |
-| Map caches | Source map folder `/_cache` | Source map folder `/_cache` |
-| Downloaded map library | `$XDG_DOWNLOAD_DIR/` (`~/Downloads/` fallback) | `~/Downloads/` |
+The final column records whether the current location should remain. **Keep for
+compatibility** means the platform offers a more conventional location, but a
+move would currently create more migration and rollback risk than user value.
+
+#### Linux
+
+| Directory | Purpose | OS-recommended directory | Notes |
+|---|---|---|---|
+| `$XDG_CONFIG_HOME/caveviewer` (fallback `~/.config/caveviewer`) | Preferences and the legacy `advanced_settings.json` rename source. | Same directory under the XDG config home. | **Keep.** This already follows XDG and separates configuration from other data. |
+| `$XDG_STATE_HOME/caveviewer` (fallback `~/.local/state/caveviewer`) | Remembered browse path, recent maps, Map Library install registry, and `diagnostics/` session logs. | Same directory under the XDG state home. | **Keep.** These are persistent machine-local state and diagnostics. |
+| `$XDG_CACHE_HOME/caveviewer` (fallback `~/.cache/caveviewer`) | Downloaded Map Library catalog. | Same directory under the XDG cache home. | **Keep.** The catalog is regenerable cache data. |
+| `$XDG_DATA_HOME/caveviewer/{map_library,sample_maps}` (fallback below `~/.local/share/caveviewer`) | Legacy bundled-map locations awaiting best-effort relocation. | User-selected map storage; the XDG data home is appropriate only for application-owned data. | **Keep only as a compatibility source.** Existing maps must remain discoverable until relocation succeeds; new maps go to the configured Map Library folder. |
+| `$XDG_RUNTIME_DIR/caveviewer`, or `<temporary-directory>/caveviewer-<uid>/caveviewer` | Reserved runtime root; no production persistence consumer currently writes here. | The same validated XDG runtime directory and secure temporary fallback. | **Keep.** It already follows the XDG security requirements. |
+| XDG Downloads directory (fallback `~/Downloads`) or the Preferences / `CAVEVIEWER_MAP_LIBRARY_DIR` selection | Downloaded Map Library maps and saved cave slices. | XDG user Downloads directory or an explicit user-selected directory. | **Keep.** These are visible user assets, and the current resolver honors both the XDG user directory and an explicit selection. |
+| `<map-folder>/_cache` | Rebuildable render cache for a map. | `$XDG_CACHE_HOME/caveviewer` is the conventional application-cache location. | **Keep.** Co-location preserves the portable map layout and avoids duplicating large caches. |
+| `<CAVEVIEWER_MAP_CACHE_DIR>/<source-key>` | Optional centrally managed render cache. | An explicit user/admin-selected directory; the XDG cache home is the natural default. | **Keep.** The override is intentional and source-keyed naming prevents collisions. |
+| `<map-folder>/_guided_dives` | Completed Guided Dive JSONL recordings. | A user-selected Documents or map-project directory. | **Keep.** The files belong to the map and remain portable with it. |
+| `<map-folder>/_benchmarks` or an explicit output directory | Local map benchmark history. | The XDG state home for application diagnostics, or an explicit project output directory. | **Keep.** Results are map-specific and the caller can already select another output directory. |
+| `~/Movies/CaveViewer` or the Preferences / `CAVEVIEWER_RECORDING_DIR` selection | Video recordings. | The XDG Videos directory or an explicit user-selected directory. | **Keep for compatibility; improve the default separately.** A future change should resolve the XDG Videos directory without moving existing recordings. |
+| `<temporary-directory>/caveviewer_update_*` | Temporary update download and verification staging. | The OS temporary directory. | **Keep.** The data is short-lived and removed after publication, failure, or cancellation. |
+| `~/Downloads` | Published AppImage update packages. | The XDG Downloads directory. | **Keep for compatibility; improve the default separately.** Resolving XDG Downloads is more correct but is a visible-output change rather than a central-storage migration. |
+| User-selected AppImage parent directory | Installed portable application payload. | A user-selected location such as `~/Applications`. | **Keep.** AppImage placement is intentionally user-controlled. |
+| `$XDG_DATA_HOME/{applications,metainfo,icons/hicolor}` (fallback below `~/.local/share`) | Desktop file, AppStream metadata, and icons. | The same XDG data-home directories. | **Keep.** Desktop integration already follows the freedesktop layout. |
+| `<CAVEVIEWER_HOME>/{config,data,cache,state,runtime}` when overridden | Explicit replacement for all five central roots. | User/admin-selected location. | **Keep.** This portability, testing, and administration override should take precedence over platform defaults. |
+
+#### macOS
+
+| Directory | Purpose | OS-recommended directory | Notes |
+|---|---|---|---|
+| `~/.caveviewer` | Preferences and the legacy `advanced_settings.json` rename source. | `~/Library/Application Support/CaveViewer`. | **Keep for compatibility.** Application Support is more conventional, but moving preferences could hide settings from older releases and needs a downgrade-safe write contract. |
+| `~/.caveviewer` | Remembered browse path, recent maps, Map Library install registry, and `diagnostics/` session logs. | `~/Library/Application Support/CaveViewer`; logs may also use `~/Library/Logs/CaveViewer`. | **Keep for compatibility.** The current files are small and functional; splitting or moving them adds support cost without solving a demonstrated problem. |
+| `~/.caveviewer` | Downloaded Map Library catalog. | `~/Library/Caches/CaveViewer`. | **Keep for compatibility.** The catalog belongs in Caches, but its small, regenerable payload does not justify migration machinery. |
+| `~/.caveviewer/{map_library,sample_maps}` | Legacy bundled-map locations awaiting best-effort relocation. | User-selected map storage rather than Application Support for user-visible maps. | **Keep only as a compatibility source.** Never bulk-move or delete arbitrary legacy map content; new maps go to the configured Map Library folder. |
+| `~/.caveviewer/runtime` | Reserved runtime root; no production persistence consumer currently writes here. | The application cache or OS temporary directory. | **Keep for compatibility.** It is unused, so moving it would not improve current behavior. |
+| `~/Downloads` or the Preferences / `CAVEVIEWER_MAP_LIBRARY_DIR` selection | Downloaded Map Library maps and saved cave slices. | `~/Downloads`, Documents, or another explicit user-selected directory. | **Keep.** These are visible user assets and the user can select their permanent location. |
+| `<map-folder>/_cache` | Rebuildable render cache for a map. | `~/Library/Caches/CaveViewer` is the conventional application-cache root. | **Keep.** Co-location preserves the portable map layout and avoids duplicating large caches. |
+| `<CAVEVIEWER_MAP_CACHE_DIR>/<source-key>` | Optional centrally managed render cache. | An explicit user/admin-selected directory; `~/Library/Caches/CaveViewer` is the natural default. | **Keep.** The override is intentional and collision-safe. |
+| `<map-folder>/_guided_dives` | Completed Guided Dive recordings. | A user-selected Documents or map-project directory. | **Keep.** The recordings belong to the map and remain portable with it. |
+| `<map-folder>/_benchmarks` or an explicit output directory | Local map benchmark history. | Application Support for internal state, or an explicit project output directory. | **Keep.** Results are map-specific and already support an explicit destination. |
+| `~/Movies/CaveViewer` or the Preferences / `CAVEVIEWER_RECORDING_DIR` selection | Video recordings. | `~/Movies/CaveViewer` or an explicit user-selected directory. | **Keep.** The default is the native user-visible location for movies. |
+| `<temporary-directory>/caveviewer_update_*` | Temporary update download and verification staging. | The OS temporary directory. | **Keep.** The staging data is short-lived and cleaned up. |
+| `~/Downloads` | Published DMG update packages. | `~/Downloads`. | **Keep.** The package is a user-visible download intended for manual installation. |
+| `/Applications`, `~/Applications`, or another user-selected application directory | Installed `CaveViewer.app`. | `/Applications` for all users or `~/Applications` for one user. | **Keep.** DMG installation is user-directed and follows macOS conventions. |
+| `<CAVEVIEWER_HOME>/{config,data,cache,state,runtime}` when overridden | Explicit replacement for all five central roots. | User/admin-selected location. | **Keep.** The explicit override is part of the platform-independent storage contract. |
+
+#### Windows
+
+| Directory | Purpose | OS-recommended directory | Notes |
+|---|---|---|---|
+| `%USERPROFILE%\.caveviewer` | Preferences and the legacy `advanced_settings.json` rename source. | `%APPDATA%\CaveViewer` for roaming configuration, or `%LOCALAPPDATA%\CaveViewer` for machine-specific configuration. | **Keep for compatibility.** The preferences file contains machine-specific Map Library and recording paths, so it must be split before any portable settings move to roaming AppData. |
+| `%USERPROFILE%\.caveviewer` | Remembered browse path, recent maps, Map Library install registry, and `diagnostics\` session logs including `startup.log`. | `%LOCALAPPDATA%\CaveViewer`. | **Keep for compatibility.** Moving established state requires dual-root discovery and downgrade-safe writes. |
+| `%USERPROFILE%\.caveviewer` | Downloaded Map Library catalog. | `%LOCALAPPDATA%\CaveViewer\Cache`. | **Keep for compatibility.** It is a small regenerable file, so convention alone does not justify migration machinery. |
+| `%USERPROFILE%\.caveviewer\{map_library,sample_maps}` | Legacy bundled-map locations awaiting best-effort relocation. | User-selected map storage rather than AppData for user-visible maps. | **Keep only as a compatibility source.** Never bulk-copy or delete potentially large legacy maps; new maps go to the configured Map Library folder. |
+| `%USERPROFILE%\.caveviewer\runtime` | Reserved runtime root; no production persistence consumer currently writes here. | `%LOCALAPPDATA%\CaveViewer\Runtime` or the OS temporary directory. | **Keep for compatibility.** It is unused and has no migration value. |
+| `%USERPROFILE%\Downloads` or the Preferences / `CAVEVIEWER_MAP_LIBRARY_DIR` selection | Downloaded Map Library maps and saved cave slices. | The Windows `FOLDERID_Downloads` known folder or an explicit user-selected directory. | **Keep for compatibility; improve lookup separately.** A focused change can use the known-folder API without coupling it to central storage migration. |
+| `<map-folder>\_cache` | Rebuildable render cache for a map. | `%LOCALAPPDATA%\CaveViewer\Cache` is the conventional application-cache root. | **Keep.** Co-location preserves portable map behavior and avoids duplicating large caches. |
+| `<CAVEVIEWER_MAP_CACHE_DIR>\<source-key>` | Optional centrally managed render cache. | An explicit user/admin-selected directory; LocalAppData is the natural default. | **Keep.** The override is deliberate and the source key prevents collisions. |
+| `<map-folder>\_guided_dives` | Completed Guided Dive recordings. | A user-selected Documents or map-project directory. | **Keep.** The recordings belong to the map and remain portable with it. |
+| `<map-folder>\_benchmarks` or an explicit output directory | Local map benchmark history. | LocalAppData for internal state, or an explicit project output directory. | **Keep.** Results are map-specific and already support a selected destination. |
+| `%USERPROFILE%\Movies\CaveViewer` or the Preferences / `CAVEVIEWER_RECORDING_DIR` selection | Video recordings. | `FOLDERID_Videos\CaveViewer` or an explicit user-selected directory. | **Keep for compatibility; improve the default separately.** Windows normally exposes Videos rather than Movies, but changing visible output requires a no-move transition. |
+| `<temporary-directory>\caveviewer_update_*` | Temporary update download and verification staging. | The OS temporary directory. | **Keep.** The staging data is short-lived and cleaned up. |
+| `%LOCALAPPDATA%\CaveViewer\updates` | Verified installer EXEs and installer logs. | A product-specific directory below LocalAppData. | **Keep.** Update artifacts are already machine-local and integrated with the updater. |
+| `%USERPROFILE%\Downloads` | Legacy ZIP update packages. | The Windows `FOLDERID_Downloads` known folder. | **Keep only for legacy compatibility.** New installer updates already use LocalAppData; any remaining lookup can later use the known-folder API. |
+| `%LOCALAPPDATA%\Programs\CaveViewer` | Versioned Inno installer payloads. | A per-user Programs location below LocalAppData. | **Keep.** The installer is already per-user, native, and compatible with its registry provenance. |
+| Windows known Start Menu and optional Desktop directories | Installer shortcuts. | The same Windows known folders selected by Inno Setup. | **Keep.** The installer already delegates shell locations to the platform. |
+| `<CAVEVIEWER_HOME>\{config,data,cache,state,runtime}` when overridden | Explicit replacement for all five central roots. | User/admin-selected location. | **Keep.** This is an intentional portability and administration boundary. |
 
 `CAVEVIEWER_HOME` creates isolated `config`, `data`, `cache`, `state`, and
 `runtime` children; map caches still default to each source map folder's
