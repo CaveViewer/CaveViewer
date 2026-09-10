@@ -122,6 +122,12 @@ from caveviewer.gui.platform.presentation_actions import (
     create_presentation_actions_adapter,
 )
 from caveviewer.gui.preference_paths import migrate_state_file, write_text_atomic
+from caveviewer.gui.shell_window_state import (
+    load_shell_window_state,
+    native_size_from_shell_state,
+    save_shell_window_state,
+    shell_state_from_native_size,
+)
 from caveviewer.gui.splash_controller import (
     SplashController,
     SplashScheduler,
@@ -281,7 +287,8 @@ _CACHE_REBUILD_CLOSE_PAUSE_ATTEMPTS = 25
 _UPDATE_READY_ACTION_DELAY_MS = 3_000
 _MIN_LAUNCH_SPLASH_MS = 3_000
 _LAUNCH_PROGRESS_INTERVAL_MS = 40
-_PREFERENCES_SHELL_FIT_MAX_PASSES = 3
+_PREFERENCES_SHELL_FIT_MAX_PASSES = 6
+_PREFERENCES_SHELL_FIT_STABLE_PASSES = 2
 
 _TYPOGRAPHY: TkTypography = create_tk_typography(
     _UI_FONT_FAMILY,
@@ -854,7 +861,8 @@ def _fit_shell_height_to_preferences(
 ) -> int:
     """Converge a normal shell height with its settled Preferences viewport."""
     fitted_height = max(1, int(round(shell_height)))
-    fit_confirmed = False
+    stable_measurement: tuple[int, int, int] | None = None
+    stable_passes = 0
     for _pass in range(_PREFERENCES_SHELL_FIT_MAX_PASSES):
         actual_shell_height, viewport_height, content_height = measure()
         actual_height = max(0, int(round(actual_shell_height)))
@@ -865,11 +873,10 @@ def _fit_shell_height_to_preferences(
             # geometry after its requested destination bounds have changed.
             # Reject physically impossible measurements and give the bounded
             # settlement loop another chance instead of accepting a false fit.
+            stable_measurement = None
+            stable_passes = 0
             continue
         fitted_height = max(fitted_height, actual_height)
-        if content <= viewport or fitted_height >= available_height:
-            fit_confirmed = True
-            break
         next_height = _preferred_shell_height_for_preferences(
             shell_height=actual_height,
             viewport_height=viewport,
@@ -878,22 +885,30 @@ def _fit_shell_height_to_preferences(
             available_height=available_height,
         )
         next_height = max(fitted_height, next_height)
-        if next_height <= fitted_height:
+        if next_height > fitted_height:
+            fitted_height = next_height
+            apply_height(fitted_height)
+            stable_measurement = None
+            stable_passes = 0
+            continue
+
+        if actual_height < fitted_height:
             # The requested root growth has not reached its children yet.
             # Keep settling rather than confirming the previous viewport.
             continue
-        fitted_height = next_height
-        apply_height(fitted_height)
-    if not fit_confirmed:
-        # The work-area bound is the only trustworthy geometry left. Prefer a
-        # larger normal window over preserving an avoidable Preferences bar.
-        fallback_height = max(
-            fitted_height,
-            max(1, int(round(available_height))),
-        )
-        if fallback_height > fitted_height:
-            fitted_height = fallback_height
-            apply_height(fitted_height)
+
+        measurement = (actual_height, viewport, content)
+        if measurement == stable_measurement:
+            stable_passes += 1
+        else:
+            stable_measurement = measurement
+            stable_passes = 1
+        if stable_passes >= _PREFERENCES_SHELL_FIT_STABLE_PASSES:
+            break
+
+    # Preserve the largest fit supported by valid measurements. Expanding to
+    # the entire work area when Tk remains unsettled makes large-monitor
+    # startup height depend on event timing and produces an oversized shell.
     return fitted_height
 
 
@@ -1697,9 +1712,27 @@ def _show_splash_composition(
         work_left, work_top, work_right, work_bottom = display_metrics.work_area
         available_width = max(1, work_right - work_left)
         available_height = max(1, work_bottom - work_top)
+    resize_min_width = min(px(_SPLASH_RESIZE_MIN_WIDTH), available_width)
+    resize_min_height = min(px(_SPLASH_RESIZE_MIN_HEIGHT), available_height)
+    remembered_shell_state = (
+        load_shell_window_state() if resume_state is None else None
+    )
+    remembered_shell_size = (
+        native_size_from_shell_state(
+            remembered_shell_state,
+            layout_scale=display_metrics.layout_scale,
+            minimum_size=(resize_min_width, resize_min_height),
+            available_size=(available_width, available_height),
+        )
+        if remembered_shell_state is not None
+        else None
+    )
     if resume_state is None:
-        window_w = min(px(_SPLASH_WINDOW_WIDTH), available_width)
-        window_h = min(px(_SPLASH_WINDOW_MIN_HEIGHT), available_height)
+        if remembered_shell_size is None:
+            window_w = min(px(_SPLASH_WINDOW_WIDTH), available_width)
+            window_h = min(px(_SPLASH_WINDOW_MIN_HEIGHT), available_height)
+        else:
+            window_w, window_h = remembered_shell_size
         pos_x = (screen_w - window_w) // 2
         pos_y = (screen_h - window_h) // 3
     else:
@@ -1710,10 +1743,7 @@ def _show_splash_composition(
         pos_y = restored.y
     # Compact displays must never receive a minimum larger than the initial
     # display-clamped window. Normal displays retain the shared shell minimum.
-    root.minsize(
-        min(px(_SPLASH_RESIZE_MIN_WIDTH), available_width),
-        min(px(_SPLASH_RESIZE_MIN_HEIGHT), available_height),
-    )
+    root.minsize(resize_min_width, resize_min_height)
     root.geometry(f"{window_w}x{window_h}+{pos_x}+{pos_y}")
 
     root.grid_rowconfigure(0, weight=1)
@@ -1827,6 +1857,7 @@ def _show_splash_composition(
     active_surface = ["map_library"]
     active_cave: list[CaveMetadata | None] = [None]
     recompose_request: list[_SplashRecomposeRequest | None] = [None]
+    persist_shell_window_state_ref: list[Callable[[], None] | None] = [None]
 
     # The status frame stays anchored to the lower-left rail and remains
     # completely quiet until an update has a meaningful state.
@@ -2069,8 +2100,11 @@ def _show_splash_composition(
         except Exception:
             pass
 
-    def _finalize_leave_splash() -> None:
+    def _finalize_leave_splash(*, persist_window_state: bool = True) -> None:
         _detach_monitor_transition_observer()
+        persist_state = persist_shell_window_state_ref[0]
+        if persist_window_state and persist_state is not None:
+            persist_state()
         workflow = map_library_workflow_ref[0]
         if workflow is not None:
             workflow.close()
@@ -2778,7 +2812,7 @@ def _show_splash_composition(
 
     map_library_navigation_item.focus_set()
     root.update_idletasks()
-    if resume_state is None:
+    if resume_state is None and remembered_shell_size is None:
         final_height = max(
             px(_SPLASH_WINDOW_MIN_HEIGHT),
             root.winfo_reqheight() + px(_SPLASH_WINDOW_EXTRA_BOTTOM_SLACK),
@@ -2789,11 +2823,6 @@ def _show_splash_composition(
         final_height = window_h
     root.geometry(f"{window_w}x{final_height}+{pos_x}+{pos_y}")
 
-    # Compose Preferences behind the launch surface while every stacked panel
-    # already owns its final mapped width. A normal shell verifies every tab
-    # before first reveal so fixed form content does not begin inside a
-    # needlessly scrollable viewport.
-    preferences_panel = _ensure_preferences_panel()
     if resume_state is not None:
         if resume_state.active_surface == "preferences":
             _show_preferences_surface()
@@ -2830,7 +2859,14 @@ def _show_splash_composition(
             pass
         root.deiconify()
     _settle_launch_layout(root, passes=3)
-    if resume_state is None or resume_state.window_state != "zoomed":
+    preferences_fit_required = (
+        remembered_shell_size is None
+        and (resume_state is None or resume_state.window_state != "zoomed")
+    )
+    if preferences_fit_required:
+        # With no compatible remembered size, stage every Preferences page at
+        # the final mapped width and derive a content-safe first-launch height.
+        preferences_panel = _ensure_preferences_panel()
         intended_surface_key = active_surface[0]
         initial_fit_height = final_height
         initial_actual_height = root.winfo_height()
@@ -2909,6 +2945,38 @@ def _show_splash_composition(
             y=pos_y,
         )
     )
+
+    def _persist_shell_window_state() -> None:
+        """Save settled normal bounds without capturing transient Tk states."""
+        try:
+            if not root.winfo_ismapped():
+                return
+            current_window_state = str(root.state())
+        except Exception:
+            return
+        if current_window_state == "normal":
+            settled_normal_geometry.observe(
+                TkWindowGeometry(
+                    width=max(1, root.winfo_width()),
+                    height=max(1, root.winfo_height()),
+                    x=root.winfo_x(),
+                    y=root.winfo_y(),
+                ),
+                window_state=current_window_state,
+            )
+        elif current_window_state != "zoomed":
+            return
+        geometry = settled_normal_geometry.geometry
+        state = shell_state_from_native_size(
+            width=geometry.width,
+            height=geometry.height,
+            layout_scale=display_metrics.layout_scale,
+            maximized=current_window_state == "zoomed",
+        )
+        if not save_shell_window_state(state):
+            _LOG.warning("Could not persist the primary shell window state.")
+
+    persist_shell_window_state_ref[0] = _persist_shell_window_state
     readiness_gate.mark_ready()
 
     map_open_error_presented = [False]
@@ -2938,7 +3006,14 @@ def _show_splash_composition(
                 root.attributes("-alpha", 1.0)
             except Exception:
                 pass
-        if resume_state is not None and resume_state.window_state == "zoomed":
+        restore_maximized = (
+            resume_state is not None and resume_state.window_state == "zoomed"
+        ) or (
+            resume_state is None
+            and remembered_shell_state is not None
+            and remembered_shell_state.maximized
+        )
+        if restore_maximized:
             try:
                 root.state("zoomed")
             except Exception:
@@ -3056,14 +3131,6 @@ def _show_splash_composition(
                 _check_monitor_transition,
             )
             return
-        candidate = resolve_tk_display_metrics(
-            root,
-            presentation_profile=presentation_profile,
-            presentation_actions_adapter=presentation_actions_adapter,
-            scale_override=(
-                viewer_settings.tk_scale if viewer_settings is not None else None
-            ),
-        )
         observed_geometry = TkWindowGeometry(
             width=max(1, root.winfo_width()),
             height=max(1, root.winfo_height()),
@@ -3074,6 +3141,20 @@ def _show_splash_composition(
             current_window_state = str(root.state())
         except Exception:
             current_window_state = "normal"
+        if presentation_profile.platform_name != "windows":
+            settled_normal_geometry.observe(
+                observed_geometry,
+                window_state=current_window_state,
+            )
+            return
+        candidate = resolve_tk_display_metrics(
+            root,
+            presentation_profile=presentation_profile,
+            presentation_actions_adapter=presentation_actions_adapter,
+            scale_override=(
+                viewer_settings.tk_scale if viewer_settings is not None else None
+            ),
+        )
         if not display_scale_changed(display_metrics, candidate):
             settled_normal_geometry.observe(
                 observed_geometry,
@@ -3128,11 +3209,9 @@ def _show_splash_composition(
             scaled_geometry.height,
             current_window_state,
         )
-        _finalize_leave_splash()
+        _finalize_leave_splash(persist_window_state=False)
 
     def _schedule_monitor_transition_check(event=None) -> None:
-        if presentation_profile.platform_name != "windows":
-            return
         if splash_controller.closing or recompose_request[0] is not None:
             return
         if event is not None and getattr(event, "widget", root) is not root:

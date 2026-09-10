@@ -831,6 +831,7 @@ def test_preferences_shell_height_remeasures_after_each_growth():
             (1758, 1200, 1400),
             (1958, 1350, 1500),
             (2100, 1500, 1500),
+            (2100, 1500, 1500),
         )
     )
     applied_heights = []
@@ -848,13 +849,14 @@ def test_preferences_shell_height_remeasures_after_each_growth():
 
 
 def test_preferences_shell_height_never_shrinks_restored_geometry():
+    measurements = iter(((2000, 1500, 1400), (2000, 1500, 1400)))
     applied_heights = []
 
     fitted_height = splash_screen._fit_shell_height_to_preferences(
         shell_height=2000,
         minimum_height=1758,
         available_height=2100,
-        measure=lambda: (2000, 1500, 1400),
+        measure=lambda: next(measurements),
         apply_height=applied_heights.append,
     )
 
@@ -869,6 +871,7 @@ def test_preferences_shell_fit_rejects_stale_source_monitor_geometry():
             # the 31.7-inch/144-DPI display: the stale viewport exceeds root.
             (1054, 1224, 880),
             (1054, 800, 880),
+            (1134, 880, 880),
             (1134, 880, 880),
         )
     )
@@ -886,7 +889,7 @@ def test_preferences_shell_fit_rejects_stale_source_monitor_geometry():
     assert applied_heights == [1134]
 
 
-def test_preferences_shell_fit_uses_work_area_when_geometry_never_settles():
+def test_preferences_shell_fit_keeps_bounded_height_when_geometry_never_settles():
     applied_heights = []
 
     fitted_height = splash_screen._fit_shell_height_to_preferences(
@@ -897,8 +900,33 @@ def test_preferences_shell_fit_uses_work_area_when_geometry_never_settles():
         apply_height=applied_heights.append,
     )
 
-    assert fitted_height == 2088
-    assert applied_heights == [2088]
+    assert fitted_height == 1054
+    assert applied_heights == []
+
+
+def test_preferences_shell_fit_rejects_a_transient_early_fit():
+    measurements = iter(
+        (
+            (1054, 880, 880),
+            (1054, 1224, 880),
+            (1054, 880, 880),
+            (1054, 880, 960),
+            (1134, 960, 960),
+            (1134, 960, 960),
+        )
+    )
+    applied_heights = []
+
+    fitted_height = splash_screen._fit_shell_height_to_preferences(
+        shell_height=1054,
+        minimum_height=855,
+        available_height=2088,
+        measure=lambda: next(measurements),
+        apply_height=applied_heights.append,
+    )
+
+    assert fitted_height == 1134
+    assert applied_heights == [1134]
 
 
 def test_preferences_shell_fit_uses_rendered_width_and_restores_intended_surface():
@@ -2225,6 +2253,32 @@ def test_settled_normal_geometry_ignores_maximized_monitor_bounds():
     settled.observe(resized, window_state="normal")
 
     assert settled.geometry is resized
+
+
+def test_splash_restores_remembered_shell_state_before_composition():
+    source = inspect.getsource(splash_screen._show_splash_composition)
+
+    assert source.index("remembered_shell_state = (") < source.index(
+        "root.geometry("
+    )
+    assert "load_shell_window_state() if resume_state is None else None" in source
+    assert "native_size_from_shell_state(" in source
+    assert "minimum_size=(resize_min_width, resize_min_height)" in source
+    assert "available_size=(available_width, available_height)" in source
+    assert "if resume_state is None and remembered_shell_size is None:" in source
+    assert "remembered_shell_size is None\n        and" in source
+    assert "and remembered_shell_state.maximized" in source
+
+
+def test_splash_persists_only_stable_shell_geometry():
+    source = inspect.getsource(splash_screen._show_splash_composition)
+
+    assert "if not root.winfo_ismapped():" in source
+    assert 'if current_window_state == "normal":' in source
+    assert 'elif current_window_state != "zoomed":' in source
+    assert "shell_state_from_native_size(" in source
+    assert "settled_normal_geometry.geometry" in source
+    assert "_finalize_leave_splash(persist_window_state=False)" in source
 
 
 def test_splash_composition_observes_settled_windows_monitor_transitions():
