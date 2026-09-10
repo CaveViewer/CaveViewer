@@ -734,9 +734,30 @@ OpenGL HUD text is rasterized at framebuffer scale for crispness, while the
 always-visible right-side viewer controls use a separate responsive HUD scale
 based on the current viewer surface size. That keeps maximized and AppImage
 windows legible without requiring user-provided environment variables.
-`CaveViewerWindow` is the OpenGL boundary: it owns the context, framebuffer
-resources, shader/program calls, and GPU uploads on the render thread. Its
-non-GL session ordering is deliberately delegated to focused coordinators.
+`CaveViewerWindow` is the native-window adapter and OpenGL composition
+boundary. It owns the context, backend callback surface, top-level frame
+ordering, and the render-thread components that create, use, or release
+framebuffers, shaders, textures, buffers, and vertex arrays. A render-thread
+component may encapsulate a cohesive resource lifetime or drawing stage, but
+it is constructed, invoked, and released from the window's callback thread; it
+is not a worker and must not import `viewer_window` or call back through the
+native-window adapter. This permits the OpenGL implementation to be split into
+focused modules without hiding its thread affinity or reversing dependency
+direction.
+
+The viewer boundary has four distinct responsibility groups:
+
+- the window adapter binds one launch session, retains the backend callbacks,
+  selects the high-level frame phase, invokes render-thread components in
+  visible order, and completes native close;
+- render-thread components own cohesive map, upload, framebuffer-readback, or
+  presentation resources and expose explicit cleanup;
+- non-OpenGL coordinators accept immutable snapshots and return workflow
+  requests without importing OpenGL or render-thread implementation modules;
+- workers perform bounded CPU and I/O preparation and return data for the
+  render thread to publish.
+
+Non-GL session ordering is deliberately delegated to focused coordinators.
 Each public viewer launcher snapshots its inputs in an immutable
 `gui.viewer_session.ViewerSessionConfig`; mutable completion state belongs to
 that launch's `ViewerSession`. A short-lived ModernGL configuration subclass

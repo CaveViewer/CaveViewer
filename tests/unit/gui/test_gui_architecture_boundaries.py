@@ -32,6 +32,24 @@ VIEWER_SESSION_COORDINATOR_MODULES = (
     GUI_ROOT / "viewer_frame_scheduler.py",
     GUI_ROOT / "viewer_workflow.py",
 )
+VIEWER_RENDER_THREAD_COMPONENT_MODULES = (
+    GUI_ROOT / "chunk_upload.py",
+    GUI_ROOT / "minimap.py",
+    GUI_ROOT / "recording_capture.py",
+    GUI_ROOT / "texture_manager.py",
+)
+VIEWER_BACKEND_CALLBACK_ALIASES = {
+    "close": "on_close",
+    "focus_event": "on_focus_event",
+    "iconify_event": "on_iconify_event",
+    "key_event": "on_key_event",
+    "mouse_drag_event": "on_mouse_drag_event",
+    "mouse_position_event": "on_mouse_position_event",
+    "mouse_press_event": "on_mouse_press_event",
+    "mouse_release_event": "on_mouse_release_event",
+    "mouse_scroll_event": "on_mouse_scroll_event",
+    "render": "on_render",
+}
 APP_MODULE = "caveviewer.app"
 _LEGACY_STATIC_PRESENTATION_ACCESSORS = {
     "ui_font_family",
@@ -579,6 +597,66 @@ def test_viewer_session_coordinators_do_not_import_opengl():
                 )
 
     assert not violations, _format_violations(violations)
+
+
+def test_viewer_render_thread_components_do_not_import_window_adapter():
+    """Keep render components below the native-window composition boundary."""
+    violations: list[Violation] = []
+
+    for path in VIEWER_RENDER_THREAD_COMPONENT_MODULES:
+        for node in ast.walk(_parse_module(path)):
+            if isinstance(node, ast.Import):
+                imports_window = any(
+                    alias.name == "caveviewer.gui.viewer_window"
+                    or alias.name.startswith("caveviewer.gui.viewer_window.")
+                    for alias in node.names
+                )
+            elif isinstance(node, ast.ImportFrom):
+                module = node.module or ""
+                imports_window = (
+                    module == "caveviewer.gui.viewer_window"
+                    or module.startswith("caveviewer.gui.viewer_window.")
+                    or (node.level > 0 and module == "viewer_window")
+                    or (
+                        node.level > 0
+                        and not module
+                        and any(alias.name == "viewer_window" for alias in node.names)
+                    )
+                )
+            else:
+                continue
+            if imports_window:
+                violations.append(
+                    Violation(path, node.lineno, "imports viewer_window adapter")
+                )
+
+    assert not violations, _format_violations(violations)
+
+
+def test_viewer_window_retains_backend_callback_surface():
+    """Keep ModernGL callback compatibility on the native-window adapter."""
+    viewer_module = _parse_module(VIEWER_WINDOW_MODULE)
+    viewer_class = next(
+        node
+        for node in viewer_module.body
+        if isinstance(node, ast.ClassDef) and node.name == "CaveViewerWindow"
+    )
+    method_names = {
+        node.name for node in viewer_class.body if isinstance(node, ast.FunctionDef)
+    }
+    aliases = {
+        target.id: statement.value.id
+        for statement in viewer_class.body
+        if isinstance(statement, ast.Assign)
+        and len(statement.targets) == 1
+        and isinstance((target := statement.targets[0]), ast.Name)
+        and isinstance(statement.value, ast.Name)
+    }
+
+    assert set(VIEWER_BACKEND_CALLBACK_ALIASES.values()) <= method_names
+    assert {
+        name: aliases.get(name) for name in VIEWER_BACKEND_CALLBACK_ALIASES
+    } == VIEWER_BACKEND_CALLBACK_ALIASES
 
 
 def test_viewer_window_composes_non_gl_state_through_workflow_coordinator():

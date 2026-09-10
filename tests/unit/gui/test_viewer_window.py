@@ -2514,6 +2514,72 @@ def test_render_loop_uses_nonblocking_throttle_instead_of_sleep():
     assert "_render_interactive_frame(current_time, frame_time)" in source
 
 
+def test_interactive_render_callback_preserves_boundary_order(monkeypatch):
+    calls = []
+
+    class FakeFrameScheduler:
+        def reset_throttle(self, name):
+            calls.append(("reset_throttle", name))
+
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window._window_setup_complete = True
+    window._first_render_checkpoint_recorded = True
+    window._startup_focus_enabled = False
+    window.wnd = SimpleNamespace(size=(1280, 720))
+    window._frame_phase = (
+        lambda: calls.append("frame_phase")
+        or viewer_window.ViewerFramePhase.INTERACTIVE
+    )
+    window._query_runtime_iconified_state = (
+        lambda: calls.append("query_iconified") or False
+    )
+    window._set_background_pause = (
+        lambda iconified, reason: calls.append(
+            ("set_background_pause", iconified, reason)
+        )
+    )
+    window._ensure_frame_scheduler = (
+        lambda: calls.append("frame_scheduler") or FakeFrameScheduler()
+    )
+    window._sync_render_mode_loading_policy = (
+        lambda: calls.append("sync_render_mode")
+    )
+    window._drain_recording_stop_results = (
+        lambda: calls.append("drain_recording")
+    )
+    window._drain_due_saved_artifact_reveals = (
+        lambda: calls.append("drain_reveals")
+    )
+    window._render_interactive_frame = (
+        lambda current_time, frame_time: calls.append(
+            ("interactive_frame", current_time, frame_time)
+        )
+    )
+    monkeypatch.setattr(viewer_window, "_window_pixel_ratio", lambda _window: 1.5)
+    monkeypatch.setattr(
+        viewer_window.bitmap_font,
+        "set_raster_scale",
+        lambda scale: calls.append(("raster_scale", scale)),
+    )
+
+    window.on_render(4.0, 0.02)
+
+    assert calls == [
+        "frame_phase",
+        "query_iconified",
+        ("set_background_pause", False, "runtime window state"),
+        "frame_phase",
+        "frame_scheduler",
+        ("reset_throttle", "iconified"),
+        ("raster_scale", 1.5),
+        "sync_render_mode",
+        "drain_recording",
+        "drain_reveals",
+        ("reset_throttle", "import_progress"),
+        ("interactive_frame", 4.0, 0.02),
+    ]
+
+
 def test_viewer_window_delegates_recording_encoder_ownership():
     source = inspect.getsource(viewer_window)
 
@@ -5517,6 +5583,45 @@ def test_load_new_map_remembers_source_dir_instead_of_cache_dir(monkeypatch):
     ]
     assert window._has_map_loaded is True
     assert remembered == ["/maps/DevilsEyeGoldLine_resized"]
+
+
+def test_load_new_map_does_not_publish_or_remember_failed_replacement(monkeypatch):
+    remembered = []
+    calls = []
+
+    from caveviewer.gui import map_history
+
+    monkeypatch.setattr(
+        map_history,
+        "remember_recent_map_path",
+        lambda path: remembered.append(path),
+    )
+
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window._has_map_loaded = True
+
+    def teardown():
+        calls.append("teardown")
+        window._has_map_loaded = False
+
+    def fail_load(*_args, **_kwargs):
+        calls.append("load")
+        raise OSError("new map could not initialize")
+
+    window._teardown_current_map = teardown
+    window._load_map = fail_load
+
+    with pytest.raises(OSError, match="new map could not initialize"):
+        window.load_new_map(
+            "/cache/new-map",
+            "/textures/new-map",
+            {"chunks": {}},
+            source_dir="/maps/new-map",
+        )
+
+    assert calls == ["teardown", "load"]
+    assert window._has_map_loaded is False
+    assert remembered == []
 
 
 def test_drain_import_queue_logs_actionable_error_without_traceback(monkeypatch):
