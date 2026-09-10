@@ -42,6 +42,15 @@ VIEWER_RENDER_THREAD_COMPONENT_MODULES = (
     GUI_ROOT / "viewer_capture_runtime.py",
     GUI_ROOT / "viewer_map_runtime.py",
     GUI_ROOT / "viewer_scene_presentation.py",
+    GUI_ROOT / "viewer_window_capture_integration.py",
+    GUI_ROOT / "viewer_window_input_integration.py",
+    GUI_ROOT / "viewer_window_map_integration.py",
+    GUI_ROOT / "viewer_window_presentation_integration.py",
+)
+VIEWER_WINDOW_COMPOSITION_MODULES = (
+    GUI_ROOT / "viewer_window_adapters.py",
+    GUI_ROOT / "viewer_window_launch.py",
+    GUI_ROOT / "viewer_window_sizing.py",
 )
 VIEWER_BACKEND_CALLBACK_ALIASES = {
     "close": "on_close",
@@ -589,6 +598,27 @@ def test_viewer_session_coordinators_do_not_import_opengl():
     violations: list[Violation] = []
 
     for path in VIEWER_SESSION_COORDINATOR_MODULES:
+        for node in ast.walk(_parse_module(path)):
+            if isinstance(node, ast.Import):
+                imported_modules = {alias.name.split(".", 1)[0] for alias in node.names}
+            elif isinstance(node, ast.ImportFrom):
+                imported_modules = {(node.module or "").split(".", 1)[0]}
+            else:
+                continue
+            for module in imported_modules & prohibited_modules:
+                violations.append(
+                    Violation(path, node.lineno, f"imports OpenGL module {module}")
+                )
+
+    assert not violations, _format_violations(violations)
+
+
+def test_viewer_window_composition_helpers_do_not_import_opengl():
+    """Keep sizing and native-launch composition testable without a GL context."""
+    prohibited_modules = {"moderngl", "moderngl_window"}
+    violations: list[Violation] = []
+
+    for path in VIEWER_WINDOW_COMPOSITION_MODULES:
         for node in ast.walk(_parse_module(path)):
             if isinstance(node, ast.Import):
                 imported_modules = {alias.name.split(".", 1)[0] for alias in node.names}
