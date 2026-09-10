@@ -519,7 +519,7 @@ def test_pages_workflow_deploys_public_site_independently_from_releases():
     assert "name: github-pages" in workflow
     assert "retention-days: 1" in workflow
     assert "if-no-files-found: error" in workflow
-    assert "actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5" in workflow
+    assert "actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5" in workflow
     assert "name: github-pages" in workflow
     assert "pages: write" in workflow
     assert "id-token: write" in workflow
