@@ -1,13 +1,13 @@
 {
   "authenticode_status": "unsigned-community",
-  "download_size_bytes": 59092608,
-  "download_size_bytes_windows_exe": 59092608,
-  "download_url": "https://github.com/CaveViewer/CaveViewer/releases/download/v1.0.97/CaveViewer-1.0.97-windows.exe",
-  "download_url_windows_exe": "https://github.com/CaveViewer/CaveViewer/releases/download/v1.0.97/CaveViewer-1.0.97-windows.exe",
+  "download_size_bytes": 60534387,
+  "download_size_bytes_windows_exe": 60534387,
+  "download_url": "https://github.com/CaveViewer/CaveViewer/releases/download/v1.0.99/CaveViewer-1.0.99-windows.exe",
+  "download_url_windows_exe": "https://github.com/CaveViewer/CaveViewer/releases/download/v1.0.99/CaveViewer-1.0.99-windows.exe",
   "install_channel": "windows_installer",
-  "latest_version": "1.0.97",
+  "latest_version": "1.0.99",
   "release_channel": "preview",
-  "release_notes": "Latest release with sync'ed UI.",
-  "sha256": "ce31ff5bbcbeb8432cb8d9273cf0d4db91227cbc98fb572b9677ef3c8ab8dcca",
-  "sha256_windows_exe": "ce31ff5bbcbeb8432cb8d9273cf0d4db91227cbc98fb572b9677ef3c8ab8dcca"
+  "release_notes": "Fix initial window geometry on large displays and remember the last used window size.",
+  "sha256": "930dac6b0730e512424cc9591b7e3f6328bfb0ebd5a0e13f21885e990c9fbe7a",
+  "sha256_windows_exe": "930dac6b0730e512424cc9591b7e3f6328bfb0ebd5a0e13f21885e990c9fbe7a"
 }

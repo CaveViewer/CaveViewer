@@ -1,13 +1,13 @@
 {
   "architecture": "arm64",
-  "download_size_bytes": 67841666,
-  "download_size_bytes_macosx_dmg": 67841666,
-  "download_url": "https://github.com/CaveViewer/CaveViewer/releases/download/v1.0.97/CaveViewer-1.0.97-macos-arm64.dmg",
-  "download_url_macosx_dmg": "https://github.com/CaveViewer/CaveViewer/releases/download/v1.0.97/CaveViewer-1.0.97-macos-arm64.dmg",
-  "latest_version": "1.0.97",
+  "download_size_bytes": 70947165,
+  "download_size_bytes_macosx_dmg": 70947165,
+  "download_url": "https://github.com/CaveViewer/CaveViewer/releases/download/v1.0.99/CaveViewer-1.0.99-macos-arm64.dmg",
+  "download_url_macosx_dmg": "https://github.com/CaveViewer/CaveViewer/releases/download/v1.0.99/CaveViewer-1.0.99-macos-arm64.dmg",
+  "latest_version": "1.0.99",
   "platform": "macos",
   "release_channel": "preview",
-  "release_notes": "Latest release with sync'ed UI.",
-  "sha256": "5c6554509beb56b404e473c8df83097d67896df619936065ca6683087c9876ae",
-  "sha256_macosx_dmg": "5c6554509beb56b404e473c8df83097d67896df619936065ca6683087c9876ae"
+  "release_notes": "Fix initial window geometry on large displays and remember the last used window size.",
+  "sha256": "c02f9710932f6c6ea0ef1b50e951722a02425551bb6dcfb29c12302c937768cb",
+  "sha256_macosx_dmg": "c02f9710932f6c6ea0ef1b50e951722a02425551bb6dcfb29c12302c937768cb"
 }
