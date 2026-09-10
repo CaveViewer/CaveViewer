@@ -787,6 +787,13 @@ testable without constructing an OpenGL window.
 post-save reveal timing; `gui.manual_dive_trace` remains the background JSONL
 writer and capture model.
 
+`gui.viewer_map_runtime` is the render-thread owner for one map's manifest,
+streaming world, camera, texture manager, minimap, chunk-upload state, culling
+cache, and texture-validation task. Map replacement publishes one new runtime
+only after the prior runtime is released. A failed replacement releases every
+resource already attached to the unpublished runtime and leaves the window
+with an empty map runtime.
+
 Tk and OpenGL objects are main-thread resources. Background threads may parse,
 read, decode, and prepare bytes, but may not mutate widgets or create/release GL
 objects.
