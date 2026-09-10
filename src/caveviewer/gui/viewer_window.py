@@ -693,7 +693,7 @@ class CaveViewerWindow(mglw.WindowConfig):
                 "CaveViewerWindow requires a session-bound configuration class"
             )
         self._viewer_session = session
-        session_config = session.config
+        self._window_setup_complete = False
         record_runtime_stage(
             "viewer_config_initialization_begin",
             requested_window_size=getattr(type(self), "window_size", None),
@@ -705,7 +705,50 @@ class CaveViewerWindow(mglw.WindowConfig):
                 "viewer_config_initialization_failed",
                 error,
             )
+            self._destroy_failed_window_backend()
             raise
+
+        try:
+            have_ready_cache, have_pending_import = self._initialize_window(session)
+        except BaseException as error:
+            record_runtime_exception(
+                "viewer_config_initialization_failed",
+                error,
+            )
+            self._cleanup_failed_initialization()
+            raise
+
+        self._window_setup_complete = True
+        record_runtime_stage(
+            "viewer_config_initialization_complete",
+            initial_map_mode=(
+                "cached" if have_ready_cache else "pending_import"
+            ),
+        )
+
+    def _initialize_window(
+        self, session: ViewerSession
+    ) -> tuple[bool, bool]:
+        """Compose one initialized window after the native context exists."""
+        session_config = session.config
+        self._configure_window_runtime(session_config)
+        have_ready_cache, have_pending_import = self._initialize_workflow(
+            session
+        )
+        self._initialize_window_state(session_config)
+        self._initialize_pending_import_presentation(have_pending_import)
+        self._initialize_shader_resources()
+        self._initialize_benchmark(session_config)
+        self._install_backend_modifier_probe()
+        self._initialize_viewer_controls()
+        self.ctx.enable(moderngl.DEPTH_TEST)
+        self.ctx.enable(moderngl.CULL_FACE)
+        self._initialize_startup_request(session_config, have_ready_cache)
+        return have_ready_cache, have_pending_import
+
+    def _configure_window_runtime(
+        self, session_config: ViewerSessionConfig
+    ) -> None:
         # moderngl-window closes its default Escape key before forwarding the
         # key callback. CaveViewer owns Escape so capture discard can finish
         # and present its result before the backend window is allowed to close.
@@ -798,6 +841,10 @@ class CaveViewerWindow(mglw.WindowConfig):
             * min(self._viewer_ui_scale, self.RIGHT_COLUMN_PANEL_TEXT_MAX_UI_SCALE)
         )
 
+    def _initialize_workflow(
+        self, session: ViewerSession
+    ) -> tuple[bool, bool]:
+        session_config = session.config
         have_ready_cache = session_config.cache_dir is not None
         have_pending_import = session_config.pending_import is not None
 
@@ -807,42 +854,33 @@ class CaveViewerWindow(mglw.WindowConfig):
             )
 
         self._workflow_coordinator = ViewerWorkflowCoordinator(session)
+        return have_ready_cache, have_pending_import
+
+    def _initialize_window_state(
+        self, session_config: ViewerSessionConfig
+    ) -> None:
+        # Establish cleanup-safe defaults before allocating OpenGL resources.
+        self._window_resources_released = False
+        self.program = None
+        self._hud_panel_program = None
+        self._hud_panel_vbo = None
+        self._hud_panel_vao = None
+        self._status_panel_vbo = None
+        self._status_panel_vao = None
         self.import_progress_panel = None
+        self.light_stepper = None
+        self.render_distance_stepper = None
+        self.ambient_stepper = None
+        self.render_mode_buttons = None
+        self.controls_overlay = None
+        self.color_picker = None
         self._pending_import_splash_rendered = False
-        if have_pending_import:
-            self.import_progress_panel = ImportProgressPanel(
-                self.ctx,
-                branding_assets=self._branding_assets,
-            )
-            self._pending_import_splash_rendered = (
-                self._present_pending_import_splash_now()
-            )
+        self._initialize_interaction_and_timing_state()
+        self._initialize_capture_state(session_config)
+        self._initialize_map_state()
+        self._initialize_import_state()
 
-        with open(os.path.join(SHADER_DIR, "mesh.vert")) as f:
-            vert_src = f.read()
-        with open(os.path.join(SHADER_DIR, "mesh.frag")) as f:
-            frag_src = f.read()
-        self.program = self.ctx.program(vertex_shader=vert_src, fragment_shader=frag_src)
-        # u_model is always the identity matrix -- write it once here rather than
-        # allocating and re-uploading a fresh identity matrix every frame.
-        self.program["u_model"].write(np.identity(4, dtype=np.float32).tobytes())
-
-        self._hud_panel_program = self.ctx.program(
-            vertex_shader=_UI_PANEL_VERT_SRC,
-            fragment_shader=_UI_PANEL_FRAG_SRC,
-        )
-        self._hud_panel_vbo = self.ctx.buffer(reserve=64 * 6 * 4)
-        self._hud_panel_vao = self.ctx.vertex_array(
-            self._hud_panel_program,
-            [(self._hud_panel_vbo, "2f 4f", "in_pos", "in_color")],
-        )
-        self._status_panel_max_verts = 12000
-        self._status_panel_vbo = self.ctx.buffer(reserve=self._status_panel_max_verts * 6 * 4)
-        self._status_panel_vao = self.ctx.vertex_array(
-            self._hud_panel_program,
-            [(self._status_panel_vbo, "2f 4f", "in_pos", "in_color")],
-        )
-
+    def _initialize_interaction_and_timing_state(self) -> None:
         self._keys_down = set()
         self._last_raw_modifiers = 0
         self._mouse_look_active = False
@@ -894,6 +932,11 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._texture_upload_slice_bytes = _RENDER_UPLOAD_INITIAL_SLICE_BYTES
         self._bookmarks_path: str | None = None
         self._bookmarks: viewer_bookmarks.BookmarkSlots = {}
+
+    def _initialize_capture_state(
+        self, session_config: ViewerSessionConfig
+    ) -> None:
+        viewer_settings = self._viewer_runtime_settings
         self._manual_dive_trace: (
             manual_dive_trace.ManualDiveTraceRecorder | None
         ) = None
@@ -948,6 +991,142 @@ class CaveViewerWindow(mglw.WindowConfig):
         self._recording_stop_thread: threading.Thread | None = None
         self._recording_stop_cancel_event: threading.Event | None = None
 
+    def _initialize_map_state(self) -> None:
+        # Map-specific state (world, manifest, camera, minimap, texture manager,
+        # chunk GPU objects) lives in its own method, separate
+        # from the one-time-per-window setup above, so the exact same
+        # logic can run again later when switching to a different map via
+        # the OPEN button -- see load_new_map() / _teardown_current_map().
+        self.cache_dir = None
+        self.textures_dir = None
+        self.map_root: str | None = None
+        self.manifest = None
+        self.world = None
+        self.camera = None
+        self.minimap = None
+        self.texture_manager = None
+        self._chunk_upload_manager: ChunkUploadManager | None = None
+        self._chunk_gpu_objects: dict[tuple, list] = {}
+        self._chunk_upload_states: dict[tuple, dict] = {}
+        # Per-chunk, per-material CPU-side data for instant SHADE toggle:
+        # each entry holds (mat_name, positions, uvs, smooth_normals, flat_normals)
+        # tuples in the same order as _chunk_gpu_objects, so toggling shading
+        # can zip the two lists and rewrite each VBO in place via vbo.write().
+        self._chunk_normal_cache: dict[tuple, list] = {}
+        # Per-cell world-space AABBs for frustum culling, populated as chunks
+        # become resident.
+        self._chunk_aabbs: dict[tuple, tuple] = {}
+        self._view_culling_cache = view_culling.FrustumCullingCache()
+        self._chunk_visibility_generation = 0
+        self._texture_validation_executor: ThreadPoolExecutor | None = None
+        self._texture_validation_future: Future | None = None
+        self._texture_validation_manager: TextureManager | None = None
+        self._texture_validation_cache_dir: str | None = None
+        self._texture_validation_started_at: float | None = None
+        self._has_map_loaded = False
+        self._pending_import_started = False
+        self._initial_chunks_loaded = False
+        self._initial_visual_ready = False
+        self._initial_visual_ready_frames = 0
+        self._initial_visual_ready_visible_chunks = 0
+        self._initial_visual_ready_required_textures = 0
+        self._initial_visual_ready_resident_textures = 0
+        self._initial_visual_ready_visible_textures = 0
+        self._initial_visual_ready_missing_textures = 0
+        self._initial_visual_ready_expected_chunks = 0
+        self._initial_visual_ready_covered_chunks = 0
+        self._initial_visual_ready_missing_chunks = 0
+        self._initial_visual_ready_coverage_pct = 100.0
+        self._initial_route_prefetch_expected_cells = 0
+        self._initial_route_prefetch_loaded_cells = 0
+        self._initial_route_prefetch_pending_cells = 0
+        self._initial_route_prefetch_failed_cells = 0
+        self._initial_route_prefetch_missing_cells = 0
+        self._initial_route_prefetch_coverage_pct = 100.0
+        self._initial_visual_ready_logged = False
+        self._initial_compilation_started_at = None
+        self._initial_compilation_logged = False
+        self._chunk_prep_progress = 0.0
+        self._chunk_prep_complete_until = None
+        self._chunk_prep_completion_armed = False
+        self._main_thread_stall_last_log_at: dict[str, float] = {}
+        self._window_resources_released = False
+
+    def _initialize_import_state(self) -> None:
+        # Background import state.  Import runs on a worker thread so the
+        # render loop stays live (resize, repaint, vsync) the whole time.
+        self._import_active: bool = False
+        self._import_is_startup: bool = False
+        self._import_thread: threading.Thread | None = None
+        self._import_process = None
+        self._import_command_queue = None
+        self._import_stop_event: threading.Event | None = None
+        self._import_queue: queue.Queue | None = None
+        self._import_pause_requested: bool = False
+        self._import_model_format: str | None = None
+        self._import_map_name: str = ""
+        self._import_progress_stage: str = ""
+        self._import_progress_fraction: float = 0.0
+        self._import_progress_title: str = ""
+        self._import_progress_note: str = ""
+        self._import_resuming_from_checkpoint: bool = False
+        self._import_pause_notice_until: float | None = None
+        self._import_pause_notice_close_after: bool = False
+        self._import_pause_notice_map_name: str = ""
+        self._import_pause_notice_title: str = "Import paused"
+        self._import_pause_notice_stage: str = "resume point saved"
+        self._import_pause_notice_note: str = ""
+        self._startup_map_load_pending: tuple[
+            str,
+            str,
+            dict,
+            str | None,
+        ] | None = None
+        self._startup_map_load_splash_rendered = False
+
+    def _initialize_pending_import_presentation(
+        self, have_pending_import: bool
+    ) -> None:
+        self.import_progress_panel = None
+        self._pending_import_splash_rendered = False
+        if have_pending_import:
+            self.import_progress_panel = ImportProgressPanel(
+                self.ctx,
+                branding_assets=self._branding_assets,
+            )
+            self._pending_import_splash_rendered = (
+                self._present_pending_import_splash_now()
+            )
+
+    def _initialize_shader_resources(self) -> None:
+        with open(os.path.join(SHADER_DIR, "mesh.vert")) as f:
+            vert_src = f.read()
+        with open(os.path.join(SHADER_DIR, "mesh.frag")) as f:
+            frag_src = f.read()
+        self.program = self.ctx.program(vertex_shader=vert_src, fragment_shader=frag_src)
+        # u_model is always the identity matrix -- write it once here rather than
+        # allocating and re-uploading a fresh identity matrix every frame.
+        self.program["u_model"].write(np.identity(4, dtype=np.float32).tobytes())
+
+        self._hud_panel_program = self.ctx.program(
+            vertex_shader=_UI_PANEL_VERT_SRC,
+            fragment_shader=_UI_PANEL_FRAG_SRC,
+        )
+        self._hud_panel_vbo = self.ctx.buffer(reserve=64 * 6 * 4)
+        self._hud_panel_vao = self.ctx.vertex_array(
+            self._hud_panel_program,
+            [(self._hud_panel_vbo, "2f 4f", "in_pos", "in_color")],
+        )
+        self._status_panel_max_verts = 12000
+        self._status_panel_vbo = self.ctx.buffer(reserve=self._status_panel_max_verts * 6 * 4)
+        self._status_panel_vao = self.ctx.vertex_array(
+            self._hud_panel_program,
+            [(self._status_panel_vbo, "2f 4f", "in_pos", "in_color")],
+        )
+
+    def _initialize_benchmark(
+        self, session_config: ViewerSessionConfig
+    ) -> None:
         benchmark_config = session_config.benchmark
         if benchmark_config is not None:
             wnd = getattr(self, "wnd", None)
@@ -991,8 +1170,7 @@ class CaveViewerWindow(mglw.WindowConfig):
                 benchmark_controller
             )
 
-        self._install_backend_modifier_probe()
-
+    def _initialize_viewer_controls(self) -> None:
         # Headlamp brightness control: a -/value/+ stepper, right side of
         # the screen. Replaced a draggable vertical slider -- dragging the
         # handle was unreliable for at least one person testing this
@@ -1098,100 +1276,10 @@ class CaveViewerWindow(mglw.WindowConfig):
                 self.ctx,
                 branding_assets=self._branding_assets,
             )
-        self.ctx.enable(moderngl.DEPTH_TEST)
-        self.ctx.enable(moderngl.CULL_FACE)
 
-        # Map-specific state (world, manifest, camera, minimap, texture manager,
-        # chunk GPU objects) lives in its own method, separate
-        # from the one-time-per-window setup above, so the exact same
-        # logic can run again later when switching to a different map via
-        # the OPEN button -- see load_new_map() / _teardown_current_map().
-        self.cache_dir = None
-        self.textures_dir = None
-        self.map_root: str | None = None
-        self.manifest = None
-        self.world = None
-        self.camera = None
-        self.minimap = None
-        self.texture_manager = None
-        self._chunk_upload_manager: ChunkUploadManager | None = None
-        self._chunk_gpu_objects: dict[tuple, list] = {}
-        self._chunk_upload_states: dict[tuple, dict] = {}
-        # Per-chunk, per-material CPU-side data for instant SHADE toggle:
-        # each entry holds (mat_name, positions, uvs, smooth_normals, flat_normals)
-        # tuples in the same order as _chunk_gpu_objects, so toggling shading
-        # can zip the two lists and rewrite each VBO in place via vbo.write().
-        self._chunk_normal_cache: dict[tuple, list] = {}
-        # Per-cell world-space AABBs for frustum culling, populated as chunks
-        # become resident.
-        self._chunk_aabbs: dict[tuple, tuple] = {}
-        self._view_culling_cache = view_culling.FrustumCullingCache()
-        self._chunk_visibility_generation = 0
-        self._texture_validation_executor: ThreadPoolExecutor | None = None
-        self._texture_validation_future: Future | None = None
-        self._texture_validation_manager: TextureManager | None = None
-        self._texture_validation_cache_dir: str | None = None
-        self._texture_validation_started_at: float | None = None
-        self._has_map_loaded = False
-        self._pending_import_started = False
-        self._initial_chunks_loaded = False
-        self._initial_visual_ready = False
-        self._initial_visual_ready_frames = 0
-        self._initial_visual_ready_visible_chunks = 0
-        self._initial_visual_ready_required_textures = 0
-        self._initial_visual_ready_resident_textures = 0
-        self._initial_visual_ready_visible_textures = 0
-        self._initial_visual_ready_missing_textures = 0
-        self._initial_visual_ready_expected_chunks = 0
-        self._initial_visual_ready_covered_chunks = 0
-        self._initial_visual_ready_missing_chunks = 0
-        self._initial_visual_ready_coverage_pct = 100.0
-        self._initial_route_prefetch_expected_cells = 0
-        self._initial_route_prefetch_loaded_cells = 0
-        self._initial_route_prefetch_pending_cells = 0
-        self._initial_route_prefetch_failed_cells = 0
-        self._initial_route_prefetch_missing_cells = 0
-        self._initial_route_prefetch_coverage_pct = 100.0
-        self._initial_visual_ready_logged = False
-        self._initial_compilation_started_at = None
-        self._initial_compilation_logged = False
-        self._chunk_prep_progress = 0.0
-        self._chunk_prep_complete_until = None
-        self._chunk_prep_completion_armed = False
-        self._main_thread_stall_last_log_at: dict[str, float] = {}
-        self._window_resources_released = False
-
-        # Background import state.  Import runs on a worker thread so the
-        # render loop stays live (resize, repaint, vsync) the whole time.
-        self._import_active: bool = False
-        self._import_is_startup: bool = False
-        self._import_thread: threading.Thread | None = None
-        self._import_process = None
-        self._import_command_queue = None
-        self._import_stop_event: threading.Event | None = None
-        self._import_queue: queue.Queue | None = None
-        self._import_pause_requested: bool = False
-        self._import_model_format: str | None = None
-        self._import_map_name: str = ""
-        self._import_progress_stage: str = ""
-        self._import_progress_fraction: float = 0.0
-        self._import_progress_title: str = ""
-        self._import_progress_note: str = ""
-        self._import_resuming_from_checkpoint: bool = False
-        self._import_pause_notice_until: float | None = None
-        self._import_pause_notice_close_after: bool = False
-        self._import_pause_notice_map_name: str = ""
-        self._import_pause_notice_title: str = "Import paused"
-        self._import_pause_notice_stage: str = "resume point saved"
-        self._import_pause_notice_note: str = ""
-        self._startup_map_load_pending: tuple[
-            str,
-            str,
-            dict,
-            str | None,
-        ] | None = None
-        self._startup_map_load_splash_rendered = False
-
+    def _initialize_startup_request(
+        self, session_config: ViewerSessionConfig, have_ready_cache: bool
+    ) -> None:
         if have_ready_cache:
             self._startup_map_load_pending = (
                 session_config.cache_dir,
@@ -1208,13 +1296,34 @@ class CaveViewerWindow(mglw.WindowConfig):
         # has truly finished and the window is on screen, would risk the
         # exact same "nothing to draw into yet" problem this feature
         # exists to avoid.
-        self._window_setup_complete = True
-        record_runtime_stage(
-            "viewer_config_initialization_complete",
-            initial_map_mode=(
-                "cached" if have_ready_cache else "pending_import"
-            ),
-        )
+
+    def _cleanup_failed_initialization(self) -> None:
+        """Release resources created before a constructor failure."""
+        self._window_setup_complete = False
+        if hasattr(self, "_window_resources_released"):
+            try:
+                self._release_window_resources()
+            except Exception:
+                _LOG.exception(
+                    "Error while releasing a partially initialized viewer."
+                )
+        workflows = getattr(self, "_workflow_coordinator", None)
+        if workflows is not None:
+            try:
+                workflows.complete_shutdown()
+            except Exception:
+                _LOG.exception("Error while closing partial viewer workflows.")
+        self._destroy_failed_window_backend()
+
+    def _destroy_failed_window_backend(self) -> None:
+        """Best-effort native cleanup when WindowConfig construction fails."""
+        wnd = getattr(self, "wnd", None)
+        if wnd is None or not hasattr(wnd, "destroy"):
+            return
+        try:
+            wnd.destroy()
+        except Exception:
+            _LOG.exception("Error while destroying a failed viewer window.")
 
     def _active_presentation_profile(self) -> PresentationProfile:
         """Return the immutable UI profile for this viewer instance."""
