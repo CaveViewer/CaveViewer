@@ -1,9 +1,9 @@
 """Render-thread recording framebuffer capture resources.
 
-The viewer window owns recording workflow decisions and the active encoder
-session. This module owns the OpenGL resources and readback ring used to stage
-raw framebuffer bytes for that encoder without making `viewer_window.py` own
-the capture implementation details.
+The viewer workflow owns recording decisions and the capture runtime owns the
+active encoder session. This module owns the OpenGL resources and readback ring
+used to stage raw framebuffer bytes for that encoder without making
+`viewer_window.py` own the capture implementation details.
 """
 
 from __future__ import annotations

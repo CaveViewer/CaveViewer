@@ -788,6 +788,10 @@ context-bound upload work.
 `gui.recording_capture` owns framebuffer readback resources and staged frame
 draining. `gui.recording` owns ffmpeg command construction, encoder
 writer/stderr workers, and asynchronous stop finalization.
+`gui.viewer_capture_runtime` owns the session's active encoder references,
+recording readback owner, manual-trace writers, and slice publication handoff.
+The window invokes its context-bound operations on the render thread and keeps
+backend callbacks as the request/result orchestration boundary.
 `gui.recording_controller` owns recording countdowns, transient status messages,
 capture timing, and dropped-frame accounting so those workflow decisions remain
 testable without constructing an OpenGL window.
