@@ -63,7 +63,7 @@ def test_preflight_allows_rebuild_of_a_valid_generated_cache(tmp_path):
     chunks_dir = cache_dir / CHUNKS_DIRNAME
     chunks_dir.mkdir(parents=True)
     (cache_dir / chunker.MANIFEST_NAME).write_text(
-        f'{{"version": {_VERSION}, "chunks": {{}}}}',
+        f'{{"version": {_VERSION}, "chunk_size": 50.0, "chunks": {{}}}}',
         encoding="utf-8",
     )
 
@@ -76,6 +76,25 @@ def test_preflight_allows_rebuild_of_a_valid_generated_cache(tmp_path):
     assert preflight.capability.value.cache_dir == cache_dir
     assert preflight.capability.value.source_path == source
     assert preflight.capability.value.operation == "rebuild"
+
+
+def test_preflight_treats_cache_missing_required_chunk_size_as_buildable(tmp_path):
+    map_dir, _source, cache_dir = _map_with_source(tmp_path)
+    chunks_dir = cache_dir / CHUNKS_DIRNAME
+    chunks_dir.mkdir(parents=True)
+    (cache_dir / chunker.MANIFEST_NAME).write_text(
+        f'{{"version": {_VERSION}, "chunks": {{}}}}',
+        encoding="utf-8",
+    )
+
+    preflight = map_cache_rebuild.probe_map_library_cache_rebuild(map_dir)
+
+    assert preflight.capability.status is CapabilityStatus.AVAILABLE
+    assert preflight.decision.allows_execution
+    assert preflight.decision.reason_code == "map_cache_build_available"
+    assert preflight.capability.value is not None
+    assert preflight.capability.value.cache_dir == cache_dir
+    assert preflight.capability.value.operation == "build"
 
 
 def test_preflight_disables_rebuild_when_only_a_cache_remains(tmp_path):

@@ -134,7 +134,11 @@ the splash session can launch it.
 Cache-rebuild coverage must prove row eligibility and disabled explanations,
 action-time revalidation, per-cache build ownership, child progress and OBJ pause
 behavior, preservation of the prior cache on failure, and background-only terminal
-notifications.
+notifications. Cache compatibility coverage must also prove that every cache
+accepted by startup contains the manifest fields required by the viewer, that
+valid manifests remain consumable after crossing immutable session boundaries,
+and that a source-backed invalid cache is routed to rebuild instead of a native
+viewer launch.
 
 ## Release gates
 

@@ -268,6 +268,38 @@ def test_map_session_opens_uncached_glb_with_pending_import(tmp_path, monkeypatc
     assert opened == [((descriptor,), {"textures_dir": str(tmp_path)})]
 
 
+def test_map_session_rebuilds_source_cache_missing_required_manifest_field(
+    tmp_path,
+    monkeypatch,
+):
+    source = tmp_path / "map.glb"
+    source.write_bytes(b"glTF")
+    cache_dir = tmp_path / "_cache"
+    (cache_dir / chunker.CHUNKS_DIRNAME).mkdir(parents=True)
+    (cache_dir / chunker.MANIFEST_NAME).write_text(
+        json.dumps({"version": chunker._VERSION, "chunks": {}}),
+        encoding="utf-8",
+    )
+    opened = []
+    _install_viewer_module(
+        monkeypatch,
+        run_viewer=lambda *args, **kwargs: opened.append(("ready", args, kwargs)),
+        run_pending=lambda *args, **kwargs: opened.append(
+            ("rebuild", args, kwargs)
+        ),
+    )
+
+    app._run_map_session(str(tmp_path))
+
+    assert opened == [
+        (
+            "rebuild",
+            ({"format": "glb", "glb_path": str(source)},),
+            {"textures_dir": str(tmp_path)},
+        )
+    ]
+
+
 def test_map_session_returns_pending_import_failure_to_gui_loop(tmp_path, monkeypatch):
     descriptor = {"format": "glb", "glb_path": str(tmp_path / "map.glb")}
     outcome = SimpleNamespace(kind="import_failed")
