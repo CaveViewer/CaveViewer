@@ -104,6 +104,8 @@ from caveviewer.gui.viewer_frame_scheduler import (
     ViewerFrameState,
 )
 from caveviewer.gui.viewer_map_runtime import ViewerMapRuntime
+from caveviewer.gui import viewer_streaming_runtime
+from caveviewer.gui.viewer_streaming_runtime import ViewerStreamingRuntime
 from caveviewer.gui.viewer_session import (
     PendingImportRequest,
     ViewerBenchmarkConfig,
@@ -222,6 +224,25 @@ def _map_runtime_property(attribute_name: str):
         return getattr(runtime(window), attribute_name)
 
     def setter(window, value):
+        setattr(runtime(window), attribute_name, value)
+
+    return property(getter, setter)
+
+
+def _streaming_runtime_property(attribute_name: str):
+    """Bridge transitional readiness attributes to the streaming owner."""
+
+    def runtime(window) -> ViewerStreamingRuntime:
+        value = getattr(window, "_streaming_runtime", None)
+        if value is None:
+            value = ViewerStreamingRuntime()
+            window._streaming_runtime = value
+        return value
+
+    def getter(window):
+        return getattr(runtime(window), attribute_name)
+
+    def setter(window, value) -> None:
         setattr(runtime(window), attribute_name, value)
 
     return property(getter, setter)
@@ -737,6 +758,59 @@ class CaveViewerWindow(mglw.WindowConfig):
         "texture_validation_started_at"
     )
     _has_map_loaded = _map_runtime_property("loaded")
+    _initial_chunks_loaded = _streaming_runtime_property("initial_chunks_loaded")
+    _initial_visual_ready = _streaming_runtime_property("initial_visual_ready")
+    _initial_visual_ready_frames = _streaming_runtime_property(
+        "initial_visual_ready_frames"
+    )
+    _initial_visual_ready_visible_chunks = _streaming_runtime_property(
+        "initial_visual_ready_visible_chunks"
+    )
+    _initial_visual_ready_required_textures = _streaming_runtime_property(
+        "initial_visual_ready_required_textures"
+    )
+    _initial_visual_ready_resident_textures = _streaming_runtime_property(
+        "initial_visual_ready_resident_textures"
+    )
+    _initial_visual_ready_visible_textures = _streaming_runtime_property(
+        "initial_visual_ready_visible_textures"
+    )
+    _initial_visual_ready_missing_textures = _streaming_runtime_property(
+        "initial_visual_ready_missing_textures"
+    )
+    _initial_visual_ready_expected_chunks = _streaming_runtime_property(
+        "initial_visual_ready_expected_chunks"
+    )
+    _initial_visual_ready_covered_chunks = _streaming_runtime_property(
+        "initial_visual_ready_covered_chunks"
+    )
+    _initial_visual_ready_missing_chunks = _streaming_runtime_property(
+        "initial_visual_ready_missing_chunks"
+    )
+    _initial_visual_ready_coverage_pct = _streaming_runtime_property(
+        "initial_visual_ready_coverage_pct"
+    )
+    _initial_route_prefetch_expected_cells = _streaming_runtime_property(
+        "initial_route_prefetch_expected_cells"
+    )
+    _initial_route_prefetch_loaded_cells = _streaming_runtime_property(
+        "initial_route_prefetch_loaded_cells"
+    )
+    _initial_route_prefetch_pending_cells = _streaming_runtime_property(
+        "initial_route_prefetch_pending_cells"
+    )
+    _initial_route_prefetch_failed_cells = _streaming_runtime_property(
+        "initial_route_prefetch_failed_cells"
+    )
+    _initial_route_prefetch_missing_cells = _streaming_runtime_property(
+        "initial_route_prefetch_missing_cells"
+    )
+    _initial_route_prefetch_coverage_pct = _streaming_runtime_property(
+        "initial_route_prefetch_coverage_pct"
+    )
+    _initial_visual_ready_logged = _streaming_runtime_property(
+        "initial_visual_ready_logged"
+    )
 
     def __init__(self, **kwargs):
         session = getattr(type(self), "_viewer_session", None)
@@ -1050,26 +1124,8 @@ class CaveViewerWindow(mglw.WindowConfig):
         # logic can run again later when switching to a different map via
         # the OPEN button -- see load_new_map() / _teardown_current_map().
         self._map_runtime = ViewerMapRuntime()
+        self._streaming_runtime = ViewerStreamingRuntime()
         self._pending_import_started = False
-        self._initial_chunks_loaded = False
-        self._initial_visual_ready = False
-        self._initial_visual_ready_frames = 0
-        self._initial_visual_ready_visible_chunks = 0
-        self._initial_visual_ready_required_textures = 0
-        self._initial_visual_ready_resident_textures = 0
-        self._initial_visual_ready_visible_textures = 0
-        self._initial_visual_ready_missing_textures = 0
-        self._initial_visual_ready_expected_chunks = 0
-        self._initial_visual_ready_covered_chunks = 0
-        self._initial_visual_ready_missing_chunks = 0
-        self._initial_visual_ready_coverage_pct = 100.0
-        self._initial_route_prefetch_expected_cells = 0
-        self._initial_route_prefetch_loaded_cells = 0
-        self._initial_route_prefetch_pending_cells = 0
-        self._initial_route_prefetch_failed_cells = 0
-        self._initial_route_prefetch_missing_cells = 0
-        self._initial_route_prefetch_coverage_pct = 100.0
-        self._initial_visual_ready_logged = False
         self._initial_compilation_started_at = None
         self._initial_compilation_logged = False
         self._chunk_prep_progress = 0.0
@@ -4456,19 +4512,7 @@ class CaveViewerWindow(mglw.WindowConfig):
 
     def _reset_initial_chunk_loading_state(self) -> None:
         """Reset ordinary map-load readiness before streaming a new map."""
-        self._initial_chunks_loaded = False
-        self._initial_visual_ready = False
-        self._initial_visual_ready_frames = 0
-        self._initial_visual_ready_visible_chunks = 0
-        self._initial_visual_ready_required_textures = 0
-        self._initial_visual_ready_resident_textures = 0
-        self._initial_visual_ready_visible_textures = 0
-        self._initial_visual_ready_missing_textures = 0
-        self._initial_visual_ready_expected_chunks = 0
-        self._initial_visual_ready_covered_chunks = 0
-        self._initial_visual_ready_missing_chunks = 0
-        self._initial_visual_ready_coverage_pct = 100.0
-        self._initial_visual_ready_logged = False
+        self._streaming_runtime.reset()
         self._chunk_prep_progress = 0.0
         self._chunk_prep_complete_until = None
         self._chunk_prep_completion_armed = False
@@ -4491,95 +4535,35 @@ class CaveViewerWindow(mglw.WindowConfig):
 
     def _target_streaming_load_radius(self) -> int:
         base_radius = max(1, int(self.render_distance_stepper.value))
-        if not self._startup_visual_prefetch_is_active():
-            return base_radius
-        max_radius = max(
+        return viewer_streaming_runtime.target_load_radius(
             base_radius,
-            min(
-                int(
-                    getattr(
-                        self.render_distance_stepper,
-                        "max_value",
-                        self._STARTUP_VISUAL_RADIUS_MAX_CHUNKS,
-                    )
-                ),
-                self._STARTUP_VISUAL_RADIUS_MAX_CHUNKS,
+            startup_active=self._startup_visual_prefetch_is_active(),
+            maximum_radius=int(
+                getattr(
+                    self.render_distance_stepper,
+                    "max_value",
+                    self._STARTUP_VISUAL_RADIUS_MAX_CHUNKS,
+                )
             ),
-        )
-        return min(
-            max_radius,
-            base_radius + self._STARTUP_VISUAL_RADIUS_EXTRA_CHUNKS,
+            startup_extra=self._STARTUP_VISUAL_RADIUS_EXTRA_CHUNKS,
+            startup_maximum=self._STARTUP_VISUAL_RADIUS_MAX_CHUNKS,
         )
 
 
     def _streaming_cell_priority_key(
         self,
     ) -> Callable[[tuple[int, int, int]], tuple[int, int, float, float, float]]:
-        """Rank streaming cells by current camera view, then by distance.
-
-        Render distance answers "how much cave should be eligible to load";
-        this priority answers "which eligible cells should consume the next
-        limited worker/upload slots."  A distance-only priority can spend that
-        budget on nearby side/behind cells while the screen-facing corridor is
-        still empty, which makes high distance values look ineffective.
-        """
         world = getattr(self, "world", None)
         world_config = getattr(world, "config", None)
-        chunk_size = max(1e-6, float(getattr(world_config, "chunk_size", 1.0)))
-        position = np.asarray(self.camera.position, dtype=np.float64)
-        forward = np.asarray(self.camera.forward(), dtype=np.float64)
-        forward_norm = float(np.linalg.norm(forward))
-        if forward_norm < 1e-9:
-            forward = np.array([0.0, 0.0, -1.0], dtype=np.float64)
-        else:
-            forward = forward / forward_norm
-
         wnd = getattr(self, "wnd", None)
         window_size = getattr(wnd, "size", _DEFAULT_WINDOW_SIZE)
-        width, height = window_size
-        aspect = max(1.0, float(width) / max(1.0, float(height)))
-        fov_deg = float(getattr(self.camera, "fov_deg", 75.0))
-        half_fov_rad = math.radians(max(1.0, min(179.0, fov_deg)) * 0.5)
-        visible_cone_tan = math.tan(half_fov_rad) * aspect * 1.25
-        chunk_size_sq = chunk_size * chunk_size
-
-        camera_x = float(position[0])
-        camera_y = float(position[1])
-        camera_z = float(position[2])
-        forward_x = float(forward[0])
-        forward_y = float(forward[1])
-        forward_z = float(forward[2])
-
-        def priority(cell: tuple[int, int, int]) -> tuple[int, int, float, float, float]:
-            center_x = (cell[0] + 0.5) * chunk_size
-            center_y = (cell[1] + 0.5) * chunk_size
-            center_z = (cell[2] + 0.5) * chunk_size
-            rel_x = center_x - camera_x
-            rel_y = center_y - camera_y
-            rel_z = center_z - camera_z
-            depth = rel_x * forward_x + rel_y * forward_y + rel_z * forward_z
-            distance_sq = rel_x * rel_x + rel_y * rel_y + rel_z * rel_z
-            lateral_sq = max(0.0, distance_sq - depth * depth)
-            front_penalty = 0 if depth >= -chunk_size else 1
-            cone_depth = max(chunk_size, depth)
-            visible_radius = cone_depth * visible_cone_tan + chunk_size
-            visible_penalty = (
-                0
-                if front_penalty == 0 and lateral_sq <= visible_radius * visible_radius
-                else 1
-            )
-            angular_sq = lateral_sq / max(chunk_size_sq, depth * depth)
-            depth_cells = max(0.0, depth / chunk_size)
-            distance_cells_sq = distance_sq / chunk_size_sq
-            return (
-                front_penalty,
-                visible_penalty,
-                depth_cells,
-                angular_sq,
-                distance_cells_sq,
-            )
-
-        return priority
+        return viewer_streaming_runtime.streaming_cell_priority_key(
+            camera_position=self.camera.position,
+            camera_forward=self.camera.forward(),
+            chunk_size=float(getattr(world_config, "chunk_size", 1.0)),
+            window_size=window_size,
+            fov_deg=float(getattr(self.camera, "fov_deg", 75.0)),
+        )
 
     def _startup_upload_boost_is_active(self) -> bool:
         overlay = getattr(self, "controls_overlay", None)
@@ -4591,104 +4575,51 @@ class CaveViewerWindow(mglw.WindowConfig):
 
     def _streaming_upload_limits(self, stats: dict | None = None) -> tuple[int, int, float]:
         """Return chunk/operation/time upload limits for the current frame."""
-        if self._startup_upload_boost_is_active():
-            return (
-                max(self._upload_chunks_per_frame, _STARTUP_UPLOAD_CHUNKS_PER_FRAME),
-                max(
-                    self._upload_groups_per_frame,
-                    _STARTUP_UPLOAD_OPERATIONS_PER_CHUNK,
-                ),
-                max(self._upload_time_budget_ms, _STARTUP_UPLOAD_TIME_BUDGET_MS),
-            )
-        if stats is not None:
-            ready = max(0, int(stats.get("ready", 0)))
-            wanted = max(0, int(stats.get("wanted", 0)))
-            loaded_wanted = max(
-                0,
-                int(stats.get("loaded_wanted", stats.get("loaded", 0))),
-            )
-            failed_wanted = max(0, int(stats.get("failed_wanted", 0)))
-            missing_wanted = max(0, wanted - loaded_wanted - failed_wanted)
-            if ready > 0 and missing_wanted > 0:
-                return (
-                    max(
-                        self._upload_chunks_per_frame,
-                        _CATCHUP_UPLOAD_CHUNKS_PER_FRAME,
-                    ),
-                    max(
-                        self._upload_groups_per_frame,
-                        _CATCHUP_UPLOAD_OPERATIONS_PER_CHUNK,
-                    ),
-                    max(
-                        self._upload_time_budget_ms,
-                        _CATCHUP_UPLOAD_TIME_BUDGET_MS,
-                    ),
-                )
-        return (
-            self._upload_chunks_per_frame,
-            self._upload_groups_per_frame,
-            self._upload_time_budget_ms,
+        policy = viewer_streaming_runtime.UploadBudgetPolicy(
+            normal=viewer_streaming_runtime.UploadLimits(
+                self._upload_chunks_per_frame,
+                self._upload_groups_per_frame,
+                self._upload_time_budget_ms,
+            ),
+            catchup=viewer_streaming_runtime.UploadLimits(
+                _CATCHUP_UPLOAD_CHUNKS_PER_FRAME,
+                _CATCHUP_UPLOAD_OPERATIONS_PER_CHUNK,
+                _CATCHUP_UPLOAD_TIME_BUDGET_MS,
+            ),
+            startup=viewer_streaming_runtime.UploadLimits(
+                _STARTUP_UPLOAD_CHUNKS_PER_FRAME,
+                _STARTUP_UPLOAD_OPERATIONS_PER_CHUNK,
+                _STARTUP_UPLOAD_TIME_BUDGET_MS,
+            ),
         )
+        limits = policy.limits_for(
+            stats,
+            startup_active=self._startup_upload_boost_is_active(),
+        )
+        return limits.chunks, limits.operations_per_chunk, limits.time_budget_ms
 
     @staticmethod
     def _initial_chunk_load_needed(
         stats: dict,
         max_loaded_chunks: int,
     ) -> int:
-        total_available = max(1, int(stats.get("total_available", 1)))
-        wanted = max(1, int(stats.get("wanted", CaveViewerWindow._INITIAL_LOAD_MIN_CHUNKS)))
-        # Startup streams the same radius the viewer will reveal. Require that
-        # current wanted set to settle before revealing the begin prompt;
-        # otherwise the first visible frame can have missing chunk rectangles
-        # beyond the old startup-only radius.
-        return min(total_available, max(1, int(max_loaded_chunks)), wanted)
+        return viewer_streaming_runtime.initial_chunk_load_needed(
+            stats,
+            max_loaded_chunks,
+            minimum_chunks=CaveViewerWindow._INITIAL_LOAD_MIN_CHUNKS,
+        )
 
     def _initial_chunk_load_is_ready(self, stats: dict) -> bool:
-        loaded = max(0, int(stats.get("loaded_wanted", stats.get("loaded", 0))))
-        failed_wanted = max(0, int(stats.get("failed_wanted", 0)))
         max_loaded = max(1, int(getattr(self.world.config, "max_loaded_chunks", self._INITIAL_LOAD_MIN_CHUNKS)))
-        needed = self._initial_chunk_load_needed(stats, max_loaded)
-        return loaded + failed_wanted >= needed
-
-    def _initial_visual_readiness_is_settled(
-        self,
-        stats: dict,
-        texture_readiness: Mapping[str, object] | None = None,
-        visual_coverage: Mapping[str, object] | None = None,
-        route_prefetch: Mapping[str, object] | None = None,
-    ) -> bool:
-        if not getattr(self, "_initial_chunks_loaded", False):
-            return False
-        if not self._initial_chunk_load_is_ready(stats):
-            return False
-        if max(0, int(stats.get("pending", 0))) > 0:
-            return False
-        if max(0, int(stats.get("ready", 0))) > 0:
-            return False
-        upload_states = getattr(self, "_chunk_upload_states", {})
-        if len(upload_states) > 0:
-            return False
-        if texture_readiness is not None and not bool(
-            texture_readiness.get("textures_ready", True)
-        ):
-            return False
-        if visual_coverage is not None and not bool(
-            visual_coverage.get("coverage_ready", True)
-        ):
-            return False
-        if route_prefetch is not None and not bool(
-            route_prefetch.get("ready", True)
-        ):
-            return False
-        return True
+        return viewer_streaming_runtime.initial_chunk_load_is_ready(
+            stats,
+            max_loaded,
+            minimum_chunks=self._INITIAL_LOAD_MIN_CHUNKS,
+        )
 
     @staticmethod
     def _texture_source_key(source: object) -> object:
-        try:
-            hash(source)
-        except TypeError:
-            return id(source)
-        return source
+        return viewer_streaming_runtime.texture_source_key(source)
 
     def _current_wanted_cells_snapshot(self) -> frozenset[tuple[int, int, int]]:
         world = getattr(self, "world", None)
@@ -4706,23 +4637,13 @@ class CaveViewerWindow(mglw.WindowConfig):
         if not isinstance(material_to_file, Mapping):
             return set()
         manifest = getattr(self, "manifest", {})
-        chunks = manifest.get("chunks", {}) if isinstance(manifest, Mapping) else {}
-        if not isinstance(chunks, Mapping):
+        if not isinstance(manifest, Mapping):
             return set()
-
-        sources: set[object] = set()
-        for cell in cells:
-            chunk_info = chunks.get(f"{cell[0]}_{cell[1]}_{cell[2]}")
-            if not isinstance(chunk_info, Mapping):
-                continue
-            materials = chunk_info.get("materials", ())
-            if not isinstance(materials, Iterable) or isinstance(materials, str):
-                materials = ()
-            for material in materials:
-                source = material_to_file.get(str(material))
-                if source:
-                    sources.add(self._texture_source_key(source))
-        return sources
+        return viewer_streaming_runtime.texture_sources_for_cells(
+            cells,
+            manifest=manifest,
+            material_to_file=material_to_file,
+        )
 
     def _texture_sources_for_visible_cells(
         self,
@@ -4732,13 +4653,10 @@ class CaveViewerWindow(mglw.WindowConfig):
         material_to_file = getattr(texture_manager, "material_to_file", {})
         if visible_cells is None or not isinstance(material_to_file, Mapping):
             return set()
-        sources: set[object] = set()
-        for _cell, vao_list in visible_cells:
-            for _vao, _vbo, material_name, _texture in vao_list:
-                source = material_to_file.get(str(material_name))
-                if source:
-                    sources.add(self._texture_source_key(source))
-        return sources
+        return viewer_streaming_runtime.texture_sources_for_visible_cells(
+            visible_cells,
+            material_to_file=material_to_file,
+        )
 
     def _resident_texture_source_keys(self) -> tuple[set[object], bool]:
         texture_manager = getattr(self, "texture_manager", None)
@@ -4758,59 +4676,31 @@ class CaveViewerWindow(mglw.WindowConfig):
         }, known_exact
 
     def _benchmark_route_prefetch_stats(self) -> dict[str, object]:
-        prefetch_cells = set(getattr(self, "_benchmark_route_prefetch_cells", ()))
-        if not prefetch_cells:
-            return {
-                "active": False,
-                "ready": True,
-                "expected_cells": 0,
-                "loaded_cells": 0,
-                "pending_cells": 0,
-                "failed_cells": 0,
-                "missing_cells": 0,
-                "coverage_pct": 100.0,
-            }
-
+        prefetch_cells = frozenset(
+            getattr(self, "_benchmark_route_prefetch_cells", ())
+        )
         world = getattr(self, "world", None)
-        if world is None:
-            return {
-                "active": True,
-                "ready": False,
-                "expected_cells": len(prefetch_cells),
-                "loaded_cells": 0,
-                "pending_cells": 0,
-                "failed_cells": 0,
-                "missing_cells": len(prefetch_cells),
-                "coverage_pct": 0.0,
-            }
-
+        if not prefetch_cells or world is None:
+            return viewer_streaming_runtime.route_prefetch_stats(
+                prefetch_cells,
+                world_available=world is not None,
+            ).as_dict()
         lock = getattr(world, "_lock", None)
         if lock is None:
-            loaded_cells = set(getattr(world, "loaded_cells", set()))
-            pending_cells = set(getattr(world, "_pending", set()))
-            failed_cells = set(getattr(world, "_failed_cells", {}))
+            loaded_cells = frozenset(getattr(world, "loaded_cells", set()))
+            pending_cells = frozenset(getattr(world, "_pending", set()))
+            failed_cells = frozenset(getattr(world, "_failed_cells", {}))
         else:
             with lock:
-                loaded_cells = set(getattr(world, "loaded_cells", set()))
-                pending_cells = set(getattr(world, "_pending", set()))
-                failed_cells = set(getattr(world, "_failed_cells", {}))
-
-        loaded_prefetch = prefetch_cells & loaded_cells
-        pending_prefetch = prefetch_cells & pending_cells
-        failed_prefetch = prefetch_cells & failed_cells
-        covered_count = len(loaded_prefetch | failed_prefetch)
-        missing_count = max(0, len(prefetch_cells) - covered_count)
-        coverage_pct = 100.0 * covered_count / max(1, len(prefetch_cells))
-        return {
-            "active": True,
-            "ready": missing_count == 0,
-            "expected_cells": len(prefetch_cells),
-            "loaded_cells": len(loaded_prefetch),
-            "pending_cells": len(pending_prefetch),
-            "failed_cells": len(failed_prefetch),
-            "missing_cells": missing_count,
-            "coverage_pct": coverage_pct,
-        }
+                loaded_cells = frozenset(getattr(world, "loaded_cells", set()))
+                pending_cells = frozenset(getattr(world, "_pending", set()))
+                failed_cells = frozenset(getattr(world, "_failed_cells", {}))
+        return viewer_streaming_runtime.route_prefetch_stats(
+            prefetch_cells,
+            loaded_cells=loaded_cells,
+            pending_cells=pending_cells,
+            failed_cells=failed_cells,
+        ).as_dict()
 
     def _initial_texture_readiness_stats(
         self,
@@ -4826,54 +4716,23 @@ class CaveViewerWindow(mglw.WindowConfig):
             self._current_wanted_cells_snapshot()
         )
         visible_sources = self._texture_sources_for_visible_cells(visible_cells)
-        required_sources = wanted_sources if wanted_sources else visible_sources
-        required_textures = len(required_sources)
-        resident_textures = max(
-            0,
-            int(manager_stats.get("unique_files_resident", required_textures)),
-        )
         resident_sources, exact_sources_known = self._resident_texture_source_keys()
-        missing_sources = (
-            required_sources - resident_sources
-            if exact_sources_known and required_sources
-            else set()
-        )
-        textures_ready = (
-            not missing_sources
-            if exact_sources_known and required_sources
-            else required_textures <= 0 or resident_textures >= required_textures
-        )
-        return {
-            "textures_ready": textures_ready,
-            "required_textures": required_textures,
-            "resident_textures": resident_textures,
-            "missing_textures": len(missing_sources),
-            "visible_textures": len(visible_sources),
-            "resident_texture_bytes": int(
-                manager_stats.get("resident_texture_bytes", 0)
-            ),
-            "resident_texture_budget_bytes": int(
-                manager_stats.get("resident_texture_budget_bytes", 0)
-            ),
-        }
+        return viewer_streaming_runtime.texture_readiness(
+            wanted_sources=wanted_sources,
+            visible_sources=visible_sources,
+            resident_sources=resident_sources,
+            exact_sources_known=exact_sources_known,
+            manager_stats=manager_stats,
+        ).as_dict()
 
     def _manifest_chunk_bounds(
         self,
         cell: tuple[int, int, int],
     ) -> tuple[np.ndarray, np.ndarray] | None:
         manifest = getattr(self, "manifest", {})
-        chunks = manifest.get("chunks", {}) if isinstance(manifest, Mapping) else {}
-        chunk_info = chunks.get(f"{cell[0]}_{cell[1]}_{cell[2]}")
-        if not isinstance(chunk_info, Mapping):
+        if not isinstance(manifest, Mapping):
             return None
-        try:
-            bounds_min = np.asarray(chunk_info["bounds_min"], dtype=np.float64)
-            bounds_max = np.asarray(chunk_info["bounds_max"], dtype=np.float64)
-        except (KeyError, TypeError, ValueError):
-            return None
-        if bounds_min.shape != (3,) or bounds_max.shape != (3,):
-            return None
-        return bounds_min, bounds_max
+        return viewer_streaming_runtime.manifest_chunk_bounds(manifest, cell)
 
     def _failed_cells_snapshot(self) -> frozenset[tuple[int, int, int]]:
         world = getattr(self, "world", None)
@@ -4888,56 +4747,18 @@ class CaveViewerWindow(mglw.WindowConfig):
         view: np.ndarray | None,
         projection: np.ndarray | None,
     ) -> dict[str, object]:
-        if view is None or projection is None:
-            return {
-                "coverage_ready": True,
-                "expected_chunks": 0,
-                "covered_chunks": 0,
-                "missing_chunks": 0,
-                "coverage_pct": 100.0,
-            }
-
         wanted_cells = self._current_wanted_cells_snapshot()
-        if not wanted_cells:
-            return {
-                "coverage_ready": True,
-                "expected_chunks": 0,
-                "covered_chunks": 0,
-                "missing_chunks": 0,
-                "coverage_pct": 100.0,
-            }
-
-        planes = view_culling.frustum_planes(
-            np.asarray(view, dtype=np.float64),
-            np.asarray(projection, dtype=np.float64),
-        )
-        expected_cells = set()
-        for cell in wanted_cells:
-            bounds = self._manifest_chunk_bounds(cell)
-            if bounds is None:
-                continue
-            if view_culling.aabb_inside_frustum(planes, bounds[0], bounds[1]):
-                expected_cells.add(cell)
-
-        visible_loaded_cells = {
-            tuple(cell)
-            for cell, _vao_list in (visible_cells or ())
-        }
-        terminal_cells = visible_loaded_cells | self._failed_cells_snapshot()
-        covered_chunks = len(expected_cells & terminal_cells)
-        missing_chunks = max(0, len(expected_cells) - covered_chunks)
-        coverage_pct = (
-            100.0
-            if not expected_cells
-            else 100.0 * covered_chunks / len(expected_cells)
-        )
-        return {
-            "coverage_ready": missing_chunks == 0,
-            "expected_chunks": len(expected_cells),
-            "covered_chunks": covered_chunks,
-            "missing_chunks": missing_chunks,
-            "coverage_pct": coverage_pct,
-        }
+        manifest = getattr(self, "manifest", {})
+        if not isinstance(manifest, Mapping):
+            manifest = {}
+        return viewer_streaming_runtime.startup_visual_coverage(
+            wanted_cells=wanted_cells,
+            visible_cells=visible_cells,
+            failed_cells=self._failed_cells_snapshot(),
+            manifest=manifest,
+            view=view,
+            projection=projection,
+        ).as_dict()
 
     def _initial_visual_readiness_stats(
         self,
@@ -4947,215 +4768,40 @@ class CaveViewerWindow(mglw.WindowConfig):
         view: np.ndarray | None = None,
         projection: np.ndarray | None = None,
     ) -> dict:
-        """Update and return startup stats augmented with visual-ready state."""
-        texture_readiness = self._initial_texture_readiness_stats(visible_cells)
-        visual_coverage = self._startup_visual_coverage_stats(
+        """Advance startup readiness from immutable per-frame snapshots."""
+        texture_data = self._initial_texture_readiness_stats(visible_cells)
+        coverage_data = self._startup_visual_coverage_stats(
             visible_cells,
             view,
             projection,
         )
-        route_prefetch = self._benchmark_route_prefetch_stats()
-        if getattr(self, "_initial_visual_ready", False):
-            visual_stats = dict(stats)
-            visual_stats["visual_ready"] = True
-            visual_stats["visual_ready_frames"] = int(
-                getattr(self, "_initial_visual_ready_frames", 0)
-            )
-            visual_stats["visual_ready_visible_chunks"] = int(
-                getattr(self, "_initial_visual_ready_visible_chunks", 0)
-            )
-            visual_stats["visual_ready_required_textures"] = int(
-                getattr(self, "_initial_visual_ready_required_textures", 0)
-            )
-            visual_stats["visual_ready_resident_textures"] = int(
-                getattr(self, "_initial_visual_ready_resident_textures", 0)
-            )
-            visual_stats["visual_ready_visible_textures"] = int(
-                getattr(self, "_initial_visual_ready_visible_textures", 0)
-            )
-            visual_stats["visual_ready_missing_textures"] = int(
-                getattr(self, "_initial_visual_ready_missing_textures", 0)
-            )
-            visual_stats["visual_ready_expected_chunks"] = int(
-                getattr(self, "_initial_visual_ready_expected_chunks", 0)
-            )
-            visual_stats["visual_ready_covered_chunks"] = int(
-                getattr(self, "_initial_visual_ready_covered_chunks", 0)
-            )
-            visual_stats["visual_ready_missing_chunks"] = int(
-                getattr(self, "_initial_visual_ready_missing_chunks", 0)
-            )
-            visual_stats["visual_ready_coverage_pct"] = float(
-                getattr(self, "_initial_visual_ready_coverage_pct", 100.0)
-            )
-            visual_stats["route_prefetch_expected_cells"] = int(
-                getattr(self, "_initial_route_prefetch_expected_cells", 0)
-            )
-            visual_stats["route_prefetch_loaded_cells"] = int(
-                getattr(self, "_initial_route_prefetch_loaded_cells", 0)
-            )
-            visual_stats["route_prefetch_pending_cells"] = int(
-                getattr(self, "_initial_route_prefetch_pending_cells", 0)
-            )
-            visual_stats["route_prefetch_failed_cells"] = int(
-                getattr(self, "_initial_route_prefetch_failed_cells", 0)
-            )
-            visual_stats["route_prefetch_missing_cells"] = int(
-                getattr(self, "_initial_route_prefetch_missing_cells", 0)
-            )
-            visual_stats["route_prefetch_coverage_pct"] = float(
-                getattr(self, "_initial_route_prefetch_coverage_pct", 100.0)
-            )
-            return visual_stats
-
-        if self._initial_visual_readiness_is_settled(
-            stats,
-            texture_readiness,
-            visual_coverage,
-            route_prefetch,
-        ):
-            self._initial_visual_ready_frames = (
-                int(getattr(self, "_initial_visual_ready_frames", 0)) + 1
-            )
-            self._initial_visual_ready_visible_chunks = int(visible_chunk_count)
-            self._initial_visual_ready_required_textures = int(
-                texture_readiness["required_textures"]
-            )
-            self._initial_visual_ready_resident_textures = int(
-                texture_readiness["resident_textures"]
-            )
-            self._initial_visual_ready_visible_textures = int(
-                texture_readiness["visible_textures"]
-            )
-            self._initial_visual_ready_missing_textures = int(
-                texture_readiness["missing_textures"]
-            )
-            self._initial_visual_ready_expected_chunks = int(
-                visual_coverage["expected_chunks"]
-            )
-            self._initial_visual_ready_covered_chunks = int(
-                visual_coverage["covered_chunks"]
-            )
-            self._initial_visual_ready_missing_chunks = int(
-                visual_coverage["missing_chunks"]
-            )
-            self._initial_visual_ready_coverage_pct = float(
-                visual_coverage["coverage_pct"]
-            )
-            self._record_initial_route_prefetch_stats(route_prefetch)
-            if (
-                self._initial_visual_ready_frames
-                >= self._INITIAL_VISUAL_READY_SETTLE_FRAMES
-            ):
-                self._initial_visual_ready = True
-                self._log_initial_visual_ready_complete(
-                    stats,
-                    visible_chunk_count=visible_chunk_count,
+        route_data = self._benchmark_route_prefetch_stats()
+        max_loaded = max(
+            1,
+            int(
+                getattr(
+                    self.world.config,
+                    "max_loaded_chunks",
+                    self._INITIAL_LOAD_MIN_CHUNKS,
                 )
-        else:
-            self._initial_visual_ready_frames = 0
-            self._initial_visual_ready_visible_chunks = 0
-            self._initial_visual_ready_required_textures = 0
-            self._initial_visual_ready_resident_textures = int(
-                texture_readiness["resident_textures"]
+            ),
+        )
+        visual_stats, became_ready = self._streaming_runtime.observe_visual_readiness(
+            stats,
+            visible_chunk_count=visible_chunk_count,
+            max_loaded_chunks=max_loaded,
+            upload_state_count=len(getattr(self, "_chunk_upload_states", {})),
+            textures=viewer_streaming_runtime.TextureReadiness(**texture_data),
+            coverage=viewer_streaming_runtime.CoverageStats(**coverage_data),
+            route=viewer_streaming_runtime.RoutePrefetchStats(**route_data),
+            settle_frames=self._INITIAL_VISUAL_READY_SETTLE_FRAMES,
+        )
+        if became_ready:
+            self._log_initial_visual_ready_complete(
+                stats,
+                visible_chunk_count=visible_chunk_count,
             )
-            self._initial_visual_ready_visible_textures = int(
-                texture_readiness["visible_textures"]
-            )
-            self._initial_visual_ready_missing_textures = int(
-                texture_readiness["missing_textures"]
-            )
-            self._initial_visual_ready_expected_chunks = int(
-                visual_coverage["expected_chunks"]
-            )
-            self._initial_visual_ready_covered_chunks = int(
-                visual_coverage["covered_chunks"]
-            )
-            self._initial_visual_ready_missing_chunks = int(
-                visual_coverage["missing_chunks"]
-            )
-            self._initial_visual_ready_coverage_pct = float(
-                visual_coverage["coverage_pct"]
-            )
-            self._record_initial_route_prefetch_stats(route_prefetch)
-
-        visual_stats = dict(stats)
-        visual_stats["visual_ready"] = bool(
-            getattr(self, "_initial_visual_ready", False)
-        )
-        visual_stats["visual_ready_frames"] = int(
-            getattr(self, "_initial_visual_ready_frames", 0)
-        )
-        visual_stats["visual_ready_visible_chunks"] = int(visible_chunk_count)
-        visual_stats["visual_ready_required_textures"] = int(
-            texture_readiness["required_textures"]
-        )
-        visual_stats["visual_ready_resident_textures"] = int(
-            texture_readiness["resident_textures"]
-        )
-        visual_stats["visual_ready_visible_textures"] = int(
-            texture_readiness["visible_textures"]
-        )
-        visual_stats["visual_ready_missing_textures"] = int(
-            texture_readiness["missing_textures"]
-        )
-        visual_stats["visual_ready_expected_chunks"] = int(
-            visual_coverage["expected_chunks"]
-        )
-        visual_stats["visual_ready_covered_chunks"] = int(
-            visual_coverage["covered_chunks"]
-        )
-        visual_stats["visual_ready_missing_chunks"] = int(
-            visual_coverage["missing_chunks"]
-        )
-        visual_stats["visual_ready_coverage_pct"] = round(
-            float(visual_coverage["coverage_pct"]),
-            3,
-        )
-        visual_stats["route_prefetch_expected_cells"] = int(
-            route_prefetch["expected_cells"]
-        )
-        visual_stats["route_prefetch_loaded_cells"] = int(
-            route_prefetch["loaded_cells"]
-        )
-        visual_stats["route_prefetch_pending_cells"] = int(
-            route_prefetch["pending_cells"]
-        )
-        visual_stats["route_prefetch_failed_cells"] = int(
-            route_prefetch["failed_cells"]
-        )
-        visual_stats["route_prefetch_missing_cells"] = int(
-            route_prefetch["missing_cells"]
-        )
-        visual_stats["route_prefetch_coverage_pct"] = round(
-            float(route_prefetch["coverage_pct"]),
-            3,
-        )
         return visual_stats
-
-    def _record_initial_route_prefetch_stats(
-        self,
-        route_prefetch: Mapping[str, object],
-    ) -> None:
-        self._initial_route_prefetch_expected_cells = int(
-            route_prefetch["expected_cells"]
-        )
-        self._initial_route_prefetch_loaded_cells = int(
-            route_prefetch["loaded_cells"]
-        )
-        self._initial_route_prefetch_pending_cells = int(
-            route_prefetch["pending_cells"]
-        )
-        self._initial_route_prefetch_failed_cells = int(
-            route_prefetch["failed_cells"]
-        )
-        self._initial_route_prefetch_missing_cells = int(
-            route_prefetch["missing_cells"]
-        )
-        self._initial_route_prefetch_coverage_pct = float(
-            route_prefetch["coverage_pct"]
-        )
-
     def _log_initial_visual_ready_complete(
         self,
         stats: dict,
@@ -5331,20 +4977,12 @@ class CaveViewerWindow(mglw.WindowConfig):
         )
 
     def _initial_chunk_load_progress(self, stats: dict) -> float:
-        loaded = max(0, int(stats.get("loaded_wanted", stats.get("loaded", 0))))
-        ready = max(0, int(stats.get("ready", 0)))
-        pending = max(0, int(stats.get("pending", 0)))
-        failed_wanted = max(0, int(stats.get("failed_wanted", 0)))
         max_loaded = max(1, int(getattr(self.world.config, "max_loaded_chunks", self._INITIAL_LOAD_MIN_CHUNKS)))
-        needed = self._initial_chunk_load_needed(stats, max_loaded)
-        # Give partial credit so the bar moves as soon as background
-        # decode starts, not only once GPU uploads complete:
-        #   pending  0.25  decode in progress
-        #   ready    0.75  decode done, upload queued
-        #   loaded   1.00  fully on GPU
-        #   failed   1.00  terminally settled; render continues with a hole
-        effective = loaded + failed_wanted + 0.75 * ready + 0.25 * min(pending, needed)
-        return max(0.0, min(1.0, effective / needed))
+        return viewer_streaming_runtime.initial_chunk_load_progress(
+            stats,
+            max_loaded,
+            minimum_chunks=self._INITIAL_LOAD_MIN_CHUNKS,
+        )
 
     def _drain_streaming_worker_failures(self) -> None:
         world = getattr(self, "world", None)

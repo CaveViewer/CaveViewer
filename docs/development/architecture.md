@@ -777,6 +777,14 @@ priority; `gui.viewer_action_dispatch` owns keyboard action priority. These
 coordinators call no OpenGL APIs and remain unit-testable without a window
 backend.
 
+`gui.viewer_streaming_runtime` owns immutable upload-limit decisions, streaming
+cell priority, startup-radius policy, and startup visual-readiness state. The
+window gathers world, texture, camera, and visibility snapshots before calling
+it, then performs world mutation and GPU uploads itself on the render thread.
+The existing `gui.view_culling`, `gui.render_upload`, and chunk-upload owner
+remain the focused implementations for culling math, timing diagnostics, and
+context-bound upload work.
+
 `gui.recording_capture` owns framebuffer readback resources and staged frame
 draining. `gui.recording` owns ffmpeg command construction, encoder
 writer/stderr workers, and asynchronous stop finalization.
