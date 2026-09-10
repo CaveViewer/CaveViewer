@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum, auto
+import math
 from typing import Any
 
 
@@ -29,6 +31,139 @@ class ContinuousInputIntent:
     @property
     def has_roll(self) -> bool:
         return bool(self.roll_delta)
+
+
+class PointerPressKind(Enum):
+    """Window-side effect selected for one normalized pointer press."""
+
+    IGNORE = auto()
+    DISMISS_HELP = auto()
+    START_MOUSE_LOOK = auto()
+    HUD = auto()
+    STEPPER = auto()
+    VIEW_BUTTON = auto()
+    COLOR_PICKER = auto()
+    DISMISS_COLOR_PICKER = auto()
+    MINIMAP_TELEPORT = auto()
+
+
+@dataclass(frozen=True)
+class PointerPressFacts:
+    """Backend and modal facts needed to route a pointer press."""
+
+    setup_complete: bool
+    input_suppressed: bool
+    waiting_for_begin: bool
+    help_visible: bool
+    recording_hides_hud: bool
+    is_left_button: bool
+    is_look_button: bool
+    option_look_active: bool
+
+
+@dataclass(frozen=True)
+class PointerPressIntent:
+    """Typed pointer action applied by the native-window adapter."""
+
+    kind: PointerPressKind
+    target: str | None = None
+    adjustment: int = 0
+    world_xz: tuple[float, float] | None = None
+    option_left_look: bool = False
+
+
+def pointer_press_intent(facts: PointerPressFacts) -> PointerPressIntent:
+    """Resolve modal and mouse-look priority before presentation hit testing."""
+    if (
+        not facts.setup_complete
+        or facts.input_suppressed
+        or facts.waiting_for_begin
+    ):
+        return PointerPressIntent(PointerPressKind.IGNORE)
+    if facts.help_visible:
+        return PointerPressIntent(PointerPressKind.DISMISS_HELP)
+    if facts.recording_hides_hud:
+        if facts.is_left_button and facts.option_look_active:
+            return PointerPressIntent(
+                PointerPressKind.START_MOUSE_LOOK,
+                option_left_look=True,
+            )
+        if facts.is_look_button:
+            return PointerPressIntent(PointerPressKind.START_MOUSE_LOOK)
+        return PointerPressIntent(PointerPressKind.IGNORE)
+    if facts.is_left_button:
+        if facts.option_look_active:
+            return PointerPressIntent(
+                PointerPressKind.START_MOUSE_LOOK,
+                option_left_look=True,
+            )
+        return PointerPressIntent(PointerPressKind.HUD)
+    if facts.is_look_button:
+        return PointerPressIntent(PointerPressKind.START_MOUSE_LOOK)
+    return PointerPressIntent(PointerPressKind.IGNORE)
+
+
+class PointerReleaseKind(Enum):
+    """Window-side effect selected for one normalized pointer release."""
+
+    IGNORE = auto()
+    STOP_OPTION_LOOK = auto()
+    STOP_MOUSE_LOOK = auto()
+    RELEASE_COLOR_PICKER = auto()
+
+
+@dataclass(frozen=True)
+class PointerReleaseFacts:
+    """State needed to route a mouse release without backend dependencies."""
+
+    setup_complete: bool
+    input_suppressed: bool
+    is_left_button: bool
+    is_look_button: bool
+    option_left_look_active: bool
+    mouse_look_active: bool
+
+
+def pointer_release_kind(facts: PointerReleaseFacts) -> PointerReleaseKind:
+    """Resolve look cleanup and color-picker release priority."""
+    if not facts.setup_complete or facts.input_suppressed:
+        return PointerReleaseKind.IGNORE
+    if facts.is_left_button:
+        if facts.option_left_look_active:
+            return PointerReleaseKind.STOP_OPTION_LOOK
+        if facts.mouse_look_active and facts.is_look_button:
+            return PointerReleaseKind.STOP_MOUSE_LOOK
+        return PointerReleaseKind.RELEASE_COLOR_PICKER
+    if facts.is_look_button:
+        return PointerReleaseKind.STOP_MOUSE_LOOK
+    return PointerReleaseKind.IGNORE
+
+
+@dataclass(frozen=True)
+class MinimapTeleportPose:
+    """Camera pose changes calculated for a resolved minimap landing point."""
+
+    position: tuple[float, float, float]
+    yaw: float | None
+
+
+def minimap_teleport_pose(
+    current_position,
+    landing_position: tuple[float, float, float],
+    *,
+    direction_threshold: float = 0.5,
+) -> MinimapTeleportPose:
+    """Return landing position and optional facing direction for a teleport."""
+    landing_x, landing_y, landing_z = (
+        float(value) for value in landing_position
+    )
+    dx = landing_x - float(current_position[0])
+    dz = landing_z - float(current_position[2])
+    yaw = math.atan2(dz, dx) if math.hypot(dx, dz) > direction_threshold else None
+    return MinimapTeleportPose(
+        position=(landing_x, landing_y, landing_z),
+        yaw=yaw,
+    )
 
 
 def resolve_key(

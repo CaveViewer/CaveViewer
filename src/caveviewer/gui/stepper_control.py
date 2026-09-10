@@ -177,6 +177,22 @@ class StepperControl:
 
     # -- interaction --------------------------------------------------------------
 
+    def adjustment_for_click(
+        self,
+        x: float,
+        y: float,
+        anchor_x: float,
+        anchor_y: float,
+    ) -> int | None:
+        """Return the signed step at a point without changing the value."""
+        mx0, my0, mx1, my1 = self._minus_button_rect(anchor_x, anchor_y)
+        if mx0 <= x <= mx1 and my0 <= y <= my1:
+            return -1
+        px0, py0, px1, py1 = self._plus_button_rect(anchor_x, anchor_y)
+        if px0 <= x <= px1 and py0 <= y <= py1:
+            return 1
+        return None
+
     def on_mouse_press(self, x: float, y: float, anchor_x: float, anchor_y: float) -> bool:
         """
         Returns True if the click landed on the minus or plus button (and
@@ -185,12 +201,11 @@ class StepperControl:
         exactly 1 right then, or it doesn't, which is the whole point of
         replacing the sliders with this.
         """
-        mx0, my0, mx1, my1 = self._minus_button_rect(anchor_x, anchor_y)
-        if mx0 <= x <= mx1 and my0 <= y <= my1:
+        adjustment = self.adjustment_for_click(x, y, anchor_x, anchor_y)
+        if adjustment == -1:
             self.decrement()
             return True
-        px0, py0, px1, py1 = self._plus_button_rect(anchor_x, anchor_y)
-        if px0 <= x <= px1 and py0 <= y <= py1:
+        if adjustment == 1:
             self.increment()
             return True
         return False

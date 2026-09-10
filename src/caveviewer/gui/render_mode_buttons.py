@@ -250,6 +250,36 @@ class RenderModeButtons:
         x0, y0, x1, y1 = self._open_button_rect(window_size, top_y, right_inset)
         return x0 <= x <= x1 and y0 <= y <= y1
 
+    def button_for_click(
+        self,
+        x: float,
+        y: float,
+        window_size: tuple[int, int],
+        top_y: float,
+        right_inset: float | None = None,
+    ) -> str | None:
+        """Return the button at a point without changing toggle state."""
+        for name, hit_test in (
+            ("mesh", self.hit_test_mesh),
+            ("texture", self.hit_test_texture),
+            ("shade", self.hit_test_shade),
+            ("help", self.hit_test_help),
+            ("color", self.hit_test_color),
+            ("open", self.hit_test_open),
+        ):
+            if hit_test(x, y, window_size, top_y, right_inset):
+                return name
+        return None
+
+    def apply_button_click(self, name: str) -> None:
+        """Apply the local toggle owned by a resolved button target."""
+        if name == "mesh":
+            self.wireframe_enabled = not self.wireframe_enabled
+        elif name == "texture":
+            self.texture_enabled = not self.texture_enabled
+        elif name == "shade":
+            self.smooth_shading_enabled = not self.smooth_shading_enabled
+
     def on_mouse_press(self, x: float, y: float, window_size: tuple[int, int], top_y: float,
                        right_inset: float | None = None) -> str | None:
         """
@@ -262,22 +292,16 @@ class RenderModeButtons:
         button block starts -- see total_stack_height()'s docstring for
         why the caller, not this class, owns that position.
         """
-        if self.hit_test_mesh(x, y, window_size, top_y, right_inset):
-            self.wireframe_enabled = not self.wireframe_enabled
-            return "mesh"
-        if self.hit_test_texture(x, y, window_size, top_y, right_inset):
-            self.texture_enabled = not self.texture_enabled
-            return "texture"
-        if self.hit_test_shade(x, y, window_size, top_y, right_inset):
-            self.smooth_shading_enabled = not self.smooth_shading_enabled
-            return "shade"
-        if self.hit_test_help(x, y, window_size, top_y, right_inset):
-            return "help"
-        if self.hit_test_color(x, y, window_size, top_y, right_inset):
-            return "color"
-        if self.hit_test_open(x, y, window_size, top_y, right_inset):
-            return "open"
-        return None
+        name = self.button_for_click(
+            x,
+            y,
+            window_size,
+            top_y,
+            right_inset,
+        )
+        if name is not None:
+            self.apply_button_click(name)
+        return name
 
     # -- rendering --------------------------------------------------------------
 

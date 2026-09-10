@@ -5475,6 +5475,171 @@ def test_mouse_callbacks_during_setup_return_before_controls_exist():
     window.on_mouse_release_event(10, 20, 1)
 
 
+def test_mouse_press_callback_routes_one_typed_intent():
+    calls = []
+    intent = viewer_window.viewer_input.PointerPressIntent(
+        viewer_window.viewer_input.PointerPressKind.DISMISS_HELP
+    )
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window._pointer_press_intent = lambda button: calls.append(
+        ("resolve", button)
+    ) or intent
+    window._apply_pointer_press_intent = lambda resolved, *, x, y: calls.append(
+        ("apply", resolved, x, y)
+    )
+
+    window.on_mouse_press_event(12.0, 34.0, 1)
+
+    assert calls == [
+        ("resolve", 1),
+        ("apply", intent, 12.0, 34.0),
+    ]
+
+
+def test_hud_pointer_resolution_uses_pure_stepper_hit_before_buttons():
+    calls = []
+
+    class Stepper:
+        def __init__(self, name, result):
+            self.name = name
+            self.result = result
+
+        def adjustment_for_click(self, x, y, anchor_x, anchor_y):
+            calls.append((self.name, x, y, anchor_x, anchor_y))
+            return self.result
+
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window.wnd = SimpleNamespace(size=(800, 600))
+    window._right_column_layout = lambda _size: {
+        "brightness_anchor": (10.0, 20.0),
+        "ambient_anchor": (30.0, 40.0),
+        "render_distance_anchor": (50.0, 60.0),
+        "buttons_top_y": 70.0,
+        "button_right_inset": 8.0,
+    }
+    window.light_stepper = Stepper("brightness", None)
+    window.ambient_stepper = Stepper("ambient", -1)
+    window.render_distance_stepper = Stepper("distance", pytest.fail)
+    window.render_mode_buttons = SimpleNamespace(
+        button_for_click=lambda *_args: pytest.fail(
+            "buttons must not run after a stepper hit"
+        )
+    )
+
+    intent = window._resolve_hud_pointer_intent(4.0, 5.0)
+
+    assert intent.kind is viewer_window.viewer_input.PointerPressKind.STEPPER
+    assert intent.target == "ambient"
+    assert intent.adjustment == -1
+    assert calls == [
+        ("brightness", 4.0, 5.0, 10.0, 20.0),
+        ("ambient", 4.0, 5.0, 30.0, 40.0),
+    ]
+
+
+def test_stepper_hit_resolution_is_pure_until_click_is_applied():
+    stepper = object.__new__(viewer_window.StepperControl)
+    stepper._geometry_scale = 1.0
+    stepper.value = 5
+    stepper.min_value = 0
+    stepper.max_value = 10
+    plus_rect = stepper._plus_button_rect(10.0, 20.0)
+    x = (plus_rect[0] + plus_rect[2]) / 2.0
+    y = (plus_rect[1] + plus_rect[3]) / 2.0
+
+    assert stepper.adjustment_for_click(x, y, 10.0, 20.0) == 1
+    assert stepper.value == 5
+    assert stepper.on_mouse_press(x, y, 10.0, 20.0) is True
+    assert stepper.value == 6
+
+
+def test_render_button_hit_resolution_is_pure_until_click_is_applied():
+    buttons = object.__new__(viewer_window.RenderModeButtons)
+    buttons._geometry_scale = 1.0
+    buttons.wireframe_enabled = False
+    buttons.texture_enabled = True
+    buttons.smooth_shading_enabled = True
+    mesh_rect = buttons._mesh_button_rect((800, 600), 100.0, 20.0)
+    x = (mesh_rect[0] + mesh_rect[2]) / 2.0
+    y = (mesh_rect[1] + mesh_rect[3]) / 2.0
+
+    assert buttons.button_for_click(x, y, (800, 600), 100.0, 20.0) == "mesh"
+    assert buttons.wireframe_enabled is False
+    assert buttons.on_mouse_press(x, y, (800, 600), 100.0, 20.0) == "mesh"
+    assert buttons.wireframe_enabled is True
+
+
+def test_locked_hud_button_is_consumed_without_changing_toggle_state():
+    unchanged = []
+    stepper = SimpleNamespace(adjustment_for_click=lambda *_args: None)
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window.wnd = SimpleNamespace(size=(800, 600))
+    window._right_column_layout = lambda _size: {
+        "brightness_anchor": (0.0, 0.0),
+        "ambient_anchor": (0.0, 0.0),
+        "render_distance_anchor": (0.0, 0.0),
+        "buttons_top_y": 100.0,
+        "button_right_inset": 10.0,
+    }
+    window.light_stepper = stepper
+    window.ambient_stepper = stepper
+    window.render_distance_stepper = stepper
+    window.render_mode_buttons = SimpleNamespace(
+        button_for_click=lambda *_args: "texture",
+        apply_button_click=lambda name: unchanged.append(name),
+    )
+    window._buttons_locked_for_loading = lambda: True
+
+    intent = window._resolve_hud_pointer_intent(20.0, 30.0)
+    window._apply_pointer_press_intent(intent, x=20.0, y=30.0)
+
+    assert intent.kind is viewer_window.viewer_input.PointerPressKind.IGNORE
+    assert unchanged == []
+
+
+def test_minimap_teleport_applies_landing_pose_and_trace_boundary(monkeypatch):
+    events = []
+    camera = SimpleNamespace(
+        position=np.array((1.0, 2.0, 3.0), dtype=np.float32),
+        yaw=0.0,
+        pitch=0.4,
+        roll=0.5,
+    )
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window.camera = camera
+    window.manifest = {"chunk_size": 10}
+    window.controls_overlay = SimpleNamespace(
+        show_panel=lambda: events.append("panel")
+    )
+    window._recorded_dive_is_active = lambda: True
+    window._stop_recorded_dive = lambda *, reason: events.append(("stop", reason))
+    window._manual_dive_trace_pose = lambda: "before"
+    window._mark_manual_dive_trace_discontinuity = (
+        lambda pose, *, reason: events.append(("trace", pose, reason))
+    )
+    monkeypatch.setattr(
+        viewer_window.chunker,
+        "find_landing_position",
+        lambda manifest, x, z, *, preferred_y: (
+            events.append(("landing", manifest, x, z, preferred_y))
+            or (11.0, 12.0, 13.0)
+        ),
+    )
+
+    window._apply_minimap_teleport((10.0, 20.0))
+
+    assert tuple(camera.position) == pytest.approx((11.0, 12.0, 13.0))
+    assert camera.yaw == pytest.approx(np.arctan2(10.0, 10.0))
+    assert camera.pitch == 0.0
+    assert camera.roll == 0.0
+    assert events == [
+        ("stop", "minimap_teleport"),
+        ("landing", window.manifest, 10.0, 20.0, 2.0),
+        ("trace", "before", "minimap_teleport"),
+        "panel",
+    ]
+
+
 def test_mouse_motion_after_color_picker_release_is_noop():
     window = object.__new__(viewer_window.CaveViewerWindow)
     window._window_setup_complete = True

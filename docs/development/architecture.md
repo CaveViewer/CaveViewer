@@ -777,6 +777,13 @@ priority; `gui.viewer_action_dispatch` owns keyboard action priority. These
 coordinators call no OpenGL APIs and remain unit-testable without a window
 backend.
 
+`gui.viewer_input` owns backend key aliases, continuous camera intent, typed
+pointer press and release priority, and minimap teleport pose calculation. The
+window obtains pure hit results from the HUD controls, resolves them to an input
+intent, and applies camera, widget, and backend mouse-capture effects explicitly.
+This keeps native callbacks as short routing boundaries while platform modifier
+and mouse-look behavior remains testable without a window or OpenGL context.
+
 `gui.viewer_streaming_runtime` owns immutable upload-limit decisions, streaming
 cell priority, startup-radius policy, and startup visual-readiness state. The
 window gathers world, texture, camera, and visibility snapshots before calling
