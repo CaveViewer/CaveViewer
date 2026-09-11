@@ -341,7 +341,9 @@ class RoundedSectionSurface:
             1,
             content_height + (self._metrics.section_padding_y * 2),
         )
-        if int(float(self.widget.cget("height"))) != target:
+        # Tk may retain the default Canvas option as a unit string (for example,
+        # ``7c`` on X11); requested geometry is always resolved to pixels.
+        if self.widget.winfo_reqheight() != target:
             self.widget.configure(height=target)
         self._redraw(height=target)
 

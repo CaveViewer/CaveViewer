@@ -6,6 +6,7 @@ from caveviewer.gui.preferences_controls import (
     ControlInteractionState,
     RoundedActionButton,
     RoundedEntryControl,
+    RoundedSectionSurface,
     RoundedSurfaceRenderer,
     resolve_action_visual,
     resolve_entry_visual,
@@ -37,6 +38,24 @@ class _FakeCanvas:
 
     def tag_lower(self, tag: str) -> None:
         self.lowered.append(tag)
+
+
+class _FakeSectionCanvas:
+    def __init__(self, *, requested_height: int, option_height: str) -> None:
+        self.requested_height = requested_height
+        self.option_height = option_height
+        self.configure_calls: list[dict[str, int]] = []
+
+    def cget(self, option: str) -> str:
+        assert option == "height"
+        return self.option_height
+
+    def winfo_reqheight(self) -> int:
+        return self.requested_height
+
+    def configure(self, **options: int) -> None:
+        self.configure_calls.append(options)
+        self.requested_height = options["height"]
 
 
 class _FakeFocusOwner:
@@ -184,6 +203,22 @@ def test_surface_renderer_replaces_geometry_on_resize_and_stops_after_close():
 
     assert len(canvas.polygons) == 4
     assert canvas.deleted[-1] == "cv-rounded-surface"
+
+
+def test_section_surface_resolves_unit_height_options_through_requested_pixels():
+    canvas = _FakeSectionCanvas(requested_height=120, option_height="7c")
+    surface = object.__new__(RoundedSectionSurface)
+    surface.widget = canvas
+    surface._metrics = SimpleNamespace(section_padding_y=10)
+    redraw_heights: list[int] = []
+    surface._redraw = lambda *, height: redraw_heights.append(height)
+
+    surface._sync_height(100)
+    canvas.requested_height = 80
+    surface._sync_height(100)
+
+    assert canvas.configure_calls == [{"height": 120}]
+    assert redraw_heights == [120, 120]
 
 
 def test_entry_compound_focus_waits_for_the_destination_widget():
