@@ -19,21 +19,23 @@ from caveviewer.gui.preferences import (
     load_preferences,
     save_preferences,
 )
+from caveviewer.gui.preferences_controls import (
+    RoundedActionButton,
+    RoundedEntryControl,
+    RoundedSectionSurface,
+)
+from caveviewer.gui.preferences_style import (
+    PREFERENCES_VISUAL_METRICS,
+    PREFERENCES_VISUAL_PALETTE,
+)
 from caveviewer.gui.preferences_workflow import PreferencesDialogWorkflow
 from caveviewer.gui.preferences_form import (
     PreferencesFormController,
     PreferencesFormState,
     MessageKind,
 )
-from caveviewer.gui.section_spacing import (
-    PRIMARY_SURFACE_VERTICAL_MARGIN,
-    STANDARD_CONTENT_SECTION_SPACING,
-)
-from caveviewer.gui.dialog_style import (
-    DIALOG_BODY_PAD_Y,
-    create_dialog_action_button,
-    set_dialog_action_button,
-)
+from caveviewer.gui.section_spacing import PRIMARY_SURFACE_VERTICAL_MARGIN
+from caveviewer.gui.dialog_style import DIALOG_BODY_PAD_Y
 from caveviewer.gui.dpi_utils import tk_display_scale
 from caveviewer.gui.platform import (
     DesktopServiceError,
@@ -78,19 +80,9 @@ class PreferencesPanelSnapshot:
 
 
 _BG_COLOR = DARK_THEME.background
-_TITLE_COLOR = DARK_THEME.title
-_SUBTITLE_COLOR = DARK_THEME.body_text
-_INSTRUCTION_COLOR = DARK_THEME.secondary_text
-_BUTTON_BG = DARK_THEME.primary_button
-_BUTTON_BORDER_COLOR = DARK_THEME.primary_button_border
 
-_NUMERIC_ENTRY_WIDTH = 6
 _SCROLLBAR_GUTTER_X = 18
-_PLACEHOLDER_COLOR = DARK_THEME.placeholder_text
 _INLINE_FEEDBACK_PAD_X = 10
-_CONTROL_GAP_X = 10
-_COMPACT_PATH_CONTROL_PAD_Y = 5
-_BACKUP_ACTION_BUTTON_WIDTH = 10
 _MIN_HINT_WRAP_LENGTH = 200
 _HINT_WRAP_INSET = 4
 _PREFERENCE_PAGES = (
@@ -103,16 +95,16 @@ _PREFERENCE_PAGE_KEYS = frozenset(key for key, _label in _PREFERENCE_PAGES)
 _PREFERENCE_FIELD_GROUPS = {
     "streaming": (
         (
-            "Memory",
+            "Memory Use",
             (
                 "memory_target_percent",
                 "gpu_memory_target_percent",
                 "gpu_memory_gb",
             ),
         ),
-        ("Loading", ("io_workers", "io_reserved_cpus")),
+        ("CPU Use", ("io_workers", "io_reserved_cpus")),
         (
-            "Uploads",
+            "Frame Loading",
             (
                 "upload_chunks_per_frame",
                 "upload_groups_per_frame",
@@ -122,7 +114,7 @@ _PREFERENCE_FIELD_GROUPS = {
     ),
     "parsing": (
         (
-            "Import",
+            "Map Processing",
             (
                 "chunk_size_meters",
                 "max_upload_group_mb",
@@ -131,7 +123,7 @@ _PREFERENCE_FIELD_GROUPS = {
             ),
         ),
         (
-            "Cache building",
+            "CPU Use",
             ("chunk_build_workers", "chunk_build_reserved_cpus"),
         ),
     ),
@@ -139,6 +131,89 @@ _PREFERENCE_FIELD_GROUPS = {
         ("Locations", ("recording_dir", "map_library_dir")),
     ),
 }
+_PREFERENCE_SECTION_DESCRIPTIONS = {
+    "streaming": {
+        "Memory Use": "Control system and graphics memory limits.",
+        "CPU Use": "Control processor capacity used for loading.",
+        "Frame Loading": "Control how much map data is loaded per frame.",
+    },
+    "parsing": {
+        "Map Processing": (
+            "Control how map data is divided and processed during import."
+        ),
+        "CPU Use": (
+            "Control processor capacity used to prepare imported map data."
+        ),
+    },
+    "storage": {
+        "Locations": "Manage where local files are kept.",
+    },
+    "backup": {
+        "Save & Load": (
+            "Keep a copy of your preferences or use one saved earlier."
+        ),
+        "Reset": (
+            "Return import and streaming preferences to their default values."
+        ),
+    },
+}
+
+
+@dataclass(frozen=True, slots=True)
+class PreferenceFieldPresentation:
+    """GUI-only display copy derived from one persisted field spec."""
+
+    description: str
+    inline_unit: str
+
+
+_STREAMING_DESCRIPTIONS = {
+    "memory_target_percent": (
+        "Percentage of available RAM used for loaded chunks."
+    ),
+    "gpu_memory_target_percent": (
+        "Percentage of GPU memory used for textures and geometry."
+    ),
+    "gpu_memory_gb": (
+        "Optional ceiling. Leave blank for automatic detection. "
+        "A smaller detected budget takes precedence."
+    ),
+    "io_workers": "Maximum chunk-loading worker threads.",
+    "io_reserved_cpus": "Logical CPUs reserved from loading.",
+    "upload_chunks_per_frame": (
+        "Maximum ready chunks uploaded during each frame."
+    ),
+    "upload_groups_per_frame": (
+        "Maximum upload slices from one ready chunk in each frame."
+    ),
+    "upload_time_budget_ms": (
+        "Target time spent uploading chunks during each frame."
+    ),
+}
+_STREAMING_INLINE_UNITS = {
+    "memory_target_percent": "%",
+    "gpu_memory_target_percent": "%",
+    "gpu_memory_gb": "GB",
+    "upload_time_budget_ms": "ms",
+}
+_PREFERENCE_INLINE_UNITS = {
+    **_STREAMING_INLINE_UNITS,
+    "max_upload_group_mb": "MB",
+    "obj_scan_throttle_ms": "ms",
+    "obj_import_batch_thousands": "thousand faces",
+}
+
+
+def _preference_field_presentation(
+    field: PreferenceSpec,
+) -> PreferenceFieldPresentation:
+    """Return card-field copy without changing the schema or persisted value."""
+    return PreferenceFieldPresentation(
+        description=_STREAMING_DESCRIPTIONS.get(field.key, field.hint),
+        inline_unit=_PREFERENCE_INLINE_UNITS.get(field.key, ""),
+    )
+
+
 def _preference_field_groups(
     section_key: str,
 ) -> tuple[tuple[str, tuple[PreferenceSpec, ...]], ...]:
@@ -163,50 +238,6 @@ def _preference_field_groups(
     return tuple(groups)
 
 
-class PreferenceSectionContainer:
-    """Render the standard whitespace grouping around one Preferences group."""
-
-    def __init__(
-        self,
-        parent,
-        *,
-        title: str,
-        font: tuple,
-        px: Callable[[int | float], int],
-    ) -> None:
-        self._px = px
-        self.widget = tk.Frame(parent, bg=_BG_COLOR)
-        tk.Label(
-            self.widget,
-            text=title.upper(),
-            font=font,
-            fg=_SUBTITLE_COLOR,
-            bg=_BG_COLOR,
-            anchor="w",
-        ).pack(anchor="w")
-        self.content = tk.Frame(self.widget, bg=_BG_COLOR)
-        self.content.pack(
-            fill="x",
-            pady=(
-                self._px(STANDARD_CONTENT_SECTION_SPACING.heading_to_content_y),
-                0,
-            ),
-        )
-
-    def pack(self, *, first: bool) -> None:
-        """Place this group with the standard preceding-section separation."""
-        self.widget.pack(
-            fill="x",
-            padx=(self._px(TABBED_CONTENT_ALIGNMENT_INSET), 0),
-            pady=(
-                0
-                if first
-                else self._px(STANDARD_CONTENT_SECTION_SPACING.between_sections_y),
-                0,
-            ),
-        )
-
-
 class PreferencesPanel:
     """Reusable Preferences form displayed in the splash right-hand panel."""
 
@@ -219,6 +250,7 @@ class PreferencesPanel:
         platform_runtime: PlatformRuntime | None = None,
         presentation_profile: PresentationProfile | None = None,
         typography: TkTypography | None = None,
+        px: Callable[[int | float], int] | None = None,
         on_applied: Callable[[Preferences], None] | None = None,
         on_cancel: Callable[[], None] | None = None,
         confirm_restore: Callable[[], bool] | None = None,
@@ -254,7 +286,6 @@ class PreferencesPanel:
             or get_presentation_profile()
         )
         self._layout_policy = self.presentation_profile.preferences_dialog_layout
-        self._dialog_layout = self.presentation_profile.dialog_layout
         self.typography = typography or create_tk_typography(
             ui_font_family,
             text_scale=self.presentation_profile.minimum_tk_text_scale,
@@ -277,21 +308,32 @@ class PreferencesPanel:
         # directory pickers, while its widgets belong to the supplied panel.
         # The splash supplies the right-hand content frame, so this is its root.
         self.dialog = parent.winfo_toplevel()
+        self._layout_px = px
         self.container = tk.Frame(parent, bg=_BG_COLOR)
         self.container.pack(fill="both", expand=True)
 
-        self.section_font = self.typography.section
+        self.heading_font = self.typography.heading
         self.action_font = self.typography.body_strong
         self.body_font = self.typography.body
+        self.body_strong_font = self.typography.body_strong
         self.small_font = self.typography.supporting
+        self.preferences_palette = PREFERENCES_VISUAL_PALETTE
+        self.preferences_metrics = PREFERENCES_VISUAL_METRICS.scaled(
+            self._surface_px
+        )
 
         self.field_vars: dict[str, tk.StringVar] = {}
         self.field_entries: dict[str, tk.Entry] = {}
         self.field_title_labels: dict[str, tk.Label] = {}
         self.field_display_vars: dict[str, tk.StringVar] = {}
         self.field_entry_states: dict[str, str] = {}
-        self.field_browse_buttons: dict[str, tk.Widget] = {}
-        self.field_compound_controls: dict[str, tk.Frame] = {}
+        self.rounded_field_controls: dict[str, RoundedEntryControl] = {}
+        self.preference_cards: dict[str, list[RoundedSectionSurface]] = {}
+        self.preference_action_buttons: list[RoundedActionButton] = []
+        self.page_focus_targets: dict[
+            str,
+            list[RoundedEntryControl | RoundedActionButton],
+        ] = {}
         self.numeric_entry_states: dict[str, tuple] = {}
         self.numeric_placeholder_keys: set[str] = set()
         self.form_ready = False
@@ -319,6 +361,8 @@ class PreferencesPanel:
         self._feedback_override_is_transient = False
         self._feedback_after_id: str | None = None
         self._page_layout_after_id: str | None = None
+        self._invalid_focus_after_id: str | None = None
+        self._scroll_restore_after_id: str | None = None
         self._pending_page_canvas_width: int | None = None
         self._page_canvas_window_width: int | None = None
         self._page_scroll_region: tuple[int, int, int, int] | None = None
@@ -363,11 +407,25 @@ class PreferencesPanel:
         self._render_form_state(state)
         if self.page_canvas is not None and snapshot.scroll_fraction > 0.0:
             fraction = max(0.0, min(1.0, float(snapshot.scroll_fraction)))
-            self.dialog.after_idle(
-                lambda: self.page_canvas.yview_moveto(fraction)
-                if self.page_canvas is not None
-                else None
-            )
+            self._schedule_scroll_restore(fraction)
+
+    def _schedule_scroll_restore(self, fraction: float) -> None:
+        """Restore a recomposed page position while owning the idle callback."""
+        self._cancel_after_callback("_scroll_restore_after_id")
+
+        def restore() -> None:
+            self._scroll_restore_after_id = None
+            if getattr(self, "_destroyed", False) or self.page_canvas is None:
+                return
+            try:
+                self.page_canvas.yview_moveto(fraction)
+            except tk.TclError:
+                return
+
+        try:
+            self._scroll_restore_after_id = self.dialog.after_idle(restore)
+        except tk.TclError:
+            self._scroll_restore_after_id = None
 
     @staticmethod
     def _is_numeric_entry_candidate(value_type: str, candidate: str) -> bool:
@@ -423,7 +481,10 @@ class PreferencesPanel:
         previous_validation = entry.cget("validate")
         entry.configure(validate="none")
         display_var.set(placeholder_text)
-        entry.configure(fg=_PLACEHOLDER_COLOR, validate=previous_validation)
+        entry.configure(validate=previous_validation)
+        rounded_control = getattr(self, "rounded_field_controls", {}).get(key)
+        if rounded_control is not None:
+            rounded_control.set_placeholder(True)
 
     def _clear_numeric_placeholder(self, key: str) -> None:
         if key not in self.numeric_placeholder_keys:
@@ -433,7 +494,10 @@ class PreferencesPanel:
         entry.configure(validate="none")
         self.numeric_placeholder_keys.discard(key)
         display_var.set("")
-        entry.configure(fg=_SUBTITLE_COLOR, validate=previous_validation)
+        entry.configure(validate=previous_validation)
+        rounded_control = getattr(self, "rounded_field_controls", {}).get(key)
+        if rounded_control is not None:
+            rounded_control.set_placeholder(False)
         entry.icursor(0)
 
     def _begin_numeric_edit_from_key(self, event, key: str) -> None:
@@ -459,98 +523,189 @@ class PreferencesPanel:
                 lambda field_key=key: self._show_numeric_placeholder(field_key)
             )
 
-    def _new_dialog_button(
+    def _new_preferences_action(
         self,
         parent,
         text: str,
         command: Callable[[], None],
         *,
-        kind: str = "secondary",
-        padx: int = 10,
-        pady: int = 5,
+        kind: str,
+        outside_background: str = _BG_COLOR,
         width: int | None = None,
-        default: str | None = None,
-    ):
-        return create_dialog_action_button(
+    ) -> RoundedActionButton:
+        """Create one Preferences action from the rounded control contract."""
+        button = RoundedActionButton(
             parent,
-            text,
-            command,
+            text=text,
+            command=command,
             font=self.action_font,
+            metrics=self.preferences_metrics,
+            palette=self.preferences_palette,
             kind=kind,
-            padx=padx,
-            pady=pady,
+            outside_background=outside_background,
             width=width,
-            default=default,
-            dialog_layout=self._dialog_layout,
         )
+        self.preference_action_buttons.append(button)
+        return button
 
     def _render_section(self, parent, section_key: str) -> None:
-        """Render every tab group through the standard section container."""
+        """Render every preference group through the shared card stack."""
         section = tk.Frame(parent, bg=_BG_COLOR)
-        # The form owns the full content surface. This leaves a stable
-        # right-aligned control column and enough width for one-line hints.
         section.pack(fill="x")
-        groups = _preference_field_groups(section_key)
-
-        for index, (title, fields) in enumerate(groups):
-            group = PreferenceSectionContainer(
+        self.preference_cards[section_key] = []
+        for index, (title, fields) in enumerate(
+            _preference_field_groups(section_key)
+        ):
+            description = _PREFERENCE_SECTION_DESCRIPTIONS.get(
+                section_key, {}
+            ).get(title)
+            card, fields_host = self._new_preference_card(
                 section,
                 title=title,
-                font=self.section_font,
-                px=self._surface_px,
+                first=index == 0,
+                description=description,
+                page_key=section_key,
             )
-            group.pack(first=index == 0)
+            self.preference_cards[section_key].append(card)
             for field_index, field in enumerate(fields):
-                self._render_field(
-                    group.content,
-                    field,
-                    bottom_pad_y=(
-                        self._form_row_gap()
-                        if field_index < len(fields) - 1
-                        else 0
-                    ),
+                self._render_field(fields_host, field)
+                if field_index < len(fields) - 1:
+                    self._render_card_item_gap(fields_host)
+
+    def _render_card_item_gap(self, parent) -> None:
+        """Separate adjacent fields or actions without drawing a line."""
+        gap = tk.Frame(
+            parent,
+            bg=self.preferences_palette.section_background,
+            height=self.preferences_metrics.card_item_gap_y,
+        )
+        gap.pack(fill="x")
+
+    def _new_preference_card(
+        self,
+        parent,
+        *,
+        title: str,
+        first: bool,
+        description: str | None = None,
+        page_key: str | None = None,
+    ) -> tuple[RoundedSectionSurface, tk.Frame]:
+        """Create one aligned rounded card and its field/action content host."""
+        card = RoundedSectionSurface(
+            parent,
+            metrics=self.preferences_metrics,
+            palette=self.preferences_palette,
+        )
+        card.pack(
+            fill="x",
+            padx=(self._surface_px(TABBED_CONTENT_ALIGNMENT_INSET), 0),
+            pady=(
+                0 if first else self.preferences_metrics.section_gap_y,
+                0,
+            ),
+        )
+        tk.Label(
+            card.content,
+            text=title,
+            font=self.heading_font,
+            fg=self.preferences_palette.heading_text,
+            bg=self.preferences_palette.section_background,
+            anchor="w",
+        ).pack(anchor="w")
+        content_gap = self.preferences_metrics.section_heading_to_fields_y
+        if description:
+            description_label = tk.Label(
+                card.content,
+                text=description,
+                font=self.small_font,
+                fg=self.preferences_palette.supporting_text,
+                bg=self.preferences_palette.section_background,
+                anchor="w",
+                justify="left",
+                wraplength=self._layout_policy.wrap_length,
+            )
+            description_label.pack(
+                anchor="w",
+                fill="x",
+                pady=(
+                    self.preferences_metrics.section_heading_to_description_y,
+                    0,
+                ),
+            )
+            if page_key is not None:
+                self.page_hint_labels.setdefault(page_key, []).append(
+                    description_label
                 )
+            content_gap = self.preferences_metrics.section_description_to_fields_y
+        content = tk.Frame(
+            card.content,
+            bg=self.preferences_palette.section_background,
+        )
+        content.pack(
+            fill="x",
+            pady=(content_gap, 0),
+        )
+        return card, content
 
     def _render_backup_restore(self, parent) -> None:
-        """Render whole-snapshot actions separately from preference fields."""
-
-        transfer_group = PreferenceSectionContainer(
-            parent,
-            title="Transfer",
-            font=self.section_font,
-            px=self._surface_px,
+        """Render whole-snapshot actions with the shared card/action system."""
+        section = tk.Frame(parent, bg=_BG_COLOR)
+        section.pack(fill="x")
+        self.preference_cards["backup"] = []
+        groups = (
+            (
+                "Save & Load",
+                (
+                    (
+                        "Save preferences",
+                        "Save preferences to a file.",
+                        "Save",
+                        self.export_preferences,
+                    ),
+                    (
+                        "Load preferences",
+                        "Load preferences from a file.",
+                        "Load",
+                        self.import_preferences,
+                    ),
+                ),
+            ),
+            (
+                "Reset",
+                (
+                    (
+                        "Restore defaults",
+                        "Restore default import and streaming settings.",
+                        "Restore",
+                        self.restore_defaults,
+                    ),
+                ),
+            ),
         )
-        transfer_group.pack(first=True)
-        self._render_backup_action(
-            transfer_group.content,
-            title="Save preferences",
-            description="Save preferences to a file.",
-            button_text="Save",
-            command=self.export_preferences,
-        )
-        self._render_backup_action(
-            transfer_group.content,
-            title="Load preferences",
-            description="Load preferences from a file.",
-            button_text="Load",
-            command=self.import_preferences,
-            top_pad=self._form_row_gap(),
-        )
-
-        restore_group = PreferenceSectionContainer(
-            parent,
-            title="Recovery",
-            font=self.section_font,
-            px=self._surface_px,
-        )
-        restore_group.pack(first=False)
-        self._render_backup_action(
-            restore_group.content,
-            title="Restore defaults",
-            description="Restore default import and streaming settings.",
-            button_text="Restore",
-            command=self.restore_defaults,
-        )
+        for index, (title, actions) in enumerate(groups):
+            card, actions_host = self._new_preference_card(
+                section,
+                title=title,
+                first=index == 0,
+                description=_PREFERENCE_SECTION_DESCRIPTIONS["backup"][title],
+                page_key="backup",
+            )
+            self.preference_cards["backup"].append(card)
+            for action_index, (
+                action_title,
+                description,
+                button_text,
+                command,
+            ) in enumerate(actions):
+                self._render_backup_action(
+                    actions_host,
+                    title=action_title,
+                    description=description,
+                    button_text=button_text,
+                    command=command,
+                )
+                if action_index < len(actions) - 1:
+                    self._render_card_item_gap(actions_host)
 
     def _render_backup_action(
         self,
@@ -560,95 +715,95 @@ class PreferencesPanel:
         description: str,
         button_text: str,
         command: Callable[[], None],
-        top_pad: int = 0,
     ) -> None:
-        row = tk.Frame(parent, bg=_BG_COLOR)
-        row.pack(fill="x", pady=(top_pad, 0))
-        row.grid_columnconfigure(0, weight=1)
-        text = tk.Frame(row, bg=_BG_COLOR)
-        text.grid(row=0, column=0, sticky="ew")
+        """Render one stacked backup action inside a Preferences card."""
+        row = tk.Frame(parent, bg=self.preferences_palette.section_background)
+        row.pack(fill="x")
         tk.Label(
-            text,
+            row,
             text=title,
-            font=self.body_font,
-            fg=_SUBTITLE_COLOR,
-            bg=_BG_COLOR,
+            font=self.body_strong_font,
+            fg=self.preferences_palette.field_label_text,
+            bg=self.preferences_palette.section_background,
             anchor="w",
         ).pack(anchor="w")
-        tk.Label(
-            text,
+        description_label = tk.Label(
+            row,
             text=description,
             font=self.small_font,
-            fg=_INSTRUCTION_COLOR,
-            bg=_BG_COLOR,
+            fg=self.preferences_palette.supporting_text,
+            bg=self.preferences_palette.section_background,
             anchor="w",
             justify="left",
-            wraplength=self._layout_policy.notice_wrap_length,
-        ).pack(anchor="w", pady=(self._surface_px(4), 0))
-        button = self._new_dialog_button(
+            wraplength=self._layout_policy.wrap_length,
+        )
+        description_label.pack(
+            anchor="w",
+            fill="x",
+            pady=(self.preferences_metrics.field_label_to_description_y, 0),
+        )
+        self.page_hint_labels.setdefault("backup", []).append(description_label)
+        button = self._new_preferences_action(
             row,
             button_text,
             command,
-            width=_BACKUP_ACTION_BUTTON_WIDTH,
+            kind="secondary",
+            outside_background=self.preferences_palette.section_background,
         )
-        button.grid(
-            row=0,
-            column=1,
-            sticky="e",
-            padx=(self._surface_px(_CONTROL_GAP_X), 0),
+        self.page_focus_targets.setdefault("backup", []).append(button)
+        button.pack(
+            anchor="w",
+            pady=(self.preferences_metrics.field_description_to_control_y, 0),
         )
 
     def _render_field(
         self,
-        section,
+        parent,
         field: PreferenceSpec,
-        *,
-        bottom_pad_y: int | None = None,
     ) -> None:
+        """Render one field with the shared label, description, and control."""
         key = field.key
         value_type = field.value_type
         compact_path = value_type in {
             PreferenceValueType.PATH,
             PreferenceValueType.PATH_CREATE,
         }
-        row = tk.Frame(
-            section,
-            bg=_BG_COLOR,
-        )
-        row.pack(
-            fill="x",
-            pady=(
-                0,
-                self._form_row_gap() if bottom_pad_y is None else bottom_pad_y,
-            ),
-        )
-        row.grid_columnconfigure(0, weight=1)
-        row.grid_columnconfigure(1, weight=0)
+        presentation = _preference_field_presentation(field)
+        row = tk.Frame(parent, bg=self.preferences_palette.section_background)
+        row.pack(fill="x")
 
-        text_column = tk.Frame(row, bg=_BG_COLOR)
-        text_column.grid(
-            row=0,
-            column=0,
-            sticky="ew",
-        )
         title_label = tk.Label(
-            text_column,
+            row,
             text=field.label,
-            font=self.body_font,
-            fg=_SUBTITLE_COLOR,
-            bg=_BG_COLOR,
+            font=self.body_strong_font,
+            fg=self.preferences_palette.field_label_text,
+            bg=self.preferences_palette.section_background,
             anchor="w",
         )
         title_label.pack(anchor="w")
         self.field_title_labels[key] = title_label
 
+        description_label = tk.Label(
+            row,
+            text=presentation.description,
+            font=self.small_font,
+            fg=self.preferences_palette.supporting_text,
+            bg=self.preferences_palette.section_background,
+            anchor="w",
+            justify="left",
+            wraplength=self._layout_policy.wrap_length,
+        )
+        description_label.pack(
+            anchor="w",
+            fill="x",
+            pady=(self.preferences_metrics.field_label_to_description_y, 0),
+        )
+        self.page_hint_labels.setdefault(field.section, []).append(
+            description_label
+        )
+
         var = tk.StringVar(master=self.dialog, value=self.form.state.values[key])
         self.field_vars[key] = var
-        entry_width = (
-            _NUMERIC_ENTRY_WIDTH
-            if value_type in {PreferenceValueType.INT, PreferenceValueType.FLOAT}
-            else self._layout_policy.text_entry_width
-        )
         entry_var = var
         placeholder_text = preference_placeholder_text(field)
         if placeholder_text:
@@ -658,7 +813,8 @@ class PreferencesPanel:
                 self.numeric_placeholder_keys.add(key)
         elif compact_path:
             entry_var = tk.StringVar(
-                master=self.dialog, value=self._compact_directory_path(var.get())
+                master=self.dialog,
+                value=self._compact_directory_path(var.get()),
             )
             var.trace_add(
                 "write",
@@ -668,76 +824,95 @@ class PreferencesPanel:
             )
         self.field_display_vars[key] = entry_var
 
-        entry_parent = tk.Frame(
+        control_row = tk.Frame(
             row,
-            bg=DARK_THEME.entry_border if compact_path else _BG_COLOR,
+            bg=self.preferences_palette.section_background,
         )
-        if compact_path:
-            entry_parent.grid(
-                row=1,
-                column=0,
-                columnspan=2,
-                sticky="ew",
-                pady=(self._layout_policy.control_row_top_pad_y, 0),
-            )
-        else:
-            entry_parent.grid(
-                row=0,
-                column=1,
-                sticky="e",
-                padx=(self._layout_policy.row_pad_x, 0),
-            )
-        entry_parent.grid_columnconfigure(0, weight=1)
-        if compact_path:
-            entry_parent.grid_columnconfigure(1, weight=0)
-            entry_parent.grid_rowconfigure(0, weight=1)
-            self.field_compound_controls[key] = entry_parent
-
-        entry = tk.Entry(
-            entry_parent,
+        control_row.pack(
+            fill="x",
+            pady=(self.preferences_metrics.field_description_to_control_y, 0),
+        )
+        rounded_entry = RoundedEntryControl(
+            control_row,
             textvariable=entry_var,
             font=self.body_font,
-            bg=DARK_THEME.entry_background,
-            fg=(
-                _PLACEHOLDER_COLOR
-                if key in self.numeric_placeholder_keys
-                else _SUBTITLE_COLOR
-            ),
-            insertbackground=_SUBTITLE_COLOR,
-            relief="flat",
-            highlightthickness=0 if compact_path else 1,
-            highlightbackground=DARK_THEME.entry_border,
-            highlightcolor=DARK_THEME.entry_focus_border,
-            width=entry_width,
+            metrics=self.preferences_metrics,
+            palette=self.preferences_palette,
             state="readonly" if compact_path else "normal",
-            readonlybackground=DARK_THEME.entry_background,
-            disabledbackground=DARK_THEME.entry_background,
-            disabledforeground=_SUBTITLE_COLOR,
+            width=1 if compact_path else None,
+            outside_background=self.preferences_palette.section_background,
             validate="none" if compact_path else "key",
-            validatecommand=(self.numeric_entry_validator, value_type.value, "%P"),
+            validatecommand=(
+                None
+                if compact_path
+                else (
+                    self.numeric_entry_validator,
+                    value_type.value,
+                    "%P",
+                )
+            ),
+            action_text="Browse" if compact_path else None,
+            action_command=(
+                (
+                    lambda field_key=key, title=field.label: self._choose_directory(
+                        field_key,
+                        title,
+                    )
+                )
+                if compact_path
+                else None
+            ),
+            action_font=self.action_font if compact_path else None,
+        )
+        if compact_path:
+            rounded_entry.pack(fill="x")
+        else:
+            rounded_entry.pack(side="left")
+        entry = rounded_entry.entry
+        self.rounded_field_controls[key] = rounded_entry
+        self.page_focus_targets.setdefault(field.section, []).append(
+            rounded_entry
         )
         self.field_entries[key] = entry
         self.field_entry_states[key] = "readonly" if compact_path else "normal"
+        if key in self.numeric_placeholder_keys:
+            rounded_entry.set_placeholder(True)
+
+        if presentation.inline_unit:
+            tk.Label(
+                control_row,
+                text=presentation.inline_unit,
+                font=self.body_font,
+                fg=self.preferences_palette.supporting_text,
+                bg=self.preferences_palette.section_background,
+                anchor="w",
+            ).pack(
+                side="left",
+                padx=(self.preferences_metrics.unit_gap_x, 0),
+            )
 
         if placeholder_text:
             self.numeric_entry_states[key] = (entry, entry_var, placeholder_text)
             entry_var.trace_add(
                 "write",
                 lambda *_args, field_key=key, source=entry_var: self._sync_numeric_value(
-                    field_key, source
+                    field_key,
+                    source,
                 ),
             )
             entry.bind(
                 "<KeyPress>",
                 lambda event, field_key=key: self._begin_numeric_edit_from_key(
-                    event, field_key
+                    event,
+                    field_key,
                 ),
                 add="+",
             )
             entry.bind(
                 "<Button-1>",
                 lambda event, field_key=key: self._begin_numeric_edit_from_click(
-                    event, field_key
+                    event,
+                    field_key,
                 ),
                 add="+",
             )
@@ -763,92 +938,6 @@ class PreferencesPanel:
             lambda _event, field_key=key: self._on_field_blurred(field_key),
             add="+",
         )
-        if compact_path:
-            # Match the Browse action's vertical padding so the read-only path
-            # and its action read as one deliberate control row.
-            entry.grid(
-                row=0,
-                column=0,
-                sticky="nsew",
-                padx=(1, 0),
-                pady=1,
-                ipady=_COMPACT_PATH_CONTROL_PAD_Y,
-            )
-        else:
-            entry.pack(side="left")
-
-        if value_type in {PreferenceValueType.PATH, PreferenceValueType.PATH_CREATE}:
-            browse_button = self._new_dialog_button(
-                entry_parent,
-                "Browse",
-                lambda field_key=key, title=field.label: self._choose_directory(
-                    field_key, title
-                ),
-                padx=10,
-            )
-            if compact_path:
-                # The parent paints the common border and the one-pixel inset
-                # between the field and action.
-                browse_button.configure(borderwidth=0, highlightthickness=0)
-                browse_button.grid(
-                    row=0,
-                    column=1,
-                    sticky="nsew",
-                    padx=(1, 1),
-                    pady=1,
-                )
-                for widget in (entry, browse_button):
-                    widget.bind(
-                        "<FocusIn>",
-                        lambda _event, field_key=key: self._set_compound_focus(
-                            field_key, focused=True
-                        ),
-                        add="+",
-                    )
-                    widget.bind(
-                        "<FocusOut>",
-                        lambda _event, field_key=key: self._set_compound_focus(
-                            field_key, focused=False
-                        ),
-                        add="+",
-                    )
-            else:
-                browse_button.pack(side="left", padx=(_CONTROL_GAP_X, 0))
-            self.field_browse_buttons[key] = browse_button
-
-        single_line_hint = compact_path
-        hint_label = tk.Label(
-            text_column,
-            text=field.hint,
-            font=self.small_font,
-            fg=_INSTRUCTION_COLOR,
-            bg=_BG_COLOR,
-            justify="left",
-            anchor="w",
-            wraplength=(
-                0 if single_line_hint else self._layout_policy.wrap_length
-            ),
-        )
-        hint_label.pack(anchor="w", fill="x", pady=(3, 0))
-        if not single_line_hint:
-            self.page_hint_labels.setdefault(field.section, []).append(hint_label)
-
-    def _set_compound_focus(self, key: str, *, focused: bool) -> None:
-        """Paint one focus border around a path field and its Browse action."""
-        shell = getattr(self, "field_compound_controls", {}).get(key)
-        if shell is not None:
-            shell.configure(
-                bg=(
-                    DARK_THEME.invalid_border
-                    if key == self.rendered_invalid_key
-                    else (
-                        DARK_THEME.entry_focus_border
-                        if focused
-                        else DARK_THEME.entry_border
-                    )
-                )
-            )
-
     @staticmethod
     def _sync_hint_wraplength(label, available_width: int) -> bool:
         """Match one description to its actual rendered text-column width."""
@@ -891,21 +980,11 @@ class PreferencesPanel:
         if page_size is None or page_size[0] <= 1:
             return None
         page_width = page_size[0]
-        control_widths: list[int] = []
-        for key, entry in self.field_entries.items():
-            if self.field_page_keys.get(key) != page_key:
-                continue
-            try:
-                control_widths.append(int(entry.winfo_reqwidth()))
-            except tk.TclError:
-                continue
-        if not control_widths:
-            return None
         return max(
             _MIN_HINT_WRAP_LENGTH,
             page_width
-            - max(control_widths)
-            - self._surface_px(self._layout_policy.row_pad_x),
+            - self._surface_px(TABBED_CONTENT_ALIGNMENT_INSET)
+            - (self.preferences_metrics.section_padding_x * 2),
         )
 
     def _sync_feedback_wraplength(self, available_width: int) -> None:
@@ -965,11 +1044,13 @@ class PreferencesPanel:
 
     def _surface_px(self, value: int | float) -> int:
         """Scale shared surface controls to the active splash display."""
+        if self._layout_px is not None:
+            return int(self._layout_px(value))
         scale = tk_display_scale(
             self.dialog,
             presentation_profile=self.presentation_profile,
         )
-        return max(1, int(round(float(value) * scale)))
+        return int(round(float(value) * scale))
 
     def _form_row_gap(self) -> int:
         """Return a display-scaled gap between adjacent preference rows."""
@@ -981,13 +1062,19 @@ class PreferencesPanel:
             return
         self._destroyed = True
         self._cancel_transient_feedback(clear=False)
-        after_id = self._page_layout_after_id
-        self._page_layout_after_id = None
+        self._cancel_after_callback("_page_layout_after_id")
+        self._cancel_after_callback("_invalid_focus_after_id")
+        self._cancel_after_callback("_scroll_restore_after_id")
+
+    def _cancel_after_callback(self, attribute: str) -> None:
+        """Cancel one named panel callback and clear its ownership token."""
+        after_id = getattr(self, attribute, None)
+        setattr(self, attribute, None)
         if after_id is None:
             return
         try:
             self.dialog.after_cancel(after_id)
-        except tk.TclError:
+        except (AttributeError, tk.TclError):
             pass
 
     def _on_container_mapped(self, event) -> None:
@@ -1199,10 +1286,12 @@ class PreferencesPanel:
             px=self._surface_px,
             tab_style=TopTabStripStyle(
                 background_color=_BG_COLOR,
-                active_color=_BUTTON_BG,
-                inactive_color=_INSTRUCTION_COLOR,
+                active_color=self.preferences_palette.tab_active_text,
+                inactive_color=self.preferences_palette.tab_inactive_text,
                 focus_color=DARK_THEME.entry_focus_border,
                 font=self.action_font,
+                active_font=self.action_font,
+                inactive_font=self.body_font,
             ),
             style=TopTabbedContentSurfaceStyle(
                 background_color=_BG_COLOR,
@@ -1219,6 +1308,10 @@ class PreferencesPanel:
         self.tab_strip = surface.tab_strip
         body = surface.content
 
+        # Create the page host before the footer so Tk traverses page controls
+        # before footer actions, while packing the footer first still protects
+        # it from clipping in height-limited windows.
+        self.page_scroll_shell = tk.Frame(body, bg=_BG_COLOR)
         self.button_row = tk.Frame(body, bg=_BG_COLOR)
         # Pack the action row before the page stack so a height-limited
         # Windows dialog shrinks form content first instead of clipping
@@ -1226,28 +1319,27 @@ class PreferencesPanel:
         self.button_row.pack(
             side="bottom",
             fill="x",
-            pady=(self._layout_policy.button_row_top_pad_y, 0),
+            pady=(self.preferences_metrics.footer_top_gap_y, 0),
         )
 
-        self.discard_button = self._new_dialog_button(
+        self.discard_button = self._new_preferences_action(
             self.button_row,
             "Discard changes",
             self.discard_changes,
-            padx=12,
-            pady=6,
+            kind="secondary",
         )
-        self.apply_button = self._new_dialog_button(
+        self.apply_button = self._new_preferences_action(
             self.button_row,
             "Save changes",
             self.apply,
             kind="primary",
-            padx=16,
-            pady=6,
-            default="active",
         )
 
         self.apply_button.pack(side="right")
-        self.discard_button.pack(side="right", padx=(0, 8))
+        self.discard_button.pack(
+            side="right",
+            padx=(0, self.preferences_metrics.footer_action_gap_x),
+        )
 
         self.feedback_frame = tk.Frame(self.button_row, bg=_BG_COLOR)
         self.feedback_frame.pack(side="left", fill="x", expand=True)
@@ -1268,7 +1360,6 @@ class PreferencesPanel:
             padx=(_INLINE_FEEDBACK_PAD_X, _INLINE_FEEDBACK_PAD_X),
         )
 
-        self.page_scroll_shell = tk.Frame(body, bg=_BG_COLOR)
         self.page_scroll_shell.pack(side="top", fill="both", expand=True)
         self.page_scroll_shell.grid_rowconfigure(0, weight=1)
         self.page_scroll_shell.grid_columnconfigure(0, weight=1)
@@ -1321,16 +1412,24 @@ class PreferencesPanel:
         self.error_label.config(text=message, fg=color)
 
     def _set_apply_enabled(self, enabled: bool) -> None:
-        set_dialog_action_button(self.apply_button, enabled=enabled)
+        self._set_action_enabled(self.apply_button, enabled=enabled)
+
+    @staticmethod
+    def _set_action_enabled(
+        button: RoundedActionButton,
+        *,
+        enabled: bool,
+    ) -> None:
+        button.set_enabled(enabled)
 
     def _render_dirty_state(self, state: PreferencesFormState) -> None:
         """Keep pending changes visible across tab navigation."""
         has_changes = state.has_unsaved_changes
-        set_dialog_action_button(
+        self._set_action_enabled(
             self.apply_button,
             enabled=has_changes and state.apply_enabled,
         )
-        set_dialog_action_button(self.discard_button, enabled=has_changes)
+        self._set_action_enabled(self.discard_button, enabled=has_changes)
         if self.tab_strip is not None:
             self.tab_strip.set_indicated(state.dirty_sections)
         fields_by_key = {field.key: field for field in PREFERENCE_FIELDS}
@@ -1339,37 +1438,13 @@ class PreferencesPanel:
             label.configure(text=f"{fields_by_key[key].label}{suffix}")
 
     def _set_field_lock(self, invalid_key: str | None) -> None:
-        for key, entry in self.field_entries.items():
+        for key in self.field_entries:
             enabled = invalid_key is None or key == invalid_key
-            entry.config(
-                state=self.field_entry_states[key] if enabled else "readonly",
-                highlightbackground=(
-                    DARK_THEME.invalid_border
-                    if key == invalid_key
-                    else DARK_THEME.entry_border
-                ),
-                highlightcolor=(
-                    DARK_THEME.invalid_border
-                    if key == invalid_key
-                    else DARK_THEME.entry_focus_border
-                ),
+            rounded_control = self.rounded_field_controls[key]
+            rounded_control.set_state(
+                self.field_entry_states[key] if enabled else "disabled"
             )
-            compound_control = getattr(
-                self, "field_compound_controls", {}
-            ).get(key)
-            if compound_control is not None:
-                compound_control.configure(
-                    bg=(
-                        DARK_THEME.invalid_border
-                        if key == invalid_key
-                        else DARK_THEME.entry_border
-                    )
-                )
-        for key, browse_button in self.field_browse_buttons.items():
-            set_dialog_action_button(
-                browse_button,
-                enabled=invalid_key is None or key == invalid_key,
-            )
+            rounded_control.set_invalid(key == invalid_key)
 
     def _focus_invalid_field(
         self, key: str, *, select_value: bool = False
@@ -1378,11 +1453,21 @@ class PreferencesPanel:
         if page_key is not None:
             self._show_page(page_key)
 
+        self._cancel_after_callback("_invalid_focus_after_id")
+
         def focus() -> None:
-            entry = self.field_entries.get(key)
-            if entry is None or not entry.winfo_exists():
+            self._invalid_focus_after_id = None
+            if getattr(self, "_destroyed", False):
                 return
-            entry.focus_set()
+            entry = self.field_entries.get(key)
+            if entry is None:
+                return
+            try:
+                if not entry.winfo_exists():
+                    return
+                entry.focus_set()
+            except tk.TclError:
+                return
             if (
                 select_value
                 and self.field_entry_states.get(key) == "normal"
@@ -1390,7 +1475,10 @@ class PreferencesPanel:
             ):
                 entry.selection_range(0, "end")
 
-        self.dialog.after_idle(focus)
+        try:
+            self._invalid_focus_after_id = self.dialog.after_idle(focus)
+        except tk.TclError:
+            self._invalid_focus_after_id = None
 
     def _render_form_state(
         self,
@@ -1490,7 +1578,11 @@ class PreferencesPanel:
                     self.numeric_placeholder_keys.discard(key)
                     if display_var.get() != value:
                         display_var.set(value)
-                    entry.configure(fg=_SUBTITLE_COLOR)
+                    rounded_control = getattr(
+                        self, "rounded_field_controls", {}
+                    ).get(key)
+                    if rounded_control is not None:
+                        rounded_control.set_placeholder(False)
                 elif key not in self.numeric_placeholder_keys:
                     if display_var.get():
                         display_var.set("")
@@ -1681,14 +1773,18 @@ class PreferencesPanel:
     def on_hidden(self) -> None:
         """Clear obsolete event confirmations when Preferences is left."""
         self._cancel_transient_feedback(clear=True)
+        self._cancel_after_callback("_invalid_focus_after_id")
+        self._cancel_after_callback("_scroll_restore_after_id")
 
     def focus_content(self) -> None:
         """Move keyboard focus into the active embedded Preferences view."""
         if self.form.state.invalid_key is not None:
             self._focus_invalid_field(self.form.state.invalid_key, select_value=True)
             return
-        if self.apply_button is not None:
-            self.apply_button.focus_set()
+        targets = self.page_focus_targets.get(self.active_page_key or "", ())
+        for target in targets:
+            if target.focus_set():
+                return
 
     def on_shown(self) -> None:
         """Recompute wrapping after the embedded surface receives its final width."""

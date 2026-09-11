@@ -1240,6 +1240,10 @@ def test_splash_navigation_actions_are_keyboard_accessible_without_fallthrough()
     assert "def _show_help_surface() -> None:" in source
     assert "_request_leave_preferences(_show_help_surface)" in source
     assert "PreferencesPanel(" in source
+    assert (
+        "typography=_embedded_panel_typography(),\n"
+        "            px=px,"
+    ) in source
     assert "HelpPanel(" in source
     assert "keyboard_control_sections(presentation_profile)" in source
     assert "TroubleshootingLogController(" in source
