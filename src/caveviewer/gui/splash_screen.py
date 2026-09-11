@@ -583,10 +583,11 @@ def _embedded_panel_typography() -> TkTypography:
 
 
 def _help_panel_style() -> HelpPanelStyle:
-    """Return the splash-owned style tokens for the quiet Keys table."""
+    """Return the splash-owned style tokens for the rounded Help cards."""
     typography = _embedded_panel_typography()
     return HelpPanelStyle(
         background_color=_BG_COLOR,
+        section_background_color=DARK_THEME.panel,
         tab_active_color=_BUTTON_BG,
         tab_focus_color=DARK_THEME.entry_focus_border,
         section_color=DARK_THEME.body_text,
@@ -595,9 +596,11 @@ def _help_panel_style() -> HelpPanelStyle:
         keycap_text_color=DARK_THEME.body_text,
         action_color=DARK_THEME.body_text,
         detail_color=DARK_THEME.secondary_text,
+        error_color=DARK_THEME.error_text,
         content_pad_x=_PRESENTATION_PROFILE.preferences_dialog_layout.body_pad_x,
         tab_font=typography.body_strong,
-        section_font=typography.section,
+        tab_inactive_font=typography.body,
+        section_font=typography.heading,
         keycap_font=typography.body_strong,
         action_font=typography.body,
         overview_font=typography.body_strong,
@@ -2297,6 +2300,7 @@ def _show_splash_composition(
             desktop_services=desktop_services,
             platform_runtime=platform_runtime,
             typography=_embedded_panel_typography(),
+            px=px,
             on_applied=_on_preferences_applied,
             on_cancel=_show_map_library_surface,
             initial_snapshot=(

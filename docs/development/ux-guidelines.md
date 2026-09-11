@@ -73,7 +73,8 @@ primitives remain documented in [design-system.md](design-system.md).
 - Use semantic typography roles from `caveviewer.gui.tk_typography`; do not
   introduce a new font size to solve a spacing problem.
 - Separate related content with the shared section-spacing tokens. Prefer
-  whitespace and alignment over decorative containers or divider lines.
+  whitespace and alignment unless a surface defines semantic grouping, such
+  as the Preferences card and between-item gap contract.
 - Align repeated labels, fields, actions, and descriptions to stable columns.
   Do not let label length move the beginning of adjacent content.
 - Give tabbed content one primary left edge shared by the tab label, section
@@ -132,18 +133,83 @@ primitives remain documented in [design-system.md](design-system.md).
 - Group fields by user goal and place related groups under semantic section
   labels. Tabs divide major preference domains; they do not replace grouping
   inside a dense page.
+- Present each Preferences group as one subtly raised section card with a
+  12-logical-pixel corner radius, consistent internal padding, and one shared
+  left and right edge beneath the tabs. Use title-case semantic headings; do
+  not add amber card borders or decoration.
+- Name the Streaming groups **Memory Use**, **CPU Use**, and **Frame Loading**.
+  Place one short, app-neutral purpose statement beneath each heading before
+  its fields.
+- Name the Import groups **Map Processing** and **CPU Use**. Use the same short,
+  app-neutral purpose statement beneath each heading before its fields.
+- Keep the Storage group named **Locations** and introduce it with a short,
+  app-neutral purpose statement that does not repeat its field descriptions.
+- Name the Backup groups **Save & Load** and **Reset**. Use short,
+  plain-language purpose statements that distinguish saved preference files
+  from restoring default values. Keep all card headings and purpose lines in
+  sync with the canonical mapping in `design-system.md`.
+- Stack an ordinary preference field in this order: strong label, supporting
+  description, and control row. Keep numeric controls left-aligned, place their
+  semantic unit immediately to the right on the same baseline, and show the
+  acceptable value range only in the entry placeholder.
+- Separate consecutive fields and actions inside a Preferences card with a
+  compact 20-logical-pixel gap. Do not draw between-field dividers or append an
+  explanatory footer after the final field.
 - Keep numeric inputs compact and path inputs wide enough to recognize the
   selected location.
+- Use a 4-logical-pixel corner radius for Preferences fields and actions. Show
+  hover, pressed, focus, invalid, read-only, and disabled states through the
+  shared semantic theme roles; focus and invalid borders follow the same
+  rounded outline.
 - Present a directory path and its **Browse** action as one compound control:
   one outer border, one internal seam, matching height, and one shared focus or
   invalid-state treatment. The read-only path remains text; the action retains
   its full keyboard-focusable target.
+- Keep Preferences tabs as text navigation above the cards. The active tab uses
+  bold amber text; inactive tabs remain muted. Tabs do not become pills,
+  section cards, or use an underline.
 - Preserve pending values while moving between tabs. Show dirty state without
   replacing labels or field contents with transient status text.
 - Keep **Save** and **Discard** available in a stable action area. When vertical
   space is constrained, form content scrolls before the action area is clipped.
+- When keyboard focus enters Preferences, place it on the first available
+  control in the active page. Traverse page controls before the footer actions,
+  and support both Return and Space on every action, including **Browse**.
 - Validation identifies the affected field, moves to its tab when necessary,
   and retains the message until the user corrects or replaces it.
+- Cancel deferred focus and scroll restoration when Preferences is hidden or
+  destroyed so a stale callback cannot move focus or scroll a replacement
+  surface.
+
+## Help
+
+- Keep **Keys**, **Capture**, and **Troubleshooting** as text tabs above the
+  content. Use bold amber text for the active tab and regular muted text for
+  inactive tabs; do not add an underline, pill, or tab card.
+- Align the first Help tab with the first Preferences tab at the shared shell
+  origin. Both surfaces must use the same display-scale helper so switching
+  between them does not move the tab row.
+- Present each Help group as a subtly raised card with a 12-logical-pixel corner
+  radius, 22-logical-pixel internal padding, and a 20-logical-pixel gap before
+  the next card. Use title-case headings, short purpose lines, and no dividers.
+- Keep descriptions to two lines or fewer at the ordinary shell width. Shorten
+  redundant copy before changing type size, card width, or spacing.
+- Keep shortcut rows on a stable keycap lane and flexible action lane. Use
+  4-logical-pixel keycap corners and preserve the documented geometric key
+  spans and centered labels. Stack the action below the keycap at compact widths
+  before either lane clips.
+- Keep Capture artifact explanations subordinate to the action label. Preserve
+  platform-specific shortcuts and destructive-cancellation meaning while using
+  the concise copy defined in `help_style.py` and `help_panel.py`.
+- Use the shared 4-logical-pixel rounded action treatment for troubleshooting
+  actions. Preserve visible focus, keyboard activation, disabled state, stable
+  action labels, and adjacent transient copy confirmation.
+- Present the last error inside a subordinate rounded container with semantic
+  text and border colors. Recompute wrapping, card height, scrolling, and
+  overflow whenever the width or troubleshooting state changes.
+- Reset a newly selected Help tab to the top and cancel transient confirmation
+  state when Help is hidden. Repeated redraws must replace only Help-owned
+  canvas items and must not leak widgets or callbacks.
 
 ## Dialogs and confirmations
 

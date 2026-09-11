@@ -804,9 +804,9 @@ def test_obj_import_batch_preference_maps_thousands_to_faces_env(
 def test_preferences_panel_uses_extracted_settings_logic():
     from caveviewer.gui import preferences_dialog, preferences_form, splash_screen
 
-    assert preferences_dialog._NUMERIC_ENTRY_WIDTH == 6
+    assert preferences_dialog.PREFERENCES_VISUAL_METRICS.numeric_control_width == 100
     assert preferences_dialog._SCROLLBAR_GUTTER_X == 18
-    assert preferences_dialog._CONTROL_GAP_X == 10
+    assert preferences_dialog.PREFERENCES_VISUAL_METRICS.unit_gap_x == 10
     assert preferences_dialog.PREFERENCE_FIELDS is settings.PREFERENCE_FIELDS
     assert (
         preferences_dialog.preference_placeholder_text
@@ -852,22 +852,37 @@ def test_preferences_panel_exposes_backup_and_restore_as_a_separate_tab():
     backup_source = inspect.getsource(
         preferences_dialog.PreferencesPanel._render_backup_restore
     )
-    assert 'page_key == "backup"' in ensure_source
-    assert 'title="Save preferences"' in backup_source
-    assert 'description="Save preferences to a file."' in backup_source
-    assert 'button_text="Save"' in backup_source
-    assert 'title="Load preferences"' in backup_source
-    assert 'description="Load preferences from a file."' in backup_source
-    assert 'button_text="Load"' in backup_source
-    assert 'title="Restore defaults"' in backup_source
-    assert (
-        'description="Restore default import and streaming settings."'
-        in backup_source
-    )
-    assert 'button_text="Restore"' in backup_source
-    assert "width=_BACKUP_ACTION_BUTTON_WIDTH" in inspect.getsource(
+    backup_action_source = inspect.getsource(
         preferences_dialog.PreferencesPanel._render_backup_action
     )
+    assert 'page_key == "backup"' in ensure_source
+    assert '"Save & Load"' in backup_source
+    assert '"Reset"' in backup_source
+    assert 'description=_PREFERENCE_SECTION_DESCRIPTIONS["backup"][title]' in (
+        backup_source
+    )
+    assert 'page_key="backup"' in backup_source
+    assert preferences_dialog._PREFERENCE_SECTION_DESCRIPTIONS["backup"] == {
+        "Save & Load": (
+            "Keep a copy of your preferences or use one saved earlier."
+        ),
+        "Reset": (
+            "Return import and streaming preferences to their default values."
+        ),
+    }
+    assert '"Save preferences"' in backup_source
+    assert '"Save preferences to a file."' in backup_source
+    assert '"Save"' in backup_source
+    assert '"Load preferences"' in backup_source
+    assert '"Load preferences from a file."' in backup_source
+    assert '"Load"' in backup_source
+    assert '"Restore defaults"' in backup_source
+    assert '"Restore default import and streaming settings."' in backup_source
+    assert '"Restore"' in backup_source
+    assert "self._new_preference_card(" in backup_source
+    assert "self._render_card_item_gap(actions_host)" in backup_source
+    assert "_render_card_divider" not in backup_source
+    assert "self._new_preferences_action(" in backup_action_source
 
 
 def test_preferences_panel_uses_dirty_controls_without_generic_status_message():
@@ -1279,8 +1294,8 @@ def test_preferences_panel_uses_compact_tabbed_pages():
     render_field_source = inspect.getsource(
         preferences_dialog.PreferencesPanel._render_field
     )
-    section_pack_source = inspect.getsource(
-        preferences_dialog.PreferenceSectionContainer.pack
+    card_source = inspect.getsource(
+        preferences_dialog.PreferencesPanel._new_preference_card
     )
     page_keys = [page[0] for page in preferences_dialog._PREFERENCE_PAGES]
     page_labels = [page[1] for page in preferences_dialog._PREFERENCE_PAGES]
@@ -1301,11 +1316,10 @@ def test_preferences_panel_uses_compact_tabbed_pages():
     assert "Guided Dive" not in module_source
     assert "_render_guided_dive_disclaimer" not in module_source
     assert "compact_path = value_type in {" in render_field_source
-    assert "ipady=_COMPACT_PATH_CONTROL_PAD_Y" in render_field_source
-    assert "self.field_compound_controls[key] = entry_parent" in render_field_source
-    assert "browse_button.configure(borderwidth=0, highlightthickness=0)" in render_field_source
-    assert 'padx=(1, 1)' in render_field_source
-    assert 'pady=1' in render_field_source
+    assert "RoundedEntryControl(" in render_field_source
+    assert 'action_text="Browse" if compact_path else None' in render_field_source
+    assert 'state="readonly" if compact_path else "normal"' in render_field_source
+    assert 'rounded_entry.pack(fill="x")' in render_field_source
     assert "grid_remove()" in show_page_source
     assert "candidate_page.tkraise()" not in show_page_source
     assert "self._ensure_page(page_key)" in show_page_source
@@ -1315,7 +1329,7 @@ def test_preferences_panel_uses_compact_tabbed_pages():
     assert "self.button_row.pack(" in source
     assert "self.page_scroll_shell.pack(side=\"top\", fill=\"both\", expand=True)" in source
     assert "TopTabbedContentSurface(" in source
-    assert "padx=(self._px(TABBED_CONTENT_ALIGNMENT_INSET), 0)" in section_pack_source
+    assert "padx=(self._surface_px(TABBED_CONTENT_ALIGNMENT_INSET), 0)" in card_source
     assert "on_selected=self._show_page" in source
     assert "self.tab_strip.select(page_key, notify=False)" in show_page_source
     assert "CanvasVerticalScrollbar(" in source
@@ -1425,54 +1439,47 @@ def test_preferences_page_switch_maps_only_the_selected_page():
     assert layout_requests == [True]
 
 
-def test_preferences_compound_path_control_preserves_focus_and_invalid_borders():
+def test_preferences_field_lock_updates_compound_path_shell():
     from caveviewer.gui import preferences_dialog
 
-    colors = []
-    shell = SimpleNamespace(configure=lambda **options: colors.append(options["bg"]))
+    states = []
+    invalid_states = []
+    rounded = SimpleNamespace(
+        set_state=states.append,
+        set_invalid=invalid_states.append,
+    )
     panel = object.__new__(preferences_dialog.PreferencesPanel)
-    panel.field_compound_controls = {"recording_dir": shell}
-    panel.rendered_invalid_key = None
-
-    panel._set_compound_focus("recording_dir", focused=True)
-    panel._set_compound_focus("recording_dir", focused=False)
-    panel.rendered_invalid_key = "recording_dir"
-    panel._set_compound_focus("recording_dir", focused=False)
-
-    assert colors == [
-        preferences_dialog.DARK_THEME.entry_focus_border,
-        preferences_dialog.DARK_THEME.entry_border,
-        preferences_dialog.DARK_THEME.invalid_border,
-    ]
-
-
-def test_preferences_field_lock_updates_compound_path_border():
-    from caveviewer.gui import preferences_dialog
-
-    entry_updates = []
-    shell_updates = []
-    panel = object.__new__(preferences_dialog.PreferencesPanel)
-    panel.field_entries = {
-        "recording_dir": SimpleNamespace(
-            config=lambda **options: entry_updates.append(options)
-        )
-    }
+    panel.field_entries = {"recording_dir": object()}
     panel.field_entry_states = {"recording_dir": "readonly"}
-    panel.field_compound_controls = {
-        "recording_dir": SimpleNamespace(
-            configure=lambda **options: shell_updates.append(options)
-        )
-    }
-    panel.field_browse_buttons = {}
+    panel.rounded_field_controls = {"recording_dir": rounded}
 
     panel._set_field_lock("recording_dir")
+    panel._set_field_lock("another_field")
     panel._set_field_lock(None)
 
-    assert entry_updates[0]["state"] == "readonly"
-    assert shell_updates == [
-        {"bg": preferences_dialog.DARK_THEME.invalid_border},
-        {"bg": preferences_dialog.DARK_THEME.entry_border},
-    ]
+    assert states == ["readonly", "disabled", "readonly"]
+    assert invalid_states == [True, False, False]
+
+
+def test_preferences_field_lock_routes_streaming_state_through_rounded_shells():
+    from caveviewer.gui import preferences_dialog
+
+    states = []
+    invalid_states = []
+    rounded = SimpleNamespace(
+        set_state=states.append,
+        set_invalid=invalid_states.append,
+    )
+    panel = object.__new__(preferences_dialog.PreferencesPanel)
+    panel.field_entries = {"io_workers": object()}
+    panel.field_entry_states = {"io_workers": "normal"}
+    panel.rounded_field_controls = {"io_workers": rounded}
+
+    panel._set_field_lock("io_workers")
+    panel._set_field_lock(None)
+
+    assert states == ["normal", "normal"]
+    assert invalid_states == [True, False]
 
 
 def test_preferences_layout_requests_are_coalesced_and_cancelled_on_destroy():
@@ -1483,6 +1490,8 @@ def test_preferences_layout_requests_are_coalesced_and_cancelled_on_destroy():
     panel = object.__new__(preferences_dialog.PreferencesPanel)
     panel._destroyed = False
     panel._page_layout_after_id = None
+    panel._invalid_focus_after_id = "focus-1"
+    panel._scroll_restore_after_id = "scroll-1"
     panel._pending_page_canvas_width = None
     panel.dialog = SimpleNamespace(
         after_idle=lambda callback: callbacks.append(callback) or "layout-1",
@@ -1501,7 +1510,46 @@ def test_preferences_layout_requests_are_coalesced_and_cancelled_on_destroy():
 
     assert panel._destroyed is True
     assert panel._page_layout_after_id is None
-    assert cancelled == ["layout-1"]
+    assert panel._invalid_focus_after_id is None
+    assert panel._scroll_restore_after_id is None
+    assert cancelled == ["layout-1", "focus-1", "scroll-1"]
+
+
+def test_preferences_scrollbar_tracks_active_page_overflow_without_repeat_work():
+    from caveviewer.gui import preferences_dialog
+
+    scroll_regions = []
+    overflow_heights = []
+    canvas = SimpleNamespace(
+        winfo_width=lambda: 480,
+        winfo_height=lambda: 360,
+        configure=lambda **options: scroll_regions.append(options),
+    )
+    panel = object.__new__(preferences_dialog.PreferencesPanel)
+    panel.page_canvas = canvas
+    panel.page_stack = SimpleNamespace(winfo_reqheight=lambda: 1)
+    panel.page_scrollbar = SimpleNamespace(
+        sync_overflow=overflow_heights.append,
+    )
+    panel.pages = {
+        "streaming": SimpleNamespace(winfo_reqheight=lambda: 720),
+        "storage": SimpleNamespace(winfo_reqheight=lambda: 240),
+    }
+    panel.active_page_key = "streaming"
+    panel._page_scroll_region = None
+    panel._scrollbar_layout_state = None
+
+    panel._sync_page_scrollbar()
+    panel._sync_page_scrollbar()
+
+    assert scroll_regions == [{"scrollregion": (0, 0, 480, 720)}]
+    assert overflow_heights == [720]
+
+    panel.active_page_key = "storage"
+    panel._sync_page_scrollbar()
+
+    assert scroll_regions[-1] == {"scrollregion": (0, 0, 480, 240)}
+    assert overflow_heights[-1] == 240
 
 
 def test_preferences_layout_waits_for_canvas_width_before_measuring_hints():
@@ -1669,6 +1717,7 @@ def test_preferences_rewraps_when_the_active_page_reaches_its_final_width():
     panel.field_entries = {"io_workers": _FakeEntry()}
     panel.field_page_keys = {"io_workers": "streaming"}
     panel._layout_policy = SimpleNamespace(row_pad_x=18)
+    panel.preferences_metrics = SimpleNamespace(section_padding_x=22)
     panel._surface_px = int
     panel._schedule_page_layout_sync = lambda: scheduled.append(True)
 
@@ -1678,7 +1727,7 @@ def test_preferences_rewraps_when_the_active_page_reaches_its_final_width():
     panel._on_page_configured("streaming", 800, 580)
 
     assert scheduled == [True, True]
-    assert label.configure_calls == [{"wraplength": 678}]
+    assert label.configure_calls == [{"wraplength": 740}]
 
 
 def test_preferences_feedback_wraplength_avoids_repeating_identical_geometry_work():
@@ -1727,39 +1776,57 @@ def test_preferences_visual_groups_cover_each_schema_field_once():
     assert grouped_fields == list(preferences_dialog.PREFERENCE_FIELDS)
 
 
-def test_preferences_groups_use_the_standard_section_container():
+def test_every_preferences_field_page_uses_the_shared_rounded_card_renderer():
     from caveviewer.gui import preferences_dialog
-    from caveviewer.gui.section_spacing import (
-        PRIMARY_SURFACE_VERTICAL_MARGIN,
-        STANDARD_CONTENT_SECTION_SPACING,
-    )
 
-    container_source = inspect.getsource(
-        preferences_dialog.PreferenceSectionContainer
-    )
     render_section_source = inspect.getsource(
         preferences_dialog.PreferencesPanel._render_section
     )
+    card_source = inspect.getsource(
+        preferences_dialog.PreferencesPanel._new_preference_card
+    )
+    gap_source = inspect.getsource(
+        preferences_dialog.PreferencesPanel._render_card_item_gap
+    )
 
-    assert STANDARD_CONTENT_SECTION_SPACING.heading_to_content_y == 13
-    assert STANDARD_CONTENT_SECTION_SPACING.between_sections_y == 26
-    assert PRIMARY_SURFACE_VERTICAL_MARGIN == 14
-    assert "text=title.upper()" in container_source
-    assert "DARK_THEME.entry_border" not in container_source
-    assert "STANDARD_CONTENT_SECTION_SPACING.heading_to_content_y" in container_source
-    assert "STANDARD_CONTENT_SECTION_SPACING.between_sections_y" in container_source
-    assert "PreferenceSectionContainer(" in render_section_source
-    assert "group.content" in render_section_source
+    assert "_preference_field_groups(section_key)" in render_section_source
+    assert "self._new_preference_card(" in render_section_source
+    assert "self._render_field(fields_host, field)" in render_section_source
+    assert "self._render_card_item_gap(fields_host)" in render_section_source
+    assert "_render_card_divider" not in render_section_source
+    assert "card_item_gap_y" in gap_source
+    assert "field_to_divider_y" not in gap_source
+    assert "divider_to_field_y" not in gap_source
+    assert "RoundedSectionSurface(" in card_source
+    assert "text=title" in card_source
+    assert "text=title.upper()" not in card_source
 
 
 def test_preferences_uses_the_shared_primary_surface_origin():
     from caveviewer.gui import preferences_dialog
 
+    init_source = inspect.getsource(preferences_dialog.PreferencesPanel.__init__)
+    scale_source = inspect.getsource(
+        preferences_dialog.PreferencesPanel._surface_px
+    )
     source = inspect.getsource(preferences_dialog.PreferencesPanel._build)
 
+    assert "self._layout_px = px" in init_source
+    assert "if self._layout_px is not None:" in scale_source
+    assert "self._layout_px(value)" in scale_source
     assert "content_pad_left_x=0" in source
     assert "content_pad_right_x=self._layout_policy.body_pad_x" in source
     assert "pady=self._surface_px(PRIMARY_SURFACE_VERTICAL_MARGIN)" in source
+
+
+def test_preferences_surface_scale_preserves_the_shell_zero_origin():
+    from caveviewer.gui import preferences_dialog
+
+    panel = object.__new__(preferences_dialog.PreferencesPanel)
+    panel._layout_px = lambda value: round(float(value) * 1.425)
+
+    assert panel._surface_px(0) == 0
+    assert panel._surface_px(12) == 17
 
 
 def test_preferences_panel_uses_sidebar_context_and_full_width_forms():
@@ -1770,21 +1837,198 @@ def test_preferences_panel_uses_sidebar_context_and_full_width_forms():
     section_source = inspect.getsource(
         preferences_dialog.PreferencesPanel._render_section
     )
+    card_source = inspect.getsource(
+        preferences_dialog.PreferencesPanel._new_preference_card
+    )
 
     assert 'text="Preferences"' not in build_source
     assert 'section.pack(fill="x")' in section_source
 
 
-def test_preferences_panel_aligns_entry_controls_without_inline_units():
+def test_preferences_keyboard_traversal_enters_page_before_footer_actions():
     from caveviewer.gui import preferences_dialog
 
-    render_field_source = inspect.getsource(
+    build_source = inspect.getsource(preferences_dialog.PreferencesPanel._build)
+
+    assert build_source.index("self.page_scroll_shell = tk.Frame(") < (
+        build_source.index("self.button_row = tk.Frame(")
+    )
+    assert build_source.index('self.button_row.pack(') < build_source.index(
+        'self.page_scroll_shell.pack(side="top", fill="both", expand=True)'
+    )
+
+
+def test_preferences_focus_content_uses_first_available_active_page_control():
+    from caveviewer.gui import preferences_dialog
+
+    focus_attempts = []
+    unavailable = SimpleNamespace(
+        focus_set=lambda: focus_attempts.append("unavailable") or False
+    )
+    available = SimpleNamespace(
+        focus_set=lambda: focus_attempts.append("available") or True
+    )
+    skipped = SimpleNamespace(
+        focus_set=lambda: focus_attempts.append("skipped") or True
+    )
+    panel = object.__new__(preferences_dialog.PreferencesPanel)
+    panel.form = SimpleNamespace(state=SimpleNamespace(invalid_key=None))
+    panel.active_page_key = "streaming"
+    panel.page_focus_targets = {
+        "streaming": [unavailable, available, skipped],
+    }
+
+    panel.focus_content()
+
+    assert focus_attempts == ["unavailable", "available"]
+
+
+def test_streaming_fields_match_reference_units_and_order():
+    from caveviewer.gui import preferences_dialog
+
+    fields = [
+        field
+        for _title, group_fields in preferences_dialog._preference_field_groups(
+            "streaming"
+        )
+        for field in group_fields
+    ]
+    presentations = {
+        field.key: preferences_dialog._preference_field_presentation(field)
+        for field in fields
+    }
+
+    assert [
+        title
+        for title, _fields in preferences_dialog._preference_field_groups(
+            "streaming"
+        )
+    ] == ["Memory Use", "CPU Use", "Frame Loading"]
+    streaming_descriptions = preferences_dialog._PREFERENCE_SECTION_DESCRIPTIONS[
+        "streaming"
+    ]
+    assert streaming_descriptions == {
+        "Memory Use": "Control system and graphics memory limits.",
+        "CPU Use": "Control processor capacity used for loading.",
+        "Frame Loading": "Control how much map data is loaded per frame.",
+    }
+
+    assert [field.key for field in fields] == [
+        "memory_target_percent",
+        "gpu_memory_target_percent",
+        "gpu_memory_gb",
+        "io_workers",
+        "io_reserved_cpus",
+        "upload_chunks_per_frame",
+        "upload_groups_per_frame",
+        "upload_time_budget_ms",
+    ]
+    assert {key: value.inline_unit for key, value in presentations.items()} == {
+        "memory_target_percent": "%",
+        "gpu_memory_target_percent": "%",
+        "gpu_memory_gb": "GB",
+        "io_workers": "",
+        "io_reserved_cpus": "",
+        "upload_chunks_per_frame": "",
+        "upload_groups_per_frame": "",
+        "upload_time_budget_ms": "ms",
+    }
+
+
+def test_import_and_storage_fields_share_units_and_card_anatomy():
+    from caveviewer.gui import preferences_dialog
+
+    assert [
+        title
+        for title, _fields in preferences_dialog._preference_field_groups(
+            "parsing"
+        )
+    ] == ["Map Processing", "CPU Use"]
+    import_descriptions = preferences_dialog._PREFERENCE_SECTION_DESCRIPTIONS[
+        "parsing"
+    ]
+    assert import_descriptions == {
+        "Map Processing": (
+            "Control how map data is divided and processed during import."
+        ),
+        "CPU Use": (
+            "Control processor capacity used to prepare imported map data."
+        ),
+    }
+    assert preferences_dialog._PREFERENCE_SECTION_DESCRIPTIONS["storage"] == {
+        "Locations": "Manage where local files are kept.",
+    }
+
+    presentations = {
+        field.key: preferences_dialog._preference_field_presentation(field)
+        for field in preferences_dialog.PREFERENCE_FIELDS
+        if field.section in {"parsing", "storage"}
+    }
+
+    assert {key: value.inline_unit for key, value in presentations.items()} == {
+        "chunk_size_meters": "",
+        "max_upload_group_mb": "MB",
+        "obj_scan_throttle_ms": "ms",
+        "obj_import_batch_thousands": "thousand faces",
+        "chunk_build_workers": "",
+        "chunk_build_reserved_cpus": "",
+        "recording_dir": "",
+        "map_library_dir": "",
+    }
+
+
+def test_every_preferences_action_uses_the_shared_rounded_control_contract():
+    from caveviewer.gui import preferences_dialog
+
+    field_source = inspect.getsource(
         preferences_dialog.PreferencesPanel._render_field
     )
-    panel_source = inspect.getsource(preferences_dialog.PreferencesPanel)
+    backup_source = inspect.getsource(
+        preferences_dialog.PreferencesPanel._render_backup_action
+    )
+    build_source = inspect.getsource(preferences_dialog.PreferencesPanel._build)
 
-    assert "self._form_row_gap()" in render_field_source
-    assert "_inline_unit_text" not in panel_source
+    assert 'action_text="Browse" if compact_path else None' in field_source
+    assert "self._new_preferences_action(" in backup_source
+    assert build_source.count("self._new_preferences_action(") == 2
+
+
+def test_streaming_reference_uses_stacked_rounded_controls():
+    from caveviewer.gui import preferences_dialog
+
+    field_source = inspect.getsource(
+        preferences_dialog.PreferencesPanel._render_field
+    )
+    section_source = inspect.getsource(
+        preferences_dialog.PreferencesPanel._render_section
+    )
+    card_source = inspect.getsource(
+        preferences_dialog.PreferencesPanel._new_preference_card
+    )
+    build_source = inspect.getsource(preferences_dialog.PreferencesPanel._build)
+
+    assert "RoundedEntryControl(" in field_source
+    assert "presentation.inline_unit" in field_source
+    assert "presentation.constraint" not in field_source
+    assert "field_label_to_description_y" in field_source
+    assert "field_description_to_control_y" in field_source
+    assert "control_to_metadata_y" not in field_source
+    assert "section_heading_to_fields_y" in card_source
+    assert "section_heading_to_description_y" in card_source
+    assert "section_description_to_fields_y" in card_source
+    assert "self.page_hint_labels.setdefault(page_key" in card_source
+    assert "_STREAMING_LOADING_FOOTER" not in inspect.getsource(
+        preferences_dialog
+    )
+    assert 'title == "Loading"' not in section_source
+    assert "footer=True" not in section_source
+    assert "RoundedActionButton" in inspect.getsource(
+        preferences_dialog.PreferencesPanel._new_preferences_action
+    )
+    assert "footer_action_gap_x" in build_source
+    assert "active_font=self.action_font" in build_source
+    assert "inactive_font=self.body_font" in build_source
+    assert "active_indicator" not in build_source
 
 
 def test_preferences_panel_uses_the_shared_tabbed_content_surface():

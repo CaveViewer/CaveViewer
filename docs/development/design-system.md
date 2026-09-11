@@ -77,14 +77,12 @@ Windows physical-density factor.
 - Cave details use `display` only for the cave name, `body` for facts and
   sources, `body_strong` for statistic values, `supporting` for its location
   and disclaimer, and `section` for section labels.
-- Preferences use `body` for fields and tabs, `body_strong` for buttons, and
-  `supporting` for field hints and feedback.
-- Preferences and Help render related groups with the standard section
-  spacing: an uppercase `section` label, 13 logical pixels before its first
-  content row, and 26 logical pixels before the next group. Use the active
-  UI scaling helper or spacing token rather than device-pixel literals. Do not
-  add heading rules, cards, amber section decoration, or shortcut-row rules in
-  Help; use whitespace to separate its rows.
+- Preferences use `body_strong` for the active tab, field labels, and actions;
+  `body` for inactive tabs, values, and inline units; `heading` for title-case
+  card headings; and `supporting` for descriptions and feedback.
+- Help uses `body_strong` for the active tab, keycaps, and emphasized actions;
+  `body` for inactive tabs and ordinary actions; `heading` for title-case card
+  headings; and `supporting` for purpose lines, details, and status text.
 - Tk and OpenGL Help keycaps use geometric unit spans. One unit (`1u`) is the
   standard single-key cap; an `n`-unit cap is exactly `n` single-key widths plus
   the `n - 1` ordinary gaps those keys would contain as a row. Compact named
@@ -100,6 +98,133 @@ Windows physical-density factor.
 Text hierarchy should come first from role, then from color and spacing.
 Do not create a new font size merely to distinguish a control state; use the
 appropriate weight, color, or interaction treatment instead.
+
+## Preferences visual contract
+
+`caveviewer.gui.preferences_style` is the canonical source for Preferences
+geometry, semantic palette mappings, and typography-role names. Its metrics are
+logical pixels. A composed Preferences surface converts the complete metrics
+snapshot through its active display-scale helper exactly once; scaled metrics
+cannot be scaled again.
+
+| Relationship | Logical value |
+| --- | ---: |
+| Control corner radius | 4 |
+| Section-card corner radius | 12 |
+| Section-card horizontal and vertical padding | 22 |
+| Gap between section cards | 20 |
+| Card heading to first field | 24 |
+| Card heading to section description | 8 |
+| Section description to first field | 20 |
+| Field label to description | 6 |
+| Field description to control row | 14 |
+| Control height | 40 |
+| Compact numeric-control width | 100 |
+| Minimum action width | 140 |
+| Control horizontal content padding | 12 |
+| Inline unit gap | 10 |
+| Gap between fields or actions in one card | 20 |
+| Compound-control seam thickness | 1 |
+| Preferences footer top gap | 20 |
+| Gap between footer actions | 10 |
+| Ordinary / focused control border | 1 / 2 |
+
+Preferences keeps its four text tabs outside the cards. The active tab uses
+`body_strong` and amber text; inactive tabs use `body` and muted text. Tabs
+remain keyboard-focusable navigation and do not become pills, cards, or use
+an underline.
+
+Each preference group is a subtly raised panel-colored card with a
+12-logical-pixel radius. Cards share one left and right edge beneath the tabs,
+use title-case `heading` labels, and remain separated by a 20-logical-pixel
+vertical gap. Amber decoration is reserved for active navigation and primary
+actions rather than section surfaces. Streaming uses **Memory Use**, **CPU
+Use**, and **Frame Loading** headings. Each has one `supporting` purpose line
+beneath its heading. Import uses **Map Processing** and **CPU Use** with the
+same purpose-line treatment. Storage uses **Locations** with a short purpose
+line that introduces the group without repeating either field description.
+Backup uses **Save & Load** and **Reset**, each with a short plain-language
+purpose line beneath its heading.
+
+| Tab | Card heading | Purpose line |
+| --- | --- | --- |
+| Streaming | **Memory Use** | Control system and graphics memory limits. |
+| Streaming | **CPU Use** | Control processor capacity used for loading. |
+| Streaming | **Frame Loading** | Control how much map data is loaded per frame. |
+| Import | **Map Processing** | Control how map data is divided and processed during import. |
+| Import | **CPU Use** | Control processor capacity used to prepare imported map data. |
+| Storage | **Locations** | Manage where local files are kept. |
+| Backup | **Save & Load** | Keep a copy of your preferences or use one saved earlier. |
+| Backup | **Reset** | Return import and streaming preferences to their default values. |
+
+Each ordinary field stacks a `body_strong` label, a `supporting` description,
+and one control row. Numeric entries remain compact and left-aligned; a
+semantic unit such as `%`, `GB`, or `ms` follows the entry on the same baseline.
+The entry placeholder carries its acceptable value range, so the field does
+not repeat that range beneath the control. Consecutive fields and actions use
+a compact 20-logical-pixel gap without a divider. The final field has no
+explanatory footer beneath it.
+
+Entries and action buttons use the 4-logical-pixel radius. Their normal, hover,
+pressed, focused, invalid, read-only, and disabled colors resolve from
+`TkTheme`; Preferences does not own duplicate color literals. Focus uses the
+entry focus role and a two-logical-pixel border, while invalid state uses the
+semantic invalid border together with persistent field feedback. A directory
+path and **Browse** remain one compound control with one rounded outer border
+and an internal seam.
+
+The stable Preferences footer keeps **Discard changes** and **Save changes**
+right-aligned. Clean or invalid state uses the neutral disabled treatment;
+valid pending edits enable the actions without moving the footer or form
+content.
+
+## Help visual contract
+
+`caveviewer.gui.help_style` is the canonical source for Help geometry,
+semantic palette mappings, typography roles, and card purpose lines. Help
+shares the Preferences 4-logical-pixel control radius, 12-logical-pixel card
+radius, 22-logical-pixel card padding, and 20-logical-pixel gaps. Help-only
+canvas measurements define the keycap and action lanes, responsive stacking,
+error excerpt, and bottom scroll padding. The active shell display-scale helper
+converts every logical metric exactly once.
+
+Help keeps **Keys**, **Capture**, and **Troubleshooting** as text tabs above the
+cards. The active tab uses bold amber text and inactive tabs use regular muted
+text. Tabs remain keyboard-focusable and do not use an underline, pill, or card.
+The first Help tab and first Preferences tab share the same top-left origin,
+including on a density-adjusted Windows display.
+
+Every Help group is one subtly raised panel-colored card with a title-case
+`heading` label and one short `supporting` purpose line. Cards share one left
+and right edge, use no divider lines, and remain separated by 20 logical pixels.
+At the ordinary shell width, descriptions should occupy no more than two lines;
+shorten the copy instead of reducing type size or card spacing.
+
+| Tab | Card heading | Purpose line |
+| --- | --- | --- |
+| Keys | **Move** | Control movement direction and speed. |
+| Keys | **Look** | Control the direction and orientation of the view. |
+| Keys | **Navigate** | Open maps and use saved locations or routes. |
+| Capture | **Capture Control** | Manage a capture already in progress. |
+| Capture | **Video** | Record what you see as a video. |
+| Capture | **Dive Trace** | Save camera movement for replay or analysis. |
+| Capture | **Cave Slice** | Save part of a cave as a new pre-compiled map. |
+| Troubleshooting | **Application Logs** | Open the latest log when you need help diagnosing a problem. |
+| Troubleshooting | **Last Error** | Review and copy details from the latest recorded error. |
+
+Shortcut rows retain one stable keycap lane and one flexible action lane.
+Keycaps use 4-logical-pixel corners while preserving the geometric unit spans
+defined above. At compact widths, the action lane moves below the keycap lane
+before either can clip. Supporting artifact text follows the action label and
+remains visually subordinate.
+
+**Show latest log** and **Copy** use the same 4-logical-pixel rounded action
+treatment as Preferences. They preserve visible focus, Return and Space
+activation, disabled state, and stable labels. The last-error excerpt uses a
+4-logical-pixel rounded semantic container. Copy success uses the shared
+transient confirmation mark; failure remains explicit text. Width, tab, and
+troubleshooting-state changes recompute wrapped content, card height, the scroll
+region, and scrollbar visibility without leaking canvas items or callbacks.
 
 ## Feedback lifetimes
 

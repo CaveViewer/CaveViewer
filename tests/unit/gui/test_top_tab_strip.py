@@ -66,6 +66,43 @@ def test_tab_strip_selects_the_active_label_and_notifies_its_owner():
     assert strip._tab_labels["streaming"].configurations[-1] == {"fg": "#a9abb8"}
 
 
+def test_tab_strip_can_pair_active_and_inactive_typography():
+    class _FakeWidget:
+        def __init__(self) -> None:
+            self.configurations = []
+
+        def configure(self, **options) -> None:
+            self.configurations.append(options)
+
+    active_font = ("TkDefaultFont", 12, "bold")
+    inactive_font = ("TkDefaultFont", 12)
+    strip = object.__new__(TopTabStrip)
+    strip._tabs = _TABS
+    strip._active_key = "streaming"
+    strip._style = TopTabStripStyle(
+        background_color="#101018",
+        active_color="#f0ad22",
+        inactive_color="#a9abb8",
+        focus_color="#f0ad22",
+        font=active_font,
+        active_font=active_font,
+        inactive_font=inactive_font,
+    )
+    strip._tab_labels = {tab.key: _FakeWidget() for tab in _TABS}
+    strip._on_selected = None
+
+    strip.select("storage")
+
+    assert strip._tab_labels["storage"].configurations[-1] == {
+        "fg": "#f0ad22",
+        "font": active_font,
+    }
+    assert strip._tab_labels["streaming"].configurations[-1] == {
+        "fg": "#a9abb8",
+        "font": inactive_font,
+    }
+
+
 def test_tab_strip_marks_pending_tabs_without_replacing_their_labels():
     class _FakeWidget:
         def __init__(self) -> None:

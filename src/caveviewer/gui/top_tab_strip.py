@@ -28,6 +28,8 @@ class TopTabStripStyle:
     inactive_color: str
     focus_color: str
     font: tuple
+    active_font: tuple | None = None
+    inactive_font: tuple | None = None
     horizontal_inset: int = 14
     top_inset: int = 8
     tab_pad_x: int = TABBED_CONTENT_ALIGNMENT_INSET
@@ -99,7 +101,7 @@ class TopTabStrip:
             label = tk.Label(
                 tab_shell,
                 text=tab.label,
-                font=style.font,
+                font=style.inactive_font or style.font,
                 fg=style.inactive_color,
                 bg=style.background_color,
                 padx=self._px(style.tab_pad_x),
@@ -131,13 +133,21 @@ class TopTabStrip:
         self._active_key = key
         for tab in self._tabs:
             active = tab.key == key
-            self._tab_labels[tab.key].configure(
-                fg=(
+            label_options = {
+                "fg": (
                     self._style.active_color
                     if active
                     else self._style.inactive_color
-                ),
+                )
+            }
+            selected_font = (
+                self._style.active_font
+                if active
+                else self._style.inactive_font
             )
+            if selected_font is not None:
+                label_options["font"] = selected_font
+            self._tab_labels[tab.key].configure(**label_options)
         if notify and self._on_selected is not None:
             self._on_selected(key)
 
