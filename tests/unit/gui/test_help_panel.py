@@ -32,6 +32,7 @@ def test_help_panel_uses_a_compact_keys_table_without_redundant_labels():
     assert "TopTabbedContentSurface(" in source
     assert "active_font=style.tab_font" in source
     assert "inactive_font=style.tab_inactive_font" in source
+    assert "active_indicator_color=style.tab_indicator_color" in source
     assert "inactive_color=style.detail_color" in source
     assert "def _draw_keycap_sequence" in source
     assert "shortcut_keycap_parts(shortcut)" in source
@@ -319,7 +320,9 @@ def test_help_uses_the_shared_primary_surface_origin():
 
     assert "content_pad_left_x=0" in create_source
     assert "content_pad_right_x=style.content_pad_x" in create_source
-    assert "pady=self._px(PRIMARY_SURFACE_VERTICAL_MARGIN)" in create_source
+    assert "self._px(PRIMARY_LABEL_ROW_TOP_INSET)" in create_source
+    assert "self._px(PRIMARY_SURFACE_VERTICAL_MARGIN)" in create_source
+    assert "row_height=PRIMARY_LABEL_ROW_HEIGHT" in create_source
 
 
 @pytest.mark.gui
@@ -359,7 +362,7 @@ def test_help_and_preferences_first_tabs_share_the_same_shell_origin(monkeypatch
         help_surface = help_panel.HelpPanel(
             help_host,
             px=layout_px,
-            style=splash_screen._help_panel_style(),
+            style=splash_screen._help_panel_style(px=layout_px),
             sections=keyboard_control_sections(profile),
         )
         help_surface.create()
@@ -407,6 +410,7 @@ def test_help_cards_and_compact_shortcuts_keep_measured_alignment():
             background_color="#0a0a0d",
             section_background_color="#12121a",
             tab_active_color="#e5a11f",
+            tab_indicator_color="#30343d",
             tab_focus_color="#5d6f8a",
             section_color="#cccdd6",
             keycap_background_color="#1c1c24",
@@ -419,6 +423,7 @@ def test_help_cards_and_compact_shortcuts_keep_measured_alignment():
             tab_font=("Arial", 10, "bold"),
             tab_inactive_font=("Arial", 10),
             section_font=("Arial", 13, "bold"),
+            section_summary_font=("Arial", 11),
             keycap_font=("Arial", 10, "bold"),
             action_font=("Arial", 10),
             overview_font=("Arial", 10, "bold"),
@@ -454,7 +459,7 @@ def test_help_cards_and_compact_shortcuts_keep_measured_alignment():
 
         card_bounds = rendered_card_bounds()
         assert len(card_bounds) == 3
-        assert {(left, right) for left, _, right, _ in card_bounds} == {(12, 788)}
+        assert {(left, right) for left, _, right, _ in card_bounds} == {(12, 800)}
         card_gaps = [
             card_bounds[index + 1][1] - card_bounds[index][3]
             for index in range(2)
@@ -476,7 +481,7 @@ def test_help_cards_and_compact_shortcuts_keep_measured_alignment():
         assert canvas.coords(title_item)[0] == 34
         assert canvas.coords(action_item)[0] > 34
 
-        panel._render_table(400)
+        panel._render_table(380)
         compact_action_item = next(
             item
             for item in canvas.find_all()

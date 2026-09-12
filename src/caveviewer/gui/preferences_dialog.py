@@ -25,8 +25,10 @@ from caveviewer.gui.preferences_controls import (
     RoundedSectionSurface,
 )
 from caveviewer.gui.preferences_style import (
+    PREFERENCES_TAB_INDICATOR,
     PREFERENCES_VISUAL_METRICS,
     PREFERENCES_VISUAL_PALETTE,
+    create_preferences_typography,
 )
 from caveviewer.gui.preferences_workflow import PreferencesDialogWorkflow
 from caveviewer.gui.preferences_form import (
@@ -34,7 +36,11 @@ from caveviewer.gui.preferences_form import (
     PreferencesFormState,
     MessageKind,
 )
-from caveviewer.gui.section_spacing import PRIMARY_SURFACE_VERTICAL_MARGIN
+from caveviewer.gui.section_spacing import (
+    PRIMARY_LABEL_ROW_HEIGHT,
+    PRIMARY_LABEL_ROW_TOP_INSET,
+    PRIMARY_SURFACE_VERTICAL_MARGIN,
+)
 from caveviewer.gui.dialog_style import DIALOG_BODY_PAD_Y
 from caveviewer.gui.dpi_utils import tk_display_scale
 from caveviewer.gui.platform import (
@@ -82,6 +88,7 @@ class PreferencesPanelSnapshot:
 _BG_COLOR = DARK_THEME.background
 
 _SCROLLBAR_GUTTER_X = 18
+_SCROLLBAR_RAIL_WIDTH = 14
 _INLINE_FEEDBACK_PAD_X = 10
 _MIN_HINT_WRAP_LENGTH = 200
 _HINT_WRAP_INSET = 4
@@ -312,11 +319,19 @@ class PreferencesPanel:
         self.container = tk.Frame(parent, bg=_BG_COLOR)
         self.container.pack(fill="both", expand=True)
 
-        self.heading_font = self.typography.heading
+        preferences_typography = create_preferences_typography(
+            self.typography,
+            px=self._surface_px,
+        )
+        self.heading_font = preferences_typography.section_title
+        self.section_summary_font = preferences_typography.section_summary
         self.action_font = self.typography.body_strong
-        self.body_font = self.typography.body
-        self.body_strong_font = self.typography.body_strong
-        self.small_font = self.typography.supporting
+        self.body_font = preferences_typography.field_value
+        self.body_strong_font = preferences_typography.field_label
+        self.small_font = preferences_typography.field_description
+        self.field_unit_font = preferences_typography.field_unit
+        self.active_tab_font = preferences_typography.active_tab
+        self.inactive_tab_font = preferences_typography.inactive_tab
         self.preferences_palette = PREFERENCES_VISUAL_PALETTE
         self.preferences_metrics = PREFERENCES_VISUAL_METRICS.scaled(
             self._surface_px
@@ -617,7 +632,7 @@ class PreferencesPanel:
             description_label = tk.Label(
                 card.content,
                 text=description,
-                font=self.small_font,
+                font=self.section_summary_font,
                 fg=self.preferences_palette.supporting_text,
                 bg=self.preferences_palette.section_background,
                 anchor="w",
@@ -659,13 +674,13 @@ class PreferencesPanel:
                     (
                         "Save preferences",
                         "Save preferences to a file.",
-                        "Save",
+                        "Export...",
                         self.export_preferences,
                     ),
                     (
                         "Load preferences",
                         "Load preferences from a file.",
-                        "Load",
+                        "Import...",
                         self.import_preferences,
                     ),
                 ),
@@ -882,7 +897,7 @@ class PreferencesPanel:
             tk.Label(
                 control_row,
                 text=presentation.inline_unit,
-                font=self.body_font,
+                font=self.field_unit_font,
                 fg=self.preferences_palette.supporting_text,
                 bg=self.preferences_palette.section_background,
                 anchor="w",
@@ -1289,9 +1304,11 @@ class PreferencesPanel:
                 active_color=self.preferences_palette.tab_active_text,
                 inactive_color=self.preferences_palette.tab_inactive_text,
                 focus_color=DARK_THEME.entry_focus_border,
-                font=self.action_font,
-                active_font=self.action_font,
-                inactive_font=self.body_font,
+                font=self.active_tab_font,
+                active_font=self.active_tab_font,
+                inactive_font=self.inactive_tab_font,
+                active_indicator_color=PREFERENCES_TAB_INDICATOR,
+                row_height=PRIMARY_LABEL_ROW_HEIGHT,
             ),
             style=TopTabbedContentSurfaceStyle(
                 background_color=_BG_COLOR,
@@ -1303,7 +1320,10 @@ class PreferencesPanel:
         surface.pack(
             fill="both",
             expand=True,
-            pady=self._surface_px(PRIMARY_SURFACE_VERTICAL_MARGIN),
+            pady=(
+                self._surface_px(PRIMARY_LABEL_ROW_TOP_INSET),
+                self._surface_px(PRIMARY_SURFACE_VERTICAL_MARGIN),
+            ),
         )
         self.tab_strip = surface.tab_strip
         body = surface.content
@@ -1319,6 +1339,12 @@ class PreferencesPanel:
         self.button_row.pack(
             side="bottom",
             fill="x",
+            padx=(
+                0,
+                self._surface_px(
+                    _SCROLLBAR_GUTTER_X + _SCROLLBAR_RAIL_WIDTH
+                ),
+            ),
             pady=(self.preferences_metrics.footer_top_gap_y, 0),
         )
 
@@ -1374,7 +1400,10 @@ class PreferencesPanel:
             self.page_scroll_shell,
             canvas=self.page_canvas,
             px=self._surface_px,
-            style=CanvasScrollbarStyle(background_color=_BG_COLOR),
+            style=CanvasScrollbarStyle(
+                background_color=_BG_COLOR,
+                rail_width=_SCROLLBAR_RAIL_WIDTH,
+            ),
         )
         self.page_scrollbar.mount_grid(
             row=0,

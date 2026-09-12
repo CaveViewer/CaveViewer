@@ -15,13 +15,18 @@ class TkTypography:
     body: tuple
     supporting: tuple
     section: tuple
+    medium_family: str
+    medium_styles: tuple[str, ...]
     semibold_family: str
     semibold_styles: tuple[str, ...]
+    text_scale: float
 
 
 def create_tk_typography(
     font_family: str,
     *,
+    medium_family: str | None = None,
+    medium_styles: tuple[str, ...] = (),
     semibold_family: str | None = None,
     semibold_styles: tuple[str, ...] = ("bold",),
     text_scale: float = 1.0,
@@ -43,6 +48,9 @@ def create_tk_typography(
         body=font(10),
         supporting=font(9),
         section=font(9, "bold"),
+        medium_family=medium_family or font_family,
+        medium_styles=tuple(medium_styles),
         semibold_family=semibold_family or font_family,
         semibold_styles=tuple(semibold_styles),
+        text_scale=normalized_scale,
     )

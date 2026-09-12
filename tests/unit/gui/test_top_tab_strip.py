@@ -55,6 +55,7 @@ def test_tab_strip_selects_the_active_label_and_notifies_its_owner():
         font=("TkDefaultFont", 12, "bold"),
     )
     strip._tab_labels = {tab.key: _FakeWidget() for tab in _TABS}
+    strip._tab_indicators = {}
     selected = []
     strip._on_selected = selected.append
 
@@ -89,6 +90,7 @@ def test_tab_strip_can_pair_active_and_inactive_typography():
         inactive_font=inactive_font,
     )
     strip._tab_labels = {tab.key: _FakeWidget() for tab in _TABS}
+    strip._tab_indicators = {}
     strip._on_selected = None
 
     strip.select("storage")
@@ -100,6 +102,39 @@ def test_tab_strip_can_pair_active_and_inactive_typography():
     assert strip._tab_labels["streaming"].configurations[-1] == {
         "fg": "#a9abb8",
         "font": inactive_font,
+    }
+
+
+def test_tab_strip_moves_the_active_indicator_with_selection():
+    class _FakeWidget:
+        def __init__(self) -> None:
+            self.configurations = []
+
+        def configure(self, **options) -> None:
+            self.configurations.append(options)
+
+    strip = object.__new__(TopTabStrip)
+    strip._tabs = _TABS
+    strip._active_key = "streaming"
+    strip._style = TopTabStripStyle(
+        background_color="#0d0f13",
+        active_color="#eff1f5",
+        inactive_color="#a9afbc",
+        focus_color="#30343d",
+        font=("Inter", 14),
+        active_indicator_color="#30343d",
+    )
+    strip._tab_labels = {tab.key: _FakeWidget() for tab in _TABS}
+    strip._tab_indicators = {tab.key: _FakeWidget() for tab in _TABS}
+    strip._on_selected = None
+
+    strip.select("storage")
+
+    assert strip._tab_indicators["storage"].configurations[-1] == {
+        "bg": "#30343d"
+    }
+    assert strip._tab_indicators["streaming"].configurations[-1] == {
+        "bg": "#0d0f13"
     }
 
 
@@ -143,6 +178,7 @@ def test_tabbed_content_surface_defines_one_standard_content_gap():
     assert TABBED_CONTENT_TOP_GAP == 26
     assert TABBED_CONTENT_ALIGNMENT_INSET == 12
     assert tab_style.tab_pad_x == TABBED_CONTENT_ALIGNMENT_INSET
+    assert tab_style.row_height is None
     assert style.content_pad_left_x == 0
     assert style.content_pad_right_x == 32
     assert style.content_bottom_pad_y == 0

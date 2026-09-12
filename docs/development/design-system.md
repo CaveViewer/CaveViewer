@@ -12,11 +12,13 @@ owns its title-bar typography.
 roles. Components receive those roles through their presentation style or
 constructor rather than choosing a font size for an individual widget.
 
-CaveViewer bundles the official hinted static Inter 4.0 Regular, SemiBold, and
-Bold TrueType faces. The application registers them for the current process
+CaveViewer bundles the official hinted static Inter 4.0 Regular, Medium,
+SemiBold, and Bold TrueType faces. The application registers them for the
+current process
 before it creates the Tk shell; it never installs fonts into system or user font
 directories. Tk uses `Inter` for regular and bold semantic roles and the
-registered `Inter SemiBold` face for semibold presentation roles. If native
+registered `Inter Medium` and `Inter SemiBold` faces for their presentation
+roles. If native
 registration or Tk discovery fails, the presentation profile falls back to
 Segoe UI on Windows, Helvetica Neue on macOS, and the active sans-serif family
 on Linux without blocking startup.
@@ -121,8 +123,9 @@ appropriate weight, color, or interaction treatment instead.
 The primary shell uses `#0D0F13` as its application surface and `#15171C` as
 the shared panel/card fill for Map Library, Preferences, Help, and About. The
 Map Library main column starts 26 logical pixels after the 220-pixel sidebar,
-44 pixels below the top edge, and retains a 28-pixel right margin in the
-1080-by-740 reference frame.
+24 pixels below the top edge, and retains a 28-pixel right margin in the
+1080-by-740 reference frame. That top inset matches the 24-logical-pixel gap
+between the Recent Maps and CaveViewer Maps panels.
 
 Map Library owns one immutable, scale-once metrics snapshot in
 `caveviewer.gui.map_library_style`. Every value below is a logical pixel and is
@@ -185,18 +188,34 @@ cannot be scaled again.
 | Gap between footer actions | 10 |
 | Ordinary / focused control border | 1 / 2 |
 
-Preferences keeps its four text tabs outside the cards. The active tab uses
-`body_strong` and amber text; inactive tabs use `body` and muted text. Tabs
-remain keyboard-focusable navigation and do not become pills, cards, or use
-an underline.
+Preferences keeps its four text tabs outside the cards. Tabs remain
+keyboard-focusable navigation and do not become pills or cards. A two-logical-
+pixel `#30343D` bar matching the label width marks the active tab. Its text
+roles use display-scaled logical pixels and the registered static Inter faces:
+
+The top tab row begins at the same 16-logical-pixel inset as the first sidebar
+entry. Both rows are 44 logical pixels tall, and their labels use middle
+alignment so their text midlines remain aligned at every display scale. Help
+uses the same tab-row alignment.
+
+| Preferences role | Inter weight | Logical size | Color |
+| --- | --- | --- | --- |
+| Active tab | SemiBold | 14 px | `#EFF1F5` |
+| Inactive tab | Regular | 14 px | `#A9AFBC` |
+| Section title | Bold | 16 px | `#EFF1F5` |
+| Section summary | Regular | 13 px | `#A9AFBC` |
+| Field label | SemiBold | 14 px | `#EFF1F5` |
+| Field description | Regular | 12 px | `#A9AFBC` |
+| Input value | Medium | 14 px | `#EFF1F5` |
+| Unit | Regular | 14 px | `#A9AFBC` |
 
 Each preference group is a subtly raised panel-colored card with a
 12-logical-pixel radius. Cards share one left and right edge beneath the tabs,
-use title-case `heading` labels, and remain separated by a 20-logical-pixel
-vertical gap. Amber decoration is reserved for active navigation and primary
-actions rather than section surfaces. Streaming uses **Memory Use**, **CPU
-Use**, and **Frame Loading** headings. Each has one `supporting` purpose line
-beneath its heading. Import uses **Map Processing** and **CPU Use** with the
+use title-case section-title labels, and remain separated by a 20-logical-pixel
+vertical gap. Amber decoration is reserved for primary actions rather than
+section surfaces. Streaming uses **Memory Use**, **CPU Use**, and **Frame
+Loading** headings. Each has one section-summary purpose line beneath its
+heading. Import uses **Map Processing** and **CPU Use** with the
 same purpose-line treatment. Storage uses **Locations** with a short purpose
 line that introduces the group without repeating either field description.
 Backup uses **Save & Load** and **Reset**, each with a short plain-language
@@ -213,13 +232,17 @@ purpose line beneath its heading.
 | Backup | **Save & Load** | Keep a copy of your preferences or use one saved earlier. |
 | Backup | **Reset** | Return import and streaming preferences to their default values. |
 
-Each ordinary field stacks a `body_strong` label, a `supporting` description,
-and one control row. Numeric entries remain compact and left-aligned; a
-semantic unit such as `%`, `GB`, or `ms` follows the entry on the same baseline.
+Each ordinary field stacks a semibold label, a regular description, and one
+control row. Numeric entries remain compact and left-aligned; a semantic unit
+such as `%`, `GB`, or `ms` follows the entry on the same baseline.
 The entry placeholder carries its acceptable value range, so the field does
 not repeat that range beneath the control. Consecutive fields and actions use
 a compact 20-logical-pixel gap without a divider. The final field has no
 explanatory footer beneath it.
+
+The Preferences footer reserves the same scrollbar gutter and rail width as
+the page viewport. The right border of **Save changes** therefore aligns with
+the right edge of the cards on every tab and at every display scale.
 
 Entries and action buttons use the 4-logical-pixel radius. Their normal, hover,
 pressed, focused, invalid, read-only, and disabled colors resolve from
@@ -237,7 +260,7 @@ content.
 ## Help visual contract
 
 `caveviewer.gui.help_style` is the canonical source for Help geometry,
-semantic palette mappings, typography roles, and card purpose lines. Help
+semantic palette mappings, exact typography, and card purpose lines. Help
 shares the Preferences 4-logical-pixel control radius, 12-logical-pixel card
 radius, 22-logical-pixel card padding, and 20-logical-pixel gaps. Help-only
 canvas measurements define the keycap and action lanes, responsive stacking,
@@ -245,16 +268,21 @@ error excerpt, and bottom scroll padding. The active shell display-scale helper
 converts every logical metric exactly once.
 
 Help keeps **Keys**, **Capture**, and **Troubleshooting** as text tabs above the
-cards. The active tab uses bold amber text and inactive tabs use regular muted
-text. Tabs remain keyboard-focusable and do not use an underline, pill, or card.
-The first Help tab and first Preferences tab share the same top-left origin,
-including on a density-adjusted Windows display.
+cards. Its tab bar matches Preferences: active text is Inter Semi Bold at 14
+logical pixels in `#EFF1F5`, inactive text is Inter Regular at 14 logical pixels
+in `#A9AFBC`, and a two-logical-pixel `#30343D` underline matches the active
+label width. Tabs remain keyboard-focusable and use no pill or card. The first
+Help tab and first Preferences tab share the same top-left origin, including on
+a density-adjusted Windows display.
 
 Every Help group is one subtly raised panel-colored card with a title-case
-`heading` label and one short `supporting` purpose line. Cards share one left
-and right edge, use no divider lines, and remain separated by 20 logical pixels.
-At the ordinary shell width, descriptions should occupy no more than two lines;
-shorten the copy instead of reducing type size or card spacing.
+Inter Bold 16-logical-pixel heading in `#EFF1F5` and one short Inter Regular
+13-logical-pixel purpose line in `#A9AFBC`. Actions use Inter Semi Bold at 14
+logical pixels, details use Inter Regular at 12 logical pixels, and keycaps use
+Inter Medium at 14 logical pixels. Cards share the Preferences content edges,
+use no divider lines, and remain separated by 20 logical pixels. At the ordinary
+shell width, descriptions should occupy no more than two lines; shorten the copy
+instead of reducing type size or card spacing.
 
 | Tab | Card heading | Purpose line |
 | --- | --- | --- |

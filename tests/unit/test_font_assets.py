@@ -32,6 +32,7 @@ def test_inter_manifest_pins_release_files_and_license() -> None:
     )
     assert set(manifest["files"]) == {
         "Inter-Regular.ttf",
+        "Inter-Medium.ttf",
         "Inter-SemiBold.ttf",
         "Inter-Bold.ttf",
         "LICENSE.txt",
@@ -49,6 +50,7 @@ def test_inter_manifest_pins_release_files_and_license() -> None:
 def test_inter_static_faces_retain_expected_family_and_styles() -> None:
     expected_styles = {
         "Inter-Regular.ttf": "Regular",
+        "Inter-Medium.ttf": "Medium",
         "Inter-SemiBold.ttf": "SemiBold",
         "Inter-Bold.ttf": "Bold",
     }
@@ -62,10 +64,12 @@ def test_inter_static_faces_retain_expected_family_and_styles() -> None:
 
 def test_inter_resource_helpers_resolve_the_pinned_files() -> None:
     assert inter_font_path() == INTER_ROOT / "Inter-Regular.ttf"
+    assert inter_font_path("medium") == INTER_ROOT / "Inter-Medium.ttf"
     assert inter_font_path("semibold") == INTER_ROOT / "Inter-SemiBold.ttf"
     assert inter_font_path("bold") == INTER_ROOT / "Inter-Bold.ttf"
     assert inter_font_paths() == (
         INTER_ROOT / "Inter-Regular.ttf",
+        INTER_ROOT / "Inter-Medium.ttf",
         INTER_ROOT / "Inter-SemiBold.ttf",
         INTER_ROOT / "Inter-Bold.ttf",
     )

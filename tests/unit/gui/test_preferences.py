@@ -872,10 +872,10 @@ def test_preferences_panel_exposes_backup_and_restore_as_a_separate_tab():
     }
     assert '"Save preferences"' in backup_source
     assert '"Save preferences to a file."' in backup_source
-    assert '"Save"' in backup_source
+    assert '"Export..."' in backup_source
     assert '"Load preferences"' in backup_source
     assert '"Load preferences from a file."' in backup_source
-    assert '"Load"' in backup_source
+    assert '"Import..."' in backup_source
     assert '"Restore defaults"' in backup_source
     assert '"Restore default import and streaming settings."' in backup_source
     assert '"Restore"' in backup_source
@@ -1816,7 +1816,9 @@ def test_preferences_uses_the_shared_primary_surface_origin():
     assert "self._layout_px(value)" in scale_source
     assert "content_pad_left_x=0" in source
     assert "content_pad_right_x=self._layout_policy.body_pad_x" in source
-    assert "pady=self._surface_px(PRIMARY_SURFACE_VERTICAL_MARGIN)" in source
+    assert "self._surface_px(PRIMARY_LABEL_ROW_TOP_INSET)" in source
+    assert "self._surface_px(PRIMARY_SURFACE_VERTICAL_MARGIN)" in source
+    assert "row_height=PRIMARY_LABEL_ROW_HEIGHT" in source
 
 
 def test_preferences_surface_scale_preserves_the_shell_zero_origin():
@@ -2026,9 +2028,9 @@ def test_streaming_reference_uses_stacked_rounded_controls():
         preferences_dialog.PreferencesPanel._new_preferences_action
     )
     assert "footer_action_gap_x" in build_source
-    assert "active_font=self.action_font" in build_source
-    assert "inactive_font=self.body_font" in build_source
-    assert "active_indicator" not in build_source
+    assert "active_font=self.active_tab_font" in build_source
+    assert "inactive_font=self.inactive_tab_font" in build_source
+    assert "active_indicator_color=PREFERENCES_TAB_INDICATOR" in build_source
 
 
 def test_preferences_panel_uses_the_shared_tabbed_content_surface():
@@ -2073,7 +2075,8 @@ def test_preferences_page_uses_the_shared_canvas_scrollbar():
 
     source = inspect.getsource(preferences_dialog.PreferencesPanel)
 
-    assert "CanvasScrollbarStyle(background_color=_BG_COLOR)" in source
+    assert "CanvasScrollbarStyle(" in source
+    assert "rail_width=_SCROLLBAR_RAIL_WIDTH" in source
     assert "self.page_scrollbar.sync_overflow(content_height)" in source
     assert "vertical_scroll_units" not in source
 

@@ -681,6 +681,8 @@ def test_splash_font_configuration_does_not_wait_on_fontconfig():
 def test_splash_fonts_scale_from_runtime_tk_default(monkeypatch):
     font_globals = (
         "_UI_FONT_FAMILY",
+        "_UI_MEDIUM_FONT_FAMILY",
+        "_UI_MEDIUM_FONT_STYLES",
         "_UI_SEMIBOLD_FONT_FAMILY",
         "_UI_SEMIBOLD_FONT_STYLES",
         "_TK_TEXT_SCALE",
@@ -731,6 +733,8 @@ def test_splash_fonts_scale_from_runtime_tk_default(monkeypatch):
 def test_splash_linux_fonts_do_not_multiply_the_tk_default_font(monkeypatch):
     font_globals = (
         "_UI_FONT_FAMILY",
+        "_UI_MEDIUM_FONT_FAMILY",
+        "_UI_MEDIUM_FONT_STYLES",
         "_UI_SEMIBOLD_FONT_FAMILY",
         "_UI_SEMIBOLD_FONT_STYLES",
         "_TK_TEXT_SCALE",
@@ -768,6 +772,8 @@ def test_splash_linux_fonts_do_not_multiply_the_tk_default_font(monkeypatch):
 def test_splash_windows_fonts_apply_large_monitor_density_once(monkeypatch):
     font_globals = (
         "_UI_FONT_FAMILY",
+        "_UI_MEDIUM_FONT_FAMILY",
+        "_UI_MEDIUM_FONT_STYLES",
         "_UI_SEMIBOLD_FONT_FAMILY",
         "_UI_SEMIBOLD_FONT_STYLES",
         "_TK_TEXT_SCALE",
@@ -800,9 +806,11 @@ def test_splash_windows_fonts_apply_large_monitor_density_once(monkeypatch):
             setattr(splash_screen, name, value)
 
 
-def test_splash_prefers_registered_inter_regular_and_semibold(monkeypatch):
+def test_splash_prefers_registered_inter_static_faces(monkeypatch):
     font_globals = (
         "_UI_FONT_FAMILY",
+        "_UI_MEDIUM_FONT_FAMILY",
+        "_UI_MEDIUM_FONT_STYLES",
         "_UI_SEMIBOLD_FONT_FAMILY",
         "_UI_SEMIBOLD_FONT_STYLES",
         "_TK_TEXT_SCALE",
@@ -819,7 +827,7 @@ def test_splash_prefers_registered_inter_regular_and_semibold(monkeypatch):
     monkeypatch.setattr(
         tkfont,
         "families",
-        lambda _root: ["Segoe UI", "Inter", "Inter SemiBold"],
+        lambda _root: ["Segoe UI", "Inter", "Inter Medium", "Inter SemiBold"],
     )
     monkeypatch.setattr(tkfont, "nametofont", lambda _name: FakeDefaultFont())
 
@@ -830,9 +838,13 @@ def test_splash_prefers_registered_inter_regular_and_semibold(monkeypatch):
         )
 
         assert splash_screen._UI_FONT_FAMILY == "Inter"
+        assert splash_screen._UI_MEDIUM_FONT_FAMILY == "Inter Medium"
+        assert splash_screen._UI_MEDIUM_FONT_STYLES == ()
         assert splash_screen._UI_SEMIBOLD_FONT_FAMILY == "Inter SemiBold"
         assert splash_screen._UI_SEMIBOLD_FONT_STYLES == ()
         assert splash_screen._TYPOGRAPHY.body == ("Inter", 10)
+        assert splash_screen._TYPOGRAPHY.medium_family == "Inter Medium"
+        assert splash_screen._TYPOGRAPHY.medium_styles == ()
         assert splash_screen._TYPOGRAPHY.semibold_family == "Inter SemiBold"
         assert splash_screen._TYPOGRAPHY.semibold_styles == ()
     finally:
@@ -1379,7 +1391,7 @@ def test_splash_navigation_uses_transparent_entries_and_type_only_selection():
     assert splash_screen._NAVIGATION_PANEL_BG == "#15171C"
     assert splash_screen._NAVIGATION_SELECTED_FG == "#F5C451"
     assert splash_screen._NAVIGATION_INACTIVE_FG == "#EFF1F5"
-    assert splash_screen._NAVIGATION_LABEL_SIZE == 13
+    assert splash_screen._NAVIGATION_LABEL_SIZE == 14
     assert splash_screen._NAVIGATION_ICON_SIZE == 18
     assert "size = px(_NAVIGATION_ICON_SIZE)" in source
     assert "_NAVIGATION_SELECTED_BG" not in module_source
@@ -1445,10 +1457,18 @@ def test_splash_navigation_panel_uses_specified_bounds_insets_and_footer():
     assert 'pady=(0, px(_NAVIGATION_PANEL_BOTTOM_INSET))' in source
     assert splash_screen._NAVIGATION_PANEL_WIDTH == 220
     assert splash_screen._NAVIGATION_PANEL_INSET_X == 16
-    assert splash_screen._NAVIGATION_PANEL_TOP_INSET == 64
+    assert splash_screen._NAVIGATION_PANEL_TOP_INSET == 16
     assert splash_screen._NAVIGATION_PANEL_BOTTOM_INSET == 16
     assert splash_screen._NAVIGATION_ENTRY_WIDTH == 188
     assert splash_screen._NAVIGATION_ENTRY_HEIGHT == 44
+    assert (
+        splash_screen._NAVIGATION_PANEL_TOP_INSET
+        == splash_screen.PRIMARY_LABEL_ROW_TOP_INSET
+    )
+    assert (
+        splash_screen._NAVIGATION_ENTRY_HEIGHT
+        == splash_screen.PRIMARY_LABEL_ROW_HEIGHT
+    )
     assert splash_screen._NAVIGATION_DIVIDER_WIDTH == 1
     assert splash_screen._NAVIGATION_DIVIDER_COLOR == "#30343D"
     assert "navigation_divider.place(" in source
@@ -2334,6 +2354,11 @@ def test_map_library_open_map_action_uses_the_existing_folder_callback(monkeypat
         "Open a local map",
         "Browse a cave map folder on your computer.",
     ]
+    image_call = next(entry for entry in action.draw_calls if entry[0] == "image")
+    text_calls = [entry for entry in action.draw_calls if entry[0] == "text"]
+    assert image_call[1][1] == pytest.approx(
+        (text_calls[0][1][1] + text_calls[1][1][1]) / 2
+    )
     assert not any(entry[0] == "rectangle" for entry in action.draw_calls)
 
     action.draw_calls.clear()

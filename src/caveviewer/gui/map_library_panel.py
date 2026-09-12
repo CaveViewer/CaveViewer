@@ -796,12 +796,13 @@ class MapLibraryPanel:
             return
 
         icon_left = 0
-        icon_top = max(self._px(7), height / 2 - self._px(10))
         icon_right = icon_left + metrics.local_action_icon_width
-        icon_bottom = icon_top + metrics.local_action_icon_height
         text_left = icon_right + metrics.local_action_icon_to_text_x
         title_y = height / 2 - self._px(7)
         subtitle_y = height / 2 + self._px(9)
+        text_block_center_y = (title_y + subtitle_y) / 2
+        icon_top = text_block_center_y - metrics.local_action_icon_height / 2
+        icon_bottom = icon_top + metrics.local_action_icon_height
         self._draw_open_folder_photo(
             action,
             left=icon_left,

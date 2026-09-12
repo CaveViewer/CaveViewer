@@ -44,8 +44,9 @@ notice applies to the derived PNG as well.
 
 ## Bundled Inter UI Font
 
-CaveViewer bundles the hinted static Regular, SemiBold, and Bold TrueType faces
-from the official Inter 4.0 release for application UI and viewer-overlay text.
+CaveViewer bundles the hinted static Regular, Medium, SemiBold, and Bold
+TrueType faces from the official Inter 4.0 release for application UI and
+viewer-overlay text.
 The unmodified files were obtained from
 `https://github.com/rsms/inter/releases/tag/v4.0`; pinned source and file hashes
 are recorded in `src/caveviewer/resources/fonts/inter/manifest.json`.

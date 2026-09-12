@@ -70,6 +70,7 @@ from caveviewer.gui.cave_metadata_panel import (
 )
 from caveviewer.gui.controls_catalog import keyboard_control_sections
 from caveviewer.gui.help_panel import HelpPanel, HelpPanelStyle
+from caveviewer.gui.help_style import HELP_VISUAL_PALETTE, create_help_typography
 from caveviewer.core.diagnostics.catalog import application_log_directory
 from caveviewer.gui.platform.diagnostic_log_reveal import (
     create_diagnostic_log_reveal_adapter,
@@ -142,6 +143,10 @@ from caveviewer.gui.splash_controller import (
 from caveviewer.gui.splash_visuals import (
     NavigationIconName,
     navigation_icon_photo,
+)
+from caveviewer.gui.section_spacing import (
+    PRIMARY_LABEL_ROW_HEIGHT,
+    PRIMARY_LABEL_ROW_TOP_INSET,
 )
 from caveviewer.gui.tk_feedback import (
     ERROR_FEEDBACK_MS,
@@ -284,19 +289,21 @@ _NAVIGATION_INACTIVE_FG = "#EFF1F5"
 _NAVIGATION_FOOTER_FG = "#A9AFBC"
 _NAVIGATION_PANEL_WIDTH = 220
 _NAVIGATION_PANEL_INSET_X = 16
-_NAVIGATION_PANEL_TOP_INSET = 64
+_NAVIGATION_PANEL_TOP_INSET = PRIMARY_LABEL_ROW_TOP_INSET
 _NAVIGATION_PANEL_BOTTOM_INSET = 16
 _NAVIGATION_ENTRY_WIDTH = 188
-_NAVIGATION_ENTRY_HEIGHT = 44
+_NAVIGATION_ENTRY_HEIGHT = PRIMARY_LABEL_ROW_HEIGHT
 _NAVIGATION_ITEM_GAP = 8
 _NAVIGATION_ICON_SIZE = 18
 _NAVIGATION_DIVIDER_WIDTH = 1
-_NAVIGATION_LABEL_SIZE = 13
+_NAVIGATION_LABEL_SIZE = 14
 _NAVIGATION_FOOTER_SIZE = 13
 _EMBEDDED_PANEL_TEXT_SCALE_FACTOR = 1.0
 _WINDOWS_SPLASH_LAYOUT = _SPLASH_LAYOUT_POLICY.windows_layout
 _LINUX_SPLASH_LAYOUT = _SPLASH_LAYOUT_POLICY.linux_layout
 _UI_FONT_FAMILY = _PRESENTATION_PROFILE.ui_font_family
+_UI_MEDIUM_FONT_FAMILY = _PRESENTATION_PROFILE.ui_medium_font_family
+_UI_MEDIUM_FONT_STYLES: tuple[str, ...] = ()
 _UI_SEMIBOLD_FONT_FAMILY = _PRESENTATION_PROFILE.ui_semibold_font_family
 _UI_SEMIBOLD_FONT_STYLES: tuple[str, ...] = ()
 _TK_TEXT_SCALE = 1.0
@@ -309,6 +316,8 @@ _PREFERENCES_SHELL_FIT_STABLE_PASSES = 2
 
 _TYPOGRAPHY: TkTypography = create_tk_typography(
     _UI_FONT_FAMILY,
+    medium_family=_UI_MEDIUM_FONT_FAMILY,
+    medium_styles=_UI_MEDIUM_FONT_STYLES,
     semibold_family=_UI_SEMIBOLD_FONT_FAMILY,
     semibold_styles=_UI_SEMIBOLD_FONT_STYLES,
     text_scale=_TK_TEXT_SCALE,
@@ -438,6 +447,8 @@ def _refresh_tk_font_tokens() -> None:
 
     _TYPOGRAPHY = create_tk_typography(
         _UI_FONT_FAMILY,
+        medium_family=_UI_MEDIUM_FONT_FAMILY,
+        medium_styles=_UI_MEDIUM_FONT_STYLES,
         semibold_family=_UI_SEMIBOLD_FONT_FAMILY,
         semibold_styles=_UI_SEMIBOLD_FONT_STYLES,
         text_scale=_TK_TEXT_SCALE,
@@ -460,8 +471,8 @@ def _activate_presentation_profile(
     """
     global _PRESENTATION_PROFILE, _SPLASH_LAYOUT_POLICY, _APP_ICON_PATH, _LOGO_PATH
     global _WINDOWS_SPLASH_LAYOUT, _LINUX_SPLASH_LAYOUT
-    global _UI_FONT_FAMILY, _UI_SEMIBOLD_FONT_FAMILY
-    global _UI_SEMIBOLD_FONT_STYLES, _TK_TEXT_SCALE
+    global _UI_FONT_FAMILY, _UI_MEDIUM_FONT_FAMILY, _UI_SEMIBOLD_FONT_FAMILY
+    global _UI_MEDIUM_FONT_STYLES, _UI_SEMIBOLD_FONT_STYLES, _TK_TEXT_SCALE
     global _SPLASH_WINDOW_WIDTH, _SPLASH_WINDOW_MIN_HEIGHT
     global _SPLASH_RESIZE_MIN_WIDTH, _SPLASH_RESIZE_MIN_HEIGHT
     global _SPLASH_WINDOW_EXTRA_BOTTOM_SLACK
@@ -475,6 +486,8 @@ def _activate_presentation_profile(
     _WINDOWS_SPLASH_LAYOUT = _SPLASH_LAYOUT_POLICY.windows_layout
     _LINUX_SPLASH_LAYOUT = _SPLASH_LAYOUT_POLICY.linux_layout
     _UI_FONT_FAMILY = profile.ui_font_family
+    _UI_MEDIUM_FONT_FAMILY = profile.ui_medium_font_family
+    _UI_MEDIUM_FONT_STYLES = ()
     _UI_SEMIBOLD_FONT_FAMILY = profile.ui_semibold_font_family
     _UI_SEMIBOLD_FONT_STYLES = ()
     _TK_TEXT_SCALE = 1.0
@@ -493,8 +506,8 @@ def _configure_runtime_tk_fonts(
     density_scale: float = 1.0,
 ) -> None:
     """Resolve the UI font against fonts Tk can actually render."""
-    global _UI_FONT_FAMILY, _UI_SEMIBOLD_FONT_FAMILY
-    global _UI_SEMIBOLD_FONT_STYLES, _TK_TEXT_SCALE
+    global _UI_FONT_FAMILY, _UI_MEDIUM_FONT_FAMILY, _UI_SEMIBOLD_FONT_FAMILY
+    global _UI_MEDIUM_FONT_STYLES, _UI_SEMIBOLD_FONT_STYLES, _TK_TEXT_SCALE
 
     profile = presentation_profile or _PRESENTATION_PROFILE
     splash_layout = profile.splash_layout
@@ -525,6 +538,18 @@ def _configure_runtime_tk_fonts(
             using_bundled_inter = (
                 resolved_family.casefold() == profile.ui_font_family.casefold()
             )
+            medium_preferred = (
+                [profile.ui_medium_font_family]
+                if using_bundled_inter
+                else [profile.ui_medium_fallback_family]
+            )
+            _UI_MEDIUM_FONT_FAMILY = _select_tk_font_family(
+                available,
+                resolved_family,
+                medium_preferred,
+                linux_layout=False,
+            )
+            _UI_MEDIUM_FONT_STYLES = ()
             semibold_preferred = (
                 [profile.ui_semibold_font_family]
                 if using_bundled_inter
@@ -591,34 +616,45 @@ def _embedded_panel_typography() -> TkTypography:
     """Return the compact type scale shared by Preferences and Help."""
     return create_tk_typography(
         _UI_FONT_FAMILY,
+        medium_family=_UI_MEDIUM_FONT_FAMILY,
+        medium_styles=_UI_MEDIUM_FONT_STYLES,
+        semibold_family=_UI_SEMIBOLD_FONT_FAMILY,
+        semibold_styles=_UI_SEMIBOLD_FONT_STYLES,
         text_scale=_TK_TEXT_SCALE * _EMBEDDED_PANEL_TEXT_SCALE_FACTOR,
     )
 
 
-def _help_panel_style() -> HelpPanelStyle:
+def _help_panel_style(
+    *,
+    px: Callable[[int | float], int],
+) -> HelpPanelStyle:
     """Return the splash-owned style tokens for the rounded Help cards."""
     typography = _embedded_panel_typography()
+    help_typography = create_help_typography(typography, px=px)
+    palette = HELP_VISUAL_PALETTE
     return HelpPanelStyle(
-        background_color=_BG_COLOR,
-        section_background_color=DARK_THEME.panel,
-        tab_active_color=_BUTTON_BG,
-        tab_focus_color=DARK_THEME.entry_focus_border,
-        section_color=DARK_THEME.body_text,
-        keycap_background_color=DARK_THEME.entry_background,
-        keycap_border_color=DARK_THEME.secondary_button_border,
-        keycap_text_color=DARK_THEME.body_text,
-        action_color=DARK_THEME.body_text,
-        detail_color=DARK_THEME.secondary_text,
-        error_color=DARK_THEME.error_text,
+        background_color=palette.surface_background,
+        section_background_color=palette.section_background,
+        tab_active_color=palette.tab_active_text,
+        tab_indicator_color=palette.tab_indicator,
+        tab_focus_color=palette.control_focus_border,
+        section_color=palette.heading_text,
+        keycap_background_color=palette.keycap_background,
+        keycap_border_color=palette.keycap_border,
+        keycap_text_color=palette.keycap_text,
+        action_color=palette.action_text,
+        detail_color=palette.supporting_text,
+        error_color=palette.error_text,
         content_pad_x=_PRESENTATION_PROFILE.preferences_dialog_layout.body_pad_x,
-        tab_font=typography.body_strong,
-        tab_inactive_font=typography.body,
-        section_font=typography.heading,
-        keycap_font=typography.body_strong,
-        action_font=typography.body,
-        overview_font=typography.body_strong,
-        detail_font=typography.supporting,
-        error_font=("Courier", typography.supporting[1]),
+        tab_font=help_typography.active_tab,
+        tab_inactive_font=help_typography.inactive_tab,
+        section_font=help_typography.section_title,
+        section_summary_font=help_typography.section_summary,
+        keycap_font=help_typography.keycap,
+        action_font=help_typography.action,
+        overview_font=help_typography.action_strong,
+        detail_font=help_typography.detail,
+        error_font=help_typography.error,
     )
 
 
@@ -2368,7 +2404,7 @@ def _show_splash_composition(
         panel = HelpPanel(
             help_surface,
             px=px,
-            style=_help_panel_style(),
+            style=_help_panel_style(px=px),
             sections=keyboard_control_sections(presentation_profile),
             troubleshooting_controller=TroubleshootingLogController(
                 directory=application_log_directory(

@@ -36,6 +36,9 @@ class TopTabStripStyle:
     tab_pad_y: int = 7
     tab_gap: int = 10
     focus_highlight_thickness: int = 1
+    active_indicator_color: str | None = None
+    active_indicator_thickness: int = 2
+    row_height: int | None = None
 
 
 @dataclass(frozen=True)
@@ -80,30 +83,43 @@ class TopTabStrip:
         self._px = px
         self._style = style
         self._tab_labels: dict[str, tk.Label] = {}
+        self._tab_indicators: dict[str, tk.Frame] = {}
         self._tab_text = {tab.key: tab.label for tab in self._tabs}
 
         self.widget = tk.Frame(parent, bg=style.background_color)
         tab_row = tk.Frame(self.widget, bg=style.background_color)
+        if style.row_height is not None:
+            tab_row.configure(height=self._px(style.row_height))
         tab_row.pack(
             fill="x",
             padx=self._px(style.horizontal_inset),
             pady=(self._px(style.top_inset), 0),
         )
+        if style.row_height is not None:
+            tab_row.pack_propagate(False)
         for index, tab in enumerate(self._tabs):
             tab_shell = tk.Frame(tab_row, bg=style.background_color)
             right_gap = (
                 self._px(style.tab_gap) if index < len(self._tabs) - 1 else 0
             )
-            tab_shell.pack(
-                side="left",
-                padx=(0, right_gap),
-            )
+            if style.row_height is not None:
+                tab_shell.pack(
+                    side="left",
+                    fill="y",
+                    padx=(0, right_gap),
+                )
+            else:
+                tab_shell.pack(
+                    side="left",
+                    padx=(0, right_gap),
+                )
             label = tk.Label(
                 tab_shell,
                 text=tab.label,
                 font=style.inactive_font or style.font,
                 fg=style.inactive_color,
                 bg=style.background_color,
+                anchor="center",
                 padx=self._px(style.tab_pad_x),
                 pady=self._px(style.tab_pad_y),
                 takefocus=True,
@@ -111,9 +127,41 @@ class TopTabStrip:
                 highlightbackground=style.background_color,
                 highlightcolor=style.focus_color,
             )
-            label.pack(anchor="w")
+            if style.row_height is None:
+                label.pack(anchor="w")
+            else:
+                label.pack(fill="both", expand=True)
             self._tab_labels[tab.key] = label
             self._bind_tab_events(label, tab.key)
+            if (
+                style.active_indicator_color is not None
+                and style.active_indicator_thickness > 0
+            ):
+                indicator = tk.Frame(
+                    tab_shell,
+                    bg=style.background_color,
+                    height=self._px(style.active_indicator_thickness),
+                )
+                if style.row_height is None:
+                    indicator.pack(
+                        fill="x",
+                        padx=self._px(style.tab_pad_x),
+                    )
+                else:
+                    indicator_thickness = max(
+                        1,
+                        self._px(style.active_indicator_thickness),
+                    )
+                    indicator_pad_x = self._px(style.tab_pad_x)
+                    indicator.place(
+                        x=indicator_pad_x,
+                        rely=1.0,
+                        y=-indicator_thickness,
+                        relwidth=1.0,
+                        width=-(indicator_pad_x * 2),
+                        height=indicator_thickness,
+                    )
+                self._tab_indicators[tab.key] = indicator
 
         self.select(active_key, notify=False)
 
@@ -148,6 +196,15 @@ class TopTabStrip:
             if selected_font is not None:
                 label_options["font"] = selected_font
             self._tab_labels[tab.key].configure(**label_options)
+            indicator = self._tab_indicators.get(tab.key)
+            if indicator is not None:
+                indicator.configure(
+                    bg=(
+                        self._style.active_indicator_color
+                        if active
+                        else self._style.background_color
+                    )
+                )
         if notify and self._on_selected is not None:
             self._on_selected(key)
 

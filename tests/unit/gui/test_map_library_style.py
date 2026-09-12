@@ -35,7 +35,7 @@ def test_map_library_metrics_scale_every_logical_value_once():
     scaled = MAP_LIBRARY_VISUAL_METRICS.scaled(px)
 
     assert len(calls) == len(MAP_LIBRARY_VISUAL_METRICS.__dataclass_fields__)
-    assert scaled.surface_top_pad_y == 88
+    assert scaled.surface_top_pad_y == 48
     assert scaled.section_corner_radius == 20
     assert scaled.section_padding_x == 48
     assert scaled.section_padding_y == 40
@@ -69,9 +69,13 @@ def test_map_library_reference_frame_resolves_exact_card_coordinates():
     assert MAP_LIBRARY_SCROLLBAR_RAIL_WIDTH == 14
     assert main_x == 246
     assert card_width == 806
-    assert MAP_LIBRARY_VISUAL_METRICS.surface_top_pad_y == 44
-    assert catalog_y == 206
-    assert catalog_y + MAP_LIBRARY_VISUAL_METRICS.catalog_card_min_height == 690
+    assert (
+        MAP_LIBRARY_VISUAL_METRICS.surface_top_pad_y
+        == MAP_LIBRARY_VISUAL_METRICS.section_gap_y
+        == 24
+    )
+    assert catalog_y == 186
+    assert catalog_y + MAP_LIBRARY_VISUAL_METRICS.catalog_card_min_height == 670
 
 
 def test_map_library_palette_uses_semantic_theme_roles():

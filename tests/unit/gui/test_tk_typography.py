@@ -14,8 +14,11 @@ def test_semantic_typography_roles_use_the_documented_base_scale():
     assert typography.body == ("CaveViewer Sans", 10)
     assert typography.supporting == ("CaveViewer Sans", 9)
     assert typography.section == ("CaveViewer Sans", 9, "bold")
+    assert typography.medium_family == "CaveViewer Sans"
+    assert typography.medium_styles == ()
     assert typography.semibold_family == "CaveViewer Sans"
     assert typography.semibold_styles == ("bold",)
+    assert typography.text_scale == 1.0
 
 
 def test_semantic_typography_applies_accessibility_scale_once():
@@ -27,6 +30,7 @@ def test_semantic_typography_applies_accessibility_scale_once():
     assert typography.body == ("CaveViewer Sans", 14)
     assert typography.supporting == ("CaveViewer Sans", 13)
     assert typography.section == ("CaveViewer Sans", 13, "bold")
+    assert typography.text_scale == 1.4
 
 
 def test_semantic_typography_accepts_a_registered_semibold_face():
@@ -38,3 +42,14 @@ def test_semantic_typography_accepts_a_registered_semibold_face():
 
     assert typography.semibold_family == "Inter SemiBold"
     assert typography.semibold_styles == ()
+
+
+def test_semantic_typography_accepts_a_registered_medium_face():
+    typography = create_tk_typography(
+        "Inter",
+        medium_family="Inter Medium",
+        medium_styles=(),
+    )
+
+    assert typography.medium_family == "Inter Medium"
+    assert typography.medium_styles == ()

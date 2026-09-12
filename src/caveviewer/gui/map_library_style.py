@@ -109,7 +109,7 @@ class MapLibraryVisualMetrics:
     """Unscaled geometry shared by every Map Library state."""
 
     surface_inset_x: int = 0
-    surface_top_pad_y: int = 44
+    surface_top_pad_y: int = 24
     surface_bottom_pad_y: int = 30
     section_corner_radius: int = 10
     section_border_thickness: int = 1
