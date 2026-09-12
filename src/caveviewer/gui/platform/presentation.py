@@ -13,6 +13,8 @@ import subprocess
 import sys
 from dataclasses import dataclass, replace
 
+from caveviewer.resources import inter_font_path
+
 
 @dataclass(frozen=True)
 class SplashLayoutPolicy:
@@ -65,12 +67,16 @@ class DialogLayoutPolicy:
     use_label_action_buttons: bool
 
 
+_BUNDLED_INTER_REGULAR = str(inter_font_path("regular"))
+
 _DEFAULT_FONT_CANDIDATES = (
+    _BUNDLED_INTER_REGULAR,
     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
     "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
 )
 
 _WINDOWS_FONT_CANDIDATES = (
+    _BUNDLED_INTER_REGULAR,
     "C:/Windows/Fonts/segoeui.ttf",
     "C:/Windows/Fonts/segoeuib.ttf",
     "C:/Windows/Fonts/arial.ttf",
@@ -81,6 +87,7 @@ _WINDOWS_FONT_CANDIDATES = (
 )
 
 _MACOS_FONT_CANDIDATES = (
+    _BUNDLED_INTER_REGULAR,
     "/System/Library/Fonts/SFNS.ttf",
     "/System/Library/Fonts/SFNSDisplay.ttf",
     "/System/Library/Fonts/HelveticaNeue.ttc",
@@ -91,7 +98,7 @@ _MACOS_FONT_CANDIDATES = (
 )
 
 _LINUX_FONT_CANDIDATES = (
-    "/usr/share/caveviewer/fonts/CaveViewerUI-Regular.ttf",
+    _BUNDLED_INTER_REGULAR,
     "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
     "/usr/share/fonts/google-noto/NotoSans-Regular.ttf",
     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
@@ -115,6 +122,9 @@ class PresentationProfile:
 
     platform_name: str
     ui_font_family: str
+    ui_font_fallback_family: str
+    ui_semibold_font_family: str
+    ui_semibold_fallback_family: str | None
     font_candidates: tuple[str, ...]
     uses_fontconfig_fallback: bool
     splash_layout: SplashLayoutPolicy
@@ -143,6 +153,20 @@ class PresentationProfile:
         if not font_family:
             raise ValueError("presentation font family must be non-empty")
         object.__setattr__(self, "ui_font_family", font_family)
+        fallback_family = str(self.ui_font_fallback_family or "").strip()
+        if not fallback_family:
+            raise ValueError("presentation fallback font family must be non-empty")
+        object.__setattr__(self, "ui_font_fallback_family", fallback_family)
+        semibold_family = str(self.ui_semibold_font_family or "").strip()
+        if not semibold_family:
+            raise ValueError("presentation semibold font family must be non-empty")
+        object.__setattr__(self, "ui_semibold_font_family", semibold_family)
+        semibold_fallback = str(self.ui_semibold_fallback_family or "").strip()
+        object.__setattr__(
+            self,
+            "ui_semibold_fallback_family",
+            semibold_fallback or None,
+        )
         candidates: list[str] = []
         for candidate in self.font_candidates:
             if candidate is None:
@@ -188,7 +212,10 @@ class PresentationProfile:
 
 _DEFAULT_PRESENTATION_PROFILE = PresentationProfile(
     platform_name="unsupported",
-    ui_font_family="Segoe UI",
+    ui_font_family="Inter",
+    ui_font_fallback_family="Segoe UI",
+    ui_semibold_font_family="Inter SemiBold",
+    ui_semibold_fallback_family="Segoe UI Semibold",
     font_candidates=_DEFAULT_FONT_CANDIDATES,
     uses_fontconfig_fallback=False,
     splash_layout=SplashLayoutPolicy(
@@ -263,7 +290,8 @@ def select_presentation_profile(*, platform_name: str) -> PresentationProfile:
         return replace(
             _DEFAULT_PRESENTATION_PROFILE,
             platform_name="darwin",
-            ui_font_family="Helvetica Neue",
+            ui_font_fallback_family="Helvetica Neue",
+            ui_semibold_fallback_family="Helvetica Neue Medium",
             font_candidates=_MACOS_FONT_CANDIDATES,
             splash_layout=SplashLayoutPolicy(
                 reuse_existing_root=True,
@@ -371,7 +399,8 @@ def select_presentation_profile(*, platform_name: str) -> PresentationProfile:
         return replace(
             _DEFAULT_PRESENTATION_PROFILE,
             platform_name="linux",
-            ui_font_family="sans-serif",
+            ui_font_fallback_family="sans-serif",
+            ui_semibold_fallback_family=None,
             font_candidates=_LINUX_FONT_CANDIDATES,
             uses_fontconfig_fallback=True,
             splash_layout=SplashLayoutPolicy(

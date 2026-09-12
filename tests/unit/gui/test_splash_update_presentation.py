@@ -681,6 +681,8 @@ def test_splash_font_configuration_does_not_wait_on_fontconfig():
 def test_splash_fonts_scale_from_runtime_tk_default(monkeypatch):
     font_globals = (
         "_UI_FONT_FAMILY",
+        "_UI_SEMIBOLD_FONT_FAMILY",
+        "_UI_SEMIBOLD_FONT_STYLES",
         "_TK_TEXT_SCALE",
         "_TYPOGRAPHY",
     )
@@ -729,6 +731,8 @@ def test_splash_fonts_scale_from_runtime_tk_default(monkeypatch):
 def test_splash_linux_fonts_do_not_multiply_the_tk_default_font(monkeypatch):
     font_globals = (
         "_UI_FONT_FAMILY",
+        "_UI_SEMIBOLD_FONT_FAMILY",
+        "_UI_SEMIBOLD_FONT_STYLES",
         "_TK_TEXT_SCALE",
         "_TYPOGRAPHY",
     )
@@ -762,7 +766,13 @@ def test_splash_linux_fonts_do_not_multiply_the_tk_default_font(monkeypatch):
 
 
 def test_splash_windows_fonts_apply_large_monitor_density_once(monkeypatch):
-    font_globals = ("_UI_FONT_FAMILY", "_TK_TEXT_SCALE", "_TYPOGRAPHY")
+    font_globals = (
+        "_UI_FONT_FAMILY",
+        "_UI_SEMIBOLD_FONT_FAMILY",
+        "_UI_SEMIBOLD_FONT_STYLES",
+        "_TK_TEXT_SCALE",
+        "_TYPOGRAPHY",
+    )
     original_values = {name: getattr(splash_screen, name) for name in font_globals}
 
     class FakeDefaultFont:
@@ -785,6 +795,46 @@ def test_splash_windows_fonts_apply_large_monitor_density_once(monkeypatch):
         assert splash_screen._TYPOGRAPHY.body == ("Segoe UI", 10)
         assert splash_screen._TYPOGRAPHY.supporting == ("Segoe UI", 9)
         assert splash_screen._TYPOGRAPHY.display == ("Segoe UI", 17, "bold")
+    finally:
+        for name, value in original_values.items():
+            setattr(splash_screen, name, value)
+
+
+def test_splash_prefers_registered_inter_regular_and_semibold(monkeypatch):
+    font_globals = (
+        "_UI_FONT_FAMILY",
+        "_UI_SEMIBOLD_FONT_FAMILY",
+        "_UI_SEMIBOLD_FONT_STYLES",
+        "_TK_TEXT_SCALE",
+        "_TYPOGRAPHY",
+    )
+    original_values = {name: getattr(splash_screen, name) for name in font_globals}
+
+    class FakeDefaultFont:
+        def actual(self, key):
+            return {"family": "Segoe UI", "size": 10}[key]
+
+    import tkinter.font as tkfont
+
+    monkeypatch.setattr(
+        tkfont,
+        "families",
+        lambda _root: ["Segoe UI", "Inter", "Inter SemiBold"],
+    )
+    monkeypatch.setattr(tkfont, "nametofont", lambda _name: FakeDefaultFont())
+
+    try:
+        splash_screen._configure_runtime_tk_fonts(
+            object(),
+            presentation_profile=select_presentation_profile(platform_name="win32"),
+        )
+
+        assert splash_screen._UI_FONT_FAMILY == "Inter"
+        assert splash_screen._UI_SEMIBOLD_FONT_FAMILY == "Inter SemiBold"
+        assert splash_screen._UI_SEMIBOLD_FONT_STYLES == ()
+        assert splash_screen._TYPOGRAPHY.body == ("Inter", 10)
+        assert splash_screen._TYPOGRAPHY.semibold_family == "Inter SemiBold"
+        assert splash_screen._TYPOGRAPHY.semibold_styles == ()
     finally:
         for name, value in original_values.items():
             setattr(splash_screen, name, value)
@@ -1340,8 +1390,8 @@ def test_splash_navigation_uses_transparent_entries_and_type_only_selection():
     assert "foreground = _NAVIGATION_SELECTED_FG" in source
     assert "foreground = _NAVIGATION_INACTIVE_FG" in source
     assert "bg=_NAVIGATION_PANEL_BG" in source
-    assert 'navigation_selected_font_family = "Segoe UI Semibold"' in source
-    assert "navigation_selected_font_weight = ()" in source
+    assert "_UI_SEMIBOLD_FONT_FAMILY" in source
+    assert "*_UI_SEMIBOLD_FONT_STYLES" in source
     assert "navigation_inactive_font" in source
 
 

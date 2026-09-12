@@ -23,6 +23,9 @@ detection.
 - `presentation.py` selects fonts, layouts, shortcuts, scaling, and input
   conventions. `presentation_actions.py` owns DPI setup, About-menu
   integration, and viewer focus.
+- `font_registration.py` registers bundled Inter faces only for the running
+  process before Tk family discovery. It owns native rollback and cleanup;
+  presentation code owns selection and fallback policy.
 - `desktop_services.py` owns file and directory selection, file/URI opening,
   notifications, and idle/suspend inhibition. Linux uses portal-first routes
   with conservative fallbacks.

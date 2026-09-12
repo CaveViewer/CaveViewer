@@ -130,7 +130,11 @@ def test_map_library_panel_style_resolves_metrics_fonts_and_progress_colors():
 
 
 def test_map_library_windows_titles_use_the_semibold_face_at_14_pixels():
-    typography = create_tk_typography("Segoe UI")
+    typography = create_tk_typography(
+        "Segoe UI",
+        semibold_family="Segoe UI Semibold",
+        semibold_styles=(),
+    )
 
     style = create_map_library_panel_style(
         px=lambda value: int(round(value * 1.5)),

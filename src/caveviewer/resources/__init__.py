@@ -19,6 +19,38 @@ def ui_icon_path(filename: str) -> Path:
     return resource_path("images", "ui", filename)
 
 
+INTER_FONT_FILENAMES = {
+    "regular": "Inter-Regular.ttf",
+    "semibold": "Inter-SemiBold.ttf",
+    "bold": "Inter-Bold.ttf",
+}
+
+
+def inter_font_path(style: str = "regular") -> Path:
+    """Return one pinned static Inter face by semantic style name."""
+    try:
+        filename = INTER_FONT_FILENAMES[style]
+    except KeyError as exc:
+        expected = ", ".join(INTER_FONT_FILENAMES)
+        raise ValueError(f"unknown Inter style {style!r}; expected one of: {expected}") from exc
+    return resource_path("fonts", "inter", filename)
+
+
+def inter_font_paths() -> tuple[Path, ...]:
+    """Return every Inter face that must be registered for Tk typography."""
+    return tuple(inter_font_path(style) for style in INTER_FONT_FILENAMES)
+
+
+def inter_font_license_path() -> Path:
+    """Return the license shipped with the bundled Inter faces."""
+    return resource_path("fonts", "inter", "LICENSE.txt")
+
+
+def inter_font_manifest_path() -> Path:
+    """Return the pinned Inter provenance manifest."""
+    return resource_path("fonts", "inter", "manifest.json")
+
+
 def shader_path(filename: str) -> Path:
     return resource_path("shaders", filename)
 

@@ -27,22 +27,42 @@ from caveviewer.gui.platform.runtime import create_platform_runtime
         "platform_name",
         "profile_name",
         "font_family",
+        "fallback_family",
         "shortcut_label",
         "look_button",
         "overlay_scale",
         "uses_glfw_size",
     ),
     [
-        ("unsupported", "unsupported", "Segoe UI", "Ctrl", "left", 1.0, False),
-        ("darwin", "darwin", "Helvetica Neue", "Cmd", "right", 1.15, False),
-        ("win32", "windows", "Segoe UI", "Ctrl", "left", 1.0, False),
-        ("linux", "linux", "sans-serif", "Ctrl", "left", 1.0, True),
+        (
+            "unsupported",
+            "unsupported",
+            "Inter",
+            "Segoe UI",
+            "Ctrl",
+            "left",
+            1.0,
+            False,
+        ),
+        (
+            "darwin",
+            "darwin",
+            "Inter",
+            "Helvetica Neue",
+            "Cmd",
+            "right",
+            1.15,
+            False,
+        ),
+        ("win32", "windows", "Inter", "Segoe UI", "Ctrl", "left", 1.0, False),
+        ("linux", "linux", "Inter", "sans-serif", "Ctrl", "left", 1.0, True),
     ],
 )
 def test_presentation_profile_selects_static_platform_conventions(
     platform_name,
     profile_name,
     font_family,
+    fallback_family,
     shortcut_label,
     look_button,
     overlay_scale,
@@ -52,6 +72,8 @@ def test_presentation_profile_selects_static_platform_conventions(
 
     assert profile.platform_name == profile_name
     assert profile.ui_font_family == font_family
+    assert profile.ui_font_fallback_family == fallback_family
+    assert profile.ui_semibold_font_family == "Inter SemiBold"
     assert profile.primary_shortcut_modifier_label == shortcut_label
     assert profile.mouse_look_button_name == look_button
     assert profile.viewer_overlay_text_scale(2.0) == pytest.approx(

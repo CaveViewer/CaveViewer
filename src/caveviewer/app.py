@@ -854,6 +854,9 @@ def main():
     # capability probes, policy decisions, and platform adapters as GUI mode.
     record_startup_stage("platform_runtime_import_begin")
     from caveviewer.gui.platform.runtime import create_platform_runtime
+    from caveviewer.gui.platform.font_registration import (
+        ensure_bundled_inter_registered,
+    )
     record_startup_stage("platform_runtime_import_complete")
 
     # CLI argument: open that path and exit when the viewer closes.
@@ -893,6 +896,11 @@ def main():
         runtime_settings=runtime_settings,
         environment=os.environ,
     )
+    record_startup_stage("bundled_font_registration_begin")
+    ensure_bundled_inter_registered(
+        platform_name=platform_runtime.profile.platform_name,
+    )
+    record_startup_stage("bundled_font_registration_complete")
     record_startup_stage("platform_runtime_create_complete")
     record_startup_stage("update_manager_create_begin")
     update_manager = UpdateManager(
@@ -1045,6 +1053,14 @@ def run(*, startup_diagnostics: StartupDiagnostics | None = None) -> None:
             reason="main_returned",
         )
     finally:
+        try:
+            from caveviewer.gui.platform.font_registration import (
+                unregister_bundled_inter_fonts,
+            )
+
+            unregister_bundled_inter_fonts()
+        except Exception:
+            _LOG.debug("Bundled-font cleanup failed", exc_info=True)
         if get_active_application_diagnostics() is application_diagnostics:
             set_active_application_diagnostics(None)
         if runtime_diagnostics is not None:

@@ -47,20 +47,15 @@ def _logical_pixel_font(
     *,
     px: Callable[[int | float], int],
     size: int,
-    semibold: bool = False,
+    semibold_family: str | None = None,
+    semibold_styles: tuple[str, ...] = (),
 ) -> tuple:
     """Resolve an exact logical-pixel font with a platform-safe emphasis."""
-    family = font[0]
-    styles: tuple[str, ...] = ()
-    if semibold:
-        normalized_family = str(family).casefold()
-        if normalized_family == "segoe ui":
-            family = "Segoe UI Semibold"
-        elif normalized_family == "helvetica neue":
-            family = "Helvetica Neue Medium"
-        else:
-            styles = ("bold",)
-    return (family, -max(1, px(size)), *styles)
+    return (
+        semibold_family or font[0],
+        -max(1, px(size)),
+        *semibold_styles,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -332,7 +327,8 @@ def create_map_library_panel_style(
             typography.body_strong,
             px=px,
             size=14,
-            semibold=True,
+            semibold_family=typography.semibold_family,
+            semibold_styles=typography.semibold_styles,
         ),
         local_action_font=_logical_pixel_font(
             typography.body,
