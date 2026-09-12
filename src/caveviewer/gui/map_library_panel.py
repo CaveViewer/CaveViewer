@@ -768,8 +768,9 @@ class MapLibraryPanel:
         style = self._style
         metrics = style.metrics
         compact = bool(getattr(action, "_cv_compact", False))
+        # Canvas highlights cover edge pixels; keep the image inside that border.
+        icon_left = metrics.focus_border_thickness
         if compact:
-            icon_left = 0
             icon_top = (height - metrics.compact_local_action_icon_height) / 2
             icon_right = icon_left + metrics.compact_local_action_icon_width
             icon_bottom = icon_top + metrics.compact_local_action_icon_height
@@ -795,7 +796,6 @@ class MapLibraryPanel:
             )
             return
 
-        icon_left = 0
         icon_right = icon_left + metrics.local_action_icon_width
         text_left = icon_right + metrics.local_action_icon_to_text_x
         title_y = height / 2 - self._px(7)
@@ -945,9 +945,9 @@ class MapLibraryPanel:
             if title_bounds is not None
             else self._px(2) + self._px(120)
         )
-        triangle_center_x = title_right + self._px(10)
+        triangle_center_x = title_right + self._px(12)
         triangle_center_y = height / 2
-        triangle_size = max(2, self._px(3))
+        triangle_size = max(2, self._px(5))
         if section.expanded:
             points = (
                 triangle_center_x - triangle_size,

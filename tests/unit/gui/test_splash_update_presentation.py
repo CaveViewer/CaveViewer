@@ -2230,7 +2230,10 @@ def test_map_library_binds_dynamic_rows_to_the_shared_scrollbar():
     assert panel._content_scrollbar.targets == ["row"]
 
 
-def test_map_library_open_map_action_uses_the_existing_folder_callback(monkeypatch):
+@pytest.mark.parametrize("focus_border_thickness", [1, 2, 3])
+def test_map_library_open_map_action_uses_the_existing_folder_callback(
+    monkeypatch, focus_border_thickness
+):
     class _FakeCanvas:
         def __init__(self, _parent, **options) -> None:
             self.options = options
@@ -2301,7 +2304,7 @@ def test_map_library_open_map_action_uses_the_existing_folder_callback(monkeypat
     panel._style = SimpleNamespace(
         metrics=SimpleNamespace(
             local_action_height=50,
-            focus_border_thickness=1,
+            focus_border_thickness=focus_border_thickness,
             local_action_icon_width=32,
             local_action_icon_height=32,
             local_action_icon_to_text_x=14,
@@ -2356,6 +2359,8 @@ def test_map_library_open_map_action_uses_the_existing_folder_callback(monkeypat
     ]
     image_call = next(entry for entry in action.draw_calls if entry[0] == "image")
     text_calls = [entry for entry in action.draw_calls if entry[0] == "text"]
+    assert image_call[1][0] - 32 / 2 >= action.options["highlightthickness"]
+    assert text_calls[0][1][0] - (image_call[1][0] + 32 / 2) == 14
     assert image_call[1][1] == pytest.approx(
         (text_calls[0][1][1] + text_calls[1][1][1]) / 2
     )
@@ -2369,6 +2374,10 @@ def test_map_library_open_map_action_uses_the_existing_folder_callback(monkeypat
         "image_size": (20, 20),
         "color": "#a9afbc",
     }
+    image_call = next(entry for entry in action.draw_calls if entry[0] == "image")
+    text_call = next(entry for entry in action.draw_calls if entry[0] == "text")
+    assert image_call[1][0] - 20 / 2 >= action.options["highlightthickness"]
+    assert text_call[1][0] - (image_call[1][0] + 20 / 2) == 12
     compact_text = [
         entry[2]
         for entry in action.draw_calls

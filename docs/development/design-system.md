@@ -152,6 +152,8 @@ Both cards use `#15171C`. The Recent border is `#30343D`; the catalog border is
 12-pixel regular `#B6BCC8`, and file sizes use 12-pixel regular `#A9AFBC`.
 Disclosure and primary row actions use `#F5C451`; overflow uses `#A9AFBC`.
 Section headings retain the reviewed reduced heading scale.
+Their disclosure triangles span 10 by 5 logical pixels when expanded and 5 by
+10 when collapsed, centered vertically beside the title.
 
 The local-map folder is a bundled transparent asset resized with high-quality
 downsampling and tinted at render time. It uses `#F5C451` beside the two-line
