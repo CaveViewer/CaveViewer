@@ -73,6 +73,7 @@ def test_presentation_profile_selects_static_platform_conventions(
     assert profile.platform_name == profile_name
     assert profile.ui_font_family == font_family
     assert profile.ui_font_fallback_family == fallback_family
+    assert profile.ui_medium_font_family == "Inter Medium"
     assert profile.ui_semibold_font_family == "Inter SemiBold"
     assert profile.primary_shortcut_modifier_label == shortcut_label
     assert profile.mouse_look_button_name == look_button

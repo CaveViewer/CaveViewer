@@ -6,15 +6,21 @@ import pytest
 
 from caveviewer.gui.help_style import (
     HELP_SECTION_CONTENT,
-    HELP_TYPOGRAPHY_ROLES,
     HELP_VISUAL_METRICS,
     HELP_VISUAL_PALETTE,
     HelpVisualMetrics,
     ScaledHelpVisualMetrics,
+    create_help_typography,
     help_section_content,
 )
-from caveviewer.gui.preferences_style import PREFERENCES_VISUAL_METRICS
+from caveviewer.gui.preferences_style import (
+    PREFERENCES_PRIMARY_TEXT,
+    PREFERENCES_SUPPORTING_TEXT,
+    PREFERENCES_TAB_INDICATOR,
+    PREFERENCES_VISUAL_METRICS,
+)
 from caveviewer.gui.tk_theme import DARK_THEME
+from caveviewer.gui.tk_typography import create_tk_typography
 
 
 def test_help_metrics_align_with_the_approved_preferences_pattern():
@@ -54,24 +60,53 @@ def test_help_palette_uses_existing_semantic_theme_colors():
 
     assert palette.surface_background == DARK_THEME.background
     assert palette.section_background == DARK_THEME.panel
-    assert palette.heading_text == DARK_THEME.body_text
-    assert palette.supporting_text == DARK_THEME.secondary_text
-    assert palette.tab_active_text == DARK_THEME.primary_button
+    assert palette.heading_text == PREFERENCES_PRIMARY_TEXT
+    assert palette.supporting_text == PREFERENCES_SUPPORTING_TEXT
+    assert palette.tab_active_text == PREFERENCES_PRIMARY_TEXT
+    assert palette.tab_inactive_text == PREFERENCES_SUPPORTING_TEXT
+    assert palette.tab_indicator == PREFERENCES_TAB_INDICATOR
     assert palette.control_focus_border == DARK_THEME.entry_focus_border
     assert palette.error_text == DARK_THEME.error_text
 
 
-def test_help_typography_uses_only_shared_semantic_roles():
-    roles = HELP_TYPOGRAPHY_ROLES
+def test_help_typography_matches_preferences():
+    shared = create_tk_typography(
+        "Inter",
+        medium_family="Inter Medium",
+        semibold_family="Inter SemiBold",
+        semibold_styles=(),
+    )
 
-    assert roles.active_tab == "body_strong"
-    assert roles.inactive_tab == "body"
-    assert roles.section_heading == "heading"
-    assert roles.section_description == "supporting"
-    assert roles.keycap == "body_strong"
-    assert roles.action == "body"
-    assert roles.action_strong == "body_strong"
-    assert roles.detail == roles.error == "supporting"
+    typography = create_help_typography(shared, px=round)
+
+    assert typography.active_tab == ("Inter SemiBold", -14)
+    assert typography.inactive_tab == ("Inter", -14)
+    assert typography.section_title == ("Inter", -16, "bold")
+    assert typography.section_summary == ("Inter", -13)
+    assert typography.keycap == ("Inter Medium", -14)
+    assert typography.action == ("Inter SemiBold", -14)
+    assert typography.action_strong == ("Inter SemiBold", -14)
+    assert typography.detail == typography.error == ("Inter", -12)
+
+
+def test_help_typography_applies_display_scaling_once():
+    shared = create_tk_typography(
+        "Inter",
+        medium_family="Inter Medium",
+        semibold_family="Inter SemiBold",
+        semibold_styles=(),
+    )
+
+    typography = create_help_typography(
+        shared,
+        px=lambda value: round(value * 1.5),
+    )
+
+    assert typography.active_tab == ("Inter SemiBold", -21)
+    assert typography.section_title == ("Inter", -24, "bold")
+    assert typography.section_summary == ("Inter", -20)
+    assert typography.keycap == ("Inter Medium", -21)
+    assert typography.detail == ("Inter", -18)
 
 
 def test_help_section_content_covers_each_declared_card_once():

@@ -21,6 +21,7 @@ def ui_icon_path(filename: str) -> Path:
 
 INTER_FONT_FILENAMES = {
     "regular": "Inter-Regular.ttf",
+    "medium": "Inter-Medium.ttf",
     "semibold": "Inter-SemiBold.ttf",
     "bold": "Inter-Bold.ttf",
 }

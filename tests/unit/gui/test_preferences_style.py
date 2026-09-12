@@ -3,13 +3,16 @@
 from dataclasses import fields
 
 from caveviewer.gui.preferences_style import (
-    PREFERENCES_TYPOGRAPHY_ROLES,
     PREFERENCES_VISUAL_METRICS,
     PREFERENCES_VISUAL_PALETTE,
+    PREFERENCES_PRIMARY_TEXT,
+    PREFERENCES_SUPPORTING_TEXT,
     PreferencesVisualMetrics,
     ScaledPreferencesVisualMetrics,
+    create_preferences_typography,
 )
 from caveviewer.gui.tk_theme import DARK_THEME
+from caveviewer.gui.tk_typography import create_tk_typography
 
 
 def test_preferences_visual_metrics_match_the_reference_contract():
@@ -54,17 +57,68 @@ def test_preferences_palette_uses_existing_semantic_theme_colors():
     assert palette.section_background == DARK_THEME.panel
     assert palette.control_focus_border == DARK_THEME.entry_focus_border
     assert palette.control_invalid_border == DARK_THEME.invalid_border
-    assert palette.tab_active_text == DARK_THEME.primary_button
+    assert palette.heading_text == PREFERENCES_PRIMARY_TEXT == "#EFF1F5"
+    assert palette.field_label_text == PREFERENCES_PRIMARY_TEXT
+    assert palette.control_text == PREFERENCES_PRIMARY_TEXT
+    assert palette.tab_active_text == PREFERENCES_PRIMARY_TEXT
+    assert palette.supporting_text == PREFERENCES_SUPPORTING_TEXT == "#A9AFBC"
+    assert palette.tab_inactive_text == PREFERENCES_SUPPORTING_TEXT
     assert palette.disabled_action_text == DARK_THEME.placeholder_text
 
 
-def test_preferences_typography_uses_only_shared_semantic_roles():
-    roles = PREFERENCES_TYPOGRAPHY_ROLES
+def test_preferences_typography_matches_the_streaming_reference():
+    shared = create_tk_typography(
+        "Inter",
+        medium_family="Inter Medium",
+        medium_styles=(),
+        semibold_family="Inter SemiBold",
+        semibold_styles=(),
+    )
 
-    assert roles.active_tab == "body_strong"
-    assert roles.inactive_tab == "body"
-    assert roles.section_heading == "heading"
-    assert roles.section_description == "supporting"
-    assert roles.field_label == "body_strong"
-    assert roles.field_description == "supporting"
-    assert roles.action == "body_strong"
+    typography = create_preferences_typography(shared, px=round)
+
+    assert typography.active_tab == ("Inter SemiBold", -14)
+    assert typography.inactive_tab == ("Inter", -14)
+    assert typography.section_title == ("Inter", -16, "bold")
+    assert typography.section_summary == ("Inter", -13)
+    assert typography.field_label == ("Inter SemiBold", -14)
+    assert typography.field_description == ("Inter", -12)
+    assert typography.field_value == ("Inter Medium", -14)
+    assert typography.field_unit == ("Inter", -14)
+
+
+def test_preferences_typography_applies_display_scaling_once():
+    shared = create_tk_typography(
+        "Inter",
+        medium_family="Inter Medium",
+        semibold_family="Inter SemiBold",
+        semibold_styles=(),
+    )
+
+    typography = create_preferences_typography(
+        shared,
+        px=lambda value: round(value * 1.5),
+    )
+
+    assert typography.active_tab == ("Inter SemiBold", -21)
+    assert typography.section_title == ("Inter", -24, "bold")
+    assert typography.section_summary == ("Inter", -20)
+    assert typography.field_description == ("Inter", -18)
+    assert typography.field_value == ("Inter Medium", -21)
+
+
+def test_preferences_typography_preserves_the_runtime_text_scale():
+    shared = create_tk_typography(
+        "Inter",
+        medium_family="Inter Medium",
+        semibold_family="Inter SemiBold",
+        semibold_styles=(),
+        text_scale=1.25,
+    )
+
+    typography = create_preferences_typography(shared, px=round)
+
+    assert typography.active_tab == ("Inter SemiBold", -18)
+    assert typography.section_title == ("Inter", -20, "bold")
+    assert typography.field_description == ("Inter", -15)
+    assert typography.field_value == ("Inter Medium", -18)

@@ -15,6 +15,11 @@
       "weight": 400,
       "sha256": "64f8be6e55c37e32ef03da99714bf3aa58b8f2099bfe4f759a7578e3b8291123"
     },
+    "Inter-Medium.ttf": {
+      "style": "Medium",
+      "weight": 500,
+      "sha256": "1bda81124d6ae26ed16a7201e2bd93766af5a3b14faf79eea14d191ebbd41146"
+    },
     "Inter-SemiBold.ttf": {
       "style": "SemiBold",
       "weight": 600,

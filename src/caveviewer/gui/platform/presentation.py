@@ -123,6 +123,8 @@ class PresentationProfile:
     platform_name: str
     ui_font_family: str
     ui_font_fallback_family: str
+    ui_medium_font_family: str
+    ui_medium_fallback_family: str | None
     ui_semibold_font_family: str
     ui_semibold_fallback_family: str | None
     font_candidates: tuple[str, ...]
@@ -157,6 +159,16 @@ class PresentationProfile:
         if not fallback_family:
             raise ValueError("presentation fallback font family must be non-empty")
         object.__setattr__(self, "ui_font_fallback_family", fallback_family)
+        medium_family = str(self.ui_medium_font_family or "").strip()
+        if not medium_family:
+            raise ValueError("presentation medium font family must be non-empty")
+        object.__setattr__(self, "ui_medium_font_family", medium_family)
+        medium_fallback = str(self.ui_medium_fallback_family or "").strip()
+        object.__setattr__(
+            self,
+            "ui_medium_fallback_family",
+            medium_fallback or None,
+        )
         semibold_family = str(self.ui_semibold_font_family or "").strip()
         if not semibold_family:
             raise ValueError("presentation semibold font family must be non-empty")
@@ -214,6 +226,8 @@ _DEFAULT_PRESENTATION_PROFILE = PresentationProfile(
     platform_name="unsupported",
     ui_font_family="Inter",
     ui_font_fallback_family="Segoe UI",
+    ui_medium_font_family="Inter Medium",
+    ui_medium_fallback_family=None,
     ui_semibold_font_family="Inter SemiBold",
     ui_semibold_fallback_family="Segoe UI Semibold",
     font_candidates=_DEFAULT_FONT_CANDIDATES,
@@ -291,6 +305,7 @@ def select_presentation_profile(*, platform_name: str) -> PresentationProfile:
             _DEFAULT_PRESENTATION_PROFILE,
             platform_name="darwin",
             ui_font_fallback_family="Helvetica Neue",
+            ui_medium_fallback_family="Helvetica Neue Medium",
             ui_semibold_fallback_family="Helvetica Neue Medium",
             font_candidates=_MACOS_FONT_CANDIDATES,
             splash_layout=SplashLayoutPolicy(

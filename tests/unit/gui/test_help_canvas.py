@@ -16,7 +16,7 @@ def _metrics():
     return HELP_VISUAL_METRICS.scaled(round)
 
 
-def test_help_card_keeps_equal_padding_and_the_shared_right_gutter():
+def test_help_card_keeps_equal_padding_and_matches_preferences_content_edges():
     metrics = _metrics()
 
     card = measure_help_card(
@@ -27,8 +27,8 @@ def test_help_card_keeps_equal_padding_and_the_shared_right_gutter():
         metrics=metrics,
     )
 
-    assert card.outer == CanvasBounds(12, 20, 788, 162)
-    assert card.content == CanvasBounds(34, 42, 766, 140)
+    assert card.outer == CanvasBounds(12, 20, 800, 162)
+    assert card.content == CanvasBounds(34, 42, 778, 140)
     assert card.content.left - card.outer.left == 22
     assert card.outer.right - card.content.right == 22
     assert card.content.top - card.outer.top == 22
@@ -48,8 +48,8 @@ def test_help_card_clamps_narrow_width_without_collapsing_its_content():
 
     assert card.outer.left == 12
     assert card.outer.top == 0
-    assert card.outer.width == 1
-    assert card.content.width == 1
+    assert card.outer.width == 8
+    assert card.content.width == 2
     assert card.outer.height == 44
 
 

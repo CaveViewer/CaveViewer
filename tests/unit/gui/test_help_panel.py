@@ -32,6 +32,7 @@ def test_help_panel_uses_a_compact_keys_table_without_redundant_labels():
     assert "TopTabbedContentSurface(" in source
     assert "active_font=style.tab_font" in source
     assert "inactive_font=style.tab_inactive_font" in source
+    assert "active_indicator_color=style.tab_indicator_color" in source
     assert "inactive_color=style.detail_color" in source
     assert "def _draw_keycap_sequence" in source
     assert "shortcut_keycap_parts(shortcut)" in source
@@ -319,11 +320,13 @@ def test_help_uses_the_shared_primary_surface_origin():
 
     assert "content_pad_left_x=0" in create_source
     assert "content_pad_right_x=style.content_pad_x" in create_source
-    assert "pady=self._px(PRIMARY_SURFACE_VERTICAL_MARGIN)" in create_source
+    assert "self._px(PRIMARY_LABEL_ROW_TOP_INSET)" in create_source
+    assert "self._px(PRIMARY_SURFACE_VERTICAL_MARGIN)" in create_source
+    assert "row_height=PRIMARY_LABEL_ROW_HEIGHT" in create_source
 
 
 @pytest.mark.gui
-def test_help_and_preferences_first_tabs_share_the_same_shell_origin(monkeypatch):
+def test_help_and_preferences_first_tabs_share_the_same_shell_geometry(monkeypatch):
     from caveviewer.gui import preferences as settings
     from caveviewer.gui import preferences_dialog, splash_screen
 
@@ -359,23 +362,38 @@ def test_help_and_preferences_first_tabs_share_the_same_shell_origin(monkeypatch
         help_surface = help_panel.HelpPanel(
             help_host,
             px=layout_px,
-            style=splash_screen._help_panel_style(),
+            style=splash_screen._help_panel_style(px=layout_px),
             sections=keyboard_control_sections(profile),
         )
         help_surface.create()
         root.update_idletasks()
 
-        streaming = preferences_panel.tab_strip._tab_labels["streaming"]
-        keys = help_surface._tab_strip._tab_labels["keys"]
-        host_origin = (host.winfo_rootx(), host.winfo_rooty())
+        preferences_strip = preferences_panel.tab_strip
+        help_strip = help_surface._tab_strip
+        preferences_shell = preferences_strip.widget.master.master
+        streaming = preferences_strip._tab_labels["streaming"]
+        keys = help_strip._tab_labels["keys"]
 
-        def relative_origin(widget):
-            return (
-                widget.winfo_rootx() - host_origin[0],
-                widget.winfo_rooty() - host_origin[1],
-            )
+        def pack_geometry(widget):
+            return {
+                key: value
+                for key, value in widget.pack_info().items()
+                if key != "in"
+            }
 
-        assert relative_origin(streaming) == relative_origin(keys)
+        assert preferences_shell.pack_info()["pady"] == (
+            layout_px(16),
+            layout_px(14),
+        )
+        assert preferences_shell.pack_info()["pady"] == (
+            help_surface._shell.pack_info()["pady"]
+        )
+        assert preferences_strip._style.row_height == help_strip._style.row_height
+        assert pack_geometry(streaming.master.master) == pack_geometry(
+            keys.master.master
+        )
+        assert pack_geometry(streaming.master) == pack_geometry(keys.master)
+        assert pack_geometry(streaming) == pack_geometry(keys)
     finally:
         root.destroy()
 
@@ -407,6 +425,7 @@ def test_help_cards_and_compact_shortcuts_keep_measured_alignment():
             background_color="#0a0a0d",
             section_background_color="#12121a",
             tab_active_color="#e5a11f",
+            tab_indicator_color="#30343d",
             tab_focus_color="#5d6f8a",
             section_color="#cccdd6",
             keycap_background_color="#1c1c24",
@@ -419,6 +438,7 @@ def test_help_cards_and_compact_shortcuts_keep_measured_alignment():
             tab_font=("Arial", 10, "bold"),
             tab_inactive_font=("Arial", 10),
             section_font=("Arial", 13, "bold"),
+            section_summary_font=("Arial", 11),
             keycap_font=("Arial", 10, "bold"),
             action_font=("Arial", 10),
             overview_font=("Arial", 10, "bold"),
@@ -454,7 +474,7 @@ def test_help_cards_and_compact_shortcuts_keep_measured_alignment():
 
         card_bounds = rendered_card_bounds()
         assert len(card_bounds) == 3
-        assert {(left, right) for left, _, right, _ in card_bounds} == {(12, 788)}
+        assert {(left, right) for left, _, right, _ in card_bounds} == {(12, 800)}
         card_gaps = [
             card_bounds[index + 1][1] - card_bounds[index][3]
             for index in range(2)
@@ -476,7 +496,7 @@ def test_help_cards_and_compact_shortcuts_keep_measured_alignment():
         assert canvas.coords(title_item)[0] == 34
         assert canvas.coords(action_item)[0] > 34
 
-        panel._render_table(400)
+        panel._render_table(380)
         compact_action_item = next(
             item
             for item in canvas.find_all()

@@ -5,8 +5,15 @@ from __future__ import annotations
 from dataclasses import dataclass, fields
 from typing import Callable
 
-from caveviewer.gui.preferences_style import PREFERENCES_VISUAL_METRICS
+from caveviewer.gui.preferences_style import (
+    PREFERENCES_PRIMARY_TEXT,
+    PREFERENCES_SUPPORTING_TEXT,
+    PREFERENCES_TAB_INDICATOR,
+    PREFERENCES_VISUAL_METRICS,
+    create_preferences_typography,
+)
 from caveviewer.gui.tk_theme import DARK_THEME, TkTheme
+from caveviewer.gui.tk_typography import TkTypography
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,7 +70,7 @@ class HelpVisualMetrics:
     )
     focus_border_thickness: int = PREFERENCES_VISUAL_METRICS.focus_border_thickness
     content_min_width: int = 320
-    content_right_pad_x: int = 12
+    content_right_pad_x: int = 0
     keycap_lane_min_width: int = 170
     keycap_lane_max_width: int = 250
     action_lane_gap_x: int = 32
@@ -98,6 +105,7 @@ class HelpVisualPalette:
     action_text: str
     tab_active_text: str
     tab_inactive_text: str
+    tab_indicator: str
     control_focus_border: str
     error_text: str
     primary_action_background: str
@@ -116,18 +124,39 @@ class HelpVisualPalette:
 
 
 @dataclass(frozen=True, slots=True)
-class HelpTypographyRoles:
-    """Names of the shared Tk typography roles used by Help."""
+class HelpTypography:
+    """Exact display-scaled font tuples shared with Preferences."""
 
-    active_tab: str = "body_strong"
-    inactive_tab: str = "body"
-    section_heading: str = "heading"
-    section_description: str = "supporting"
-    keycap: str = "body_strong"
-    action: str = "body"
-    action_strong: str = "body_strong"
-    detail: str = "supporting"
-    error: str = "supporting"
+    active_tab: tuple
+    inactive_tab: tuple
+    section_title: tuple
+    section_summary: tuple
+    keycap: tuple
+    action: tuple
+    action_strong: tuple
+    detail: tuple
+    error: tuple
+
+
+def create_help_typography(
+    typography: TkTypography,
+    *,
+    px: Callable[[int | float], int],
+) -> HelpTypography:
+    """Map Help content onto the exact Preferences type hierarchy."""
+
+    preferences = create_preferences_typography(typography, px=px)
+    return HelpTypography(
+        active_tab=preferences.active_tab,
+        inactive_tab=preferences.inactive_tab,
+        section_title=preferences.section_title,
+        section_summary=preferences.section_summary,
+        keycap=preferences.field_value,
+        action=preferences.field_label,
+        action_strong=preferences.field_label,
+        detail=preferences.field_description,
+        error=preferences.field_description,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,14 +175,15 @@ def help_visual_palette(theme: TkTheme = DARK_THEME) -> HelpVisualPalette:
     return HelpVisualPalette(
         surface_background=theme.background,
         section_background=theme.panel,
-        heading_text=theme.body_text,
-        supporting_text=theme.secondary_text,
+        heading_text=PREFERENCES_PRIMARY_TEXT,
+        supporting_text=PREFERENCES_SUPPORTING_TEXT,
         keycap_background=theme.entry_background,
         keycap_border=theme.secondary_button_border,
-        keycap_text=theme.body_text,
-        action_text=theme.body_text,
-        tab_active_text=theme.primary_button,
-        tab_inactive_text=theme.secondary_text,
+        keycap_text=PREFERENCES_PRIMARY_TEXT,
+        action_text=PREFERENCES_PRIMARY_TEXT,
+        tab_active_text=PREFERENCES_PRIMARY_TEXT,
+        tab_inactive_text=PREFERENCES_SUPPORTING_TEXT,
+        tab_indicator=PREFERENCES_TAB_INDICATOR,
         control_focus_border=theme.entry_focus_border,
         error_text=theme.error_text,
         primary_action_background=theme.primary_button,
@@ -235,4 +265,3 @@ def help_section_content(tab_key: str, section_id: str) -> HelpSectionContent:
 
 HELP_VISUAL_METRICS = HelpVisualMetrics()
 HELP_VISUAL_PALETTE = help_visual_palette()
-HELP_TYPOGRAPHY_ROLES = HelpTypographyRoles()

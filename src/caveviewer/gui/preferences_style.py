@@ -6,6 +6,12 @@ from dataclasses import dataclass, fields
 from typing import Callable
 
 from caveviewer.gui.tk_theme import DARK_THEME, TkTheme
+from caveviewer.gui.tk_typography import TkTypography
+
+
+PREFERENCES_PRIMARY_TEXT = "#EFF1F5"
+PREFERENCES_SUPPORTING_TEXT = "#A9AFBC"
+PREFERENCES_TAB_INDICATOR = "#30343D"
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,19 +112,54 @@ class PreferencesVisualPalette:
 
 
 @dataclass(frozen=True, slots=True)
-class PreferencesTypographyRoles:
-    """Names of the shared Tk typography roles used by Preferences."""
+class PreferencesTypography:
+    """Exact display-scaled font tuples for the Preferences hierarchy."""
 
-    active_tab: str = "body_strong"
-    inactive_tab: str = "body"
-    section_heading: str = "heading"
-    section_description: str = "supporting"
-    field_label: str = "body_strong"
-    field_description: str = "supporting"
-    field_value: str = "body"
-    field_unit: str = "body"
-    action: str = "body_strong"
-    feedback: str = "supporting"
+    active_tab: tuple
+    inactive_tab: tuple
+    section_title: tuple
+    section_summary: tuple
+    field_label: tuple
+    field_description: tuple
+    field_value: tuple
+    field_unit: tuple
+
+
+def create_preferences_typography(
+    typography: TkTypography,
+    *,
+    px: Callable[[int | float], int],
+) -> PreferencesTypography:
+    """Build the Preferences type hierarchy from registered Inter faces."""
+
+    regular_family = str(typography.body[0])
+
+    def font(family: str, size: int, *styles: str) -> tuple:
+        pixel_size = -max(1, int(px(size * typography.text_scale)))
+        return (family, pixel_size, *styles)
+
+    return PreferencesTypography(
+        active_tab=font(
+            typography.semibold_family,
+            14,
+            *typography.semibold_styles,
+        ),
+        inactive_tab=font(regular_family, 14),
+        section_title=font(regular_family, 16, "bold"),
+        section_summary=font(regular_family, 13),
+        field_label=font(
+            typography.semibold_family,
+            14,
+            *typography.semibold_styles,
+        ),
+        field_description=font(regular_family, 12),
+        field_value=font(
+            typography.medium_family,
+            14,
+            *typography.medium_styles,
+        ),
+        field_unit=font(regular_family, 14),
+    )
 
 
 def preferences_visual_palette(
@@ -128,17 +169,17 @@ def preferences_visual_palette(
     return PreferencesVisualPalette(
         surface_background=theme.background,
         section_background=theme.panel,
-        heading_text=theme.body_text,
-        field_label_text=theme.body_text,
-        supporting_text=theme.secondary_text,
+        heading_text=PREFERENCES_PRIMARY_TEXT,
+        field_label_text=PREFERENCES_PRIMARY_TEXT,
+        supporting_text=PREFERENCES_SUPPORTING_TEXT,
         control_background=theme.entry_background,
         control_border=theme.entry_border,
         control_focus_border=theme.entry_focus_border,
         control_invalid_border=theme.invalid_border,
-        control_text=theme.body_text,
+        control_text=PREFERENCES_PRIMARY_TEXT,
         control_placeholder_text=theme.placeholder_text,
-        tab_active_text=theme.primary_button,
-        tab_inactive_text=theme.secondary_text,
+        tab_active_text=PREFERENCES_PRIMARY_TEXT,
+        tab_inactive_text=PREFERENCES_SUPPORTING_TEXT,
         primary_action_background=theme.primary_button,
         primary_action_hover_background=theme.primary_button_hover,
         primary_action_pressed_background=theme.primary_button_border,
@@ -156,5 +197,4 @@ def preferences_visual_palette(
 
 
 PREFERENCES_VISUAL_METRICS = PreferencesVisualMetrics()
-PREFERENCES_TYPOGRAPHY_ROLES = PreferencesTypographyRoles()
 PREFERENCES_VISUAL_PALETTE = preferences_visual_palette()

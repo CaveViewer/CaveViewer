@@ -31,7 +31,11 @@ from caveviewer.gui.action_confirmation import (
     TransientActionConfirmation,
     create_confirmation_mark,
 )
-from caveviewer.gui.section_spacing import PRIMARY_SURFACE_VERTICAL_MARGIN
+from caveviewer.gui.section_spacing import (
+    PRIMARY_LABEL_ROW_HEIGHT,
+    PRIMARY_LABEL_ROW_TOP_INSET,
+    PRIMARY_SURFACE_VERTICAL_MARGIN,
+)
 from caveviewer.gui.scrollable_content import (
     CanvasScrollbarStyle,
     CanvasVerticalScrollbar,
@@ -192,6 +196,7 @@ class HelpPanelStyle:
     background_color: str
     section_background_color: str
     tab_active_color: str
+    tab_indicator_color: str
     tab_focus_color: str
     section_color: str
     keycap_background_color: str
@@ -204,6 +209,7 @@ class HelpPanelStyle:
     tab_font: tuple
     tab_inactive_font: tuple
     section_font: tuple
+    section_summary_font: tuple
     keycap_font: tuple
     action_font: tuple
     overview_font: tuple
@@ -284,6 +290,7 @@ class HelpPanel:
         self._tab_strip = None
         self._active_tab_key = None
         self._section_font = None
+        self._section_summary_font = None
         self._keycap_font = None
         self._action_font = None
         self._overview_font = None
@@ -310,6 +317,8 @@ class HelpPanel:
                 font=style.tab_font,
                 active_font=style.tab_font,
                 inactive_font=style.tab_inactive_font,
+                active_indicator_color=style.tab_indicator_color,
+                row_height=PRIMARY_LABEL_ROW_HEIGHT,
             ),
             style=TopTabbedContentSurfaceStyle(
                 background_color=style.background_color,
@@ -321,7 +330,10 @@ class HelpPanel:
         surface.pack(
             fill="both",
             expand=True,
-            pady=self._px(PRIMARY_SURFACE_VERTICAL_MARGIN),
+            pady=(
+                self._px(PRIMARY_LABEL_ROW_TOP_INSET),
+                self._px(PRIMARY_SURFACE_VERTICAL_MARGIN),
+            ),
         )
         self._shell = surface.widget
         self._tab_strip = surface.tab_strip
@@ -340,6 +352,10 @@ class HelpPanel:
         canvas.grid(row=0, column=0, sticky="nsew")
         self._content_canvas = canvas
         self._section_font = self._create_canvas_font(canvas, style.section_font)
+        self._section_summary_font = self._create_canvas_font(
+            canvas,
+            style.section_summary_font,
+        )
         self._keycap_font = self._create_canvas_font(canvas, style.keycap_font)
         self._action_font = self._create_canvas_font(canvas, style.action_font)
         self._overview_font = self._create_canvas_font(canvas, style.overview_font)
@@ -358,7 +374,7 @@ class HelpPanel:
             canvas,
             text="⧉  Copy",
             command=self._copy_last_error,
-            font=style.detail_font,
+            font=style.action_font,
             metrics=self._metrics,
             palette=HELP_VISUAL_PALETTE,
             kind="secondary",
@@ -795,7 +811,7 @@ class HelpPanel:
             content_x,
             purpose_y,
             text=content.purpose,
-            font=self._canvas_font("detail"),
+            font=self._canvas_font("section_summary"),
             fill=style.detail_color,
             anchor="nw",
             justify="left",
@@ -804,7 +820,7 @@ class HelpPanel:
         )
         purpose_bounds = canvas.bbox(purpose_item)
         purpose_height = (
-            self._font_line_height("detail")
+            self._font_line_height("section_summary")
             if purpose_bounds is None
             else max(1, purpose_bounds[3] - purpose_bounds[1])
         )
