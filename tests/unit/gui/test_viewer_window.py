@@ -2000,6 +2000,52 @@ def test_optional_ms_formatter_reports_disabled_timer():
 
 
 
+@pytest.mark.parametrize(
+    ("slice_metadata", "expected_position"),
+    [
+        (None, (-102.5, 52.5, 57.5)),
+        ({"entry_position": [-99.5, 50.25, 69.5]}, (-99.5, 50.25, 69.5)),
+        ({"entry_position": [1.0, 2.0]}, (-102.5, 52.5, 57.5)),
+        ({"entry_position": [float("nan"), 2.0, 3.0]}, (-102.5, 52.5, 57.5)),
+        ({"entry_position": "invalid"}, (-102.5, 52.5, 57.5)),
+    ],
+)
+def test_live_map_camera_starts_near_streamable_chunks(
+    tmp_path, slice_metadata, expected_position
+):
+    from caveviewer.core.streaming.scheduler import select_wanted_cells
+
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window.cache_dir = str(tmp_path)
+    window.manifest = {
+        "chunk_size": 5.0,
+        "chunks": {
+            "-21_10_11": {
+                "bounds_min": [-105.0, 50.0, 55.0],
+                "bounds_max": [-100.0, 55.0, 60.0],
+            },
+            "-20_10_13": {
+                "bounds_min": [-100.0, 50.0, 65.0],
+                "bounds_max": [-95.0, 55.0, 70.0],
+            },
+        },
+        "slice": slice_metadata,
+    }
+    window._load_bookmarks = lambda: None
+
+    window._initialize_map_camera(None, benchmark_controller=None)
+
+    assert tuple(window.camera.position) == expected_position
+    assert np.array_equal(
+        window.camera.position,
+        viewer_window._map_initial_camera_position(window.manifest),
+    )
+    camera_cell = tuple(np.floor(window.camera.position / 5.0).astype(int))
+    assert select_wanted_cells(
+        {(-21, 10, 11), (-20, 10, 13)}, camera_cell, 3, 2
+    ) == {(-21, 10, 11), (-20, 10, 13)}
+
+
 def test_map_initial_camera_ignores_navigation_start_metadata():
     manifest = {
         "chunks": {

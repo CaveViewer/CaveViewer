@@ -298,6 +298,12 @@ target, validates texture paths remain cache-local, and rechecks the parent
 manifest identity before publication. Cancellation and failures remove only
 the private slice staging directory; neither can modify the parent cache.
 
+Viewer map initialization uses a slice's finite saved entry position, falling
+back to the first valid chunk's bounds center for ordinary caches or invalid
+slice entry metadata. The map integration owns this policy, and the window's
+compatibility helper delegates to it. Recorded-dive and benchmark camera
+overrides retain priority over the normal cache start.
+
 First-time imports launched from the viewer run in a spawned child process
 through `src/caveviewer/gui/import_process.py`. The viewer process owns OpenGL,
 window events, progress rendering, and desktop idle/suspend inhibition; the
