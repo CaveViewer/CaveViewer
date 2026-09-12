@@ -121,7 +121,11 @@ from caveviewer.gui.platform.viewer_launch import (
     authorized_viewer_launch_target,
     viewer_launch_preflight,
 )
-from caveviewer.gui import viewer_window_adapters, viewer_window_launch
+from caveviewer.gui import (
+    viewer_window_adapters,
+    viewer_window_launch,
+    viewer_window_map_integration,
+)
 from caveviewer.gui.viewer_window_capture_integration import (
     ViewerWindowCaptureIntegration,
 )
@@ -247,22 +251,8 @@ def _env_optional_mebibytes(name: str) -> int | None:
 
 
 def _map_initial_camera_position(manifest: Mapping[str, Any]) -> np.ndarray:
-    """Return a slice entry point or the ordinary render-cache start."""
-    slice_metadata = manifest.get(map_slicing.SLICE_MANIFEST_KEY)
-    if isinstance(slice_metadata, Mapping):
-        try:
-            entry_position = np.asarray(
-                tuple(float(value) for value in slice_metadata["entry_position"]),
-                dtype=np.float64,
-            )
-        except (KeyError, TypeError, ValueError):
-            entry_position = np.empty(0, dtype=np.float64)
-        if entry_position.shape == (3,) and np.isfinite(entry_position).all():
-            return entry_position
-    position = chunker.first_manifest_chunk_center(manifest.get("chunks"))
-    if position is None:
-        raise ValueError("map manifest does not contain a valid starting chunk")
-    return np.asarray(position, dtype=np.float64)
+    """Delegate compatibility callers to the live map-start policy."""
+    return viewer_window_map_integration._map_initial_camera_position(manifest)
 
 
 SHADER_DIR = str(resource_path("shaders"))

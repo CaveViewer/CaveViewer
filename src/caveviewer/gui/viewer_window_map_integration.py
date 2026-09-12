@@ -12,6 +12,7 @@ import time
 import numpy as np
 
 from caveviewer.core.chunking import builder as chunker
+from caveviewer.core.map import slicing as map_slicing
 from caveviewer.core.hardware import gpu_memory, memory_targets, system_memory
 from caveviewer.core.diagnostics.logging import get_logger
 from caveviewer.core.streaming.world import StreamingConfig, StreamingWorld
@@ -67,11 +68,22 @@ def _env_optional_mebibytes(name: str) -> int | None:
     return max(1, value)
 
 def _map_initial_camera_position(manifest: Mapping[str, object]) -> np.ndarray:
-    bounds = manifest.get("bounds") or {}
-    minimum = bounds.get("min", [0.0, 0.0, 0.0])
-    maximum = bounds.get("max", [0.0, 0.0, 0.0])
-    center = (np.asarray(minimum, dtype="f4") + np.asarray(maximum, dtype="f4")) * 0.5
-    return np.asarray([center[0], center[1], float(maximum[2]) + 10.0], dtype="f4")
+    """Return a slice entry point or the ordinary render-cache start."""
+    slice_metadata = manifest.get(map_slicing.SLICE_MANIFEST_KEY)
+    if isinstance(slice_metadata, Mapping):
+        try:
+            entry_position = np.asarray(
+                tuple(float(value) for value in slice_metadata["entry_position"]),
+                dtype=np.float64,
+            )
+        except (KeyError, TypeError, ValueError):
+            entry_position = np.empty(0, dtype=np.float64)
+        if entry_position.shape == (3,) and np.isfinite(entry_position).all():
+            return entry_position
+    position = chunker.first_manifest_chunk_center(manifest.get("chunks"))
+    if position is None:
+        raise ValueError("map manifest does not contain a valid starting chunk")
+    return np.asarray(position, dtype=np.float64)
 
 def _normalize_map_root(map_root: str | os.PathLike[str] | None) -> str | None:
     if map_root is None:
