@@ -27,6 +27,7 @@ class RecentMapEntry:
     key: str
     title: str
     detail: str = ""
+    size_text: str = ""
     cave_lookup_title: str | None = None
 
 

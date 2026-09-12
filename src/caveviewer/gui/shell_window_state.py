@@ -13,7 +13,7 @@ from caveviewer.gui.preference_paths import state_dir, write_text_atomic
 
 _STATE_FILENAME = "shell_window_state.json"
 _STATE_FORMAT_VERSION = 1
-SHELL_LAYOUT_REVISION = 1
+SHELL_LAYOUT_REVISION = 2
 _MAX_LOGICAL_DIMENSION = 100_000.0
 
 

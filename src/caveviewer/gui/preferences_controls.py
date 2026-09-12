@@ -11,12 +11,17 @@ from caveviewer.gui.preferences_style import (
     PreferencesVisualPalette,
     ScaledPreferencesVisualMetrics,
 )
+from caveviewer.gui.rounded_surface import (
+    RoundedSectionStyle,
+    RoundedSectionSurface as _SharedRoundedSectionSurface,
+    RoundedSurfaceRenderer,
+    rounded_rectangle_points,
+)
 
 
 ActionKind = Literal["primary", "secondary"]
 EntryState = Literal["normal", "readonly", "disabled"]
 
-_ROUNDED_SURFACE_TAG = "cv-rounded-surface"
 _COMPOUND_ACTION_BACKDROP_TAG = "cv-compound-action-backdrop"
 _CURVE_STEPS = 24
 
@@ -42,66 +47,6 @@ class ResolvedControlVisual:
     border: str
     foreground: str
     border_width: int
-
-
-def rounded_rectangle_points(
-    width: int,
-    height: int,
-    radius: int,
-    *,
-    inset: int = 0,
-) -> tuple[int, ...]:
-    """Return a clamped clockwise path for one smoothed rounded rectangle."""
-    x0 = max(0, int(inset))
-    y0 = x0
-    x1 = max(x0, int(width) - x0)
-    y1 = max(y0, int(height) - y0)
-    resolved_radius = max(
-        0,
-        min(int(radius), (x1 - x0) // 2, (y1 - y0) // 2),
-    )
-    return (
-        x0 + resolved_radius,
-        y0,
-        x0 + resolved_radius,
-        y0,
-        x1 - resolved_radius,
-        y0,
-        x1 - resolved_radius,
-        y0,
-        x1,
-        y0,
-        x1,
-        y0 + resolved_radius,
-        x1,
-        y0 + resolved_radius,
-        x1,
-        y1 - resolved_radius,
-        x1,
-        y1 - resolved_radius,
-        x1,
-        y1,
-        x1 - resolved_radius,
-        y1,
-        x1 - resolved_radius,
-        y1,
-        x0 + resolved_radius,
-        y1,
-        x0 + resolved_radius,
-        y1,
-        x0,
-        y1,
-        x0,
-        y1 - resolved_radius,
-        x0,
-        y1 - resolved_radius,
-        x0,
-        y0 + resolved_radius,
-        x0,
-        y0 + resolved_radius,
-        x0,
-        y0,
-    )
 
 
 def right_rounded_segment_points(
@@ -199,71 +144,8 @@ def resolve_action_visual(
     )
 
 
-class RoundedSurfaceRenderer:
-    """Redraw one rounded Canvas surface without retaining scheduled work."""
-
-    def __init__(self, canvas) -> None:
-        self._canvas = canvas
-        self._closed = False
-
-    def redraw(
-        self,
-        *,
-        width: int,
-        height: int,
-        radius: int,
-        fill: str,
-        border: str,
-        border_width: int,
-    ) -> None:
-        """Replace the prior vector surface with the current bounded geometry."""
-        if self._closed:
-            return
-        width = max(0, int(width))
-        height = max(0, int(height))
-        self._canvas.delete(_ROUNDED_SURFACE_TAG)
-        if width <= 0 or height <= 0:
-            return
-
-        border_width = max(0, int(border_width))
-        outer_fill = border if border_width else fill
-        self._canvas.create_polygon(
-            rounded_rectangle_points(width, height, radius),
-            fill=outer_fill,
-            outline="",
-            smooth=True,
-            splinesteps=_CURVE_STEPS,
-            tags=(_ROUNDED_SURFACE_TAG,),
-        )
-        if border_width:
-            self._canvas.create_polygon(
-                rounded_rectangle_points(
-                    width,
-                    height,
-                    max(0, radius - border_width),
-                    inset=border_width,
-                ),
-                fill=fill,
-                outline="",
-                smooth=True,
-                splinesteps=_CURVE_STEPS,
-                tags=(_ROUNDED_SURFACE_TAG,),
-            )
-        self._canvas.tag_lower(_ROUNDED_SURFACE_TAG)
-
-    def close(self) -> None:
-        """Prevent later event delivery from drawing into a destroyed surface."""
-        if self._closed:
-            return
-        self._closed = True
-        try:
-            self._canvas.delete(_ROUNDED_SURFACE_TAG)
-        except tk.TclError:
-            pass
-
-
-class RoundedSectionSurface:
-    """A resize-aware rounded card that hosts ordinary Tk content widgets."""
+class RoundedSectionSurface(_SharedRoundedSectionSurface):
+    """Preferences adapter for the shared rounded content surface."""
 
     def __init__(
         self,
@@ -274,101 +156,43 @@ class RoundedSectionSurface:
     ) -> None:
         self._metrics = metrics
         self._palette = palette
-        self._closed = False
-        self.widget = tk.Canvas(
+        super().__init__(
             parent,
-            bg=palette.surface_background,
-            borderwidth=0,
-            highlightthickness=0,
-            takefocus=False,
+            style=self._surface_style(metrics=metrics, palette=palette),
         )
-        self._renderer = RoundedSurfaceRenderer(self.widget)
-        self.content = tk.Frame(self.widget, bg=palette.section_background)
-        self._content_window = self.widget.create_window(
-            (metrics.section_padding_x, metrics.section_padding_y),
-            window=self.content,
-            anchor="nw",
-        )
-        self.widget.bind("<Configure>", self._on_widget_configure, add="+")
-        self.widget.bind("<Destroy>", self._on_destroy, add="+")
-        self.content.bind("<Configure>", self._on_content_configure, add="+")
-
-    def pack(self, **options) -> None:
-        self.widget.pack(**options)
-
-    def grid(self, **options) -> None:
-        self.widget.grid(**options)
 
     def set_palette(self, palette: PreferencesVisualPalette) -> None:
         """Apply a recomposed semantic palette and repaint the card."""
         self._palette = palette
-        self.widget.configure(bg=palette.surface_background)
-        self.content.configure(bg=palette.section_background)
-        self._redraw()
+        self.set_style(self._surface_style(metrics=self._metrics, palette=palette))
 
     def set_metrics(self, metrics: ScaledPreferencesVisualMetrics) -> None:
         """Apply a recomposed display-scale snapshot to the existing card."""
         self._metrics = metrics
-        self.widget.coords(
-            self._content_window,
-            metrics.section_padding_x,
-            metrics.section_padding_y,
-        )
-        self._sync_content_width(self.widget.winfo_width())
-        self._sync_height(self.content.winfo_reqheight())
-        self._redraw()
-
-    def destroy(self) -> None:
-        self.widget.destroy()
-
-    def _on_widget_configure(self, event) -> None:
-        if self._closed:
-            return
-        self._sync_content_width(event.width)
-        self._redraw(width=event.width, height=event.height)
-
-    def _on_content_configure(self, event) -> None:
-        if self._closed:
-            return
-        self._sync_height(event.height)
-
-    def _sync_content_width(self, width: int) -> None:
-        content_width = max(1, width - (self._metrics.section_padding_x * 2))
-        self.widget.itemconfigure(self._content_window, width=content_width)
+        self.set_style(self._surface_style(metrics=metrics, palette=self._palette))
 
     def _sync_height(self, content_height: int) -> None:
-        target = max(
-            1,
-            content_height + (self._metrics.section_padding_y * 2),
+        self._sync_height_for_padding(
+            content_height,
+            self._metrics.section_padding_y,
         )
-        # Tk may retain the default Canvas option as a unit string (for example,
-        # ``7c`` on X11); requested geometry is always resolved to pixels.
-        if self.widget.winfo_reqheight() != target:
-            self.widget.configure(height=target)
-        self._redraw(height=target)
 
-    def _redraw(
-        self,
+    @staticmethod
+    def _surface_style(
         *,
-        width: int | None = None,
-        height: int | None = None,
-    ) -> None:
-        if self._closed:
-            return
-        self._renderer.redraw(
-            width=self.widget.winfo_width() if width is None else width,
-            height=self.widget.winfo_height() if height is None else height,
-            radius=self._metrics.section_corner_radius,
-            fill=self._palette.section_background,
-            border=self._palette.section_background,
+        metrics: ScaledPreferencesVisualMetrics,
+        palette: PreferencesVisualPalette,
+    ) -> RoundedSectionStyle:
+        return RoundedSectionStyle(
+            outside_background=palette.surface_background,
+            fill=palette.section_background,
+            border=palette.section_background,
             border_width=0,
+            radius=metrics.section_corner_radius,
+            padding_x=metrics.section_padding_x,
+            padding_y=metrics.section_padding_y,
         )
 
-    def _on_destroy(self, event) -> None:
-        if event.widget is not self.widget or self._closed:
-            return
-        self._closed = True
-        self._renderer.close()
 
 class RoundedEntryControl:
     """A real Tk entry inside a rounded, state-aware vector shell."""

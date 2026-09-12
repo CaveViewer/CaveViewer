@@ -37,7 +37,7 @@ def test_shell_window_state_round_trips_versioned_json(tmp_path):
         "[]",
         '{"version": 2, "layout_revision": 1, "normal_width": 1040, '
         '"normal_height": 780, "maximized": false}',
-        '{"version": 1, "layout_revision": 2, "normal_width": 1040, '
+        '{"version": 1, "layout_revision": 3, "normal_width": 1040, '
         '"normal_height": 780, "maximized": false}',
         '{"version": 1, "layout_revision": 1, "normal_width": 0, '
         '"normal_height": 780, "maximized": false}',
@@ -62,7 +62,7 @@ def test_shell_window_state_rejects_a_stale_layout_revision_on_save(tmp_path):
     path = tmp_path / "shell_window_state.json"
 
     assert not shell_window_state.save_shell_window_state(
-        ShellWindowState(1040, 780, maximized=False, layout_revision=2),
+        ShellWindowState(1040, 780, maximized=False, layout_revision=1),
         path,
     )
     assert not path.exists()

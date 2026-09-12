@@ -5,6 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
+APPLICATION_SURFACE_FILL = "#0D0F13"
+APPLICATION_PANEL_FILL = "#15171C"
+
+
 @dataclass(frozen=True)
 class TkTheme:
     background: str
@@ -29,8 +33,8 @@ class TkTheme:
 
 
 DARK_THEME = TkTheme(
-    background="#0a0a0d",
-    panel="#12121a",
+    background=APPLICATION_SURFACE_FILL,
+    panel=APPLICATION_PANEL_FILL,
     title="#f2d98c",
     body_text="#cccdd6",
     secondary_text="#9a9aa6",

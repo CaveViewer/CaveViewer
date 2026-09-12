@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from caveviewer.gui.help_style import ScaledHelpVisualMetrics
-from caveviewer.gui.preferences_controls import rounded_rectangle_points
+from caveviewer.gui.rounded_surface import rounded_rectangle_points
 
 
 @dataclass(frozen=True, slots=True)

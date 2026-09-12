@@ -18,6 +18,7 @@ def test_recent_map_entry_uses_folder_name_without_directory_detail(tmp_path):
     assert entry.key == map_library.recent_map_key(str(map_root))
     assert entry.title == "Demo Map"
     assert entry.detail == ""
+    assert entry.size_text == ""
 
 
 def test_recent_map_title_uses_source_model_name(tmp_path):

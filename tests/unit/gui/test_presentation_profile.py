@@ -58,7 +58,7 @@ def test_presentation_profile_selects_static_platform_conventions(
         2.0 * overlay_scale
     )
     assert profile.viewer_uses_glfw_native_initial_size is uses_glfw_size
-    assert profile.splash_layout.window_width == 1040
+    assert profile.splash_layout.window_width == 1080
     assert profile.splash_layout.min_height == 740
     assert profile.splash_layout.resize_min_width == 840
     assert profile.splash_layout.resize_min_height == 600
@@ -69,7 +69,7 @@ def test_compact_shell_geometry_still_uses_native_display_scale_once():
     profile = select_presentation_profile(platform_name="win32")
     scale = 240 / 96
 
-    assert round(profile.splash_layout.window_width * scale) == 2600
+    assert round(profile.splash_layout.window_width * scale) == 2700
     assert round(profile.splash_layout.min_height * scale) == 1850
     assert round(profile.splash_layout.resize_min_width * scale) == 2100
     assert round(profile.splash_layout.resize_min_height * scale) == 1500

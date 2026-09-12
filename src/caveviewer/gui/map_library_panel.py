@@ -7,7 +7,14 @@ from dataclasses import dataclass
 from typing import Callable, Iterable
 
 from caveviewer.gui.loading_progress import monotonic_progress, progress_segments
-from caveviewer.gui.section_spacing import PRIMARY_SURFACE_VERTICAL_MARGIN
+from caveviewer.gui.map_library_style import (
+    MAP_LIBRARY_SCROLLBAR_RAIL_WIDTH,
+    OPEN_ANOTHER_LOCAL_MAP_TITLE,
+    OPEN_LOCAL_MAP_DESCRIPTION,
+    OPEN_LOCAL_MAP_TITLE,
+    MapLibraryPanelStyle,
+)
+from caveviewer.gui.rounded_surface import RoundedSectionStyle, RoundedSectionSurface
 from caveviewer.gui.scrollable_content import (
     CanvasScrollbarStyle,
     CanvasVerticalScrollbar,
@@ -17,6 +24,7 @@ from caveviewer.gui.splash_visuals import (
     VectorEllipse,
     VectorPath,
     VectorPolygon,
+    open_folder_icon_photo,
     retry_icon_photo,
     vector_icon_photo,
 )
@@ -68,50 +76,6 @@ def map_library_action_visual(
 
 
 @dataclass(frozen=True)
-class MapLibraryPanelStyle:
-    """Theme and layout tokens used by the splash Map Library panel."""
-
-    panel_color: str
-    panel_border_color: str
-    title_color: str
-    former_map_title_color: str
-    instruction_color: str
-    title_font: tuple
-    body_font: tuple
-    supporting_font: tuple
-    section_font: tuple
-    button_bg: str
-    button_fg: str
-    button_hover_bg: str
-    featured_action_bg: str
-    featured_action_hover_bg: str
-    button_border_color: str
-    disabled_button_bg: str
-    disabled_button_fg: str
-    disabled_button_border: str
-    empty_note_color: str
-    metadata_color: str
-    metadata_error_color: str
-    metadata_status_color: str
-    metadata_status_duration_ms: int
-    metadata_error_duration_ms: int
-    progress_track_color: str
-    progress_fill_color: str
-    action_retry_icon_diameter: int
-    action_stop_size: int
-    action_button_size: int
-    action_icon_stroke_width: int
-    overflow_button_size: int
-    overflow_fg: str
-    overflow_hover_fg: str
-    overflow_hover_bg: str
-    menu_bg: str
-    menu_border: str
-    menu_hover_bg: str
-    menu_text: str
-
-
-@dataclass(frozen=True)
 class MapLibraryRowWidgets:
     """Tk widgets owned by one map-library row on the splash thread."""
 
@@ -131,6 +95,8 @@ class MapLibrarySectionWidgets:
     header: object
     content: object
     title: str
+    surface: RoundedSectionSurface | None = None
+    minimum_expanded_height: int = 0
     # Start expanded on every splash so first-time users can discover the
     # CaveViewer Maps catalog without needing to uncover it first.
     expanded: bool = True
@@ -168,6 +134,8 @@ class MapLibraryPanel:
         self.recent_rows: dict[str, MapLibraryRowWidgets] = {}
         self._recent_section: MapLibrarySectionWidgets | None = None
         self._recent_container = None
+        self._recent_rows_host_packed = False
+        self._open_map_action = None
         self._recent_empty_note = None
         self._standard_section: MapLibrarySectionWidgets | None = None
         self._standard_container = None
@@ -175,6 +143,7 @@ class MapLibraryPanel:
         self._content_canvas = None
         self._rows_window = None
         self._content_scrollbar = None
+        self._layout_sync_pending = False
         self._active_menu = None
         self._active_menu_root_bindings: list[tuple[str, str]] = []
 
@@ -186,36 +155,22 @@ class MapLibraryPanel:
             bg=style.panel_color,
             highlightthickness=0,
         )
-        # Keep a modest outer margin so the library can use more of the
-        # available splash height without losing its visual separation.
         panel.pack(
             fill="both",
             expand=True,
-            pady=self._px(PRIMARY_SURFACE_VERTICAL_MARGIN),
         )
         panel.grid_columnconfigure(0, weight=1)
 
-        scroll_row = 0
-        if self._open_map_folder is not None:
-            open_map_shell = tk.Frame(panel, bg=style.panel_color)
-            open_map_shell.grid(
-                row=0,
-                column=0,
-                sticky="ew",
-                padx=self._px(12),
-                pady=(self._px(12), self._px(2)),
-            )
-            self._create_open_map_action(open_map_shell)
-            scroll_row = 1
-        panel.grid_rowconfigure(scroll_row, weight=1)
+        panel.grid_rowconfigure(0, weight=1)
 
+        metrics = style.metrics
         scroll_shell = tk.Frame(panel, bg=style.panel_color)
         scroll_shell.grid(
-            row=scroll_row,
+            row=0,
             column=0,
             sticky="nsew",
-            padx=self._px(12),
-            pady=(0, self._px(4)),
+            padx=metrics.surface_inset_x,
+            pady=(metrics.surface_top_pad_y, metrics.surface_bottom_pad_y),
         )
         scroll_shell.grid_rowconfigure(0, weight=1)
         scroll_shell.grid_columnconfigure(0, weight=1)
@@ -231,7 +186,10 @@ class MapLibraryPanel:
             scroll_shell,
             canvas=self._content_canvas,
             px=self._px,
-            style=CanvasScrollbarStyle(background_color=style.panel_color),
+            style=CanvasScrollbarStyle(
+                background_color=style.panel_color,
+                rail_width=MAP_LIBRARY_SCROLLBAR_RAIL_WIDTH,
+            ),
         )
         self._content_scrollbar.mount_grid(row=0, column=1, sticky="ns")
 
@@ -251,12 +209,17 @@ class MapLibraryPanel:
         self._recent_section = self._create_section(
             self._rows_frame,
             "Your Recent Maps",
-            top_pad=12,
+            minimum_expanded_height=metrics.recent_card_min_height,
         )
-        self._recent_container = self._recent_section.content
+        recent_content = self._recent_section.content
+        self._recent_container = tk.Frame(recent_content, bg=style.card_color)
+        self._open_map_action = self._create_open_map_action(recent_content)
         self._standard_section = self._create_section(
             self._rows_frame,
             "CaveViewer Maps",
+            top_pad=metrics.section_gap_y,
+            border_color=style.catalog_card_border_color,
+            minimum_expanded_height=metrics.catalog_card_min_height,
         )
         self._standard_container = self._standard_section.content
 
@@ -265,7 +228,7 @@ class MapLibraryPanel:
         if self._rows_frame is None or self._content_scrollbar is None:
             return
         self.bind_mousewheel_if_ready(self._rows_frame)
-        self.root.after_idle(self.sync_scroll_region)
+        self.sync_after_row_change()
 
     def close_active_menu(self) -> None:
         """Close the transient overflow menu if it is currently open."""
@@ -299,35 +262,53 @@ class MapLibraryPanel:
         if self._widget_exists(self._recent_empty_note):
             self._recent_empty_note.destroy()
         self._recent_empty_note = None
+        self._show_recent_rows_host()
         widgets = self._create_row(
             self._recent_container,
             title=entry.title,
             detail=entry.detail,
-            size_text="",
+            size_text=entry.size_text,
             action_text="Open",
             action=action,
             reserve_metadata=True,
+            reserve_size=True,
             menu_actions_factory=menu_actions_factory,
         )
         self.recent_rows[entry.key] = widgets
+        self._sync_open_map_action_presentation()
         self.bind_mousewheel_if_ready(widgets.row_shell)
         self.sync_after_row_change()
         return widgets
 
     def ensure_recent_empty_note(self) -> None:
-        """Show the empty Your Recent Maps note when no recent rows remain."""
-        if self._recent_container is None:
-            return
+        """Keep the Recent card compact when only its local-map action remains."""
         if self.recent_rows:
             return
-        if self._widget_exists(self._recent_empty_note):
+        self._hide_recent_rows_host()
+        self._sync_open_map_action_presentation()
+        self.sync_after_row_change()
+
+    def _show_recent_rows_host(self) -> None:
+        if self._recent_container is None or getattr(
+            self, "_recent_rows_host_packed", False
+        ):
             return
-        self._recent_empty_note = self._create_empty_note(
-            self._recent_container,
-            "No maps added yet.",
-            bottom_pad=18,
-        )
-        self.bind_mousewheel_if_ready(self._recent_empty_note)
+        pack_options = {
+            "fill": "x",
+            "pady": (0, self._style.metrics.recent_rows_to_local_action_y),
+        }
+        if self._widget_exists(self._open_map_action):
+            pack_options["before"] = self._open_map_action
+        self._recent_container.pack(**pack_options)
+        self._recent_rows_host_packed = True
+
+    def _hide_recent_rows_host(self) -> None:
+        if self._recent_container is None or not getattr(
+            self, "_recent_rows_host_packed", False
+        ):
+            return
+        self._recent_container.pack_forget()
+        self._recent_rows_host_packed = False
 
     def remove_recent_row(self, key: str) -> None:
         """Remove a recent row and restore the empty note if needed."""
@@ -336,7 +317,6 @@ class MapLibraryPanel:
             self._hide_row_action_tooltips(row_widgets)
             row_widgets.row_shell.destroy()
         self.ensure_recent_empty_note()
-        self.sync_after_row_change()
 
     def add_standard_row(
         self,
@@ -415,6 +395,14 @@ class MapLibraryPanel:
     def set_standard_row_size(self, key: object, text: str) -> bool:
         """Set the persistent download-size label for one standard row."""
         widgets = self.standard_rows.get(key)
+        if widgets is None or not self._widget_exists(widgets.size_label):
+            return False
+        widgets.size_label.config(text=text)
+        return True
+
+    def set_recent_row_size(self, key: str, text: str) -> bool:
+        """Set a known catalog size without measuring an arbitrary local folder."""
+        widgets = self.recent_rows.get(key)
         if widgets is None or not self._widget_exists(widgets.size_label):
             return False
         widgets.size_label.config(text=text)
@@ -614,8 +602,18 @@ class MapLibraryPanel:
 
     def sync_after_row_change(self) -> None:
         """Schedule a scroll-region refresh after row insertion/removal."""
-        if self._widget_exists(self.root):
-            self.root.after_idle(self.sync_scroll_region)
+        if not self._widget_exists(self.root) or self._layout_sync_pending:
+            return
+        self._layout_sync_pending = True
+        self.root.after_idle(self._sync_card_layout)
+
+    def _sync_card_layout(self) -> None:
+        """Measure each dynamic card once before updating the outer scroll rail."""
+        self._layout_sync_pending = False
+        for section in (self._recent_section, self._standard_section):
+            if section is not None and section.surface is not None:
+                section.surface.sync_geometry()
+        self.sync_scroll_region()
 
     def bind_mousewheel_if_ready(self, widget) -> None:
         """Bind recursive mousewheel handlers when panel scrolling is ready."""
@@ -669,43 +667,71 @@ class MapLibraryPanel:
         except (TypeError, ValueError, tk.TclError):
             return
 
-    def _create_open_map_action(self, parent) -> None:
-        """Create the featured entry point for opening a local map folder."""
+    def _create_open_map_action(self, parent):
+        """Create the Recent card's entry point for opening a local map folder."""
         callback = self._open_map_folder
         if callback is None:
-            return
+            return None
 
         style = self._style
+        metrics = style.metrics
         action = tk.Canvas(
             parent,
-            height=self._px(50),
+            height=metrics.local_action_height,
             bg=style.featured_action_bg,
             borderwidth=0,
             takefocus=True,
-            highlightthickness=1,
-            highlightbackground=style.panel_border_color,
+            highlightthickness=metrics.focus_border_thickness,
+            highlightbackground=style.card_color,
             highlightcolor=style.button_border_color,
         )
         action._cv_open_map_hovered = False
+        action._cv_open_map_pressed = False
+        action._cv_compact = False
 
         def activate() -> None:
             self.close_active_menu()
             callback()
 
+        def apply_interaction() -> None:
+            if action._cv_open_map_pressed:
+                background = style.featured_action_pressed_bg
+            elif action._cv_open_map_hovered:
+                background = style.featured_action_hover_bg
+            else:
+                background = style.featured_action_bg
+            action.configure(bg=background)
+            self._draw_open_map_action(action)
+
         def set_hovered(hovered: bool) -> None:
             action._cv_open_map_hovered = hovered
-            action.config(
-                bg=(
-                    style.featured_action_hover_bg
-                    if hovered
-                    else style.featured_action_bg
-                )
-            )
-            self._draw_open_map_action(action)
+            apply_interaction()
+
+        def set_pressed(pressed: bool) -> None:
+            action._cv_open_map_pressed = pressed
+            apply_interaction()
+
+        def reset_interaction() -> None:
+            action._cv_open_map_pressed = False
+            action._cv_open_map_hovered = False
+            apply_interaction()
+
+        def press_pointer() -> str:
+            set_pressed(True)
+            return "break"
+
+        def release_pointer() -> str:
+            was_pressed = action._cv_open_map_pressed
+            set_pressed(False)
+            if was_pressed:
+                activate()
+            return "break"
 
         self._bind_activation(action, activate)
         action.bind("<Enter>", lambda _event: set_hovered(True))
-        action.bind("<Leave>", lambda _event: set_hovered(False))
+        action.bind("<Leave>", lambda _event: reset_interaction())
+        action.bind("<ButtonPress-1>", lambda _event: press_pointer())
+        action.bind("<ButtonRelease-1>", lambda _event: release_pointer())
         action.bind(
             "<Configure>",
             lambda _event, target=action: self._draw_open_map_action(target),
@@ -713,9 +739,26 @@ class MapLibraryPanel:
         )
         action.pack(anchor="w", fill="x")
         self.bind_mousewheel_if_ready(action)
+        return action
+
+    def _sync_open_map_action_presentation(self) -> None:
+        """Switch the local-map action between empty and populated treatments."""
+        action = self._open_map_action
+        if not self._widget_exists(action):
+            return
+        compact = bool(self.recent_rows)
+        action._cv_compact = compact
+        action.configure(
+            height=(
+                self._style.metrics.compact_local_action_height
+                if compact
+                else self._style.metrics.local_action_height
+            )
+        )
+        self._draw_open_map_action(action)
 
     def _draw_open_map_action(self, action) -> None:
-        """Draw the folder command card without relying on font glyphs."""
+        """Draw the integrated folder command without font glyph dependencies."""
         if not self._widget_exists(action):
             return
         action.delete("cv_open_map_action")
@@ -723,75 +766,66 @@ class MapLibraryPanel:
         width = max(1, action.winfo_width())
         height = max(1, action.winfo_height())
         style = self._style
-        accent_width = max(2, self._px(3))
-        stroke_width = max(1, self._px(2))
-        icon_left = self._px(18)
+        metrics = style.metrics
+        compact = bool(getattr(action, "_cv_compact", False))
+        if compact:
+            icon_left = 0
+            icon_top = (height - metrics.compact_local_action_icon_height) / 2
+            icon_right = icon_left + metrics.compact_local_action_icon_width
+            icon_bottom = icon_top + metrics.compact_local_action_icon_height
+            text_left = icon_right + metrics.compact_local_action_icon_to_text_x
+            foreground = style.local_action_supporting_color
+            self._draw_open_folder_photo(
+                action,
+                left=icon_left,
+                top=icon_top,
+                width=icon_right - icon_left,
+                height=icon_bottom - icon_top,
+                color=foreground,
+                tags="cv_open_map_action",
+            )
+            action.create_text(
+                text_left,
+                height / 2,
+                text=OPEN_ANOTHER_LOCAL_MAP_TITLE,
+                font=style.local_action_font,
+                fill=foreground,
+                anchor="w",
+                tags="cv_open_map_action",
+            )
+            return
+
+        icon_left = 0
         icon_top = max(self._px(7), height / 2 - self._px(10))
-        icon_right = icon_left + self._px(24)
-        icon_bottom = icon_top + self._px(19)
-        icon_tab_right = icon_left + self._px(13)
-        text_left = icon_right + self._px(14)
+        icon_right = icon_left + metrics.local_action_icon_width
+        icon_bottom = icon_top + metrics.local_action_icon_height
+        text_left = icon_right + metrics.local_action_icon_to_text_x
         title_y = height / 2 - self._px(7)
         subtitle_y = height / 2 + self._px(9)
-        chevron_x = width - self._px(18)
-        chevron_size = max(3, self._px(4))
-
-        action.create_rectangle(
-            0,
-            0,
-            accent_width,
-            height,
-            fill=style.progress_fill_color,
-            outline="",
-            tags="cv_open_map_action",
-        )
-        self._draw_vector_photo(
+        self._draw_open_folder_photo(
             action,
-            image_size=(width, height),
-            center_x=width / 2,
-            center_y=height / 2,
+            left=icon_left,
+            top=icon_top,
+            width=icon_right - icon_left,
+            height=icon_bottom - icon_top,
+            color=style.local_action_title_color,
             tags="cv_open_map_action",
-            paths=(
-                VectorPath(
-                    points=(
-                        (icon_left, icon_top + self._px(5)),
-                        (icon_left + self._px(8), icon_top + self._px(5)),
-                        (icon_left + self._px(11), icon_top),
-                        (icon_tab_right, icon_top),
-                        (icon_right, icon_top + self._px(5)),
-                        (icon_right, icon_bottom),
-                        (icon_left, icon_bottom),
-                    ),
-                    color=style.title_color,
-                    width=stroke_width,
-                    closed=True,
-                ),
-                VectorPath(
-                    points=(
-                        (chevron_x - chevron_size, height / 2 - chevron_size),
-                        (chevron_x, height / 2),
-                        (chevron_x - chevron_size, height / 2 + chevron_size),
-                    ),
-                    color=style.progress_fill_color,
-                    width=stroke_width,
-                ),
-            ),
         )
         action.create_text(
             text_left,
             title_y,
-            text="Open a local map",
+            text=OPEN_LOCAL_MAP_TITLE,
             font=style.title_font,
-            fill=style.title_color,
+            fill=style.local_action_title_color,
             anchor="w",
             tags="cv_open_map_action",
         )
         action.create_text(
             text_left,
             subtitle_y,
-            text="Browse a cave map folder",
+            text=OPEN_LOCAL_MAP_DESCRIPTION,
             font=style.supporting_font,
-            fill=style.metadata_color,
+            fill=style.local_action_supporting_color,
             anchor="w",
             tags="cv_open_map_action",
         )
@@ -801,26 +835,46 @@ class MapLibraryPanel:
         parent,
         text: str,
         *,
-        top_pad: int = 8,
+        top_pad: int = 0,
+        border_color: str | None = None,
+        minimum_expanded_height: int = 0,
     ) -> MapLibrarySectionWidgets:
         """Create an expanded, keyboard-accessible disclosure header and body."""
-        header = tk.Canvas(
+        metrics = self._style.metrics
+        surface = RoundedSectionSurface(
             parent,
-            bg=self._style.panel_color,
+            style=RoundedSectionStyle(
+                outside_background=self._style.panel_color,
+                fill=self._style.card_color,
+                border=border_color or self._style.panel_border_color,
+                border_width=metrics.section_border_thickness,
+                radius=metrics.section_corner_radius,
+                padding_x=metrics.section_padding_x,
+                padding_y=metrics.section_padding_y,
+                padding_bottom_y=metrics.section_padding_bottom_y,
+                minimum_height=minimum_expanded_height,
+            ),
+        )
+        surface.pack(fill="x", pady=(top_pad, 0))
+        header = tk.Canvas(
+            surface.content,
+            bg=self._style.card_color,
             borderwidth=0,
             highlightthickness=1,
-            highlightbackground=self._style.panel_color,
+            highlightbackground=self._style.card_color,
             highlightcolor=self._style.button_border_color,
-            height=max(1, self._px(22)),
+            height=max(1, metrics.section_header_height),
             takefocus=True,
         )
-        header.pack(fill="x", pady=(self._px(top_pad), self._px(4)))
-        content = tk.Frame(parent, bg=self._style.panel_color)
-        content.pack(fill="x")
+        header.pack(fill="x")
+        content = tk.Frame(surface.content, bg=self._style.card_color)
+        content.pack(fill="x", pady=(metrics.section_header_to_body_y, 0))
         section = MapLibrarySectionWidgets(
             header=header,
             content=content,
             title=text,
+            surface=surface,
+            minimum_expanded_height=minimum_expanded_height,
         )
         self._bind_activation(
             header,
@@ -832,6 +886,9 @@ class MapLibraryPanel:
             add="+",
         )
         self._draw_section_header(section)
+        self.bind_mousewheel_if_ready(surface.widget)
+        self.bind_mousewheel_if_ready(surface.content)
+        self.bind_mousewheel_if_ready(header)
         return section
 
     def _toggle_section(self, section: MapLibrarySectionWidgets) -> None:
@@ -844,9 +901,19 @@ class MapLibraryPanel:
         self.close_active_menu()
         section.expanded = not section.expanded
         if section.expanded:
-            section.content.pack(fill="x", after=section.header)
+            section.content.pack(
+                fill="x",
+                pady=(self._style.metrics.section_header_to_body_y, 0),
+                after=section.header,
+            )
+            if section.surface is not None:
+                section.surface.set_minimum_height(
+                    section.minimum_expanded_height
+                )
         else:
             section.content.pack_forget()
+            if section.surface is not None:
+                section.surface.set_minimum_height(0)
         self._draw_section_header(section)
         self.sync_after_row_change()
 
@@ -907,29 +974,10 @@ class MapLibraryPanel:
             polygons=(
                 VectorPolygon(
                     points=tuple(zip(points[::2], points[1::2])),
-                    fill_color=self._style.instruction_color,
+                    fill_color=self._style.disclosure_color,
                 ),
             ),
         )
-
-    def _create_empty_note(
-        self,
-        parent,
-        text: str,
-        *,
-        bottom_pad: int = 8,
-    ) -> tk.Label:
-        label = tk.Label(
-            parent,
-            text=text,
-            font=self._style.supporting_font,
-            fg=self._style.empty_note_color,
-            bg=self._style.panel_color,
-            anchor="w",
-            justify="left",
-        )
-        label.pack(anchor="w", fill="x", pady=(0, self._px(bottom_pad)))
-        return label
 
     def _create_row(
         self,
@@ -946,14 +994,15 @@ class MapLibraryPanel:
         menu_actions_factory: MenuActionsFactory | None = None,
     ) -> MapLibraryRowWidgets:
         style = self._style
+        metrics = style.metrics
         row_shell = tk.Frame(
             parent,
-            bg=style.panel_color,
+            bg=style.card_color,
             highlightthickness=0,
         )
-        row_shell.pack(fill="x", pady=(0, self._px(8)))
+        row_shell.pack(fill="x", pady=(0, metrics.row_gap_y))
 
-        row_content = tk.Frame(row_shell, bg=style.panel_color)
+        row_content = tk.Frame(row_shell, bg=style.card_color)
         row_content.pack(fill="x")
         row_content.grid_columnconfigure(0, weight=1, minsize=1)
 
@@ -975,17 +1024,17 @@ class MapLibraryPanel:
             row=0,
             column=3,
             sticky="e",
-            padx=(0, self._px(12)),
-            pady=self._px(5),
+            padx=(0, metrics.overflow_trailing_pad_x),
+            pady=metrics.row_content_pad_y,
         )
 
-        text_column = tk.Frame(row_content, bg=style.panel_color)
+        text_column = tk.Frame(row_content, bg=style.card_color)
         text_column.grid(
             row=0,
             column=0,
             sticky="ew",
-            padx=(0, self._px(8)),
-            pady=self._px(4),
+            padx=(0, metrics.row_text_end_pad_x),
+            pady=metrics.row_content_pad_y,
         )
 
         name_label = tk.Label(
@@ -993,7 +1042,7 @@ class MapLibraryPanel:
             text=title,
             font=style.title_font,
             fg=title_color or style.title_color,
-            bg=style.panel_color,
+            bg=style.card_color,
             anchor="w",
             justify="left",
         )
@@ -1015,19 +1064,23 @@ class MapLibraryPanel:
                 text=metadata_text,
                 font=style.supporting_font,
                 fg=style.metadata_color,
-                bg=style.panel_color,
+                bg=style.card_color,
                 anchor="w",
                 justify="left",
             )
-            metadata_label.pack(anchor="w", fill="x", pady=(self._px(2), 0))
+            metadata_label.pack(
+                anchor="w",
+                fill="x",
+                pady=(metrics.metadata_top_gap_y, 0),
+            )
             metadata_label._cv_base_text = metadata_text
             metadata_label._cv_base_fg = style.metadata_color
             metadata_label._cv_status_after_id = None
 
         progress_bar_canvas = tk.Canvas(
             text_column,
-            height=max(1, self._px(3)),
-            bg=style.panel_color,
+            height=max(1, metrics.progress_height),
+            bg=style.card_color,
             borderwidth=0,
             highlightthickness=0,
             takefocus=False,
@@ -1039,7 +1092,7 @@ class MapLibraryPanel:
         progress_bar_canvas.pack(
             anchor="w",
             fill="x",
-            pady=(self._px(5), 0),
+            pady=(metrics.progress_top_gap_y, 0),
         )
         progress_bar_canvas.bind(
             "<Configure>",
@@ -1066,8 +1119,8 @@ class MapLibraryPanel:
             row=0,
             column=2,
             sticky="e",
-            padx=(0, self._px(4)),
-            pady=self._px(4),
+            padx=(0, metrics.action_gap_x),
+            pady=metrics.row_content_pad_y,
         )
 
         size_label = None
@@ -1076,8 +1129,8 @@ class MapLibraryPanel:
                 row_content,
                 text=size_text,
                 font=style.supporting_font,
-                fg=style.metadata_color,
-                bg=style.panel_color,
+                fg=style.file_size_color,
+                bg=style.card_color,
                 anchor="e",
                 justify="right",
             )
@@ -1085,8 +1138,11 @@ class MapLibraryPanel:
                 row=0,
                 column=1,
                 sticky="e",
-                padx=(self._px(8), self._px(12)),
-                pady=self._px(4),
+                padx=(
+                    metrics.size_leading_pad_x,
+                    metrics.size_trailing_pad_x,
+                ),
+                pady=metrics.row_content_pad_y,
             )
 
         row_widgets = MapLibraryRowWidgets(
@@ -1250,7 +1306,7 @@ class MapLibraryPanel:
             bg=style.button_bg,
             borderwidth=0,
             highlightthickness=1,
-            highlightbackground=style.panel_color,
+            highlightbackground=style.card_color,
             highlightcolor=style.button_border_color,
             takefocus=True,
         )
@@ -1272,7 +1328,7 @@ class MapLibraryPanel:
 
     def _action_button_pixel_size(self) -> tuple[int, int]:
         """Return the fixed square hit target shared by all row actions."""
-        size = max(1, self._px(self._style.action_button_size))
+        size = max(1, self._style.action_button_size)
         return size, size
 
     def _set_action_button_style(self, button, *, hovered: bool = False) -> None:
@@ -1289,7 +1345,7 @@ class MapLibraryPanel:
         button.config(
             bg=bg,
             takefocus=enabled,
-            highlightbackground=style.panel_color,
+            highlightbackground=style.card_color,
             highlightcolor=border,
         )
 
@@ -1338,14 +1394,14 @@ class MapLibraryPanel:
                         (width / 2 - inset / 3, height / 2 + inset / 2),
                     ),
                     color=color,
-                    width=max(1, self._px(self._style.action_icon_stroke_width)),
+                width=max(1, self._style.action_icon_stroke_width),
                 ),
             ),
         )
 
     def _draw_download(self, button, width: int, height: int, color: str) -> None:
         """Draw a quiet download arrow with an open tray, not a boxed button."""
-        stroke_width = max(1, self._px(self._style.action_icon_stroke_width))
+        stroke_width = max(1, self._style.action_icon_stroke_width)
         center_x = width / 2
         center_y = height / 2
         self._draw_vector_photo(
@@ -1387,7 +1443,7 @@ class MapLibraryPanel:
 
     def _draw_retry(self, button, width: int, height: int, color: str) -> None:
         """Draw an intentionally inset Font Awesome retry glyph."""
-        glyph_diameter = self._px(self._style.action_retry_icon_diameter)
+        glyph_diameter = self._style.action_retry_icon_diameter
         photo = retry_icon_photo(
             button,
             image_size=(width, height),
@@ -1431,7 +1487,7 @@ class MapLibraryPanel:
         """Draw a stop or pause glyph without embedding progress geometry."""
         style = self._style
         enabled = getattr(button, "_cv_enabled", True)
-        glyph_size = self._px(style.action_stop_size)
+        glyph_size = style.action_stop_size
         center_x = width / 2
         center_y = height / 2
         color = style.button_fg if enabled else style.disabled_button_fg
@@ -1514,6 +1570,33 @@ class MapLibraryPanel:
         canvas.create_image(
             center_x,
             center_y,
+            image=photo,
+            tags=tags,
+        )
+
+    @staticmethod
+    def _draw_open_folder_photo(
+        canvas,
+        *,
+        left: float,
+        top: float,
+        width: float,
+        height: float,
+        color: str,
+        tags: str,
+    ) -> None:
+        """Place one retained, state-tinted supplied folder icon."""
+        photo = open_folder_icon_photo(
+            canvas,
+            image_size=(width, height),
+            color=color,
+        )
+        photos = list(getattr(canvas, "_cv_vector_photos", ()))
+        photos.append(photo)
+        canvas._cv_vector_photos = photos
+        canvas.create_image(
+            left + width / 2,
+            top + height / 2,
             image=photo,
             tags=tags,
         )
@@ -1668,11 +1751,11 @@ class MapLibraryPanel:
         if not has_actions:
             self._hide_action_tooltip(button)
         button.config(
-            bg=style.panel_color,
+            bg=style.card_color,
             takefocus=has_actions,
-            highlightbackground=style.panel_color,
+            highlightbackground=style.card_color,
             highlightcolor=(
-                style.button_border_color if has_actions else style.panel_color
+                style.button_border_color if has_actions else style.card_color
             ),
         )
         self._draw_overflow_button(button)
@@ -1938,17 +2021,17 @@ class MapLibraryPanel:
 
     def _create_overflow_button(self, parent, menu_actions_factory=None):
         style = self._style
-        size = max(1, self._px(style.overflow_button_size))
+        size = max(1, style.overflow_button_size)
         button = tk.Canvas(
             parent,
             width=size,
             height=size,
-            bg=style.panel_color,
+            bg=style.card_color,
             borderwidth=0,
             takefocus=False,
             highlightthickness=1,
-            highlightbackground=style.panel_color,
-            highlightcolor=style.panel_color,
+            highlightbackground=style.card_color,
+            highlightcolor=style.card_color,
         )
         button._cv_menu_actions_factory = menu_actions_factory
         button._cv_has_menu_actions = False
@@ -1973,9 +2056,9 @@ class MapLibraryPanel:
             self._hide_action_tooltip(button)
             button._cv_overflow_hover = False
             if not getattr(button, "_cv_has_menu_actions", False):
-                button.config(bg=style.panel_color, highlightbackground=style.panel_color)
+                button.config(bg=style.card_color, highlightbackground=style.card_color)
                 return
-            button.config(bg=style.panel_color, highlightbackground=style.panel_color)
+            button.config(bg=style.card_color, highlightbackground=style.card_color)
             self._draw_overflow_button(button)
 
         self._bind_activation(button, lambda: self._show_row_menu(button))
@@ -1995,4 +2078,4 @@ class MapLibraryPanel:
         if self._content_canvas is None or self._rows_window is None:
             return
         self._content_canvas.itemconfigure(self._rows_window, width=event.width)
-        self.sync_scroll_region()
+        self.sync_after_row_change()
