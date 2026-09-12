@@ -19,6 +19,11 @@ from .presentation import (
     select_presentation_profile,
 )
 from .presentation_actions import PresentationActionsAdapter
+from .font_registration import (
+    FontRegistrationResult,
+    ensure_bundled_inter_registered,
+    unregister_bundled_inter_fonts,
+)
 from .runtime import (
     DesktopNotificationPreflight,
     DirectorySelectionPreflight,
@@ -54,6 +59,9 @@ __all__ = [
     "SplashLayoutPolicy",
     "PresentationProfile",
     "PresentationActionsAdapter",
+    "FontRegistrationResult",
+    "ensure_bundled_inter_registered",
+    "unregister_bundled_inter_fonts",
     "DesktopServiceError",
     "DesktopInhibitor",
     "DesktopServices",

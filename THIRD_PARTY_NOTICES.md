@@ -42,12 +42,20 @@ licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
 The SVG retains Font Awesome's embedded attribution and license comment; this
 notice applies to the derived PNG as well.
 
-## Bundled Linux AppImage Font
+## Bundled Inter UI Font
 
-Linux AppImage packages may bundle Noto Sans Regular from the system
-`fonts-noto-core` package so CaveViewer's FreeType-rendered UI text is
-consistent across GitHub-hosted release builds and user systems. Noto fonts are
-licensed under the SIL Open Font License 1.1.
+CaveViewer bundles the hinted static Regular, SemiBold, and Bold TrueType faces
+from the official Inter 4.0 release for application UI and viewer-overlay text.
+The unmodified files were obtained from
+`https://github.com/rsms/inter/releases/tag/v4.0`; pinned source and file hashes
+are recorded in `src/caveviewer/resources/fonts/inter/manifest.json`.
+
+Copyright (c) 2016 The Inter Project Authors (https://github.com/rsms/inter)
+
+Inter is licensed under the SIL Open Font License 1.1. The complete
+license and copyright notice are included at
+`src/caveviewer/resources/fonts/inter/LICENSE.txt` and must remain with every
+source and binary distribution containing the font files.
 
 Before publishing a bundled binary, regenerate dependency notices from the
 bundled environment and include the exact package versions and license metadata

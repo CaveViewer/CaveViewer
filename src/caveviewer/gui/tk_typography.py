@@ -15,11 +15,15 @@ class TkTypography:
     body: tuple
     supporting: tuple
     section: tuple
+    semibold_family: str
+    semibold_styles: tuple[str, ...]
 
 
 def create_tk_typography(
     font_family: str,
     *,
+    semibold_family: str | None = None,
+    semibold_styles: tuple[str, ...] = ("bold",),
     text_scale: float = 1.0,
 ) -> TkTypography:
     """Build CaveViewer's Tk type scale, applying accessibility scale once."""
@@ -39,4 +43,6 @@ def create_tk_typography(
         body=font(10),
         supporting=font(9),
         section=font(9, "bold"),
+        semibold_family=semibold_family or font_family,
+        semibold_styles=tuple(semibold_styles),
     )

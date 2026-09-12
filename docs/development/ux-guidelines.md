@@ -73,6 +73,9 @@ primitives remain documented in [design-system.md](design-system.md).
   restore bounds.
 - Use semantic typography roles from `caveviewer.gui.tk_typography`; do not
   introduce a new font size to solve a spacing problem.
+- Use the bundled Inter family selected by the presentation layer. Keep
+  process-local registration, platform fallback, and FreeType path selection
+  out of individual screens and controls.
 - Separate related content with the shared section-spacing tokens. Prefer
   whitespace and alignment unless a surface defines semantic grouping, such
   as the Preferences card and between-item gap contract.

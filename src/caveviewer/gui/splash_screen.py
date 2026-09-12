@@ -297,6 +297,8 @@ _EMBEDDED_PANEL_TEXT_SCALE_FACTOR = 1.0
 _WINDOWS_SPLASH_LAYOUT = _SPLASH_LAYOUT_POLICY.windows_layout
 _LINUX_SPLASH_LAYOUT = _SPLASH_LAYOUT_POLICY.linux_layout
 _UI_FONT_FAMILY = _PRESENTATION_PROFILE.ui_font_family
+_UI_SEMIBOLD_FONT_FAMILY = _PRESENTATION_PROFILE.ui_semibold_font_family
+_UI_SEMIBOLD_FONT_STYLES: tuple[str, ...] = ()
 _TK_TEXT_SCALE = 1.0
 _CACHE_REBUILD_CLOSE_PAUSE_ATTEMPTS = 25
 _UPDATE_READY_ACTION_DELAY_MS = 3_000
@@ -307,6 +309,8 @@ _PREFERENCES_SHELL_FIT_STABLE_PASSES = 2
 
 _TYPOGRAPHY: TkTypography = create_tk_typography(
     _UI_FONT_FAMILY,
+    semibold_family=_UI_SEMIBOLD_FONT_FAMILY,
+    semibold_styles=_UI_SEMIBOLD_FONT_STYLES,
     text_scale=_TK_TEXT_SCALE,
 )
 _SPLASH_WINDOW_WIDTH = _SPLASH_LAYOUT_POLICY.window_width
@@ -411,7 +415,7 @@ def _presentation_actions_adapter_for_runtime(
 def _select_tk_font_family(
     available: dict[str, str],
     default_family: str,
-    preferred: list[str],
+    preferred: list[str | None],
     *,
     linux_layout: bool,
 ) -> str:
@@ -434,6 +438,8 @@ def _refresh_tk_font_tokens() -> None:
 
     _TYPOGRAPHY = create_tk_typography(
         _UI_FONT_FAMILY,
+        semibold_family=_UI_SEMIBOLD_FONT_FAMILY,
+        semibold_styles=_UI_SEMIBOLD_FONT_STYLES,
         text_scale=_TK_TEXT_SCALE,
     )
 
@@ -454,7 +460,8 @@ def _activate_presentation_profile(
     """
     global _PRESENTATION_PROFILE, _SPLASH_LAYOUT_POLICY, _APP_ICON_PATH, _LOGO_PATH
     global _WINDOWS_SPLASH_LAYOUT, _LINUX_SPLASH_LAYOUT
-    global _UI_FONT_FAMILY, _TK_TEXT_SCALE
+    global _UI_FONT_FAMILY, _UI_SEMIBOLD_FONT_FAMILY
+    global _UI_SEMIBOLD_FONT_STYLES, _TK_TEXT_SCALE
     global _SPLASH_WINDOW_WIDTH, _SPLASH_WINDOW_MIN_HEIGHT
     global _SPLASH_RESIZE_MIN_WIDTH, _SPLASH_RESIZE_MIN_HEIGHT
     global _SPLASH_WINDOW_EXTRA_BOTTOM_SLACK
@@ -468,6 +475,8 @@ def _activate_presentation_profile(
     _WINDOWS_SPLASH_LAYOUT = _SPLASH_LAYOUT_POLICY.windows_layout
     _LINUX_SPLASH_LAYOUT = _SPLASH_LAYOUT_POLICY.linux_layout
     _UI_FONT_FAMILY = profile.ui_font_family
+    _UI_SEMIBOLD_FONT_FAMILY = profile.ui_semibold_font_family
+    _UI_SEMIBOLD_FONT_STYLES = ()
     _TK_TEXT_SCALE = 1.0
     _SPLASH_WINDOW_WIDTH = _SPLASH_LAYOUT_POLICY.window_width
     _SPLASH_WINDOW_MIN_HEIGHT = _SPLASH_LAYOUT_POLICY.min_height
@@ -484,7 +493,8 @@ def _configure_runtime_tk_fonts(
     density_scale: float = 1.0,
 ) -> None:
     """Resolve the UI font against fonts Tk can actually render."""
-    global _UI_FONT_FAMILY, _TK_TEXT_SCALE
+    global _UI_FONT_FAMILY, _UI_SEMIBOLD_FONT_FAMILY
+    global _UI_SEMIBOLD_FONT_STYLES, _TK_TEXT_SCALE
 
     profile = presentation_profile or _PRESENTATION_PROFILE
     splash_layout = profile.splash_layout
@@ -494,7 +504,7 @@ def _configure_runtime_tk_fonts(
         import tkinter.font as tkfont
 
         available = {family.lower(): family for family in tkfont.families(root)}
-        preferred = [profile.ui_font_family]
+        preferred = [profile.ui_font_family, profile.ui_font_fallback_family]
         if splash_layout.linux_layout:
             # Keep splash startup on the Tk path free of subprocess waits.
             # Prefer families Tk already knows instead of asking fontconfig.
@@ -512,6 +522,26 @@ def _configure_runtime_tk_fonts(
 
         if resolved_family:
             _UI_FONT_FAMILY = resolved_family
+            using_bundled_inter = (
+                resolved_family.casefold() == profile.ui_font_family.casefold()
+            )
+            semibold_preferred = (
+                [profile.ui_semibold_font_family]
+                if using_bundled_inter
+                else [profile.ui_semibold_fallback_family]
+            )
+            resolved_semibold = _select_tk_font_family(
+                available,
+                resolved_family,
+                semibold_preferred,
+                linux_layout=False,
+            )
+            if resolved_semibold.casefold() == resolved_family.casefold():
+                _UI_SEMIBOLD_FONT_FAMILY = resolved_family
+                _UI_SEMIBOLD_FONT_STYLES = ("bold",)
+            else:
+                _UI_SEMIBOLD_FONT_FAMILY = resolved_semibold
+                _UI_SEMIBOLD_FONT_STYLES = ()
             if splash_layout.linux_layout:
                 _LOG.info(f"Using Tk UI font family: {_UI_FONT_FAMILY}")
     except Exception as exc:
@@ -1859,14 +1889,10 @@ def _show_splash_composition(
 
     # The status frame stays anchored to the lower-left rail and remains
     # completely quiet until an update has a meaningful state.
-    navigation_footer_font_family = _UI_FONT_FAMILY
-    if _PRESENTATION_PROFILE.platform_name == "windows":
-        navigation_footer_font_family = "Segoe UI Semibold"
-    elif _PRESENTATION_PROFILE.platform_name == "darwin":
-        navigation_footer_font_family = "Helvetica Neue Medium"
     navigation_footer_font = (
-        navigation_footer_font_family,
+        _UI_SEMIBOLD_FONT_FAMILY,
         -max(1, px(_NAVIGATION_FOOTER_SIZE)),
+        *_UI_SEMIBOLD_FONT_STYLES,
     )
     update_cluster = tk.Frame(app_status_frame, bg=_NAVIGATION_PANEL_BG)
     update_status_row = tk.Frame(update_cluster, bg=_NAVIGATION_PANEL_BG)
@@ -2415,18 +2441,10 @@ def _show_splash_composition(
         _request_leave_preferences(_show_map_library_surface)
 
     navigation_label_pixel_size = -max(1, px(_NAVIGATION_LABEL_SIZE))
-    navigation_selected_font_family = _UI_FONT_FAMILY
-    navigation_selected_font_weight: tuple[str, ...] = ("bold",)
-    if _PRESENTATION_PROFILE.platform_name == "windows":
-        navigation_selected_font_family = "Segoe UI Semibold"
-        navigation_selected_font_weight = ()
-    elif _PRESENTATION_PROFILE.platform_name == "darwin":
-        navigation_selected_font_family = "Helvetica Neue Medium"
-        navigation_selected_font_weight = ()
     navigation_selected_font = (
-        navigation_selected_font_family,
+        _UI_SEMIBOLD_FONT_FAMILY,
         navigation_label_pixel_size,
-        *navigation_selected_font_weight,
+        *_UI_SEMIBOLD_FONT_STYLES,
     )
     navigation_inactive_font = (
         _UI_FONT_FAMILY,

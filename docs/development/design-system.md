@@ -12,6 +12,21 @@ owns its title-bar typography.
 roles. Components receive those roles through their presentation style or
 constructor rather than choosing a font size for an individual widget.
 
+CaveViewer bundles the official hinted static Inter 4.0 Regular, SemiBold, and
+Bold TrueType faces. The application registers them for the current process
+before it creates the Tk shell; it never installs fonts into system or user font
+directories. Tk uses `Inter` for regular and bold semantic roles and the
+registered `Inter SemiBold` face for semibold presentation roles. If native
+registration or Tk discovery fails, the presentation profile falls back to
+Segoe UI on Windows, Helvetica Neue on macOS, and the active sans-serif family
+on Linux without blocking startup.
+
+The OpenGL bitmap renderer loads the same bundled Inter Regular file directly
+through FreeType. An explicit runtime font path or `CAVEVIEWER_UI_FONT` retains
+its existing priority, followed by bundled Inter and the platform system-font
+candidates. Missing or invalid candidates are skipped rather than making an
+otherwise usable fallback unreachable.
+
 | Role | Base Tk size | Weight | Use |
 | --- | ---: | --- | --- |
 | `display` | 18 | bold | One primary page subject, such as a cave name. |
@@ -363,7 +378,8 @@ only that optional space, never the title or bar position.
 The initial Tk launch surface uses the same measured layout and control scale,
 while launch, initial streaming, and first-time map building share the solid
 Void background. Renderer-specific font technology remains separate: Tk uses
-the platform family and OpenGL uses its scaled bitmap renderer.
+the process-registered Inter family and OpenGL rasterizes the bundled Inter file
+at its independent bitmap-renderer scale.
 For map opening, source import/cache construction and initial streaming are
 one user-facing progress session: keep the bar continuous and retain the
 current stage as the primary message. Do not add a separate operation title;
@@ -388,8 +404,8 @@ the lane, so neighboring rows remain fixed.
 
 ## Applying the system
 
-1. Use `create_tk_typography(font_family, text_scale=...)` to obtain the
-   semantic font roles.
+1. Use `create_tk_typography(font_family, semibold_family=...,
+   semibold_styles=..., text_scale=...)` to obtain the semantic font roles.
 2. Pass the relevant roles into a panel's style object or constructor.
 3. Reuse the role appropriate to the text's meaning. Avoid raw `(family,
    size)` tuples in presentation components.

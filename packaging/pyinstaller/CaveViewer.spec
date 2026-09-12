@@ -128,6 +128,7 @@ a = Analysis(
     datas=[
         (str(resources_root / 'shaders'), 'caveviewer/resources/shaders'),
         (str(resources_root / 'images'), 'caveviewer/resources/images'),
+        (str(resources_root / 'fonts'), 'caveviewer/resources/fonts'),
         *(
             (str(resources_root / filename), 'caveviewer/resources')
             for filename in (

@@ -193,28 +193,6 @@ mkdir -p \
   "$appdir/usr/share/icons/hicolor"
 
 cp -a "$app_dir/." "$appdir/usr/lib/caveviewer/"
-bundled_font_dir="$appdir/usr/share/caveviewer/fonts"
-bundled_ui_font="$bundled_font_dir/CaveViewerUI-Regular.ttf"
-mkdir -p "$bundled_font_dir"
-ui_font_candidates=(
-  "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf"
-  "/usr/share/fonts/google-noto/NotoSans-Regular.ttf"
-  "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
-  "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf"
-  "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf"
-  "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"
-)
-for ui_font_candidate in "${ui_font_candidates[@]}"; do
-  if [ -f "$ui_font_candidate" ]; then
-    cp "$ui_font_candidate" "$bundled_ui_font"
-    echo "Bundled UI font: $ui_font_candidate"
-    break
-  fi
-done
-if [ ! -f "$bundled_ui_font" ]; then
-  echo "Warning: no preferred UI font was found to bundle; runtime font fallback will be used."
-fi
-
 icon_hicolor_dir="$appdir/usr/share/icons/hicolor"
 icon_root="$appdir/${APPLICATION_ID}.png"
 if [ ! -d "$branding_linux_dir/hicolor" ] || [ ! -f "$branding_linux_dir/${APPLICATION_ID}.png" ]; then
@@ -444,7 +422,6 @@ fi
 bundled_internal_dir="$appdir/usr/lib/caveviewer/_internal"
 bundled_tcl_dir="$bundled_internal_dir/_tcl_data"
 bundled_tk_dir="$bundled_internal_dir/_tk_data"
-bundled_ui_font="$appdir/usr/share/caveviewer/fonts/CaveViewerUI-Regular.ttf"
 
 # PyInstaller's Tcl/Tk runtime can miss the X resource database DPI even when
 # the system Python/Tk sees it correctly.  CaveViewer uses CAVEVIEWER_TK_SCALE
@@ -475,9 +452,6 @@ if [ "${CAVEVIEWER_USE_BUNDLED_TK:-0}" = "1" ]; then
   export LD_LIBRARY_PATH="$gl_compat_dir:$bundled_internal_dir:$appdir/usr/lib/caveviewer/lib:$appdir/usr/lib/caveviewer/lib64:${LD_LIBRARY_PATH:-}"
 else
   export LD_LIBRARY_PATH="$gl_compat_dir:$appdir/usr/lib/caveviewer/lib:$appdir/usr/lib/caveviewer/lib64:${LD_LIBRARY_PATH:-}"
-fi
-if [ -f "$bundled_ui_font" ]; then
-  export CAVEVIEWER_UI_FONT="${CAVEVIEWER_UI_FONT:-$bundled_ui_font}"
 fi
 export CAVEVIEWER_TEXT_AA_MODE="${CAVEVIEWER_TEXT_AA_MODE:-light}"
 if [ "${CAVEVIEWER_USE_BUNDLED_TK:-0}" = "1" ] && [ -d "$bundled_tcl_dir" ]; then

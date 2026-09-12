@@ -157,8 +157,13 @@ def _font_candidates() -> list[str]:
 @lru_cache(maxsize=32)
 def _resolve_font_path() -> str:
     for candidate in _font_candidates():
-        if os.path.exists(candidate):
-            return candidate
+        if not os.path.exists(candidate):
+            continue
+        try:
+            freetype.Face(candidate)
+        except Exception:
+            continue
+        return candidate
     raise RuntimeError(
         "No usable UI font found for FreeType renderer. "
         "Set CAVEVIEWER_UI_FONT to a .ttf/.otf/.ttc path."

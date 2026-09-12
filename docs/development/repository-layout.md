@@ -102,7 +102,7 @@ src/caveviewer/gui/chunk_upload.py            render-thread chunk upload state a
 src/caveviewer/gui/texture_manager.py         render-thread OpenGL texture lifecycle
 src/caveviewer/gui/view_culling.py            resident chunk frustum-culling cache
 src/caveviewer/gui/update_manager.py          process-lifetime update state/workers
-src/caveviewer/resources/                     shaders, images, and public key
+src/caveviewer/resources/                     shaders, images, fonts, and public key
 tests/                                        unit and integration tests
 benchmarks/                                   versioned benchmark scenario/threshold files
 docs/                                         site and development documentation
