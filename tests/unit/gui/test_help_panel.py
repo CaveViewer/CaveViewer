@@ -326,7 +326,7 @@ def test_help_uses_the_shared_primary_surface_origin():
 
 
 @pytest.mark.gui
-def test_help_and_preferences_first_tabs_share_the_same_shell_origin(monkeypatch):
+def test_help_and_preferences_first_tabs_share_the_same_shell_geometry(monkeypatch):
     from caveviewer.gui import preferences as settings
     from caveviewer.gui import preferences_dialog, splash_screen
 
@@ -368,17 +368,32 @@ def test_help_and_preferences_first_tabs_share_the_same_shell_origin(monkeypatch
         help_surface.create()
         root.update_idletasks()
 
-        streaming = preferences_panel.tab_strip._tab_labels["streaming"]
-        keys = help_surface._tab_strip._tab_labels["keys"]
-        host_origin = (host.winfo_rootx(), host.winfo_rooty())
+        preferences_strip = preferences_panel.tab_strip
+        help_strip = help_surface._tab_strip
+        preferences_shell = preferences_strip.widget.master.master
+        streaming = preferences_strip._tab_labels["streaming"]
+        keys = help_strip._tab_labels["keys"]
 
-        def relative_origin(widget):
-            return (
-                widget.winfo_rootx() - host_origin[0],
-                widget.winfo_rooty() - host_origin[1],
-            )
+        def pack_geometry(widget):
+            return {
+                key: value
+                for key, value in widget.pack_info().items()
+                if key != "in"
+            }
 
-        assert relative_origin(streaming) == relative_origin(keys)
+        assert preferences_shell.pack_info()["pady"] == (
+            layout_px(16),
+            layout_px(14),
+        )
+        assert preferences_shell.pack_info()["pady"] == (
+            help_surface._shell.pack_info()["pady"]
+        )
+        assert preferences_strip._style.row_height == help_strip._style.row_height
+        assert pack_geometry(streaming.master.master) == pack_geometry(
+            keys.master.master
+        )
+        assert pack_geometry(streaming.master) == pack_geometry(keys.master)
+        assert pack_geometry(streaming) == pack_geometry(keys)
     finally:
         root.destroy()
 
