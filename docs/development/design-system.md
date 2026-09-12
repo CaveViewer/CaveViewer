@@ -73,7 +73,9 @@ Windows physical-density factor.
   fixed column width. Text never displaces or clips those controls.
 - The **Open a local map** card uses `body_strong` for its action and
   `supporting` for its explanation.
-- Navigation uses `body`, switching only the active item to `body_strong`.
+- Primary-shell navigation uses an exact 13-logical-pixel label. Inactive items
+  use the platform regular face; the active item uses the platform semibold
+  face where available and a bold fallback elsewhere.
 - Cave details use `display` only for the cave name, `body` for facts and
   sources, `body_strong` for statistic values, `supporting` for its location
   and disclaimer, and `section` for section labels.
@@ -98,6 +100,45 @@ Windows physical-density factor.
 Text hierarchy should come first from role, then from color and spacing.
 Do not create a new font size merely to distinguish a control state; use the
 appropriate weight, color, or interaction treatment instead.
+
+## Application shell and Map Library visual contract
+
+The primary shell uses `#0D0F13` as its application surface and `#15171C` as
+the shared panel/card fill for Map Library, Preferences, Help, and About. The
+Map Library main column starts 26 logical pixels after the 220-pixel sidebar,
+44 pixels below the top edge, and retains a 28-pixel right margin in the
+1080-by-740 reference frame.
+
+Map Library owns one immutable, scale-once metrics snapshot in
+`caveviewer.gui.map_library_style`. Every value below is a logical pixel and is
+converted by the active display-scale helper exactly once.
+
+| Relationship | Logical value |
+| --- | ---: |
+| Recent/catalog card corner radius | 10 |
+| Card border | 1 |
+| Card horizontal padding | 24 |
+| Card top / bottom padding | 20 / 25 |
+| Gap between cards | 24 |
+| Recent card minimum height | 138 |
+| Catalog card minimum height | 484 |
+| Empty local-map icon | 32 |
+| Populated local-map icon | 20 |
+| Populated local-map action height | 28 |
+| Catalog row gap | 8 |
+| Primary / overflow action target | 28 / 24 |
+| Reserved progress lane / preceding gap | 3 / 5 |
+
+Both cards use `#15171C`. The Recent border is `#30343D`; the catalog border is
+`#313337`. Map titles use 14-pixel semibold `#EFF1F5`, descriptions use
+12-pixel regular `#B6BCC8`, and file sizes use 12-pixel regular `#A9AFBC`.
+Disclosure and primary row actions use `#F5C451`; overflow uses `#A9AFBC`.
+Section headings retain the reviewed reduced heading scale.
+
+The local-map folder is a bundled transparent asset resized with high-quality
+downsampling and tinted at render time. It uses `#F5C451` beside the two-line
+empty-state action and `#A9AFBC` beside **Open another local map** after recent
+rows. Asset pixels do not define hit targets, spacing, state, or behavior.
 
 ## Preferences visual contract
 
@@ -241,31 +282,29 @@ timeout constant.
 
 ## Navigation rail and application status
 
-The primary shell uses a compact native desktop baseline: a 190-logical-pixel
-navigation rail, 24 logical pixels between the rail and content, 24-pixel
-navigation icons, and compact row padding. Map Library actions use stable
-50-pixel feature rows and 28-pixel row controls. These values are logical units;
-the Windows shell's combined native-DPI and bounded-density layout scale is
-still applied exactly once.
+The sidebar is flush with the window's left, top, and bottom edges. It is 220
+logical pixels wide with square corners, a `#15171C` fill, and one `#30343D`
+right divider. Its content uses 16-pixel horizontal and bottom insets and a
+64-pixel top inset. Apply the active display scale once to every measurement.
 
-Map Library, Preferences, and Help share a 14-logical-pixel outer vertical
-margin and a 12-logical-pixel primary left edge inside the right-hand surface.
-Tabbed surfaces use asymmetric outer padding: no additional left inset and the
-platform profile's existing gutter on the right. Tab text, section headings,
-and first content columns align to the shared left edge, so navigation never
-moves the primary content origin.
+Navigation entries are 188 by 44 logical pixels with eight pixels between
+them. Their 18-pixel user-supplied icons and labels share the same state color:
+`#F5C451` for the active destination and `#EFF1F5` for inactive destinations.
+Every entry remains transparent. Labels use 13 logical pixels, regular when
+inactive and semibold when active. The full row is pointer-activatable while
+the label remains the keyboard focus owner.
 
 The navigation rail deliberately has no repeated app name or logo: native
 window chrome already identifies the application, while a quiet rail keeps
 attention on navigation. Start navigation near the top with no decorative
 masthead.
 
-The lower-left application-status block does not repeat the installed version;
-About owns that product detail. When an update has a meaningful state, show one
-compact amber `supporting`-role action or status row; omit the block entirely
-when there is no update state to communicate. This footer action is a secondary
-link, not the primary action of the active panel. Keep the block left-aligned,
-without a card or divider.
+The lower application-status block is pinned after flexible sidebar space and
+does not repeat the installed version; About owns that product detail. When an
+update has a meaningful state, show one centered 13-pixel medium action or
+status row in muted `#A9AFBC`; omit the block entirely when there is no update
+state to communicate. Keep it within the 188-pixel content column without a
+card, pill, border, or divider.
 
 For an available update, use one label: **Update to version &lt;version&gt;**. If
 the update source omits its version unexpectedly, fall back to **Update** rather

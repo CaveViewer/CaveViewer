@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from caveviewer.gui import splash_visuals
 
 
@@ -153,6 +155,36 @@ def test_vector_icon_downsampling_keeps_curves_and_diagonals_smooth():
     assert any(0 < alpha < 255 for alpha in alpha_values)
 
 
+def test_sampled_vector_path_can_disable_per_vertex_rounding(monkeypatch):
+    draw_calls = []
+
+    def capture_draw(_drawer, _points, **options) -> None:
+        draw_calls.append(options)
+
+    monkeypatch.setattr(splash_visuals, "_draw_rounded_path", capture_draw)
+
+    splash_visuals.render_vector_icon(
+        image_size=(24, 20),
+        paths=(
+            splash_visuals.VectorPath(
+                points=((2, 18), (4, 8), (22, 8)),
+                color="#ffb000",
+                width=2,
+                round_vertices=False,
+            ),
+        ),
+    )
+
+    assert draw_calls == [
+        {
+            "color": "#ffb000",
+            "width": 8,
+            "closed": False,
+            "round_vertices": False,
+        }
+    ]
+
+
 def test_font_awesome_retry_icon_uses_an_inset_optical_diameter():
     icon = splash_visuals.render_retry_icon(
         image_size=(32, 32),
@@ -185,6 +217,62 @@ def test_font_awesome_retry_icon_retains_its_inset_proportions_at_high_dpi():
     assert abs((left + right) / 2 - 40) <= 1
     assert abs((top + bottom) / 2 - 40) <= 1
     assert any(0 < value < 255 for value in alpha.get_flattened_data())
+
+
+@pytest.mark.parametrize("icon_name", ("map", "preferences", "help", "about"))
+def test_supplied_navigation_icons_render_as_tintable_alpha_masks(icon_name):
+    icon = splash_visuals.render_navigation_icon(
+        image_size=(18, 18),
+        icon_name=icon_name,
+        color="#F5C451",
+    )
+    alpha = icon.getchannel("A")
+    visible_pixels = [
+        pixel
+        for pixel in icon.get_flattened_data()
+        if pixel[3] > 0
+    ]
+
+    assert icon.mode == "RGBA"
+    assert icon.size == (18, 18)
+    assert alpha.getbbox() is not None
+    assert set(pixel[:3] for pixel in visible_pixels) == {(245, 196, 81)}
+
+
+def test_supplied_navigation_icon_masks_scale_for_high_density_displays():
+    icon = splash_visuals.render_navigation_icon(
+        image_size=(36, 36),
+        icon_name="preferences",
+        color="#EFF1F5",
+    )
+
+    assert icon.size == (36, 36)
+    assert icon.getchannel("A").getbbox() is not None
+
+
+@pytest.mark.parametrize(
+    ("image_size", "color"),
+    (((20, 20), "#A9AFBC"), ((32, 32), "#F5C451")),
+)
+def test_supplied_open_folder_icon_scales_and_tints_for_both_presentations(
+    image_size,
+    color,
+):
+    icon = splash_visuals.render_open_folder_icon(
+        image_size=image_size,
+        color=color,
+    )
+    visible_pixels = [
+        pixel
+        for pixel in icon.get_flattened_data()
+        if pixel[3] > 0
+    ]
+
+    assert icon.size == image_size
+    assert icon.getchannel("A").getbbox() is not None
+    assert set(pixel[:3] for pixel in visible_pixels) == {
+        splash_visuals.ImageColor.getrgb(color)
+    }
 
 
 def test_vector_arc_honors_both_coordinates_of_its_center():

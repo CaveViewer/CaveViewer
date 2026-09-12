@@ -89,6 +89,7 @@ class _FakePanel:
         self.standard_former = {}
         self.standard_sizes = {}
         self.recent_rows = {}
+        self.recent_sizes = {}
         self.metadata = {}
         self.progress = []
         self.closed_menus = 0
@@ -174,6 +175,12 @@ class _FakePanel:
         if key not in self.standard_rows:
             return False
         self.standard_sizes[key] = text
+        return True
+
+    def set_recent_row_size(self, key: str, text: str) -> bool:
+        if key not in self.recent_rows:
+            return False
+        self.recent_sizes[key] = text
         return True
 
     def set_row_action(
@@ -678,6 +685,43 @@ def test_recent_map_metadata_uses_the_same_safe_match_and_about_action():
     ]
     actions[-1][1]()
     assert [cave.id for cave in shown_caves] == ["us-fl-peacock-springs"]
+
+
+def test_recent_map_reuses_an_exact_catalog_size_without_scanning_its_folder():
+    library_map = _library_map(
+        display_name="Boh Yai Mine I (Low Res)",
+        size_bytes=57 * 1024 * 1024,
+    )
+    state = _workflow([library_map])
+
+    state.workflow.add_recent_row("/maps/Boh Yai Mine I (Low Res)")
+
+    entry, _open_map, _menu_factory = state.panel.recent_row
+    assert entry.size_text == "57 MB"
+
+
+def test_catalog_refresh_fills_a_matching_visible_recent_map_size():
+    initial_map = _library_map(
+        display_name="Boh Yai Mine I (Low Res)",
+        size_bytes=None,
+    )
+    refreshed_map = _library_map(
+        display_name="Boh Yai Mine I (Low Res)",
+        size_bytes=57 * 1024 * 1024,
+    )
+    recent_path = "/maps/Boh Yai Mine I (Low Res)"
+    state = _workflow(
+        [initial_map],
+        fetch_catalog=lambda: _catalog_refresh(refreshed_map),
+    )
+
+    state.workflow.populate_panel("parent", [recent_path])
+    entry, _open_map, _menu_factory = state.panel.recent_row
+    assert entry.size_text == ""
+
+    state.workflow.catalog_workflow.poll()
+
+    assert state.panel.recent_sizes[recent_map_key(recent_path)] == "57 MB"
 
 
 def test_recent_slice_inherits_root_cave_metadata_and_about_action(tmp_path):

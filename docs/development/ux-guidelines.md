@@ -33,8 +33,9 @@ primitives remain documented in [design-system.md](design-system.md).
 - Use one persistent application shell rather than opening independent windows
   for primary sections.
 - Keep navigation stable while changing the active content surface. The active
-  item uses semantic emphasis and focus state; it does not require a decorative
-  card or repeated application identity.
+  item uses an amber icon and semibold label on the same transparent surface as
+  inactive entries; it does not require a decorative card, marker, or repeated
+  application identity.
 - Build deferred surfaces before exposing them when the first interactive frame
   depends on their geometry or state. Do not reveal partially composed panels.
 - When leaving a surface with unsaved edits, keep that surface active until the
@@ -67,7 +68,7 @@ primitives remain documented in [design-system.md](design-system.md).
   replacement widgets are created, and detach the prior composition's root
   observer so one move produces one lifecycle transition. For a normal window,
   keep the larger of its proportionally scaled bounds and the destination's
-  1040-by-740 logical-pixel default, then clamp to the destination work area;
+  1080-by-740 logical-pixel default, then clamp to the destination work area;
   preserve a maximized window as maximized and retain its transformed normal
   restore bounds.
 - Use semantic typography roles from `caveviewer.gui.tk_typography`; do not
@@ -80,10 +81,10 @@ primitives remain documented in [design-system.md](design-system.md).
 - Give tabbed content one primary left edge shared by the tab label, section
   headings, and the first content column. Use an additional inset only when it
   communicates real hierarchy consistently across the surface.
-- Keep ordinary stacked shell surfaces on one stable origin. Map Library,
-  Preferences, and Help use the same 14-logical-pixel vertical surface margin
-  and 12-logical-pixel primary left edge; retain platform-specific right
-  gutters without mirroring them onto the left.
+- Keep each shell surface on a stable origin. The Map Library card stack begins
+  44 logical pixels below the window edge and 26 logical pixels after the fixed
+  sidebar; Preferences and Help retain their own established internal insets.
+  Switching destinations must not move the shell or navigation geometry.
 - Size normal desktop windows for their complete primary content, then clamp
   them to the usable display area. Scrolling is the fallback for compact
   displays and accessibility scaling, not the default presentation on an
@@ -95,7 +96,7 @@ primitives remain documented in [design-system.md](design-system.md).
   larger than the actual root before applying the same fit. Restore the intended
   surface before reveal; unbounded Map Library lists remain scrollable.
 - Use the same compact primary-shell geometry on Windows, macOS, and Linux:
-  1040 by 740 logical pixels by default and an 840 by 600 logical-pixel resize
+  1080 by 740 logical pixels by default and an 840 by 600 logical-pixel resize
   minimum.
   Clamp both the initial geometry and minimum constraints when the available
   display is smaller. Establish native resize capability before the window is
@@ -106,6 +107,28 @@ primitives remain documented in [design-system.md](design-system.md).
 - In Map Library rows, give the text column the remaining width and reserve
   trailing columns for size, primary action, and overflow action. Long names
   may wrap, but they must never displace or clip row controls.
+
+## Map Library composition
+
+- Present **Your Recent Maps** and **CaveViewer Maps** as two rounded, bordered
+  cards in one scroll flow. Keep their headings and disclosure controls inside
+  the cards, preserve both sections' expanded state, and recompute rounded
+  bounds and scroll geometry after disclosure, resize, scaling, or row changes.
+- When no recent map exists, keep **Open a local map** directly beneath the
+  Recent heading with its supporting explanation. When recent maps exist, show
+  the recent rows first and follow them with the compact **Open another local
+  map** action. The local action is always available.
+- Use the supplied open-folder asset for the local action. Tint the icon and
+  label from the same semantic color: amber in the empty state and muted in the
+  populated state. Keep its pointer, keyboard, hover, press, and focus behavior
+  independent from the raster artwork.
+- Keep map titles and descriptions neutral, reserving amber for disclosure and
+  the primary row action. Rows have no dividers and retain fixed trailing lanes
+  for file size, primary action, and overflow.
+- Preserve map discovery, opening, download, retry, stop, cache build and
+  rebuild, pause and resume, removal, cave metadata, Guided Dive, menu
+  dismissal, scroll restoration, and recovery behavior while the presentation
+  changes around them.
 
 ## Actions and labels
 

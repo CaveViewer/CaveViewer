@@ -517,6 +517,10 @@ class MapLibraryWorkflow:
     def add_recent_row(self, path: str) -> None:
         """Append one recent-map row and wire its management actions."""
         entry = recent_map_entry(path)
+        entry = replace(
+            entry,
+            size_text=self._recent_catalog_size_text(entry.title),
+        )
         metadata_match = self.cave_metadata_match(
             entry.cave_lookup_title or entry.title
         )
@@ -574,6 +578,35 @@ class MapLibraryWorkflow:
             action=lambda path=path: self.open_recent_map(path),
             menu_actions_factory=menu_actions,
         )
+
+    def _recent_catalog_size_text(self, title: str) -> str:
+        """Return one unambiguous catalog size for an exact recent-map title."""
+        normalized_title = str(title).strip().casefold()
+        if not normalized_title:
+            return ""
+        matching_sizes = set()
+        for library_map in self.standard_library_maps:
+            resolved_map = self.controller.resolve_catalog_entry(library_map)
+            display_name = str(
+                getattr(resolved_map, "display_name", "")
+            ).strip().casefold()
+            if display_name != normalized_title:
+                continue
+            size_text = self.controller.size_text(resolved_map)
+            if size_text:
+                matching_sizes.add(size_text)
+        if len(matching_sizes) != 1:
+            return ""
+        return next(iter(matching_sizes))
+
+    def _refresh_recent_row_sizes(self) -> None:
+        """Apply newly fetched catalog sizes to matching visible recent rows."""
+        for path in self.recent_map_paths:
+            entry = recent_map_entry(path)
+            self.panel.set_recent_row_size(
+                entry.key,
+                self._recent_catalog_size_text(entry.title),
+            )
 
     def add_standard_row(self, library_map) -> None:
         """Append one standard-library row and wire its workflow actions."""
@@ -1791,6 +1824,7 @@ class MapLibraryWorkflow:
             visible_maps_tuple,
             availability_by_key=availability_by_key,
         )
+        self._refresh_recent_row_sizes()
 
         for library_map in visible_maps_tuple:
             if self.controller.map_key(library_map) in active_keys:

@@ -30,7 +30,6 @@ manual reveal-only.
 from __future__ import annotations
 
 import enum
-import math
 import os
 import time
 from dataclasses import dataclass
@@ -80,7 +79,14 @@ from caveviewer.gui.map_library_controller import MapLibraryController
 from caveviewer.gui.map_history import load_recent_map_paths
 from caveviewer.gui.map_library_panel import (
     MapLibraryPanel,
+)
+from caveviewer.gui.map_library_style import (
+    MAP_LIBRARY_MAIN_LEFT_GAP,
+    MAP_LIBRARY_RIGHT_MARGIN,
+    MAP_LIBRARY_SCROLLBAR_RAIL_WIDTH,
+    MAP_LIBRARY_WINDOW_FILL,
     MapLibraryPanelStyle,
+    create_map_library_panel_style,
 )
 from caveviewer.gui.map_library_workflow import (
     MapLibraryActionDependencies,
@@ -134,10 +140,8 @@ from caveviewer.gui.splash_controller import (
     StartupReadinessGate,
 )
 from caveviewer.gui.splash_visuals import (
-    VectorEllipse,
-    VectorPath,
-    VectorPolygon,
-    vector_icon_photo,
+    NavigationIconName,
+    navigation_icon_photo,
 )
 from caveviewer.gui.tk_feedback import (
     ERROR_FEEDBACK_MS,
@@ -271,13 +275,24 @@ _COPYRIGHT_SYMBOL = "©"
 _WORDMARK_COPYRIGHT_GAP = 4
 _WORDMARK_COPYRIGHT_OPTICAL_OFFSET = 2
 _BUTTON_BORDER_COLOR = DARK_THEME.primary_button_border
-# Navigation uses a location marker rather than a button treatment.  The
-# background shift stays deliberately quiet; the amber rail and stronger label
-# carry the selected-state meaning.
-_NAVIGATION_HOVER_BG = DARK_THEME.entry_background
-# Keep navigation entries distinct without making the rail read as a stack of
-# separate cards. This shared spacing also scales with the active display.
-_NAVIGATION_ITEM_GAP = 4
+# The navigation shell follows its approved logical-pixel specification.  The
+# selected entry stays transparent and is identified only by amber type/icon.
+_NAVIGATION_PANEL_BG = "#15171C"
+_NAVIGATION_DIVIDER_COLOR = "#30343D"
+_NAVIGATION_SELECTED_FG = "#F5C451"
+_NAVIGATION_INACTIVE_FG = "#EFF1F5"
+_NAVIGATION_FOOTER_FG = "#A9AFBC"
+_NAVIGATION_PANEL_WIDTH = 220
+_NAVIGATION_PANEL_INSET_X = 16
+_NAVIGATION_PANEL_TOP_INSET = 64
+_NAVIGATION_PANEL_BOTTOM_INSET = 16
+_NAVIGATION_ENTRY_WIDTH = 188
+_NAVIGATION_ENTRY_HEIGHT = 44
+_NAVIGATION_ITEM_GAP = 8
+_NAVIGATION_ICON_SIZE = 18
+_NAVIGATION_DIVIDER_WIDTH = 1
+_NAVIGATION_LABEL_SIZE = 13
+_NAVIGATION_FOOTER_SIZE = 13
 _EMBEDDED_PANEL_TEXT_SCALE_FACTOR = 1.0
 _WINDOWS_SPLASH_LAYOUT = _SPLASH_LAYOUT_POLICY.windows_layout
 _LINUX_SPLASH_LAYOUT = _SPLASH_LAYOUT_POLICY.linux_layout
@@ -508,49 +523,17 @@ def _configure_runtime_tk_fonts(
 
 def _map_library_panel_style(
     branding_assets: BrandingAssets | None = None,
+    *,
+    px: Callable[[int | float], int] = lambda value: int(round(value)),
 ) -> MapLibraryPanelStyle:
     """Return the splash-owned style tokens for the Map Library panel."""
     assets = branding_assets or _branding_assets_for_runtime(None)
     progress_tokens = assets.loading_progress
-    return MapLibraryPanelStyle(
-        panel_color=_LIBRARY_PANEL_COLOR,
-        panel_border_color=_LIBRARY_PANEL_BORDER_COLOR,
-        title_color=_TITLE_COLOR,
-        former_map_title_color=_LIBRARY_FORMER_MAP_TITLE_COLOR,
-        instruction_color=_INSTRUCTION_COLOR,
-        title_font=_TYPOGRAPHY.body_strong,
-        body_font=_TYPOGRAPHY.body,
-        supporting_font=_TYPOGRAPHY.supporting,
-        section_font=_TYPOGRAPHY.section,
-        button_bg=_LIBRARY_PANEL_COLOR,
-        button_fg=_BUTTON_BG,
-        button_hover_bg=DARK_THEME.secondary_button,
-        featured_action_bg=_LIBRARY_FEATURED_ACTION_BG,
-        featured_action_hover_bg=_LIBRARY_FEATURED_ACTION_HOVER_BG,
-        button_border_color=_BUTTON_BORDER_COLOR,
-        disabled_button_bg=_LIBRARY_PANEL_COLOR,
-        disabled_button_fg=DARK_THEME.placeholder_text,
-        disabled_button_border=DARK_THEME.entry_border,
-        empty_note_color="#5f606b",
-        metadata_color=_LIBRARY_METADATA_COLOR,
-        metadata_error_color=_LIBRARY_METADATA_ERROR_COLOR,
-        metadata_status_color=_LIBRARY_METADATA_STATUS_COLOR,
-        metadata_status_duration_ms=_LIBRARY_METADATA_STATUS_DURATION_MS,
-        metadata_error_duration_ms=_LIBRARY_METADATA_ERROR_DURATION_MS,
+    return create_map_library_panel_style(
+        px=px,
+        typography=_TYPOGRAPHY,
         progress_track_color=progress_tokens.track_color,
         progress_fill_color=progress_tokens.fill_color,
-        action_retry_icon_diameter=_LIBRARY_ACTION_RETRY_ICON_DIAMETER,
-        action_stop_size=_LIBRARY_ACTION_STOP_SIZE,
-        action_button_size=_LIBRARY_ACTION_BUTTON_SIZE,
-        action_icon_stroke_width=_LIBRARY_ACTION_ICON_STROKE_WIDTH,
-        overflow_button_size=_LIBRARY_OVERFLOW_BUTTON_SIZE,
-        overflow_fg=_LIBRARY_OVERFLOW_FG,
-        overflow_hover_fg=_LIBRARY_OVERFLOW_HOVER_FG,
-        overflow_hover_bg=_LIBRARY_OVERFLOW_HOVER_BG,
-        menu_bg=_LIBRARY_MENU_BG,
-        menu_border=_LIBRARY_MENU_BORDER,
-        menu_hover_bg=_LIBRARY_MENU_HOVER_BG,
-        menu_text=_LIBRARY_MENU_TEXT,
     )
 
 
@@ -913,21 +896,6 @@ def _fit_shell_height_to_preferences(
     # the entire work area when Tk remains unsettled makes large-monitor
     # startup height depend on event timing and produces an oversized shell.
     return fitted_height
-
-
-def _navigation_gear_points(center: float, px) -> tuple[tuple[float, float], ...]:
-    """Return the alternating outer/inner vertices for the Preferences gear."""
-    return tuple(
-        (
-            center
-            + math.cos(math.radians(index * 22.5 - 90))
-            * px(11 if index % 2 == 0 else 8),
-            center
-            + math.sin(math.radians(index * 22.5 - 90))
-            * px(11 if index % 2 == 0 else 8),
-        )
-        for index in range(16)
-    )
 
 
 def _build_themed_about_content(
@@ -1484,10 +1452,14 @@ def _update_status_label(
         presentation.action_replaces_status_after_delay
         and show_delayed_action
     ):
-        return presentation.action_text, _BUTTON_BG, presentation.action
+        return (
+            presentation.action_text,
+            _NAVIGATION_FOOTER_FG,
+            presentation.action,
+        )
     return (
         presentation.status_text,
-        "#ff9b90" if presentation.error else _INSTRUCTION_COLOR,
+        _NAVIGATION_FOOTER_FG,
         presentation.status_action,
     )
 
@@ -1763,13 +1735,11 @@ def _show_splash_composition(
             branding_assets=branding_assets,
         )
 
-    content_frame = tk.Frame(root, bg=_BG_COLOR)
+    content_frame = tk.Frame(root, bg=MAP_LIBRARY_WINDOW_FILL)
     content_frame.grid(
         row=0,
         column=0,
         sticky="nsew",
-        padx=px(18),
-        pady=px(14),
     )
     recomposition_cover = None
     recomposition_alpha_hidden = False
@@ -1802,23 +1772,43 @@ def _show_splash_composition(
     if show_launch_overlay:
         _advance_launch_progress(0.08)
 
-    # The splash is organized as a stable navigation rail beside an active
-    # content surface. Keeping the rail a fixed width prevents map-library
-    # and Preferences content from jumping as users navigate.
-    left_frame = tk.Frame(content_frame, bg=_BG_COLOR, width=px(190))
+    # The navigation panel is a square, full-height shell region. Its one-pixel
+    # divider overlays the right edge so the 16-pixel content insets still
+    # produce the specified 188-pixel navigation and footer width.
+    left_frame = tk.Frame(
+        content_frame,
+        bg=_NAVIGATION_PANEL_BG,
+        width=px(_NAVIGATION_PANEL_WIDTH),
+    )
     left_frame.pack(side="left", fill="y")
     left_frame.pack_propagate(False)
 
-    right_frame = tk.Frame(content_frame, bg=_BG_COLOR)
+    navigation_divider = tk.Frame(
+        left_frame,
+        bg=_NAVIGATION_DIVIDER_COLOR,
+        width=max(1, px(_NAVIGATION_DIVIDER_WIDTH)),
+    )
+    navigation_divider.place(
+        relx=1.0,
+        x=-max(1, px(_NAVIGATION_DIVIDER_WIDTH)),
+        y=0,
+        relheight=1.0,
+        width=max(1, px(_NAVIGATION_DIVIDER_WIDTH)),
+    )
+
+    right_frame = tk.Frame(content_frame, bg=MAP_LIBRARY_WINDOW_FILL)
     right_frame.pack(
         side="left",
         fill="both",
         expand=True,
-        padx=(px(24), 0),
+        padx=(
+            px(MAP_LIBRARY_MAIN_LEFT_GAP),
+            px(MAP_LIBRARY_RIGHT_MARGIN - MAP_LIBRARY_SCROLLBAR_RAIL_WIDTH),
+        ),
     )
     right_frame.grid_rowconfigure(0, weight=1)
     right_frame.grid_columnconfigure(0, weight=1)
-    map_library_surface = tk.Frame(right_frame, bg=_BG_COLOR)
+    map_library_surface = tk.Frame(right_frame, bg=MAP_LIBRARY_WINDOW_FILL)
     preferences_surface = tk.Frame(right_frame, bg=_BG_COLOR)
     help_surface = tk.Frame(right_frame, bg=_BG_COLOR)
     about_surface = tk.Frame(right_frame, bg=_BG_COLOR)
@@ -1840,16 +1830,21 @@ def _show_splash_composition(
     }
     map_library_surface.tkraise()
 
-    navigation_frame = tk.Frame(left_frame, bg=_BG_COLOR)
-    navigation_frame.pack(fill="x", pady=(px(18), 0))
+    navigation_frame = tk.Frame(left_frame, bg=_NAVIGATION_PANEL_BG)
+    navigation_frame.pack(
+        fill="x",
+        padx=px(_NAVIGATION_PANEL_INSET_X),
+        pady=(px(_NAVIGATION_PANEL_TOP_INSET), 0),
+    )
 
-    app_status_frame = tk.Frame(left_frame, bg=_BG_COLOR)
+    app_status_frame = tk.Frame(left_frame, bg=_NAVIGATION_PANEL_BG)
     app_status_frame.pack(
         side="bottom",
         fill="x",
-        padx=px(12),
-        pady=(0, px(12)),
+        padx=px(_NAVIGATION_PANEL_INSET_X),
+        pady=(0, px(_NAVIGATION_PANEL_BOTTOM_INSET)),
     )
+    navigation_divider.lift()
     last_update_presentation: list[_UpdatePresentation | None] = [None]
     map_library_workflow_ref: list[MapLibraryWorkflow | None] = [None]
     map_library_panel_ref: list[MapLibraryPanel | None] = [None]
@@ -1864,23 +1859,32 @@ def _show_splash_composition(
 
     # The status frame stays anchored to the lower-left rail and remains
     # completely quiet until an update has a meaningful state.
-    update_cluster = tk.Frame(app_status_frame, bg=_BG_COLOR)
-    update_status_row = tk.Frame(update_cluster, bg=_BG_COLOR)
-    update_status_row.pack(anchor="w", fill="x")
+    navigation_footer_font_family = _UI_FONT_FAMILY
+    if _PRESENTATION_PROFILE.platform_name == "windows":
+        navigation_footer_font_family = "Segoe UI Semibold"
+    elif _PRESENTATION_PROFILE.platform_name == "darwin":
+        navigation_footer_font_family = "Helvetica Neue Medium"
+    navigation_footer_font = (
+        navigation_footer_font_family,
+        -max(1, px(_NAVIGATION_FOOTER_SIZE)),
+    )
+    update_cluster = tk.Frame(app_status_frame, bg=_NAVIGATION_PANEL_BG)
+    update_status_row = tk.Frame(update_cluster, bg=_NAVIGATION_PANEL_BG)
+    update_status_row.pack(anchor="center", fill="x")
 
     update_label = tk.Label(
         update_status_row,
         text="",
-        font=_TYPOGRAPHY.supporting,
-        fg=_INSTRUCTION_COLOR,
-        bg=_BG_COLOR,
+        font=navigation_footer_font,
+        fg=_NAVIGATION_FOOTER_FG,
+        bg=_NAVIGATION_PANEL_BG,
         takefocus=False,
-        highlightthickness=1,
-        highlightbackground=_BG_COLOR,
+        highlightthickness=0,
+        highlightbackground=_NAVIGATION_PANEL_BG,
         highlightcolor=_BUTTON_BG,
-        wraplength=px(192),
-        justify="left",
-        anchor="w",
+        wraplength=px(_NAVIGATION_ENTRY_WIDTH),
+        justify="center",
+        anchor="center",
     )
 
     update_action_label = tk.Label(
@@ -1889,23 +1893,23 @@ def _show_splash_composition(
         # Footer actions are links to a follow-on update task, not the primary
         # action of the active panel. Keep their hierarchy with the status
         # text; amber color and interaction behavior provide the affordance.
-        font=_TYPOGRAPHY.supporting,
-        fg=_BUTTON_BG,
-        bg=_BG_COLOR,
+        font=navigation_footer_font,
+        fg=_NAVIGATION_FOOTER_FG,
+        bg=_NAVIGATION_PANEL_BG,
         takefocus=False,
-        highlightthickness=1,
-        highlightbackground=_BG_COLOR,
+        highlightthickness=0,
+        highlightbackground=_NAVIGATION_PANEL_BG,
         highlightcolor=_BUTTON_BG,
-        wraplength=px(192),
-        justify="left",
-        anchor="w",
+        wraplength=px(_NAVIGATION_ENTRY_WIDTH),
+        justify="center",
+        anchor="center",
     )
 
     update_progress_bar = tk.Canvas(
         update_cluster,
-        width=px(192),
+        width=px(_NAVIGATION_ENTRY_WIDTH),
         height=max(1, px(3)),
-        bg=_BG_COLOR,
+        bg=_NAVIGATION_PANEL_BG,
         borderwidth=0,
         highlightthickness=0,
         takefocus=False,
@@ -1993,14 +1997,16 @@ def _show_splash_composition(
             _draw_update_progress_bar(None)
 
         if presentation.status_text:
-            update_label.pack(side="left", anchor="w", fill="x", expand=True)
+            update_label.pack(side="left", anchor="center", fill="x", expand=True)
         if (
             presentation.action_text
             and not presentation.action_replaces_status_after_delay
         ):
             update_action_label.pack(
                 side="left",
-                anchor="w",
+                anchor="center",
+                fill="x",
+                expand=True,
                 padx=(px(6), 0) if presentation.status_text else 0,
             )
         if presentation.progress_visible:
@@ -2408,14 +2414,34 @@ def _show_splash_composition(
     def _focus_map_library() -> None:
         _request_leave_preferences(_show_map_library_surface)
 
-    def _create_navigation_icon(parent, icon_name: str):
-        """Create a small, scalable outline icon for one navigation row."""
-        size = px(24)
+    navigation_label_pixel_size = -max(1, px(_NAVIGATION_LABEL_SIZE))
+    navigation_selected_font_family = _UI_FONT_FAMILY
+    navigation_selected_font_weight: tuple[str, ...] = ("bold",)
+    if _PRESENTATION_PROFILE.platform_name == "windows":
+        navigation_selected_font_family = "Segoe UI Semibold"
+        navigation_selected_font_weight = ()
+    elif _PRESENTATION_PROFILE.platform_name == "darwin":
+        navigation_selected_font_family = "Helvetica Neue Medium"
+        navigation_selected_font_weight = ()
+    navigation_selected_font = (
+        navigation_selected_font_family,
+        navigation_label_pixel_size,
+        *navigation_selected_font_weight,
+    )
+    navigation_inactive_font = (
+        _UI_FONT_FAMILY,
+        navigation_label_pixel_size,
+    )
+
+    def _create_navigation_icon(parent, icon_name: NavigationIconName):
+        """Create one state-tinted supplied icon for a navigation row."""
+        size = px(_NAVIGATION_ICON_SIZE)
+
         icon = tk.Canvas(
             parent,
             width=size,
             height=size,
-            bg=_BG_COLOR,
+            bg=_NAVIGATION_PANEL_BG,
             borderwidth=0,
             highlightthickness=0,
             takefocus=False,
@@ -2424,82 +2450,12 @@ def _show_splash_composition(
         def redraw(background: str, foreground: str) -> None:
             icon.configure(bg=background)
             icon.delete("navigation-icon")
-            stroke = max(1, px(1.5))
             center = size / 2
-            paths: tuple[VectorPath, ...] = ()
-            polygons: tuple[VectorPolygon, ...] = ()
-            ellipses: tuple[VectorEllipse, ...] = ()
-
-            if icon_name == "map":
-                paths = (
-                    VectorPath(
-                        points=(
-                            (px(3), px(5)),
-                            (px(9), px(3)),
-                            (px(15), px(5)),
-                            (px(21), px(3)),
-                            (px(21), px(19)),
-                            (px(15), px(22)),
-                            (px(9), px(19)),
-                            (px(3), px(22)),
-                        ),
-                        color=foreground,
-                        width=stroke,
-                        closed=True,
-                    ),
-                    VectorPath(
-                        points=((px(9), px(3)), (px(9), px(19))),
-                        color=foreground,
-                        width=stroke,
-                    ),
-                    VectorPath(
-                        points=((px(15), px(5)), (px(15), px(22))),
-                        color=foreground,
-                        width=stroke,
-                    ),
-                )
-            elif icon_name == "preferences":
-                polygons = (
-                    VectorPolygon(
-                        points=_navigation_gear_points(center, px),
-                        outline_color=foreground,
-                        outline_width=stroke,
-                    ),
-                )
-                ellipses = (
-                    VectorEllipse(
-                        bounds=(
-                            center - px(3),
-                            center - px(3),
-                            center + px(3),
-                            center + px(3),
-                        ),
-                        outline_color=foreground,
-                        outline_width=stroke,
-                    ),
-                )
-            elif icon_name == "help":
-                ellipses = (
-                    VectorEllipse(
-                        bounds=(px(2), px(2), px(22), px(22)),
-                        outline_color=foreground,
-                        outline_width=stroke,
-                    ),
-                )
-            else:
-                ellipses = (
-                    VectorEllipse(
-                        bounds=(px(2), px(2), px(22), px(22)),
-                        outline_color=foreground,
-                        outline_width=stroke,
-                    ),
-                )
-            icon_photo = vector_icon_photo(
+            icon_photo = navigation_icon_photo(
                 icon,
                 image_size=(size, size),
-                paths=paths,
-                polygons=polygons,
-                ellipses=ellipses,
+                icon_name=icon_name,
+                color=foreground,
             )
             icon._cv_navigation_icon_photo = icon_photo
             icon.create_image(
@@ -2508,24 +2464,6 @@ def _show_splash_composition(
                 image=icon_photo,
                 tags="navigation-icon",
             )
-            if icon_name == "help":
-                icon.create_text(
-                    center,
-                    center,
-                    text="?",
-                    font=_TYPOGRAPHY.body_strong,
-                    fill=foreground,
-                    tags="navigation-icon",
-                )
-            elif icon_name != "map" and icon_name != "preferences":
-                icon.create_text(
-                    center,
-                    center,
-                    text="i",
-                    font=_TYPOGRAPHY.body_strong,
-                    fill=foreground,
-                    tags="navigation-icon",
-                )
 
         icon._cv_set_appearance = redraw
         return icon
@@ -2538,81 +2476,57 @@ def _show_splash_composition(
         selected: bool = False,
     ):
         """Create one keyboard-accessible action in the persistent nav rail."""
-        item_row = tk.Frame(navigation_frame, bg=_BG_COLOR)
+        item_row = tk.Frame(
+            navigation_frame,
+            bg=_NAVIGATION_PANEL_BG,
+            width=px(_NAVIGATION_ENTRY_WIDTH),
+            height=px(_NAVIGATION_ENTRY_HEIGHT),
+        )
+        item_row.pack_propagate(False)
         icon = _create_navigation_icon(item_row, icon_name)
         icon.pack(side="left", padx=(px(11), px(6)))
         item = tk.Label(
             item_row,
             text=text,
-            font=_TYPOGRAPHY.body_strong if selected else _TYPOGRAPHY.body,
-            fg=_TITLE_COLOR if selected else _SUBTITLE_COLOR,
-            bg=_BG_COLOR,
+            font=navigation_selected_font if selected else navigation_inactive_font,
+            fg=_NAVIGATION_SELECTED_FG if selected else _NAVIGATION_INACTIVE_FG,
+            bg=_NAVIGATION_PANEL_BG,
             anchor="w",
             padx=0,
-            pady=px(7),
+            pady=0,
             takefocus=True,
             highlightthickness=1,
-            highlightbackground=_BG_COLOR,
-            highlightcolor=_BUTTON_BORDER_COLOR,
+            highlightbackground=_NAVIGATION_PANEL_BG,
+            highlightcolor=_NAVIGATION_SELECTED_FG,
         )
         item.pack(side="left", fill="both", expand=True, padx=(0, px(9)))
-        state = {
-            "selected": selected,
-            "hovered": False,
-            "focused": False,
-        }
+        state = {"selected": selected}
 
         def refresh_visual() -> None:
-            active = state["hovered"] or state["focused"]
-            background = _NAVIGATION_HOVER_BG if active else _BG_COLOR
-            item_row.config(bg=background)
+            if state["selected"]:
+                foreground = _NAVIGATION_SELECTED_FG
+                label_font = navigation_selected_font
+            else:
+                foreground = _NAVIGATION_INACTIVE_FG
+                label_font = navigation_inactive_font
             item.config(
-                bg=background,
-                fg=(
-                    _TITLE_COLOR
-                    if state["selected"] or active
-                    else _SUBTITLE_COLOR
-                ),
-                font=(
-                    _TYPOGRAPHY.body_strong
-                    if state["selected"]
-                    else _TYPOGRAPHY.body
-                ),
-                highlightbackground=background,
+                bg=_NAVIGATION_PANEL_BG,
+                fg=foreground,
+                font=label_font,
+                highlightbackground=_NAVIGATION_PANEL_BG,
             )
             icon._cv_set_appearance(
-                background,
-                _TITLE_COLOR if state["selected"] or active else _SUBTITLE_COLOR,
+                _NAVIGATION_PANEL_BG,
+                foreground,
             )
 
         def set_selected(is_selected: bool) -> None:
             state["selected"] = is_selected
             refresh_visual()
 
-        def on_enter(_event) -> None:
-            state["hovered"] = True
-            refresh_visual()
-
-        def on_leave(_event) -> None:
-            state["hovered"] = False
-            refresh_visual()
-
-        def on_focus_in(_event) -> None:
-            state["focused"] = True
-            refresh_visual()
-
-        def on_focus_out(_event) -> None:
-            state["focused"] = False
-            refresh_visual()
-
+        _bind_activation(item_row, callback)
         _bind_activation(item, callback)
         _bind_activation(icon, callback)
-        item.bind("<Enter>", on_enter)
-        item.bind("<Leave>", on_leave)
-        item.bind("<FocusIn>", on_focus_in)
-        item.bind("<FocusOut>", on_focus_out)
-        icon.bind("<Enter>", on_enter)
-        icon.bind("<Leave>", on_leave)
         refresh_visual()
         item_row.pack(fill="x", pady=(0, px(_NAVIGATION_ITEM_GAP)))
         item._cv_set_selected = set_selected
@@ -2742,7 +2656,7 @@ def _show_splash_composition(
         bind_activation=_bind_activation,
         widget_exists=lambda widget: _widget_exists(widget),
         logger=_LOG,
-        style=_map_library_panel_style(branding_assets),
+        style=_map_library_panel_style(branding_assets, px=px),
         open_map_folder=on_open_map_folder,
     )
     map_library_panel_ref[0] = map_library_panel

@@ -275,7 +275,7 @@ def test_32_inch_250_percent_shell_contract():
     assert display.geometry_scale == pytest.approx(2.5)
     assert display.density_scale == pytest.approx(0.95)
     assert display.layout_scale == pytest.approx(2.375)
-    assert round(profile.splash_layout.window_width * display.layout_scale) == 2470
+    assert round(profile.splash_layout.window_width * display.layout_scale) == 2565
     assert round(profile.splash_layout.min_height * display.layout_scale) == 1758
     assert round(profile.splash_layout.resize_min_width * display.layout_scale) == 1995
     assert round(profile.splash_layout.resize_min_height * display.layout_scale) == 1425
@@ -296,7 +296,7 @@ def test_observed_31_7_inch_144_dpi_desktop_contract():
     assert display.geometry_scale == pytest.approx(1.5)
     assert display.density_scale == pytest.approx(0.95)
     assert display.layout_scale == pytest.approx(1.425)
-    assert round(profile.splash_layout.window_width * display.layout_scale) == 1482
+    assert round(profile.splash_layout.window_width * display.layout_scale) == 1539
     assert round(profile.splash_layout.min_height * display.layout_scale) == 1054
 
 

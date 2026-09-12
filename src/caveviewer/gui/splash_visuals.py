@@ -24,6 +24,15 @@ _PROGRESS_RING_MAX_RASTER_SIZE = 2048
 Color: TypeAlias = str | tuple[int, int, int] | tuple[int, int, int, int]
 Point: TypeAlias = tuple[float, float]
 ProgressCenterGlyph: TypeAlias = Literal["pause", "stop"]
+NavigationIconName: TypeAlias = Literal["map", "preferences", "help", "about"]
+
+_NAVIGATION_ICON_FILENAMES: dict[NavigationIconName, str] = {
+    "map": "navigation-map-library.png",
+    "preferences": "navigation-preferences.png",
+    "help": "navigation-help.png",
+    "about": "navigation-about.png",
+}
+_OPEN_FOLDER_ICON_FILENAME = "open-local-map.png"
 
 
 @dataclass(frozen=True)
@@ -34,6 +43,7 @@ class VectorPath:
     color: Color
     width: float
     closed: bool = False
+    round_vertices: bool = True
 
 
 @dataclass(frozen=True)
@@ -325,6 +335,53 @@ def _retry_icon_alpha() -> Image.Image:
         return icon.getchannel("A").copy()
 
 
+@cache
+def _navigation_icon_alpha(icon_name: NavigationIconName) -> Image.Image:
+    """Load one user-supplied navigation glyph as a reusable alpha mask."""
+    with Image.open(ui_icon_path(_NAVIGATION_ICON_FILENAMES[icon_name])) as icon:
+        return icon.getchannel("A").copy()
+
+
+def render_navigation_icon(
+    *,
+    image_size: tuple[int | float, int | float],
+    icon_name: NavigationIconName,
+    color: Color,
+) -> Image.Image:
+    """Resize and tint one supplied navigation glyph for the active state."""
+    target_size = _target_icon_size(image_size)
+    alpha = _navigation_icon_alpha(icon_name).resize(
+        target_size,
+        Image.Resampling.LANCZOS,
+    )
+    image = Image.new("RGBA", target_size, _rgba(color))
+    image.putalpha(alpha)
+    return image
+
+
+@cache
+def _open_folder_icon_alpha() -> Image.Image:
+    """Load the user-supplied open-folder glyph as a reusable alpha mask."""
+    with Image.open(ui_icon_path(_OPEN_FOLDER_ICON_FILENAME)) as icon:
+        return icon.getchannel("A").copy()
+
+
+def render_open_folder_icon(
+    *,
+    image_size: tuple[int | float, int | float],
+    color: Color,
+) -> Image.Image:
+    """Resize and tint the supplied local-map folder glyph."""
+    target_size = _target_icon_size(image_size)
+    alpha = _open_folder_icon_alpha().resize(
+        target_size,
+        Image.Resampling.LANCZOS,
+    )
+    image = Image.new("RGBA", target_size, _rgba(color))
+    image.putalpha(alpha)
+    return image
+
+
 def render_retry_icon(
     *,
     image_size: tuple[int | float, int | float],
@@ -482,6 +539,7 @@ def render_vector_icon(
             color=path.color,
             width=scale_width(path.width),
             closed=path.closed,
+            round_vertices=path.round_vertices,
         )
     for arc in arcs:
         center_x, center_y = scale_point(arc.center)
@@ -588,6 +646,44 @@ def vector_icon_photo(
             polygons=polygons,
             ellipses=ellipses,
             rectangles=rectangles,
+        ),
+        master=widget.winfo_toplevel(),
+    )
+
+
+def navigation_icon_photo(
+    widget: object,
+    *,
+    image_size: tuple[int | float, int | float],
+    icon_name: NavigationIconName,
+    color: Color,
+) -> object:
+    """Create one root-owned photo from a supplied navigation glyph."""
+    from PIL import ImageTk
+
+    return ImageTk.PhotoImage(
+        render_navigation_icon(
+            image_size=image_size,
+            icon_name=icon_name,
+            color=color,
+        ),
+        master=widget.winfo_toplevel(),
+    )
+
+
+def open_folder_icon_photo(
+    widget: object,
+    *,
+    image_size: tuple[int | float, int | float],
+    color: Color,
+) -> object:
+    """Create one root-owned photo from the supplied local-map folder glyph."""
+    from PIL import ImageTk
+
+    return ImageTk.PhotoImage(
+        render_open_folder_icon(
+            image_size=image_size,
+            color=color,
         ),
         master=widget.winfo_toplevel(),
     )

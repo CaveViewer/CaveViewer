@@ -17,6 +17,7 @@ from caveviewer.gui import (
     map_history,
     map_library_controller,
     map_library_panel,
+    map_library_style,
     map_library_transfers,
     map_library_workflow,
     preferences_dialog,
@@ -356,7 +357,7 @@ def test_ready_update_uses_the_snapshot_label_as_the_reveal_action():
 
     assert splash_screen._update_status_label(presentation) == (
         "Update ready",
-        splash_screen._INSTRUCTION_COLOR,
+        splash_screen._NAVIGATION_FOOTER_FG,
         None,
     )
     assert splash_screen._update_status_label(
@@ -364,7 +365,7 @@ def test_ready_update_uses_the_snapshot_label_as_the_reveal_action():
         show_delayed_action=True,
     ) == (
         "Open Download Folder",
-        splash_screen._BUTTON_BG,
+        splash_screen._NAVIGATION_FOOTER_FG,
         splash_screen._UpdateAction.REVEAL,
     )
 
@@ -971,12 +972,13 @@ def test_monitor_recomposition_maps_invisibly_before_preferences_fit():
     )
 
 
-def test_preferences_navigation_gear_geometry_executes_during_startup():
-    points = splash_screen._navigation_gear_points(16.0, lambda value: value)
+def test_navigation_uses_the_supplied_state_tinted_icon_assets():
+    source = inspect.getsource(splash_screen._show_splash_composition)
 
-    assert len(points) == 16
-    assert points[0] == pytest.approx((16.0, 5.0))
-    assert points[8] == pytest.approx((16.0, 27.0))
+    assert "navigation_icon_photo(" in source
+    assert "icon_name=icon_name" in source
+    assert "color=foreground" in source
+    assert "_navigation_gear_points" not in inspect.getsource(splash_screen)
 
 
 def test_launch_splash_waits_only_for_the_remaining_minimum_duration():
@@ -1159,10 +1161,14 @@ def test_splash_navigation_actions_are_keyboard_accessible_without_fallthrough()
     assert "navigation_frame = tk.Frame(" in source
     assert "def _create_navigation_icon(" in source
     assert "def _create_navigation_item(" in source
-    assert "item_row = tk.Frame(navigation_frame, bg=_BG_COLOR)" in source
+    assert "item_row = tk.Frame(" in source
+    assert "width=px(_NAVIGATION_ENTRY_WIDTH)" in source
+    assert "height=px(_NAVIGATION_ENTRY_HEIGHT)" in source
+    assert "item_row.pack_propagate(False)" in source
     assert "icon = _create_navigation_icon(item_row, icon_name)" in source
+    assert "_bind_activation(item_row, callback)" in source
     assert "_bind_activation(icon, callback)" in source
-    assert "font=_TYPOGRAPHY.body_strong if selected else _TYPOGRAPHY.body" in source
+    assert "navigation_selected_font if selected else navigation_inactive_font" in source
     assert "takefocus=True" in source
     assert 'label.bind("<Return>", invoke)' in update_action_source
     assert 'label.bind("<space>", invoke)' in update_action_source
@@ -1180,7 +1186,10 @@ def test_splash_navigation_actions_are_keyboard_accessible_without_fallthrough()
     assert "open_map_folder=on_open_map_folder" in source
     assert "def _focus_map_library() -> None:" in source
     assert "panel.focus_content()" in source
-    assert "map_library_surface = tk.Frame(right_frame, bg=_BG_COLOR)" in source
+    assert (
+        "map_library_surface = tk.Frame(right_frame, bg=MAP_LIBRARY_WINDOW_FILL)"
+        in source
+    )
     assert "preferences_surface = tk.Frame(right_frame, bg=_BG_COLOR)" in source
     assert "help_surface = tk.Frame(right_frame, bg=_BG_COLOR)" in source
     assert "about_surface = tk.Frame(right_frame, bg=_BG_COLOR)" in source
@@ -1309,16 +1318,31 @@ def test_splash_navigation_keeps_asymmetric_label_padding_in_pack_geometry():
 def test_splash_navigation_uses_consistent_row_spacing():
     source = inspect.getsource(splash_screen._show_splash_composition)
 
-    assert splash_screen._NAVIGATION_ITEM_GAP == 4
+    assert splash_screen._NAVIGATION_ITEM_GAP == 8
     assert 'item_row.pack(fill="x", pady=(0, px(_NAVIGATION_ITEM_GAP)))' in source
 
 
-def test_splash_navigation_selection_uses_type_and_color_without_a_fill():
+def test_splash_navigation_uses_transparent_entries_and_type_only_selection():
     source = inspect.getsource(splash_screen._show_splash_composition)
+    module_source = inspect.getsource(splash_screen)
 
-    assert "_NAVIGATION_ACTIVE_BG" not in inspect.getsource(splash_screen)
-    assert "background = _NAVIGATION_HOVER_BG if active else _BG_COLOR" in source
-    assert "_TYPOGRAPHY.body_strong" in source
+    assert splash_screen._NAVIGATION_PANEL_BG == "#15171C"
+    assert splash_screen._NAVIGATION_SELECTED_FG == "#F5C451"
+    assert splash_screen._NAVIGATION_INACTIVE_FG == "#EFF1F5"
+    assert splash_screen._NAVIGATION_LABEL_SIZE == 13
+    assert splash_screen._NAVIGATION_ICON_SIZE == 18
+    assert "size = px(_NAVIGATION_ICON_SIZE)" in source
+    assert "_NAVIGATION_SELECTED_BG" not in module_source
+    assert "_NAVIGATION_SELECTED_RAIL_WIDTH" not in module_source
+    assert "_NAVIGATION_HOVER_BG" not in module_source
+    assert "selection_rail" not in source
+    assert 'if state["selected"]:' in source
+    assert "foreground = _NAVIGATION_SELECTED_FG" in source
+    assert "foreground = _NAVIGATION_INACTIVE_FG" in source
+    assert "bg=_NAVIGATION_PANEL_BG" in source
+    assert 'navigation_selected_font_family = "Segoe UI Semibold"' in source
+    assert "navigation_selected_font_weight = ()" in source
+    assert "navigation_inactive_font" in source
 
 
 def test_unsaved_preferences_dialog_offers_three_explicit_close_choices():
@@ -1345,23 +1369,54 @@ def test_preferences_and_help_share_the_primary_semantic_type_scale():
     assert "typography = _embedded_panel_typography()" in help_style_source
 
 
-def test_splash_navigation_uses_a_quiet_rail_and_lower_app_status():
+def test_splash_navigation_panel_uses_specified_bounds_insets_and_footer():
     source = inspect.getsource(splash_screen._show_splash_composition)
     update_source = inspect.getsource(splash_screen._update_presentation)
+    content_grid_source = source[
+        source.index("content_frame = tk.Frame") : source.index(
+            "recomposition_cover = None"
+        )
+    ]
 
     assert "_TYPOGRAPHY: TkTypography = create_tk_typography(" in inspect.getsource(
         splash_screen
     )
     assert "brand_frame = tk.Frame(left_frame, bg=_BG_COLOR)" not in source
     assert "masthead_icon_label" not in source
-    assert 'navigation_frame.pack(fill="x", pady=(px(18), 0))' in source
-    assert "app_status_frame = tk.Frame(left_frame, bg=_BG_COLOR)" in source
+    assert "padx=" not in content_grid_source
+    assert "pady=" not in content_grid_source
+    assert "navigation_frame.pack(" in source
+    assert 'padx=px(_NAVIGATION_PANEL_INSET_X)' in source
+    assert 'pady=(px(_NAVIGATION_PANEL_TOP_INSET), 0)' in source
+    assert (
+        "app_status_frame = tk.Frame(left_frame, bg=_NAVIGATION_PANEL_BG)"
+        in source
+    )
+    assert 'pady=(0, px(_NAVIGATION_PANEL_BOTTOM_INSET))' in source
+    assert splash_screen._NAVIGATION_PANEL_WIDTH == 220
+    assert splash_screen._NAVIGATION_PANEL_INSET_X == 16
+    assert splash_screen._NAVIGATION_PANEL_TOP_INSET == 64
+    assert splash_screen._NAVIGATION_PANEL_BOTTOM_INSET == 16
+    assert splash_screen._NAVIGATION_ENTRY_WIDTH == 188
+    assert splash_screen._NAVIGATION_ENTRY_HEIGHT == 44
+    assert splash_screen._NAVIGATION_DIVIDER_WIDTH == 1
+    assert splash_screen._NAVIGATION_DIVIDER_COLOR == "#30343D"
+    assert "navigation_divider.place(" in source
+    assert "navigation_divider.lift()" in source
     assert "version_table" not in source
     assert "version_descriptor_label" not in source
     assert "available_update_label" not in source
     assert "available_version_label" not in source
-    assert "update_cluster = tk.Frame(app_status_frame, bg=_BG_COLOR)" in source
-    assert 'update_status_row.pack(anchor="w", fill="x")' in source
+    assert (
+        "update_cluster = tk.Frame(app_status_frame, bg=_NAVIGATION_PANEL_BG)"
+        in source
+    )
+    assert splash_screen._NAVIGATION_FOOTER_SIZE == 13
+    assert splash_screen._NAVIGATION_FOOTER_FG == "#A9AFBC"
+    assert "font=navigation_footer_font" in source
+    assert "fg=_NAVIGATION_FOOTER_FG" in source
+    assert "highlightthickness=0" in source
+    assert 'update_status_row.pack(anchor="center", fill="x")' in source
     assert source.count("update_status_row.pack(") == 1
     assert "update_status_row.pack_forget()" not in source
     assert "def _set_update_cluster_visible(visible: bool)" in source
@@ -1385,8 +1440,14 @@ def test_splash_navigation_uses_a_quiet_rail_and_lower_app_status():
     assert "update_progress_bar._cv_progress_visible" in source
     assert "if not update_progress_bar._cv_progress_visible:" in source
     assert "update_progress_bar._cv_progress_visible = presentation.progress_visible" in source
-    assert 'update_label.pack(side="left", anchor="w", fill="x", expand=True)' in source
+    assert (
+        'update_label.pack(side="left", anchor="center", fill="x", expand=True)'
+        in source
+    )
     assert "update_action_label.pack(" in source
+    assert source.count('anchor="center"') >= 3
+    assert source.count('fill="x"') >= 3
+    assert source.count("expand=True") >= 2
     assert "padx=(px(6), 0) if presentation.status_text else 0" in source
     assert "def _draw_update_progress_bar(progress_fraction: float | None)" in source
     assert "progress_segments(" in source
@@ -1397,8 +1458,9 @@ def test_splash_navigation_uses_a_quiet_rail_and_lower_app_status():
             "update_progress_bar = tk.Canvas("
         )
     ]
-    assert "font=_TYPOGRAPHY.supporting" in footer_action_source
-    assert 'justify="left"' in source
+    assert "font=navigation_footer_font" in footer_action_source
+    assert "highlightthickness=0" in footer_action_source
+    assert 'justify="center"' in footer_action_source
 
 
 def test_themed_about_content_owns_the_brand_identity_while_launch_stays_quiet():
@@ -1505,9 +1567,7 @@ def test_splash_map_library_uses_navigation_and_an_overflow_cue():
         + workflow_source
     )
     section_source = panel_source[
-        panel_source.find("def _create_section") : panel_source.find(
-            "def _create_empty_note"
-        )
+        panel_source.find("def _create_section") : panel_source.find("def _create_row")
     ]
 
     assert '"Map Library"' in splash_source
@@ -1516,13 +1576,21 @@ def test_splash_map_library_uses_navigation_and_an_overflow_cue():
     assert "Your Library" not in source
     assert "Standard Library" not in source
     assert "Open your maps or explore the standard library." not in source
-    assert "No maps added yet." in source
+    assert "No maps added yet." not in source
     assert "Maps you open yourself will appear here." not in source
     assert "No user-opened maps yet." not in source
-    assert 'top_pad=12' in source
-    assert 'bottom_pad=18' in source
-    assert "Open a local map" in panel_source
-    assert "Browse a cave map folder" in panel_source
+    assert "RoundedSectionSurface(" in panel_source
+    assert "radius=metrics.section_corner_radius" in section_source
+    assert "border_width=metrics.section_border_thickness" in section_source
+    assert "padding_x=metrics.section_padding_x" in section_source
+    assert "padding_y=metrics.section_padding_y" in section_source
+    assert "padding_bottom_y=metrics.section_padding_bottom_y" in section_source
+    assert "minimum_height=minimum_expanded_height" in section_source
+    assert map_library_style.OPEN_LOCAL_MAP_TITLE == "Open a local map"
+    assert (
+        map_library_style.OPEN_LOCAL_MAP_DESCRIPTION
+        == "Browse a cave map folder on your computer."
+    )
     assert "def _create_open_map_action" in panel_source
     assert "def _draw_open_map_action" in panel_source
     assert "self._open_map_folder = open_map_folder" in panel_source
@@ -1533,9 +1601,9 @@ def test_splash_map_library_uses_navigation_and_an_overflow_cue():
     ]
     assert "highlightthickness=0" in panel_create_source
     assert "highlightbackground=style.panel_border_color" not in panel_create_source
-    assert "open_map_shell = tk.Frame(panel, bg=style.panel_color)" in panel_source
-    assert "self._create_open_map_action(open_map_shell)" in panel_source
-    assert "scroll_row = 1" in panel_source
+    assert "open_map_shell" not in panel_source
+    assert "self._create_open_map_action(recent_content)" in panel_source
+    assert "scroll_row" not in panel_source
     assert '"Recent Maps"' not in source
     assert "Available Maps" not in source
     assert "Open recent or available maps." not in source
@@ -1557,15 +1625,26 @@ def test_splash_map_library_uses_navigation_and_an_overflow_cue():
     assert "wraplength=self._px(250)" not in panel_source
     assert "self._sync_row_title_wraplength(" in panel_source
     assert "highlightthickness=0" in source
-    assert "panel_border_color=_LIBRARY_PANEL_BORDER_COLOR" in style_source
-    assert 'left_frame = tk.Frame(content_frame, bg=_BG_COLOR, width=px(190))' in source
-    assert 'padx=(px(24), 0)' in source
-    assert "pady=self._px(PRIMARY_SURFACE_VERTICAL_MARGIN)" in panel_source
-    assert "title_font=_TYPOGRAPHY.body_strong" in style_source
-    assert "body_font=_TYPOGRAPHY.body" in style_source
-    assert "supporting_font=_TYPOGRAPHY.supporting" in style_source
-    assert "section_font=_TYPOGRAPHY.section" in style_source
-    assert "metadata_color=_LIBRARY_METADATA_COLOR" in style_source
+    assert "create_map_library_panel_style(" in style_source
+    assert "left_frame = tk.Frame(" in source
+    assert "bg=_NAVIGATION_PANEL_BG" in source
+    assert "width=px(_NAVIGATION_PANEL_WIDTH)" in source
+    assert splash_screen._NAVIGATION_PANEL_WIDTH == 220
+    assert "px(MAP_LIBRARY_MAIN_LEFT_GAP)" in source
+    assert (
+        "px(MAP_LIBRARY_RIGHT_MARGIN - MAP_LIBRARY_SCROLLBAR_RAIL_WIDTH)"
+        in source
+    )
+    assert "PRIMARY_SURFACE_VERTICAL_MARGIN" not in panel_source
+    assert "pady=(metrics.surface_top_pad_y, metrics.surface_bottom_pad_y)" in panel_source
+    assert "minimum_expanded_height=metrics.recent_card_min_height" in panel_source
+    assert "minimum_expanded_height=metrics.catalog_card_min_height" in panel_source
+    assert "border_color=style.catalog_card_border_color" in panel_source
+    assert "typography=_TYPOGRAPHY" in style_source
+    assert (
+        map_library_style.MAP_LIBRARY_TYPOGRAPHY_ROLES.section_heading
+        == "heading"
+    )
     assert "_action_button_pixel_size" in panel_source
     assert "style.action_button_size" in panel_source
     assert "style.action_icon_stroke_width" in panel_source
@@ -1587,9 +1666,7 @@ def test_splash_map_library_uses_navigation_and_an_overflow_cue():
     assert "_set_row_open_activation" not in panel_source
     assert "_cv_row_action_widgets" not in panel_source
     assert "color = style.button_fg" in panel_source
-    assert "action_progress_ring_diameter=" not in style_source
-    assert "action_retry_icon_diameter=" in style_source
-    assert "action_stop_size=" in style_source
+    assert "action_progress_ring_diameter" not in map_library_style.MapLibraryPanelStyle.__annotations__
     assert "show_stop_progress=True" in workflow_source
     assert '"Cancel"' not in workflow_source
     assert '"Stopping…"' in workflow_source
@@ -1611,6 +1688,8 @@ def test_splash_map_library_uses_navigation_and_an_overflow_cue():
     assert 'text="Show"' not in section_source
 
     style = splash_screen._map_library_panel_style()
+    assert style.action_retry_icon_diameter == style.metrics.action_retry_icon_diameter
+    assert style.action_stop_size == style.metrics.action_stop_size
     assert style.progress_track_color == "#3B3428"
     assert style.progress_fill_color == "#FFB000"
     assert style.progress_track_color != style.button_bg
@@ -1634,16 +1713,24 @@ def test_map_library_sections_start_expanded_and_toggle_in_place():
 
     header = object()
     content = _FakeSectionContent()
+    minimum_heights = []
     section = map_library_panel.MapLibrarySectionWidgets(
         header=header,
         content=content,
         title="CaveViewer Maps",
+        surface=SimpleNamespace(
+            set_minimum_height=lambda height: minimum_heights.append(height)
+        ),
+        minimum_expanded_height=484,
     )
     panel = object.__new__(map_library_panel.MapLibraryPanel)
     drawn_states = []
     closed_menus = []
     sync_calls = []
     panel._widget_exists = lambda _widget: True
+    panel._style = SimpleNamespace(
+        metrics=SimpleNamespace(section_header_to_body_y=12)
+    )
     panel._draw_section_header = lambda target: drawn_states.append(target.expanded)
     panel.close_active_menu = lambda: closed_menus.append(True)
     panel.sync_after_row_change = lambda: sync_calls.append(True)
@@ -1659,8 +1746,11 @@ def test_map_library_sections_start_expanded_and_toggle_in_place():
     panel._toggle_section(section)
 
     assert section.expanded is True
-    assert content.pack_calls == [{"fill": "x", "after": header}]
+    assert content.pack_calls == [
+        {"fill": "x", "pady": (12, 0), "after": header}
+    ]
     assert drawn_states == [False, True]
+    assert minimum_heights == [0, 484]
     assert len(closed_menus) == 2
     assert len(sync_calls) == 2
 
@@ -1700,8 +1790,9 @@ def test_map_library_section_headers_use_adjacent_disclosure_triangles(monkeypat
         "Style",
         (),
         {
-            "section_font": ("TkDefaultFont", 10, "bold"),
-            "instruction_color": "#ffffff",
+                "section_font": ("TkDefaultFont", 10, "bold"),
+                "instruction_color": "#ffffff",
+                "disclosure_color": "#ffb000",
         },
     )()
     header = _FakeHeader()
@@ -1732,14 +1823,14 @@ def test_map_library_section_headers_use_adjacent_disclosure_triangles(monkeypat
     collapsed = vector_calls[1]["polygons"][0]
     assert expanded.points[0][1] == expanded.points[1][1] < expanded.points[2][1]
     assert collapsed.points[0][0] == collapsed.points[1][0] < collapsed.points[2][0]
-    assert expanded.fill_color == collapsed.fill_color == "#ffffff"
+    assert expanded.fill_color == collapsed.fill_color == "#ffb000"
 
 
 def test_splash_and_library_curved_canvas_art_uses_antialiased_vector_photos():
     navigation_source = inspect.getsource(splash_screen._show_splash_composition)
     panel_source = inspect.getsource(map_library_panel.MapLibraryPanel)
 
-    assert "vector_icon_photo(" in navigation_source
+    assert "navigation_icon_photo(" in navigation_source
     assert "vector_icon_photo(" in panel_source
     for primitive in ("create_line(", "create_arc(", "create_oval(", "create_polygon("):
         assert primitive not in navigation_source
@@ -1753,6 +1844,8 @@ def test_former_standard_row_title_uses_a_muted_style_without_moving_the_row():
 
         def config(self, **options) -> None:
             self.config_calls.append(options)
+
+        configure = config
 
     title_label = _FakeLabel()
     panel = object.__new__(map_library_panel.MapLibraryPanel)
@@ -1857,10 +1950,10 @@ def test_map_library_rows_use_subtle_overflow_menu_for_management():
     assert "Removed downloaded maps for" not in source
     assert "Removed cache for" not in source
     assert "has_managed_map_cache(sample_path)" not in source
-    assert "self._recent_container = self._recent_section.content" in panel_source
+    assert "self._recent_container = tk.Frame(recent_content" in panel_source
     assert "self._standard_container = self._standard_section.content" in panel_source
     assert "self.recent_rows" in panel_source
-    assert "self._recent_empty_note = self._create_empty_note" in panel_source
+    assert "self._hide_recent_rows_host()" in panel_source
     assert "Open dive plan…" in source
     assert "guided_dive_preflight" in workflow_source
     assert "file_selection_preflight" in workflow_source
@@ -1872,7 +1965,7 @@ def test_map_library_rows_use_subtle_overflow_menu_for_management():
     assert "vector_icon_photo(" in panel_source
     assert "overflow_button.grid(" in panel_source
     assert "column=3" in panel_source
-    assert "padx=(0, self._px(8))" in panel_source
+    assert "padx=(0, metrics.row_text_end_pad_x)" in panel_source
     assert "_install_menu_dismissal_bindings" in panel_source
     assert "tk.Frame(" in row_menu_source
     assert "menu.place(" in row_menu_source
@@ -1955,13 +2048,23 @@ def test_map_library_menu_popover_position_stays_inside_the_splash():
 
 
 def test_library_action_buttons_use_normalized_dimensions():
-    assert splash_screen._LIBRARY_ACTION_BUTTON_SIZE == 28
-    assert splash_screen._LIBRARY_ACTION_ICON_STROKE_WIDTH == 2
-    assert splash_screen._LIBRARY_OVERFLOW_BUTTON_SIZE == 24
     assert splash_screen._TYPOGRAPHY.supporting[1] == 9
     style = splash_screen._map_library_panel_style()
     assert not hasattr(style, "scrollbar_right_inset")
-    assert style.panel_border_color == splash_screen._LIBRARY_PANEL_BORDER_COLOR
+    assert style.metrics.action_button_size == 28
+    assert style.metrics.action_icon_stroke_width == 2
+    assert style.metrics.overflow_button_size == 24
+    assert style.panel_color == "#0D0F13"
+    assert style.panel_border_color == "#30343D"
+    assert style.catalog_card_border_color == "#313337"
+    assert style.card_color == map_library_style.MAP_LIBRARY_PANEL_FILL
+    assert style.card_color == "#15171C"
+    assert style.button_bg == style.card_color
+    assert style.disabled_button_bg == style.card_color
+    panel_source = inspect.getsource(map_library_panel.MapLibraryPanel)
+    assert "self._px(self._style.action_button_size)" not in panel_source
+    assert "self._px(style.overflow_button_size)" not in panel_source
+    assert "self._px(self._style.action_icon_stroke_width)" not in panel_source
 
 
 def test_map_library_scroll_region_delegates_overflow_to_the_shared_rail():
@@ -2007,6 +2110,38 @@ def test_map_library_scroll_region_delegates_overflow_to_the_shared_rail():
     assert panel._content_scrollbar.content_heights == [320, 200]
 
 
+def test_map_library_card_measurement_is_coalesced_before_scroll_sync():
+    callbacks = []
+    order = []
+
+    class _FakeRoot:
+        def after_idle(self, callback) -> None:
+            callbacks.append(callback)
+
+    def section(name):
+        return SimpleNamespace(
+            surface=SimpleNamespace(
+                sync_geometry=lambda: order.append(f"measure-{name}")
+            )
+        )
+
+    panel = object.__new__(map_library_panel.MapLibraryPanel)
+    panel.root = _FakeRoot()
+    panel._widget_exists = lambda _widget: True
+    panel._layout_sync_pending = False
+    panel._recent_section = section("recent")
+    panel._standard_section = section("standard")
+    panel.sync_scroll_region = lambda: order.append("scroll")
+
+    panel.sync_after_row_change()
+    panel.sync_after_row_change()
+
+    assert len(callbacks) == 1
+    callbacks[0]()
+    assert order == ["measure-recent", "measure-standard", "scroll"]
+    assert panel._layout_sync_pending is False
+
+
 def test_map_library_binds_dynamic_rows_to_the_shared_scrollbar():
     class _FakeScrollbar:
         def __init__(self) -> None:
@@ -2043,6 +2178,8 @@ def test_map_library_open_map_action_uses_the_existing_folder_callback(monkeypat
         def config(self, **options) -> None:
             self.config_calls.append(options)
 
+        configure = config
+
         def winfo_width(self) -> int:
             return 420
 
@@ -2072,10 +2209,13 @@ def test_map_library_open_map_action_uses_the_existing_folder_callback(monkeypat
             canvases.append(_FakeCanvas(*args, **kwargs)) or canvases[-1]
         ),
     )
+    open_folder_photo_calls = []
     monkeypatch.setattr(
         map_library_panel,
-        "vector_icon_photo",
-        lambda _widget, **_options: object(),
+        "open_folder_icon_photo",
+        lambda _widget, **options: (
+            open_folder_photo_calls.append(options) or object()
+        ),
     )
     opened = []
     closed_menus = []
@@ -2089,21 +2229,32 @@ def test_map_library_open_map_action_uses_the_existing_folder_callback(monkeypat
     panel._widget_exists = lambda _widget: True
     panel._px = lambda value: int(value)
     panel._style = SimpleNamespace(
+        metrics=SimpleNamespace(
+            local_action_height=50,
+            focus_border_thickness=1,
+            local_action_icon_width=32,
+            local_action_icon_height=32,
+            local_action_icon_to_text_x=14,
+            compact_local_action_height=28,
+            compact_local_action_icon_width=20,
+            compact_local_action_icon_height=20,
+            compact_local_action_icon_to_text_x=12,
+        ),
         title_font=("TkDefaultFont", 13, "bold"),
+        local_action_font=("TkDefaultFont", 14),
         supporting_font=("TkDefaultFont", 11),
-        title_color="#f5d77d",
+        local_action_title_color="#f5d77d",
+        local_action_supporting_color="#a9afbc",
         metadata_color="#6f717f",
-        panel_color="#101018",
-        panel_border_color="#1e2028",
+        card_color="#202025",
         button_border_color="#a77a10",
-        button_hover_bg="#2a2a33",
         featured_action_bg="#202025",
         featured_action_hover_bg="#28282e",
-        menu_hover_bg="#343442",
-        progress_fill_color="#f0ad22",
+        featured_action_pressed_bg="#343442",
     )
 
-    panel._create_open_map_action(object())
+    panel._open_map_action = panel._create_open_map_action(object())
+    panel.recent_rows = {}
 
     action = canvases[0]
     assert action.options["takefocus"] is True
@@ -2113,23 +2264,105 @@ def test_map_library_open_map_action_uses_the_existing_folder_callback(monkeypat
     assert wheel_targets == [action]
 
     action.bindings["<Enter>"](None)
+    action.bindings["<ButtonPress-1>"](None)
+    action.bindings["<ButtonRelease-1>"](None)
     action.bindings["<Leave>"](None)
-    assert action.config_calls[-2:] == [
+    assert action.config_calls[-4:] == [
+        {"bg": "#28282e"},
+        {"bg": "#343442"},
         {"bg": "#28282e"},
         {"bg": "#202025"},
     ]
 
     action.draw_calls.clear()
     action.bindings["<Configure>"](None)
+    assert open_folder_photo_calls[-1] == {
+        "image_size": (32, 32),
+        "color": "#f5d77d",
+    }
     assert [entry[2]["text"] for entry in action.draw_calls if entry[0] == "text"] == [
         "Open a local map",
-        "Browse a cave map folder",
+        "Browse a cave map folder on your computer.",
+    ]
+    assert not any(entry[0] == "rectangle" for entry in action.draw_calls)
+
+    action.draw_calls.clear()
+    panel.recent_rows["recent"] = object()
+    panel._sync_open_map_action_presentation()
+    assert action.config_calls[-1] == {"height": 28}
+    assert open_folder_photo_calls[-1] == {
+        "image_size": (20, 20),
+        "color": "#a9afbc",
+    }
+    compact_text = [
+        entry[2]
+        for entry in action.draw_calls
+        if entry[0] == "text"
+    ]
+    assert compact_text == [
+        {
+            "text": "Open another local map",
+            "font": ("TkDefaultFont", 14),
+            "fill": "#a9afbc",
+            "anchor": "w",
+            "tags": "cv_open_map_action",
+        }
     ]
 
     activations[0]()
 
-    assert closed_menus == [True]
-    assert opened == [True]
+    assert closed_menus == [True, True]
+    assert opened == [True, True]
+
+
+def test_local_map_action_uses_the_supplied_state_tinted_open_folder_asset():
+    source = inspect.getsource(map_library_panel.MapLibraryPanel._draw_open_map_action)
+    draw_source = inspect.getsource(
+        map_library_panel.MapLibraryPanel._draw_open_folder_photo
+    )
+
+    assert source.count("self._draw_open_folder_photo(") == 2
+    assert "open_folder_icon_paths" not in source
+    assert "open_folder_icon_photo(" in draw_source
+    assert "image_size=(width, height)" in draw_source
+    assert "color=color" in draw_source
+
+
+def test_recent_rows_are_packed_before_the_always_present_local_action():
+    class _FakeRowsHost:
+        def __init__(self) -> None:
+            self.pack_calls = []
+            self.pack_forget_calls = 0
+
+        def pack(self, **options) -> None:
+            self.pack_calls.append(options)
+
+        def pack_forget(self) -> None:
+            self.pack_forget_calls += 1
+
+    host = _FakeRowsHost()
+    panel = object.__new__(map_library_panel.MapLibraryPanel)
+    panel._recent_container = host
+    panel._recent_rows_host_packed = False
+    panel._open_map_action = object()
+    panel._style = SimpleNamespace(
+        metrics=SimpleNamespace(recent_rows_to_local_action_y=12)
+    )
+    panel._widget_exists = lambda _widget: True
+
+    panel._show_recent_rows_host()
+    panel._show_recent_rows_host()
+    panel._hide_recent_rows_host()
+    panel._hide_recent_rows_host()
+
+    assert host.pack_calls == [
+        {
+            "fill": "x",
+            "pady": (0, 12),
+            "before": panel._open_map_action,
+        }
+    ]
+    assert host.pack_forget_calls == 1
 
 
 @pytest.mark.parametrize(

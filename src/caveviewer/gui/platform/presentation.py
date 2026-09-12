@@ -196,7 +196,7 @@ _DEFAULT_PRESENTATION_PROFILE = PresentationProfile(
         destroy_root_on_close=True,
         windows_layout=False,
         linux_layout=False,
-        window_width=1040,
+        window_width=1080,
         # Keep the embedded Preferences form visible without its overflow
         # scrollbar on ordinary desktop displays. Splash composition still
         # clamps this preferred height to the usable screen area.
@@ -270,7 +270,7 @@ def select_presentation_profile(*, platform_name: str) -> PresentationProfile:
                 destroy_root_on_close=False,
                 windows_layout=False,
                 linux_layout=False,
-                window_width=1040,
+                window_width=1080,
                 min_height=740,
                 resize_min_width=840,
                 resize_min_height=600,
@@ -330,7 +330,7 @@ def select_presentation_profile(*, platform_name: str) -> PresentationProfile:
                 destroy_root_on_close=False,
                 windows_layout=True,
                 linux_layout=False,
-                window_width=1040,
+                window_width=1080,
                 min_height=740,
                 resize_min_width=840,
                 resize_min_height=600,
@@ -379,7 +379,7 @@ def select_presentation_profile(*, platform_name: str) -> PresentationProfile:
                 destroy_root_on_close=True,
                 windows_layout=False,
                 linux_layout=True,
-                window_width=1040,
+                window_width=1080,
                 min_height=740,
                 resize_min_width=840,
                 resize_min_height=600,
