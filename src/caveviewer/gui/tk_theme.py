@@ -30,6 +30,8 @@ class TkTheme:
     invalid_border: str
     placeholder_text: str
     error_text: str
+    panel_entry_background: str = APPLICATION_SURFACE_FILL
+    panel_entry_border: str = "#30343D"
 
 
 DARK_THEME = TkTheme(

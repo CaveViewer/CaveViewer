@@ -28,13 +28,13 @@ def test_help_metrics_align_with_the_approved_preferences_pattern():
     preferences = PREFERENCES_VISUAL_METRICS
 
     assert metrics.control_corner_radius == preferences.control_corner_radius == 4
-    assert metrics.section_corner_radius == preferences.section_corner_radius == 12
-    assert metrics.section_padding_x == preferences.section_padding_x == 22
-    assert metrics.section_padding_y == preferences.section_padding_y == 22
+    assert metrics.section_corner_radius == preferences.section_corner_radius == 10
+    assert metrics.section_padding_x == preferences.section_padding_x == 24
+    assert metrics.section_padding_y == preferences.section_padding_y == 24
     assert metrics.section_gap_y == preferences.section_gap_y == 20
     assert metrics.card_item_gap_y == preferences.card_item_gap_y == 20
     assert metrics.section_heading_to_description_y == 8
-    assert metrics.section_description_to_content_y == 20
+    assert metrics.section_description_to_divider_y == 20
 
 
 def test_help_metrics_apply_display_scaling_once():
@@ -49,8 +49,8 @@ def test_help_metrics_apply_display_scaling_once():
     assert isinstance(scaled, ScaledHelpVisualMetrics)
     assert len(calls) == len(fields(HelpVisualMetrics))
     assert scaled.control_corner_radius == 6
-    assert scaled.section_corner_radius == 18
-    assert scaled.section_padding_x == 33
+    assert scaled.section_corner_radius == 15
+    assert scaled.section_padding_x == 36
     assert scaled.keycap_lane_min_width == 255
     assert not hasattr(scaled, "scaled")
 

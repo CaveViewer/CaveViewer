@@ -19,15 +19,18 @@ def test_preferences_visual_metrics_match_the_reference_contract():
     metrics = PREFERENCES_VISUAL_METRICS
 
     assert metrics.control_corner_radius == 4
-    assert metrics.section_corner_radius == 12
-    assert metrics.section_padding_x == 22
-    assert metrics.section_padding_y == 22
+    assert metrics.section_corner_radius == 10
+    assert metrics.section_padding_x == 24
+    assert metrics.section_padding_y == 24
     assert metrics.section_gap_y == 20
     assert metrics.section_heading_to_description_y == 8
-    assert metrics.section_description_to_fields_y == 20
+    assert metrics.section_description_to_divider_y == 20
+    assert metrics.section_divider_to_content_y == 24
+    assert metrics.section_divider_thickness == 1
+    assert metrics.numeric_control_height == 36
     assert metrics.card_item_gap_y == 20
     assert metrics.control_height == 40
-    assert metrics.numeric_control_width == 100
+    assert metrics.numeric_control_width == 90
     assert metrics.action_min_width == 140
     assert metrics.control_content_pad_x == 12
     assert metrics.footer_action_gap_x == 10
@@ -45,8 +48,8 @@ def test_preferences_visual_metrics_apply_display_scaling_once():
     assert isinstance(scaled, ScaledPreferencesVisualMetrics)
     assert len(calls) == len(fields(PreferencesVisualMetrics))
     assert scaled.control_corner_radius == 6
-    assert scaled.section_corner_radius == 18
-    assert scaled.section_padding_x == 33
+    assert scaled.section_corner_radius == 15
+    assert scaled.section_padding_x == 36
     assert not hasattr(scaled, "scaled")
 
 
@@ -83,6 +86,7 @@ def test_preferences_typography_matches_the_streaming_reference():
     assert typography.section_summary == ("Inter", -13)
     assert typography.field_label == ("Inter SemiBold", -14)
     assert typography.field_description == ("Inter", -12)
+    assert typography.field_description_line_height == 17
     assert typography.field_value == ("Inter Medium", -14)
     assert typography.field_unit == ("Inter", -14)
 
@@ -104,6 +108,7 @@ def test_preferences_typography_applies_display_scaling_once():
     assert typography.section_title == ("Inter", -24, "bold")
     assert typography.section_summary == ("Inter", -20)
     assert typography.field_description == ("Inter", -18)
+    assert typography.field_description_line_height == 25
     assert typography.field_value == ("Inter Medium", -21)
 
 
@@ -121,4 +126,5 @@ def test_preferences_typography_preserves_the_runtime_text_scale():
     assert typography.active_tab == ("Inter SemiBold", -18)
     assert typography.section_title == ("Inter", -20, "bold")
     assert typography.field_description == ("Inter", -15)
+    assert typography.field_description_line_height == 21
     assert typography.field_value == ("Inter Medium", -18)

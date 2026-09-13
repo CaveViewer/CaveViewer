@@ -26,7 +26,9 @@ class ScaledHelpVisualMetrics:
     section_padding_y: int
     section_gap_y: int
     section_heading_to_description_y: int
-    section_description_to_content_y: int
+    section_description_to_divider_y: int
+    section_divider_to_content_y: int
+    section_divider_thickness: int
     card_item_gap_y: int
     control_height: int
     action_min_width: int
@@ -58,8 +60,14 @@ class HelpVisualMetrics:
     section_heading_to_description_y: int = (
         PREFERENCES_VISUAL_METRICS.section_heading_to_description_y
     )
-    section_description_to_content_y: int = (
-        PREFERENCES_VISUAL_METRICS.section_description_to_fields_y
+    section_description_to_divider_y: int = (
+        PREFERENCES_VISUAL_METRICS.section_description_to_divider_y
+    )
+    section_divider_to_content_y: int = (
+        PREFERENCES_VISUAL_METRICS.section_divider_to_content_y
+    )
+    section_divider_thickness: int = (
+        PREFERENCES_VISUAL_METRICS.section_divider_thickness
     )
     card_item_gap_y: int = PREFERENCES_VISUAL_METRICS.card_item_gap_y
     control_height: int = PREFERENCES_VISUAL_METRICS.control_height

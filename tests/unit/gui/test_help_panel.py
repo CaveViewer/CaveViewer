@@ -408,7 +408,7 @@ def test_help_panel_uses_the_shared_card_alignment_and_spacing():
     assert "initial_geometry = measure_help_card(" in intro_source
     assert "content_x = initial_geometry.content.left" in intro_source
     assert "metrics.section_heading_to_description_y" in intro_source
-    assert "metrics.section_description_to_content_y" in intro_source
+    assert "metrics.section_description_to_divider_y" in intro_source
     assert "y += metrics.card_item_gap_y" in card_source
     assert "canvas.create_line(" not in card_source
 
@@ -495,8 +495,8 @@ def test_help_cards_and_compact_shortcuts_keep_measured_alignment():
             if canvas.type(item) == "text"
             and canvas.itemcget(item, "text") == first_action
         )
-        assert canvas.coords(title_item)[0] == 34
-        assert canvas.coords(action_item)[0] > 34
+        assert canvas.coords(title_item)[0] == 36
+        assert canvas.coords(action_item)[0] > 36
 
         panel._render_table(380)
         compact_action_item = next(
@@ -505,7 +505,7 @@ def test_help_cards_and_compact_shortcuts_keep_measured_alignment():
             if canvas.type(item) == "text"
             and canvas.itemcget(item, "text") == first_action
         )
-        assert canvas.coords(compact_action_item)[0] == 34
+        assert canvas.coords(compact_action_item)[0] == 36
         keycap_item = canvas.find_withtag("help-keycap")[0]
         keycap_bottom = max(canvas.coords(keycap_item)[1::2])
         assert canvas.coords(compact_action_item)[1] > keycap_bottom

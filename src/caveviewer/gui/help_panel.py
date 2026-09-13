@@ -888,15 +888,27 @@ class HelpPanel:
             if purpose_bounds is None
             else max(1, purpose_bounds[3] - purpose_bounds[1])
         )
+        divider_y = (
+            purpose_y + purpose_height + metrics.section_description_to_divider_y
+        )
+        canvas.create_rectangle(
+            content_x,
+            divider_y,
+            content_x + content_width,
+            divider_y + metrics.section_divider_thickness,
+            fill=style.section_border_color,
+            outline="",
+            tags=("help-content", "help-card-divider"),
+        )
         return _HelpCardIntro(
             heading_item=heading_item,
             card_left=card_left,
             content_x=content_x,
             content_width=content_width,
             content_y=(
-                    purpose_y
-                    + purpose_height
-                    + metrics.section_description_to_content_y
+                    divider_y
+                    + metrics.section_divider_thickness
+                    + metrics.section_divider_to_content_y
             ),
         )
 

@@ -206,6 +206,7 @@ class RoundedEntryControl:
         metrics: ScaledPreferencesVisualMetrics,
         palette: PreferencesVisualPalette = PREFERENCES_VISUAL_PALETTE,
         state: EntryState = "normal",
+        numeric: bool = False,
         width: int | None = None,
         outside_background: str | None = None,
         validate: str = "none",
@@ -228,6 +229,7 @@ class RoundedEntryControl:
             else outside_background
         )
         self._entry_state: EntryState = state
+        self._numeric = numeric
         self._interaction = ControlInteractionState(
             enabled=state != "disabled",
             readonly=state == "readonly",
@@ -245,7 +247,7 @@ class RoundedEntryControl:
         self.widget = tk.Canvas(
             parent,
             width=width or metrics.numeric_control_width,
-            height=metrics.control_height,
+            height=self._control_height,
             bg=self._outside_background,
             borderwidth=0,
             highlightthickness=0,
@@ -393,7 +395,7 @@ class RoundedEntryControl:
 
     def set_metrics(self, metrics: ScaledPreferencesVisualMetrics) -> None:
         self._metrics = metrics
-        options = {"height": metrics.control_height}
+        options = {"height": self._control_height}
         if self._uses_default_width:
             options["width"] = metrics.numeric_control_width
         self.widget.configure(**options)
@@ -419,20 +421,35 @@ class RoundedEntryControl:
             return False
         return True
 
+    @property
+    def _control_height(self) -> int:
+        return (
+            self._metrics.numeric_control_height
+            if self._numeric
+            else self._metrics.control_height
+        )
+
     def _sync_geometry(self, width: int | None = None) -> None:
         resolved_width = self.widget.winfo_width() if width is None else width
         resolved_width = max(1, resolved_width)
-        height = self._metrics.control_height
+        height = self._control_height
         inset = max(
             self._metrics.control_corner_radius,
             self._metrics.control_border_thickness,
             self._metrics.control_content_pad_x,
         )
-        self.widget.coords(self._content_window, inset, 0)
+        # Native child windows paint above canvas items. Reserve the thickest
+        # outline on both axes so focus never moves text or obscures the border.
+        border_inset = max(
+            self._metrics.control_border_thickness,
+            self._metrics.focus_border_thickness,
+        )
+        inset = max(inset, border_inset)
+        self.widget.coords(self._content_window, inset, border_inset)
         self.widget.itemconfigure(
             self._content_window,
             width=max(1, resolved_width - (inset * 2)),
-            height=height,
+            height=max(1, height - (border_inset * 2)),
         )
 
     def _on_configure(self, event) -> None:

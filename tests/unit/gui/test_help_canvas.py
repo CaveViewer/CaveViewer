@@ -27,12 +27,12 @@ def test_help_card_keeps_equal_padding_and_matches_preferences_content_edges():
         metrics=metrics,
     )
 
-    assert card.outer == CanvasBounds(12, 20, 800, 162)
-    assert card.content == CanvasBounds(34, 42, 778, 140)
-    assert card.content.left - card.outer.left == 22
-    assert card.outer.right - card.content.right == 22
-    assert card.content.top - card.outer.top == 22
-    assert card.outer.bottom - card.content.bottom == 22
+    assert card.outer == CanvasBounds(12, 20, 800, 164)
+    assert card.content == CanvasBounds(36, 44, 776, 140)
+    assert card.content.left - card.outer.left == 24
+    assert card.outer.right - card.content.right == 24
+    assert card.content.top - card.outer.top == 24
+    assert card.outer.bottom - card.content.bottom == 24
 
 
 def test_help_card_clamps_narrow_width_without_collapsing_its_content():
@@ -50,7 +50,7 @@ def test_help_card_clamps_narrow_width_without_collapsing_its_content():
     assert card.outer.top == 0
     assert card.outer.width == 8
     assert card.content.width == 2
-    assert card.outer.height == 44
+    assert card.outer.height == 48
 
 
 def test_shortcut_row_keeps_aligned_lanes_at_ordinary_width():
