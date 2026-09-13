@@ -350,9 +350,17 @@ def test_actual_map_row_click_opens_its_menu_and_preserves_dismissal(menu_root):
             root.update()
             assert panel._active_menu is None
             assert not panel._active_menu_root_bindings
+        # Native window managers may clamp the requested height. Exercise a
+        # compact viewport and scroll the sampled card edge into view first.
+        root.geometry("900x500")
+        root.update()
+        panel._content_canvas.yview_moveto(1.0)
+        root.update()
+        assert panel._content_canvas.yview()[0] > 0
         card = panel._standard_section.surface.widget
         bottom = card.winfo_rooty() + card.winfo_height() - root.winfo_rooty()
-        backing = panel._menu_backdrop(40, bottom - 80, 200, 194)
+        center_x = card.winfo_rootx() + card.winfo_width() // 2 - root.winfo_rootx()
+        backing = panel._menu_backdrop(center_x - 100, bottom - 80, 200, 194)
         assert backing.getpixel((100, 20))[:3] == (21, 23, 28)
         assert backing.getpixel((100, 160))[:3] == (13, 15, 19)
     finally:
