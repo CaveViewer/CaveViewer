@@ -158,9 +158,10 @@ invent navigation, data, or controls for a marketing composition.
 
 Favor one focal mark, one primary message, and ample negative space. Avoid
 repeating the logo in navigation, loading, and content at the same time. The
-startup surface uses the Void background with a sparse, static triangular mesh,
-a single sentence, and a flat progress bar without an additional logo or
-product title.
+startup surface uses the supplied cave mesh, subdued against the application
+surface with a darker center, and the live two-tone CaveViewer wordmark above
+the shared flat progress bar. The name and copyright remain text, separate
+from the background artwork.
 
 ## Motion, voice, and accessibility
 
@@ -239,7 +240,7 @@ Tk, OpenGL, or platform packaging tools.
 | Platform or area | User-visible surface | Semantic input | Derived or inherited output | Owner |
 | --- | --- | --- | --- | --- |
 | All desktop platforms | About page | About mark | Runtime RGBA image | GUI composition |
-| All desktop platforms | Initial startup | Solid Void background, launch copy, and shared progress colors | Text-and-bar launch surface gated by minimum display time and composed-main-screen readiness | GUI composition |
+| All desktop platforms | Initial startup | Subdued cave mesh, live product wordmark, and shared progress colors | Text-and-bar launch surface gated by minimum display time and composed-main-screen readiness | GUI composition |
 | All desktop platforms | Routine loading progress | Semantic progress fill and track colors | Flat determinate or indeterminate bar across launch, viewer, Map Library, and updates | GUI presentation |
 | All desktop platforms | Capture countdown/status | Semantic progress fill and track colors | Standard vector circle with centered countdown or status text | GUI presentation |
 | Windows | Window upper-left icon, taskbar, title bar, native dialogs | Windows application icon | Runtime PNG and inherited window icon | GUI/platform adapter |
@@ -594,7 +595,7 @@ not change machine behavior may retain the current version.
       "preserve ample negative space",
       "avoid repeating the logo across adjacent surfaces",
       "prefer hierarchy and alignment over decorative containers",
-      "startup uses no logo or product-title lockup"
+      "startup overlays the live product wordmark and progress bar on a subdued cave mesh"
     ]
   },
   "motion": {
@@ -784,10 +785,19 @@ toolchain change that preserves the ICNS fallback and can be tested on both
 supported macOS architectures; do not treat a flattened approximation as a
 layered source.
 
-The initial startup surface intentionally carries no independent logo or
-product-title lockup. It uses the Void background with a sparse static
-triangular mesh, the sentence `Preparing to explore what lies beneath...`, and
-the same subdued-track/amber-fill flat progress language used by map loading.
+The initial startup surface uses a subdued cave mesh behind the live two-tone
+`CaveViewer` wordmark and copyright, with the same subdued-track/amber-fill flat
+progress language used by map loading. `images/startup-mesh.png` is the
+unmodified mesh supplied by the user for this design on 2026-09-13 (SHA-256
+`3e3a2f7431eb6cb14db8c9f6908bfd54602b0342eb4cce8b4a3aa728324f96dc`).
+It was supplied for use in CaveViewer; no separate asset license notice was
+provided. It remains application-owned imagery outside the branding profile.
+The renderer excludes the capture's narrow outer border, preserves aspect
+ratio with a centered cover crop, tints the mesh with quiet neutral colors,
+and darkens the center. Text and progress are separate Tk canvas items. A
+surface owns one decoded source and one viewport-sized image, reuses that
+image during progress updates, and releases both when destroyed. An unreadable
+image falls back to the plain application background without blocking launch.
 Composition milestones are
 monotonic and remain below 100 percent until the map library, Preferences
 surface, final geometry, and idle layout work needed by the first interactive
