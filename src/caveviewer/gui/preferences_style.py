@@ -25,10 +25,13 @@ class ScaledPreferencesVisualMetrics:
     section_gap_y: int
     section_heading_to_fields_y: int
     section_heading_to_description_y: int
-    section_description_to_fields_y: int
+    section_description_to_divider_y: int
+    section_divider_to_content_y: int
+    section_divider_thickness: int
     field_label_to_description_y: int
     field_description_to_control_y: int
     control_height: int
+    numeric_control_height: int
     numeric_control_width: int
     action_min_width: int
     control_content_pad_x: int
@@ -46,20 +49,23 @@ class PreferencesVisualMetrics:
     """Unscaled logical geometry measured from the Preferences reference."""
 
     control_corner_radius: int = 4
-    section_corner_radius: int = 12
-    section_padding_x: int = 22
-    section_padding_y: int = 22
+    section_corner_radius: int = 10
+    section_padding_x: int = 24
+    section_padding_y: int = 24
     section_gap_y: int = 20
     section_heading_to_fields_y: int = 24
     section_heading_to_description_y: int = 8
-    section_description_to_fields_y: int = 20
+    section_description_to_divider_y: int = 20
+    section_divider_to_content_y: int = 24
+    section_divider_thickness: int = 1
     field_label_to_description_y: int = 6
-    field_description_to_control_y: int = 14
+    field_description_to_control_y: int = 8
     control_height: int = 40
-    numeric_control_width: int = 100
+    numeric_control_height: int = 36
+    numeric_control_width: int = 90
     action_min_width: int = 140
     control_content_pad_x: int = 12
-    unit_gap_x: int = 10
+    unit_gap_x: int = 12
     control_seam_thickness: int = 1
     card_item_gap_y: int = 20
     footer_action_gap_x: int = 10
@@ -114,7 +120,7 @@ class PreferencesVisualPalette:
 
 @dataclass(frozen=True, slots=True)
 class PreferencesTypography:
-    """Exact display-scaled font tuples for the Preferences hierarchy."""
+    """Display-scaled fonts and line heights for the Preferences hierarchy."""
 
     active_tab: tuple
     inactive_tab: tuple
@@ -124,6 +130,7 @@ class PreferencesTypography:
     field_description: tuple
     field_value: tuple
     field_unit: tuple
+    field_description_line_height: int
 
 
 def create_preferences_typography(
@@ -160,6 +167,7 @@ def create_preferences_typography(
             *typography.medium_styles,
         ),
         field_unit=font(regular_family, 14),
+        field_description_line_height=max(1, int(px(12 * 1.4 * typography.text_scale))),
     )
 
 
@@ -173,8 +181,8 @@ def preferences_visual_palette(
         heading_text=PREFERENCES_PRIMARY_TEXT,
         field_label_text=PREFERENCES_PRIMARY_TEXT,
         supporting_text=PREFERENCES_SUPPORTING_TEXT,
-        control_background=theme.entry_background,
-        control_border=theme.entry_border,
+        control_background=theme.panel_entry_background,
+        control_border=theme.panel_entry_border,
         control_focus_border=theme.entry_focus_border,
         control_invalid_border=theme.invalid_border,
         control_text=PREFERENCES_PRIMARY_TEXT,

@@ -805,9 +805,9 @@ def test_obj_import_batch_preference_maps_thousands_to_faces_env(
 def test_preferences_panel_uses_extracted_settings_logic():
     from caveviewer.gui import preferences_dialog, preferences_form, splash_screen
 
-    assert preferences_dialog.PREFERENCES_VISUAL_METRICS.numeric_control_width == 100
+    assert preferences_dialog.PREFERENCES_VISUAL_METRICS.numeric_control_width == 90
     assert preferences_dialog._SCROLLBAR_GUTTER_X == 18
-    assert preferences_dialog.PREFERENCES_VISUAL_METRICS.unit_gap_x == 10
+    assert preferences_dialog.PREFERENCES_VISUAL_METRICS.unit_gap_x == 12
     assert preferences_dialog.PREFERENCE_FIELDS is settings.PREFERENCE_FIELDS
     assert (
         preferences_dialog.preference_placeholder_text
@@ -2039,7 +2039,7 @@ def test_streaming_reference_uses_stacked_rounded_controls():
     assert "control_to_metadata_y" not in field_source
     assert "section_heading_to_fields_y" in card_source
     assert "section_heading_to_description_y" in card_source
-    assert "section_description_to_fields_y" in card_source
+    assert "section_description_to_divider_y" in card_source
     assert "self.page_hint_labels.setdefault(page_key" in card_source
     assert "_STREAMING_LOADING_FOOTER" not in inspect.getsource(
         preferences_dialog

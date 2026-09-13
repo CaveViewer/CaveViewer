@@ -160,10 +160,13 @@ primitives remain documented in [design-system.md](design-system.md).
   labels. Tabs divide major preference domains; they do not replace grouping
   inside a dense page.
 - Present each Preferences group as one subtly raised section card with a
-  12-logical-pixel corner radius, consistent internal padding, and one shared
+  10-logical-pixel corner radius, 24-logical-pixel internal padding, and one shared
   left and right edge beneath the tabs, with a subtle muted border on every
   card. Use title-case semantic headings; do
   not add amber card borders or decoration.
+- Separate each card's purpose line from its content with one muted divider
+  aligned to the content edges. Position it after wrapped text and let the card
+  grow with its content.
 - Name the Streaming groups **Memory Use**, **CPU Use**, and **Frame Loading**.
   Place one short, app-neutral purpose statement beneath each heading before
   its fields.
@@ -217,10 +220,12 @@ primitives remain documented in [design-system.md](design-system.md).
 - Align the first Help tab with the first Preferences tab at the shared shell
   origin. Both surfaces must use the same display-scale helper so switching
   between them does not move the tab row.
-- Present each Help group as a subtly raised card with a 12-logical-pixel corner
-  radius, 22-logical-pixel internal padding, and a 20-logical-pixel gap before
+- Present each Help group as a subtly raised card with a 10-logical-pixel corner
+  radius, 24-logical-pixel internal padding, and a 20-logical-pixel gap before
   the next card. Add the same subtle muted border to Keys, Capture, and
-  Troubleshooting cards. Use title-case headings, short purpose lines, and no dividers.
+  Troubleshooting cards. Use title-case headings and short purpose lines with
+  one content-aligned divider below each purpose line. Keep rows separated by
+  whitespace.
 - Keep descriptions to two lines or fewer at the ordinary shell width. Shorten
   redundant copy before changing type size, card width, or spacing.
 - Keep shortcut rows on a stable keycap lane and flexible action lane. Use

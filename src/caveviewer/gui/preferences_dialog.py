@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable, Mapping
 
 from caveviewer.core.preferences.transfer import PREFERENCES_EXPORT_FILENAME
+from caveviewer.gui.field_description import FieldDescription
 from caveviewer.storage_paths import default_downloads_dir
 from caveviewer.gui.preferences import (
     PREFERENCE_FIELDS,
@@ -329,6 +330,9 @@ class PreferencesPanel:
         self.body_font = preferences_typography.field_value
         self.body_strong_font = preferences_typography.field_label
         self.small_font = preferences_typography.field_description
+        self.field_description_line_height = (
+            preferences_typography.field_description_line_height
+        )
         self.field_unit_font = preferences_typography.field_unit
         self.active_tab_font = preferences_typography.active_tab
         self.inactive_tab_font = preferences_typography.inactive_tab
@@ -359,7 +363,7 @@ class PreferencesPanel:
         self.page_scrollbar = None
         self.page_stack = None
         self.pages: dict[str, tk.Frame] = {}
-        self.page_hint_labels: dict[str, list[tk.Label]] = {}
+        self.page_hint_labels: dict[str, list[tk.Label | FieldDescription]] = {}
         self.field_page_keys: dict[str, str] = {
             field.key: field.section for field in PREFERENCE_FIELDS
         }
@@ -622,6 +626,8 @@ class PreferencesPanel:
             fg=self.preferences_palette.heading_text,
             bg=self.preferences_palette.section_background,
             anchor="w",
+            padx=0,
+            pady=0,
         ).pack(anchor="w")
         content_gap = self.preferences_metrics.section_heading_to_fields_y
         if description:
@@ -633,6 +639,8 @@ class PreferencesPanel:
                 bg=self.preferences_palette.section_background,
                 anchor="w",
                 justify="left",
+                padx=0,
+                pady=0,
                 wraplength=self._layout_policy.wrap_length,
             )
             description_label.pack(
@@ -647,7 +655,16 @@ class PreferencesPanel:
                 self.page_hint_labels.setdefault(page_key, []).append(
                     description_label
                 )
-            content_gap = self.preferences_metrics.section_description_to_fields_y
+            tk.Frame(
+                card.content,
+                bg=self.preferences_palette.section_border,
+                height=self.preferences_metrics.section_divider_thickness,
+                takefocus=False,
+            ).pack(
+                fill="x",
+                pady=(self.preferences_metrics.section_description_to_divider_y, 0),
+            )
+            content_gap = self.preferences_metrics.section_divider_to_content_y
         content = tk.Frame(
             card.content,
             bg=self.preferences_palette.section_background,
@@ -738,14 +755,13 @@ class PreferencesPanel:
             bg=self.preferences_palette.section_background,
             anchor="w",
         ).pack(anchor="w")
-        description_label = tk.Label(
+        description_label = FieldDescription(
             row,
             text=description,
             font=self.small_font,
             fg=self.preferences_palette.supporting_text,
             bg=self.preferences_palette.section_background,
-            anchor="w",
-            justify="left",
+            line_height=self.field_description_line_height,
             wraplength=self._layout_policy.wrap_length,
         )
         description_label.pack(
@@ -789,18 +805,19 @@ class PreferencesPanel:
             fg=self.preferences_palette.field_label_text,
             bg=self.preferences_palette.section_background,
             anchor="w",
+            padx=0,
+            pady=0,
         )
         title_label.pack(anchor="w")
         self.field_title_labels[key] = title_label
 
-        description_label = tk.Label(
+        description_label = FieldDescription(
             row,
             text=presentation.description,
             font=self.small_font,
             fg=self.preferences_palette.supporting_text,
             bg=self.preferences_palette.section_background,
-            anchor="w",
-            justify="left",
+            line_height=self.field_description_line_height,
             wraplength=self._layout_policy.wrap_length,
         )
         description_label.pack(
@@ -849,6 +866,7 @@ class PreferencesPanel:
             metrics=self.preferences_metrics,
             palette=self.preferences_palette,
             state="readonly" if compact_path else "normal",
+            numeric=not compact_path,
             width=1 if compact_path else None,
             outside_background=self.preferences_palette.section_background,
             validate="none" if compact_path else "key",

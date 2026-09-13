@@ -23,6 +23,25 @@ _METRICS = PREFERENCES_VISUAL_METRICS.scaled(round)
 _PALETTE = PREFERENCES_VISUAL_PALETTE
 
 
+def test_native_entry_window_leaves_the_full_focus_outline_visible():
+    from unittest.mock import Mock
+
+    entry = object.__new__(RoundedEntryControl)
+    entry.widget = Mock()
+    entry._metrics = _METRICS
+    entry._numeric = True
+    entry._content_window = 1
+
+    entry._sync_geometry(90)
+
+    entry.widget.coords.assert_called_once_with(1, 12, 2)
+    entry.widget.itemconfigure.assert_called_once_with(1, width=66, height=32)
+
+    entry._numeric = False
+    entry._sync_geometry(200)
+    assert entry.widget.itemconfigure.call_args.kwargs["height"] == 36
+
+
 class _FakeCanvas:
     def __init__(self) -> None:
         self.deleted: list[str] = []

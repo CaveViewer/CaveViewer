@@ -205,19 +205,22 @@ cannot be scaled again.
 | Relationship | Logical value |
 | --- | ---: |
 | Control corner radius | 4 |
-| Section-card corner radius | 12 |
-| Section-card horizontal and vertical padding | 22 |
+| Section-card corner radius | 10 |
+| Section-card horizontal and vertical padding | 24 |
 | Gap between section cards | 20 |
 | Card heading to first field | 24 |
 | Card heading to section description | 8 |
-| Section description to first field | 20 |
+| Section description to divider | 20 |
+| Header divider thickness | 1 |
+| Header divider to content | 24 |
 | Field label to description | 6 |
-| Field description to control row | 14 |
-| Control height | 40 |
-| Compact numeric-control width | 100 |
+| Field description to control row | 8 |
+| Action and compound path-control height | 40 |
+| Numeric-control height | 36 |
+| Compact numeric-control width | 90 |
 | Minimum action width | 140 |
 | Control horizontal content padding | 12 |
-| Inline unit gap | 10 |
+| Inline unit gap | 12 |
 | Gap between fields or actions in one card | 20 |
 | Compound-control seam thickness | 1 |
 | Preferences footer top gap | 20 |
@@ -245,8 +248,15 @@ uses the same tab-row alignment.
 | Input value | Medium | 14 px | `#EFF1F5` |
 | Unit | Regular | 14 px | `#A9AFBC` |
 
+Field descriptions use 140% line height (16.8 logical pixels at the default
+12-pixel size), with display and accessibility scaling applied once. The
+read-only description component uses native word wrapping and adds leading
+between wrapped lines and around each paragraph. Its height follows the text
+when the panel is resized; it does not enter keyboard focus order or consume
+the panel's wheel scrolling. A taller fallback font is never clipped.
+
 Each preference group is a subtly raised panel-colored card with a
-12-logical-pixel radius. Cards share one left and right edge beneath the tabs,
+10-logical-pixel radius. Cards share one left and right edge beneath the tabs,
 use title-case section-title labels, and remain separated by a 20-logical-pixel
 vertical gap. Every card has a one-logical-pixel `#30343D` border, including
 Storage and Backup cards. Amber decoration is reserved for primary actions
@@ -257,6 +267,11 @@ same purpose-line treatment. Storage uses **Locations** with a short purpose
 line that introduces the group without repeating either field description.
 Backup uses **Save & Load** and **Reset**, each with a short plain-language
 purpose line beneath its heading.
+
+One `#30343D` header divider spans the content width beneath each purpose
+line. Its position follows the wrapped description rather than a fixed card
+coordinate. Card height grows with its content. Keep units outside each input
+border; do not add a border around the field group.
 
 | Tab | Card heading | Purpose line |
 | --- | --- | --- |
@@ -283,7 +298,10 @@ the right edge of the cards on every tab and at every display scale.
 
 Entries and action buttons use the 4-logical-pixel radius. Their normal, hover,
 pressed, focused, invalid, read-only, and disabled colors resolve from
-`TkTheme`; Preferences does not own duplicate color literals. Focus uses the
+`TkTheme`; Preferences does not own duplicate color literals. Panel entries use
+the semantic panel-entry fill `#0D0F13` and border `#30343D`. Their embedded
+native content reserves the thickest outline on all sides, keeping the full
+border visible without moving the text when focus changes. Focus uses the
 entry focus role and a two-logical-pixel border, while invalid state uses the
 semantic invalid border together with persistent field feedback. A directory
 path and **Browse** remain one compound control with one rounded outer border
@@ -298,8 +316,9 @@ content.
 
 `caveviewer.gui.help_style` is the canonical source for Help geometry,
 semantic palette mappings, exact typography, and card purpose lines. Help
-shares the Preferences 4-logical-pixel control radius, 12-logical-pixel card
-radius, 22-logical-pixel card padding, and 20-logical-pixel gaps. Help-only
+shares the Preferences 4-logical-pixel control radius, 10-logical-pixel card
+radius, 24-logical-pixel card padding, header-divider spacing, and
+20-logical-pixel gaps. Help-only
 canvas measurements define the keycap and action lanes, responsive stacking,
 error excerpt, and bottom scroll padding. The active shell display-scale helper
 converts every logical metric exactly once.
@@ -317,7 +336,8 @@ Inter Bold 16-logical-pixel heading in `#EFF1F5` and one short Inter Regular
 13-logical-pixel purpose line in `#A9AFBC`. Actions use Inter Semi Bold at 14
 logical pixels, details use Inter Regular at 12 logical pixels, and keycaps use
 Inter Medium at 14 logical pixels. Cards share the Preferences content edges,
-use no divider lines, and remain separated by 20 logical pixels. At the ordinary
+use one `#30343D` divider beneath each purpose line, and remain separated by
+20 logical pixels. Keep shortcut and action rows separated by whitespace. At the ordinary
 shell width, descriptions should occupy no more than two lines; shorten the copy
 instead of reducing type size or card spacing.
 
