@@ -177,3 +177,20 @@ def test_tab_wraps_to_opener_when_no_other_controls_exist(control):
     root.update()
     assert choice._menu is None
     assert root.focus_get() == choice.button
+
+
+@pytest.mark.parametrize("event", ["<Tab>", "<Shift-Tab>"])
+def test_traversal_loads_bundled_focus_helpers_when_autoload_index_omits_them(control, event):
+    root, choice, _, before, after = control
+    for command in ("tk_focusNext", "tk_focusPrev"):
+        if root.tk.call("info", "commands", command):
+            root.tk.call("rename", command, "")
+        root.tk.call("unset", "-nocomplain", f"auto_index({command})",
+                     f"auto_index(::{command})")
+    root.tk.call("set", "::tcl::auto_oldpath", root.tk.call("set", "auto_path"))
+    assert root.tk.call("auto_load", "tk_focusNext") == 0
+    open_choice(root, choice)
+    choice._menu.event_generate(event)
+    root.update()
+    assert choice._menu is None
+    assert root.focus_get() == (before if event == "<Shift-Tab>" else after)

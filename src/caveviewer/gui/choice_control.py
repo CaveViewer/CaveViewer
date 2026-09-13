@@ -219,6 +219,16 @@ class RoundedChoiceControl:
         return "break"
 
     def _traverse(self, backwards: bool) -> str:
+        command = "tk_focusPrev" if backwards else "tk_focusNext"
+        interpreter = self.button.tk
+        if not interpreter.call("info", "commands", command):
+            if not interpreter.call("auto_load", command):
+                # Some Tk installations omit these helpers from the cached
+                # autoload index. Use Tk's own traversal implementation.
+                script = interpreter.call(
+                    "file", "join", interpreter.call("set", "tk_library"), "focus.tcl",
+                )
+                interpreter.call("source", script)
         self.dismiss()
         target = self.button.tk_focusPrev() if backwards else self.button.tk_focusNext()
         target.focus_set()
