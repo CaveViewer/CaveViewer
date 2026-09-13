@@ -1208,7 +1208,7 @@ def test_launch_logo_suppresses_only_amber_pixels_like_the_map_loader():
     ]
 
 
-def test_launch_surface_uses_dark_background_without_a_logo_or_ring():
+def test_launch_surface_keeps_mesh_separate_from_live_text_and_progress():
     source = inspect.getsource(splash_screen._build_launch_surface)
     content_source = inspect.getsource(splash_screen._render_launch_content)
 
@@ -1216,8 +1216,9 @@ def test_launch_surface_uses_dark_background_without_a_logo_or_ring():
     assert "progress_ring_photo(" not in content_source
     assert "program_name" not in content_source
     assert "bg=_BG_COLOR" in source
-    assert "_render_launch_background(" not in source
-    assert "_load_launch_background_image(" not in source
+    assert "LaunchBackground(launch_canvas)" in source
+    assert "launch_background.resize(*_launch_canvas_dimensions(launch_canvas))" in source
+    assert "create_image" not in content_source
 
 
 def test_splash_navigation_actions_are_keyboard_accessible_without_fallthrough():

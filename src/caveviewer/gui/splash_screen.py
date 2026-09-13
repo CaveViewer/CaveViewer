@@ -97,6 +97,7 @@ from caveviewer.gui.map_library_workflow import (
     MapLibraryComposition,
     MapLibraryWorkflow,
 )
+from caveviewer.gui.launch_background import LaunchBackground
 from caveviewer.gui.map_selection import (
     validate_selected_map_folder as _validate_selected_map_folder,
 )
@@ -848,7 +849,7 @@ def _build_launch_surface(
     px,
     branding_assets: BrandingAssets | None = None,
 ):
-    """Build the branded Void launch surface and return its canvas."""
+    """Build the mesh-backed launch surface with live text and progress."""
     import tkinter as tk
 
     launch_canvas = tk.Canvas(
@@ -866,8 +867,10 @@ def _build_launch_surface(
     ).loading_progress
     launch_canvas._cv_progress_track_color = progress_tokens.track_color
     launch_canvas._cv_progress_fill_color = progress_tokens.fill_color
+    launch_background = LaunchBackground(launch_canvas)
 
     def _refresh_launch_surface(_event=None) -> None:
+        launch_background.resize(*_launch_canvas_dimensions(launch_canvas))
         _render_launch_content(
             launch_canvas,
             progress=launch_canvas._cv_launch_progress,

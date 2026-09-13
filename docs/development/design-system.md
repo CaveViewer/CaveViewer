@@ -442,10 +442,12 @@ visible title bottom to bar top at 40 logical pixels and the bar bottom to an
 optional description at 30 logical pixels; omitting a description collapses
 only that optional space, never the title or bar position.
 The initial Tk launch surface uses the same measured layout and control scale,
-while launch, initial streaming, and first-time map building share the solid
-Void background. Renderer-specific font technology remains separate: Tk uses
-the process-registered Inter family and OpenGL rasterizes the bundled Inter file
-at its independent bitmap-renderer scale.
+with the live two-tone product wordmark above the bar and the supplied subdued
+cave mesh behind it. The mesh covers the viewport without stretching and fades
+to the application surface at the center. Initial streaming and first-time map
+building retain their solid background. Renderer-specific font technology
+remains separate: Tk uses the process-registered Inter family and OpenGL
+rasterizes the bundled Inter file at its independent bitmap-renderer scale.
 For map opening, source import/cache construction and initial streaming are
 one user-facing progress session: keep the bar continuous and retain the
 current stage as the primary message. Do not add a separate operation title;
