@@ -7,6 +7,9 @@ from dataclasses import dataclass
 from typing import Callable, Iterable
 
 from caveviewer.gui.loading_progress import monotonic_progress, progress_segments
+from caveviewer.gui.map_library_menu import (
+    MapLibraryMenu, MenuBackdropCard, MenuEntry, menu_backdrop, ordered_menu_entries,
+)
 from caveviewer.gui.map_library_style import (
     MAP_LIBRARY_SCROLLBAR_RAIL_WIDTH,
     OPEN_ANOTHER_LOCAL_MAP_TITLE,
@@ -1897,7 +1900,18 @@ class MapLibraryPanel:
             if self._active_menu is not expected_menu:
                 return None
             self.close_active_menu()
+            if self._widget_exists(opener):
+                opener.focus_set()
             return "break"
+
+        def dismiss_for_layout(event, expected_menu=menu):
+            if self._active_menu is not expected_menu:
+                return
+            changed = getattr(event, "widget", None)
+            surfaces = (self.root, getattr(self, "_rows_frame", None),
+                        getattr(self, "_content_canvas", None))
+            if changed is not None and any(changed is surface for surface in surfaces):
+                self.close_active_menu()
 
         bindings: list[tuple[str, str]] = []
         try:
@@ -1908,12 +1922,15 @@ class MapLibraryPanel:
             )
             focus_id = self.root.bind("<FocusOut>", dismiss_for_focus, add="+")
             escape_id = self.root.bind("<Escape>", dismiss_for_escape, add="+")
+            layout_id = self.root.bind("<Configure>", dismiss_for_layout, add="+")
             if pointer_id:
                 bindings.append(("<ButtonPress-1>", pointer_id))
             if focus_id:
                 bindings.append(("<FocusOut>", focus_id))
             if escape_id:
                 bindings.append(("<Escape>", escape_id))
+            if layout_id:
+                bindings.append(("<Configure>", layout_id))
         except (tk.TclError, AttributeError):
             for sequence, callback_id in bindings:
                 try:
@@ -1943,55 +1960,20 @@ class MapLibraryPanel:
         menu_margin = max(1, self._px(8))
         menu_gap = max(1, self._px(4))
         max_menu_width = max(1, root_width - (menu_margin * 2))
-        menu_text_wraplength = max(1, max_menu_width - self._px(24))
-        menu = tk.Frame(
+
+        def invoke_and_close(action) -> None:
+            self.close_active_menu()
+            action()
+
+        menu = MapLibraryMenu(
             self.root,
-            bg=style.menu_bg,
-            highlightthickness=1,
-            highlightbackground=style.menu_border,
-            highlightcolor=style.menu_border,
+            entries=ordered_menu_entries(tuple(
+                MenuEntry(*self._menu_action_parts(action)) for action in actions
+            )),
+            style=style,
+            invoke=invoke_and_close,
         )
         self._active_menu = menu
-
-        first_item = [None]
-        for menu_action in actions:
-            item_text, item_action, explanation = self._menu_action_parts(menu_action)
-            enabled = item_action is not None
-            display_text = item_text
-            if explanation:
-                display_text = f"{item_text}\n{explanation}"
-
-            item = tk.Label(
-                menu,
-                text=display_text,
-                font=style.body_font,
-                bg=style.menu_bg,
-                fg=style.menu_text if enabled else style.disabled_button_fg,
-                padx=self._px(12),
-                pady=self._px(7),
-                takefocus=enabled,
-                anchor="w",
-                justify="left",
-                wraplength=menu_text_wraplength,
-            )
-            if enabled:
-
-                def invoke_and_close(action=item_action) -> None:
-                    self.close_active_menu()
-                    action()
-
-                self._bind_activation(item, invoke_and_close)
-                item.bind(
-                    "<Enter>",
-                    lambda _event, target=item: target.config(bg=style.menu_hover_bg),
-                )
-                item.bind(
-                    "<Leave>",
-                    lambda _event, target=item: target.config(bg=style.menu_bg),
-                )
-            item.pack(fill="x")
-            if enabled and first_item[0] is None:
-                first_item[0] = item
 
         try:
             menu.update_idletasks()
@@ -2005,20 +1987,56 @@ class MapLibraryPanel:
                 button_height=button.winfo_height(),
                 root_width=root_width,
                 root_height=root_height,
-                menu_width=menu_width,
-                menu_height=menu_height,
+                menu_width=style.menu_metrics.width,
+                menu_height=menu.body_height,
                 margin=menu_margin,
                 gap=menu_gap,
             )
+            # Align the body to the opener; reserve the shadow outside it on
+            # either side of the button, then clamp the complete popover.
+            x = max(menu_margin, min(x - style.menu_metrics.shadow_x,
+                                    root_width - menu_width - menu_margin))
+            y = max(menu_margin, min(y - style.menu_metrics.shadow_top,
+                                    root_height - menu_height - menu_margin))
+            menu.set_backdrop(self._menu_backdrop(x, y, menu_width, menu_height))
             menu.place(x=x, y=y, width=menu_width, height=menu_height)
-            menu.lift()
-            if first_item[0] is not None:
-                first_item[0].focus_set()
+            # Canvas.lift raises canvas items; raise the popover widget itself.
+            tk.Misc.lift(menu)
+            menu.focus_set()
         except tk.TclError:
             self.close_active_menu()
             return
 
         self._install_menu_dismissal_bindings(menu, button)
+
+    def _menu_backdrop(self, x: int, y: int, width: int, height: int):
+        """Resolve the actual card/viewport boundary beneath the popup."""
+        origin_x = self.root.winfo_rootx() + x
+        origin_y = self.root.winfo_rooty() + y
+
+        def bounds(widget):
+            left = widget.winfo_rootx() - origin_x
+            top = widget.winfo_rooty() - origin_y
+            return left, top, left + widget.winfo_width(), top + widget.winfo_height()
+
+        style = self._style
+        cards = []
+        for section, border in (
+            (self._recent_section, style.panel_border_color),
+            (self._standard_section, style.catalog_card_border_color),
+        ):
+            if section is not None and section.surface is not None:
+                widget = section.surface.widget
+                if self._widget_exists(widget) and widget.winfo_ismapped():
+                    cards.append(MenuBackdropCard(
+                        bounds(widget), style.metrics.section_corner_radius,
+                        style.card_color, border, style.metrics.section_border_thickness,
+                    ))
+        viewport = (0, 0, width, height)
+        if self._widget_exists(self._content_canvas):
+            viewport = bounds(self._content_canvas)
+        return menu_backdrop((width, height), background=style.panel_color,
+                             cards=tuple(cards), viewport=viewport)
 
     def _create_overflow_button(self, parent, menu_actions_factory=None):
         style = self._style

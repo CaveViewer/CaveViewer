@@ -160,6 +160,40 @@ downsampling and tinted at render time. It uses `#F5C451` beside the two-line
 empty-state action and `#A9AFBC` beside **Open another local map** after recent
 rows. Asset pixels do not define hit targets, spacing, state, or behavior.
 
+Map overflow menus use a 204-logical-pixel body with 40-pixel rows, an 8-pixel
+corner radius and a 1-pixel inside border in `#30343D`. Rows have 16-pixel
+left and right insets, 16-pixel centered icons and a 12-pixel icon-to-label gap.
+The 144-pixel label area fits the current action labels on one line in regular
+and selected states.
+The trash icon is approximately 14 pixels wide and 14 1/3 pixels high, with a
+2-pixel stroke. Its top and bottom are inset by half a pixel from the original
+artwork, preserving its center and rounded bottom corners.
+The About icon uses the SVG's centered 2-pixel stroke on a circle of radius
+6 2/3 pixels, giving an outer diameter of 15 1/3 pixels within its 16-pixel slot.
+The Remove cache eraser uses 130% of the original path geometry around the slot
+center, with a 2.2-pixel stroke. Its visible bounds are approximately 15.2 by
+13.9 pixels, retaining the same 16-pixel slot and label spacing.
+Dividers separate cache, cave-information and removal groups in that order;
+unavailable groups are omitted. Optional map actions remain before the final
+removal group. The four-action reference is 162 pixels high. Additional contextual
+actions retain the same row geometry. Label wrapping is disabled.
+
+Menu text is native, 13-pixel Inter regular `#A9AFBC`. Hover and keyboard focus
+use `#1B1E25` with semibold amber `#F5C451` text and icons. Disabled actions
+retain muted text and expose their reason on hover or focus. The shadow uses
+an 8-pixel downward offset, 24-pixel blur, negative 8-pixel spread and 40% black,
+rendered with transparency outside the rounded body. Its backing follows the
+actual card borders and dark application background, clipped to the library
+viewport, so crossing a card edge does not reveal a rectangular fill. The
+backing stays fixed while menu rows scroll. Moving or resizing the underlying
+library dismisses the menu; reopening resolves the new geometry.
+Menus open with focus on the container and no selected row. Hover or keyboard
+navigation selects a row; Return/Space do nothing until a row is selected.
+Arrow keys, Home/End and Tab navigate; Return/Space activate; Escape dismisses
+and returns focus to the opener. Outside clicks and focus departure dismiss.
+When window height constrains the popover, rows scroll and keyboard focus keeps
+the current row visible.
+
 ## Preferences visual contract
 
 `caveviewer.gui.preferences_style` is the canonical source for Preferences
@@ -351,6 +385,8 @@ status row in muted `#A9AFBC`; omit the block entirely when there is no update
 state to communicate. Keep it within the 188-pixel content column without a
 card, pill, border, or divider.
 
+Clickable update labels use the native hand cursor; non-actionable status labels
+inherit the default cursor.
 For an available update, use one label: **Update to version &lt;version&gt;**. If
 the update source omits its version unexpectedly, fall back to **Update** rather
 than presenting an incomplete sentence. Reserve the thin progress lane and its
