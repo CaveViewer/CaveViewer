@@ -128,6 +128,17 @@ class PreferencesFormController:
         self._state = self._validate()
         return self._state
 
+    def update_saved_value(self, key: str, value: str) -> PreferencesFormState:
+        """Accept a setting saved by another surface without losing staged edits."""
+        field = self._require_key(key)
+        result = validate_preference(field, value)
+        if not result.is_valid:
+            raise ValueError(result.message)
+        self._values[key] = result.normalized_value
+        self._baseline_values[key] = result.normalized_value
+        self._state = self._validate()
+        return self._state
+
     def _dirty_state(self) -> tuple[frozenset[str], frozenset[str]]:
         dirty_keys = frozenset(
             key

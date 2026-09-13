@@ -750,15 +750,13 @@ def _embedded_update_channel_default(
     return platform.release_metadata.release_channel
 
 
-def _package_log_level_default(
-    platform: RuntimePlatformFacts,
-    _resolved_values: Mapping[str, RuntimeValue],
+def _saved_log_level_default(
+    _platform: RuntimePlatformFacts,
+    resolved_values: Mapping[str, RuntimeValue],
 ) -> str:
-    """Increase diagnostic detail for packages explicitly built as Preview."""
+    """Use the persisted Help choice unless a developer overrides log_level."""
 
-    if platform.release_metadata.release_channel == "preview":
-        return "DEBUG"
-    return "INFO"
+    return "DEBUG" if resolved_values["log_information"] == "all" else "INFO"
 
 
 RUNTIME_SETTING_SPECS = (
@@ -796,7 +794,7 @@ RUNTIME_SETTING_SPECS = (
         "Application logging verbosity.",
         value_type=RuntimeValueType.TEXT,
         parser=_log_level,
-        default=_package_log_level_default,
+        default=_saved_log_level_default,
         enum_values=("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"),
         cli_name="log_level",
     ),

@@ -260,7 +260,7 @@ def test_update_channel_defaults_to_embedded_release_metadata_and_allows_overrid
     )
 
 
-def test_preview_package_defaults_to_debug_and_explicit_log_level_wins(tmp_path):
+def test_every_package_defaults_to_essential_and_explicit_log_level_wins(tmp_path):
     preview_metadata = ReleaseMetadata("preview", ReleaseMetadataSource.BUNDLED)
 
     preview = _resolve(tmp_path, release_metadata=preview_metadata)
@@ -271,11 +271,30 @@ def test_preview_package_defaults_to_debug_and_explicit_log_level_wins(tmp_path)
     )
     stable = _resolve(tmp_path)
 
-    assert preview["log_level"] == "DEBUG"
+    assert preview["log_information"] == "essential"
+    assert preview["log_level"] == "INFO"
     assert preview.source("log_level") is settings.SettingSource.BUILT_IN
     assert preview_override["log_level"] == "WARNING"
     assert preview_override.source("log_level") is settings.SettingSource.ENVIRONMENT
     assert stable["log_level"] == "INFO"
+
+
+@pytest.mark.parametrize("choice, level", [("essential", "INFO"), ("all", "DEBUG")])
+def test_saved_log_information_resolves_at_startup_with_explicit_overrides(tmp_path, choice, level):
+    preferences = {"log_information": choice}
+    snapshot = _resolve(tmp_path, preferences=preferences)
+    assert snapshot["log_level"] == level
+    assert snapshot.source("log_information") is settings.SettingSource.PREFERENCES
+    assert _resolve(tmp_path, preferences=preferences,
+                    environ={"CAVEVIEWER_LOG_LEVEL": "ERROR"})["log_level"] == "ERROR"
+    assert _resolve(tmp_path, preferences=preferences,
+                    cli_overrides={"log_level": "WARNING"})["log_level"] == "WARNING"
+
+
+def test_invalid_saved_log_information_falls_back_to_essential(tmp_path):
+    snapshot = _resolve(tmp_path, preferences={"log_information": "invalid"})
+    assert snapshot["log_information"] == "essential"
+    assert snapshot["log_level"] == "INFO"
 
 
 def test_platform_facts_control_dynamic_defaults_without_reading_process_environment(

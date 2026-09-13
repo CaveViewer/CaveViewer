@@ -112,7 +112,7 @@ def test_help_typography_applies_display_scaling_once():
 def test_help_section_content_covers_each_declared_card_once():
     keys = [(content.tab_key, content.section_id) for content in HELP_SECTION_CONTENT]
 
-    assert len(keys) == len(set(keys)) == 9
+    assert len(keys) == len(set(keys)) == 10
     assert help_section_content("keys", "move").purpose == (
         "Control movement direction and speed."
     )

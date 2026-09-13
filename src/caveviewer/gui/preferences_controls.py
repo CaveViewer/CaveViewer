@@ -186,8 +186,8 @@ class RoundedSectionSurface(_SharedRoundedSectionSurface):
         return RoundedSectionStyle(
             outside_background=palette.surface_background,
             fill=palette.section_background,
-            border=palette.section_background,
-            border_width=0,
+            border=palette.section_border,
+            border_width=metrics.control_border_thickness,
             radius=metrics.section_corner_radius,
             padding_x=metrics.section_padding_x,
             padding_y=metrics.section_padding_y,

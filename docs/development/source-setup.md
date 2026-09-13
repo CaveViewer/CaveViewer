@@ -459,6 +459,7 @@ runtime snapshot.
 | `CAVEVIEWER_CHUNK_BUILD_RESERVED_CPUS` | persisted preference | saved preference or platform default | Logical CPUs reserved from cache build. |
 | `CAVEVIEWER_RECORDING_DIR` | persisted preference | saved preference or platform default | Where saved recordings are stored. |
 | `CAVEVIEWER_MAP_LIBRARY_DIR` | persisted preference | saved preference or platform default | Where CaveViewer stores downloaded Map Library maps. |
+| `CAVEVIEWER_LOG_INFORMATION` | persisted preference | saved preference or platform default | Amount of log information after restart: essential or all. |
 | `CAVEVIEWER_HOME` | environment | _(unset)_ | Optional absolute portable storage root. |
 | `CAVEVIEWER_MAP_CACHE_DIR` | environment | _(unset)_ | Optional absolute root for generated map caches. |
 | `CAVEVIEWER_APP_ICON` | environment | _(unset)_ | Optional custom application icon path. |
@@ -504,7 +505,7 @@ runtime snapshot.
 | `CAVEVIEWER_MAP_CACHE_DIR` | _(none)_ | Advanced override for generated map caches. When unset, CaveViewer writes `_cache` inside the source map folder. When set, it must be an absolute root for hashed generated caches. |
 | `CAVEVIEWER_APP_ICON` | _(bundled icon)_ | Path to a custom application icon file. |
 | `CAVEVIEWER_FORCE_STARTUP_FOCUS` | `0` | Set to `1` to force the main window to the front on startup. Disabled by default on frozen macOS builds to avoid window-placement jumps. |
-| `CAVEVIEWER_LOG_LEVEL` | `INFO` | Logging verbosity. Accepted values: `DEBUG`, `INFO`, `WARNING`, `ERROR`. |
+| `CAVEVIEWER_LOG_LEVEL` | saved Log Information choice | Developer override for logging verbosity. Accepted values: `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`. |
 
 ### Update Checking
 
@@ -959,7 +960,12 @@ all-thread Python traceback. A normal visible splash closes the diagnostic file
 immediately.
 
 For ordinary troubleshooting on any supported desktop, open **Help >
-Troubleshooting**. **Show latest log** opens the application diagnostics folder
+Troubleshooting**. **Log Information** defaults to **Essential**, which records
+INFO, WARNING, ERROR, and CRITICAL. Choose **All** to include DEBUG information.
+The choice is saved immediately and takes effect after restarting CaveViewer;
+an explicit developer log-level override still takes precedence.
+
+**Show latest log** opens the application diagnostics folder
 and selects the newest human-readable session log. **Last error** shows the
 newest complete `ERROR` record with up to three preceding physical log lines;
 its **Copy** action places exactly that displayed excerpt on the clipboard.

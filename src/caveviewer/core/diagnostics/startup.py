@@ -105,6 +105,7 @@ class StartupDiagnostics:
             if self._closed or self._attached_to_root_logger:
                 return
             root_logger = logging.getLogger()
+            self._handler.setLevel(root_logger.getEffectiveLevel())
             root_logger.addHandler(self._handler)
             self._attached_to_root_logger = True
             self.record("application_logging_attached")

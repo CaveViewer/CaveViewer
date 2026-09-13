@@ -51,6 +51,8 @@ from caveviewer.gui.troubleshooting_logs import (
     TroubleshootingLogController,
     TroubleshootingLogState,
 )
+from caveviewer.gui.choice_control import RoundedChoiceControl
+from caveviewer.gui.log_information import LogInformationController, LogInformationState
 
 _CAPTURE_HELP_LAYOUT = (
     (
@@ -215,6 +217,7 @@ class HelpPanelStyle:
     overview_font: tuple
     detail_font: tuple
     error_font: tuple
+    section_border_color: str = HELP_VISUAL_PALETTE.tab_indicator
 
 
 @dataclass(frozen=True, slots=True)
@@ -250,6 +253,7 @@ class HelpPanel:
         style: HelpPanelStyle,
         sections: Iterable[KeyboardShortcutSection],
         troubleshooting_controller: TroubleshootingLogController | None = None,
+        log_information_controller: LogInformationController | None = None,
     ) -> None:
         self.parent = parent
         self._px = px
@@ -269,6 +273,9 @@ class HelpPanel:
             self._tabs.append(TopTab("capture", "Capture"))
         self._tabs.append(TopTab("troubleshooting", "Troubleshooting"))
         self._troubleshooting_controller = troubleshooting_controller
+        self._log_information_controller = log_information_controller
+        self._log_information_state = LogInformationState()
+        self._log_choice = None
         self._troubleshooting_state = TroubleshootingLogState(
             latest_log=None,
             status_text=(
@@ -360,6 +367,14 @@ class HelpPanel:
         self._action_font = self._create_canvas_font(canvas, style.action_font)
         self._overview_font = self._create_canvas_font(canvas, style.overview_font)
         self._detail_font = self._create_canvas_font(canvas, style.detail_font)
+        self._log_choice = RoundedChoiceControl(
+            canvas, choices=(("essential", "Essential"), ("all", "All")),
+            value=self._log_information_state.value,
+            on_selected=self._select_log_information,
+            font=style.overview_font, metrics=self._metrics,
+            palette=HELP_VISUAL_PALETTE, width=self._px(160),
+        )
+        self._log_choice.button.bind("<FocusIn>", self._reveal_log_choice, add="+")
         self._troubleshooting_button = RoundedActionButton(
             canvas,
             text="Show latest log",
@@ -420,6 +435,8 @@ class HelpPanel:
         if key == self._active_tab_key:
             return
 
+        if self._log_choice is not None:
+            self._log_choice.dismiss()
         self._active_tab_key = key
         if key == "troubleshooting":
             self._refresh_troubleshooting()
@@ -469,6 +486,8 @@ class HelpPanel:
             width = self._metrics.content_min_width
 
         canvas.delete("help-content")
+        # Reserve the final device pixel for the centered panel outlines.
+        width = max(1, width - 1)
         if active_tab_key == "troubleshooting":
             self._render_troubleshooting(canvas, width)
             return
@@ -494,6 +513,8 @@ class HelpPanel:
 
     def _refresh_troubleshooting(self) -> None:
         self._clear_copy_confirmation()
+        if self._log_information_controller is not None:
+            self._log_information_state = self._log_information_controller.refresh()
         controller = self._troubleshooting_controller
         if controller is not None:
             self._troubleshooting_state = controller.refresh()
@@ -555,17 +576,59 @@ class HelpPanel:
         self._clear_copy_confirmation()
         self._copy_feedback = ""
         self._copy_feedback_is_error = False
+        if self._log_choice is not None:
+            self._log_choice.dismiss()
+
+    def on_shown(self) -> None:
+        """Reload saved settings after a Preferences import or another visit."""
+        if self._active_tab_key == "troubleshooting":
+            self._refresh_troubleshooting()
+            self._render_table(self._content_canvas.winfo_width())
+
+    def _select_log_information(self, value: str) -> None:
+        if self._log_information_controller is None:
+            return
+        self._log_information_state = self._log_information_controller.select(value)
+        self._render_table(self._content_canvas.winfo_width())
+
+    def _reveal_log_choice(self, _event=None) -> None:
+        if self._active_tab_key == "troubleshooting":
+            self._content_canvas.yview_moveto(0)
+
+    def _draw_log_information(self, canvas, width: int) -> int:
+        intro = self._draw_card_intro(
+            canvas, tab_key="troubleshooting", section_id="log-information",
+            top=0, width=width,
+        )
+        y = intro.content_y
+        if self._log_choice is not None:
+            self._log_choice.set_value(self._log_information_state.value)
+            canvas.create_window(
+                intro.content_x, y, window=self._log_choice.widget,
+                anchor="nw", tags="help-content",
+            )
+            y += self._metrics.control_height
+        if self._log_information_state.error:
+            y += self._metrics.detail_gap_y
+            item = canvas.create_text(
+                intro.content_x, y, text=self._log_information_state.error,
+                font=self._canvas_font("detail"), fill=self._style.error_color,
+                anchor="nw", width=intro.content_width, tags="help-content",
+            )
+            y += self._canvas_item_height(canvas, item, "detail")
+        return self._finish_card(canvas, width=width, top=0, content_bottom=y, intro=intro)
 
     def _render_troubleshooting(self, canvas, width: int) -> None:
         """Render troubleshooting states inside the shared rounded cards."""
 
         metrics = self._metrics
         state = self._troubleshooting_state
+        logs_top = self._draw_log_information(canvas, width) + metrics.section_gap_y
         logs_intro = self._draw_card_intro(
             canvas,
             tab_key="troubleshooting",
             section_id="application-logs",
-            top=0,
+            top=logs_top,
             width=width,
         )
         y = logs_intro.content_y
@@ -599,7 +662,7 @@ class HelpPanel:
         logs_bottom = self._finish_card(
             canvas,
             width=width,
-            top=0,
+            top=logs_top,
             content_bottom=y,
             intro=logs_intro,
         )
@@ -860,6 +923,8 @@ class HelpPanel:
             geometry.outer,
             radius=metrics.section_corner_radius,
             fill=self._style.section_background_color,
+            outline=self._style.section_border_color,
+            border_width=metrics.control_border_thickness,
             tags=("help-content", "help-card"),
             below=intro.heading_item,
         )

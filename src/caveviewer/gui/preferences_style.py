@@ -109,6 +109,7 @@ class PreferencesVisualPalette:
     disabled_action_background: str
     disabled_action_border: str
     disabled_action_text: str
+    section_border: str = PREFERENCES_TAB_INDICATOR
 
 
 @dataclass(frozen=True, slots=True)

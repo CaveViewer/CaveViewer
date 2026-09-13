@@ -161,7 +161,8 @@ primitives remain documented in [design-system.md](design-system.md).
   inside a dense page.
 - Present each Preferences group as one subtly raised section card with a
   12-logical-pixel corner radius, consistent internal padding, and one shared
-  left and right edge beneath the tabs. Use title-case semantic headings; do
+  left and right edge beneath the tabs, with a subtle muted border on every
+  card. Use title-case semantic headings; do
   not add amber card borders or decoration.
 - Name the Streaming groups **Memory Use**, **CPU Use**, and **Frame Loading**.
   Place one short, app-neutral purpose statement beneath each heading before
@@ -218,7 +219,8 @@ primitives remain documented in [design-system.md](design-system.md).
   between them does not move the tab row.
 - Present each Help group as a subtly raised card with a 12-logical-pixel corner
   radius, 22-logical-pixel internal padding, and a 20-logical-pixel gap before
-  the next card. Use title-case headings, short purpose lines, and no dividers.
+  the next card. Add the same subtle muted border to Keys, Capture, and
+  Troubleshooting cards. Use title-case headings, short purpose lines, and no dividers.
 - Keep descriptions to two lines or fewer at the ordinary shell width. Shorten
   redundant copy before changing type size, card width, or spacing.
 - Keep shortcut rows on a stable keycap lane and flexible action lane. Use
@@ -228,6 +230,12 @@ primitives remain documented in [design-system.md](design-system.md).
 - Keep Capture artifact explanations subordinate to the action label. Preserve
   platform-specific shortcuts and destructive-cancellation meaning while using
   the concise copy defined in `help_style.py` and `help_panel.py`.
+- Place **Log Information** before **Application Logs** and **Last Error**.
+  Add subtle borders around these three cards. The choice defaults to
+  **Essential**; **All** includes debug information. Save on selection and
+  explain that the change takes effect after restart. Keep the previous choice
+  and show an inline error if saving fails. Support keyboard selection and
+  dismiss the menu when leaving the tab or Help surface.
 - Use the shared 4-logical-pixel rounded action treatment for troubleshooting
   actions. Preserve visible focus, keyboard activation, disabled state, stable
   action labels, and adjacent transient copy confirmation.

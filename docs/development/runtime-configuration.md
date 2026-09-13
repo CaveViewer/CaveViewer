@@ -28,6 +28,24 @@ standalone compatibility entry points. The executable allowlist is
 `tests/unit/test_runtime_environment_boundaries.py`; every exception requires
 an ownership reason.
 
+### Log information
+
+Help > Troubleshooting owns the persisted `log_information` choice:
+`essential` (default on every package channel) or `all`. It uses the existing
+Preferences schema, atomic storage, and backup format. Older backups that omit
+the key resolve to Essential. `CAVEVIEWER_LOG_INFORMATION` supplies the usual
+environment fallback when no saved value exists.
+
+The runtime `log_level` default derives from that choice: Essential uses INFO
+and All uses DEBUG. Explicit `CAVEVIEWER_LOG_LEVEL` or command-line overrides
+retain their existing precedence. File handlers use the resolved threshold,
+including for child loggers with their own levels. Essential retains WARNING,
+ERROR, and CRITICAL as well as INFO.
+
+Saving the Help choice does not reconfigure the active logging session. The
+new threshold applies on restart. A retained Preferences editor synchronizes
+this saved field without discarding unrelated staged edits.
+
 ## Authority boundaries
 
 | Concern | Authority |

@@ -756,6 +756,7 @@ def test_non_numeric_settings_have_no_display_range():
     assert {field.key for field in non_numeric_fields} == {
         "recording_dir",
         "map_library_dir",
+        "log_information",
     }
     assert all(
         settings.preference_range_text(field) is None
@@ -1308,7 +1309,8 @@ def test_preferences_panel_uses_compact_tabbed_pages():
     assert page_keys == ["streaming", "parsing", "storage", "backup"]
     assert page_labels == ["Streaming", "Import", "Storage", "Backup"]
     assert all(len(page) == 2 for page in preferences_dialog._PREFERENCE_PAGES)
-    assert set(page_keys) - {"backup"} == field_sections
+    assert set(page_keys) - {"backup"} == field_sections - {"troubleshooting"}
+    assert fields_by_key["log_information"].section == "troubleshooting"
     assert fields_by_key["io_workers"].label == "Loading worker limit"
     assert fields_by_key["chunk_build_workers"].label == "Cache-building worker limit"
     assert fields_by_key["recording_dir"].label == "Recordings folder"
@@ -1773,7 +1775,12 @@ def test_preferences_visual_groups_cover_each_schema_field_once():
         for field in fields
     ]
 
-    assert grouped_fields == list(preferences_dialog.PREFERENCE_FIELDS)
+    assert grouped_fields == [
+        field for field in preferences_dialog.PREFERENCE_FIELDS
+        if field.section != "troubleshooting"
+    ]
+    assert {field.key for field in preferences_dialog.PREFERENCE_FIELDS
+            if field.section == "troubleshooting"} == {"log_information"}
 
 
 def test_every_preferences_field_page_uses_the_shared_rounded_card_renderer():

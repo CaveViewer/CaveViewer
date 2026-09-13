@@ -1649,6 +1649,12 @@ class PreferencesPanel:
             on_applied(result.preferences)
         return True
 
+    def accept_log_information(self, value: str) -> None:
+        """Keep Help's saved setting when this retained form is saved later."""
+        state = self.form.update_saved_value("log_information", value)
+        self.preferences = Preferences({**self.preferences, "log_information": value})
+        self._render_form_state(state)
+
     def export_preferences(self) -> None:
         """Choose a visible destination and export the validated form snapshot."""
 

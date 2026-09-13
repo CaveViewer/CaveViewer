@@ -515,6 +515,42 @@ def _prepare_main(monkeypatch):
     return recorder, configured
 
 
+@pytest.mark.parametrize(
+    "saved_choice, override, expected",
+    [(None, None, "INFO"), ("essential", None, "INFO"),
+     ("all", None, "DEBUG"), ("all", "WARNING", "WARNING")],
+)
+def test_main_configures_logging_from_saved_help_choice(
+    monkeypatch, tmp_path, saved_choice, override, expected,
+):
+    from caveviewer.gui import preferences as preferences_module
+
+    _recorder, configured = _prepare_main(monkeypatch)
+    monkeypatch.delenv("CAVEVIEWER_LOG_LEVEL")
+    monkeypatch.delenv("CAVEVIEWER_LOG_INFORMATION", raising=False)
+    if override is not None:
+        monkeypatch.setenv("CAVEVIEWER_LOG_LEVEL", override)
+    path = tmp_path / "saved-preferences.json"
+    path.write_text(json.dumps({} if saved_choice is None else {"log_information": saved_choice}))
+    original_load = preferences_module.load_saved_preference_values
+    monkeypatch.setattr(
+        preferences_module, "load_saved_preference_values", lambda: original_load(path),
+    )
+    monkeypatch.setattr(app.sys, "argv", ["caveviewer", "/maps/cave"])
+    monkeypatch.setattr(platform_runtime_module, "create_platform_runtime", lambda **_kwargs: object())
+    attached = []
+    for name in ("_attach_runtime_diagnostics_logging", "_attach_startup_diagnostics_logging"):
+        monkeypatch.setattr(app, name, lambda: attached.append(tuple(configured)))
+    opened = []
+    monkeypatch.setattr(app, "_run_map_session", lambda _path, **kwargs: opened.append(kwargs))
+
+    app.main()
+
+    assert configured == [(expected,)]
+    assert attached == [((expected,),), ((expected,),)]
+    assert opened[0]["runtime_settings"]["log_level"] == expected
+
+
 def test_main_applies_update_branch_and_opens_cli_map(monkeypatch):
     recorder, configured = _prepare_main(monkeypatch)
     opened = []
@@ -827,6 +863,8 @@ def test_runtime_diagnostics_attach_and_viewer_error_include_log_path(
     tmp_path,
     monkeypatch,
 ):
+    from caveviewer.gui import notifications
+
     calls = []
     dialog_calls = []
 
@@ -854,8 +892,6 @@ def test_runtime_diagnostics_attach_and_viewer_error_include_log_path(
     tkinter = ModuleType("tkinter")
     tkinter.Tk = create_root
     monkeypatch.setitem(sys.modules, "tkinter", tkinter)
-    from caveviewer.gui import notifications
-
     monkeypatch.setattr(notifications, "show_error", show_error)
 
     diagnostics = RuntimeDiagnosticsRecorder()
