@@ -1860,29 +1860,44 @@ def test_preferences_keyboard_traversal_enters_page_before_footer_actions():
     )
 
 
-def test_preferences_focus_content_uses_first_available_active_page_control():
+@pytest.mark.parametrize("page_key", ["streaming", "parsing", "storage", "backup"])
+def test_preferences_focus_content_leaves_page_controls_unfocused(page_key):
     from caveviewer.gui import preferences_dialog
 
     focus_attempts = []
-    unavailable = SimpleNamespace(
-        focus_set=lambda: focus_attempts.append("unavailable") or False
-    )
-    available = SimpleNamespace(
-        focus_set=lambda: focus_attempts.append("available") or True
-    )
-    skipped = SimpleNamespace(
-        focus_set=lambda: focus_attempts.append("skipped") or True
-    )
     panel = object.__new__(preferences_dialog.PreferencesPanel)
     panel.form = SimpleNamespace(state=SimpleNamespace(invalid_key=None))
-    panel.active_page_key = "streaming"
+    panel.active_page_key = page_key
+    panel.page_canvas = SimpleNamespace(
+        focus_set=lambda: focus_attempts.append("content")
+    )
     panel.page_focus_targets = {
-        "streaming": [unavailable, available, skipped],
+        page_key: [SimpleNamespace(
+            focus_set=lambda: focus_attempts.append("first control") or True
+        )],
     }
 
     panel.focus_content()
 
-    assert focus_attempts == ["unavailable", "available"]
+    assert focus_attempts == ["content"]
+
+
+def test_preferences_focus_content_preserves_invalid_field_focus():
+    from caveviewer.gui import preferences_dialog
+
+    focus_attempts = []
+    panel = object.__new__(preferences_dialog.PreferencesPanel)
+    panel.form = SimpleNamespace(state=SimpleNamespace(invalid_key="io_workers"))
+    panel.page_canvas = SimpleNamespace(
+        focus_set=lambda: focus_attempts.append("content")
+    )
+    panel._focus_invalid_field = lambda key, **options: focus_attempts.append(
+        (key, options)
+    )
+
+    panel.focus_content()
+
+    assert focus_attempts == [("io_workers", {"select_value": True})]
 
 
 def test_streaming_fields_match_reference_units_and_order():

@@ -198,9 +198,10 @@ primitives remain documented in [design-system.md](design-system.md).
   replacing labels or field contents with transient status text.
 - Keep **Save** and **Discard** available in a stable action area. When vertical
   space is constrained, form content scrolls before the action area is clipped.
-- When keyboard focus enters Preferences, place it on the first available
-  control in the active page. Traverse page controls before the footer actions,
-  and support both Return and Space on every action, including **Browse**.
+- When Preferences opens, focus its content surface without automatically
+  highlighting a field or action. Tab moves into the page controls, which
+  precede the footer actions. Preserve invalid-field focus and support both
+  Return and Space on every action, including **Browse**.
 - Validation identifies the affected field, moves to its tab when necessary,
   and retains the message until the user corrects or replaces it.
 - Cancel deferred focus and scroll restoration when Preferences is hidden or

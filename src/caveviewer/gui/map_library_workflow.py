@@ -140,7 +140,17 @@ def _row_error_message(
 
 OpenMapCallback = Callable[[str], None]
 OpenGuidedDiveCallback = Callable[[str], None]
-ShowCaveMetadataCallback = Callable[[CaveMetadata], None]
+
+
+@dataclass(frozen=True, slots=True)
+class CaveMetadataMapTarget:
+    """Originating map identity retained while its cave information is visible."""
+
+    recent_path: str | None = None
+    library_map: Any | None = None
+
+
+ShowCaveMetadataCallback = Callable[[CaveMetadata, CaveMetadataMapTarget], None]
 
 _CACHE_REBUILD_NOTIFICATION_PREFIX = "caveviewer.cache-rebuild"
 
@@ -539,7 +549,9 @@ class MapLibraryWorkflow:
             if metadata_match is not None and self.show_cave_metadata is not None:
                 metadata_action = (
                     "About cave",
-                    lambda cave=metadata_match.cave: self.show_cave_metadata(cave),
+                    lambda cave=metadata_match.cave: self.show_cave_metadata(
+                        cave, CaveMetadataMapTarget(recent_path=path),
+                    ),
                 )
             if self._guided_dive_action_available(path):
                 actions.append(
@@ -627,7 +639,9 @@ class MapLibraryWorkflow:
             if metadata_match is not None and self.show_cave_metadata is not None:
                 metadata_action = (
                     "About cave",
-                    lambda cave=metadata_match.cave: self.show_cave_metadata(cave),
+                    lambda cave=metadata_match.cave: self.show_cave_metadata(
+                        cave, CaveMetadataMapTarget(library_map=library_map),
+                    ),
                 )
             map_path = self.downloaded_library_map_path(library_map)
             if map_path is None:
@@ -1093,6 +1107,21 @@ class MapLibraryWorkflow:
             max_wraplength=380,
         )
         return True
+
+    def cave_map_open_action(
+        self, target: CaveMetadataMapTarget | None,
+    ) -> Callable[[], None] | None:
+        """Resolve an available map's existing action for the cave details view."""
+        if target is None:
+            return None
+        if target.library_map is not None:
+            library_map = self.controller.resolve_catalog_entry(target.library_map)
+            if self.downloaded_library_map_path(library_map) is None:
+                return None
+            return lambda: self.open_standard_map(library_map)
+        if target.recent_path is not None:
+            return lambda: self.open_recent_map(target.recent_path)
+        return None
 
     def open_recent_map(self, path: str) -> None:
         """Open a recent row unless the splash currently owns a rebuild child."""
