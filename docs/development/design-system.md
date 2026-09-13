@@ -342,11 +342,17 @@ remains visually subordinate.
 
 All Help cards have a one-logical-pixel `#30343D` border. Reserve the final
 canvas device pixel so the right outline remains visible on every tab. **Log
-Information** comes first and uses a 160-by-40-logical-pixel rounded choice
-control with the shared action typography, a muted border, and an amber
-chevron. Its options are **Essential** (default) and **All**. Keep the restart
-guidance visible; show a failed save beneath the control while retaining the
-previous selection.
+Information** comes first and uses a 44-logical-pixel-high rounded choice
+control whose width matches **Show latest log** via the shared action width
+(140 logical pixels). The menu matches the trigger width. Present the
+control with a 4-pixel radius, 15-pixel semibold text, a muted border, and an
+amber `#F5C451` chevron that points upward while open. Its app-owned menu sits
+4 logical pixels below the trigger, with two 40-pixel rows, 13-pixel semibold
+labels, `#15171C` fill and a one-pixel `#30343D` border. Highlight the active
+row with `#1F2228`; mark the saved choice with an amber check independently
+of hover or keyboard navigation. Its options are **Essential** (default) and
+**All**. Keep the restart guidance visible; show a failed save beneath the
+control while retaining the previous selection.
 
 **Show latest log** and **Copy** use the same 4-logical-pixel rounded action
 treatment as Preferences. They preserve visible focus, Return and Space

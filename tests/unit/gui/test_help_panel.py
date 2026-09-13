@@ -533,6 +533,7 @@ def test_help_cards_and_compact_shortcuts_keep_measured_alignment():
         assert troubleshooting_bounds[1][1] - troubleshooting_bounds[0][3] == 20
         assert panel._troubleshooting_button is not None
         assert int(panel._troubleshooting_button.widget.cget("height")) == 40
+        assert panel._log_choice.widget.cget("width") == panel._troubleshooting_button.widget.cget("width")
     finally:
         root.destroy()
 

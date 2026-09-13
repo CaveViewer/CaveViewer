@@ -372,7 +372,7 @@ class HelpPanel:
             value=self._log_information_state.value,
             on_selected=self._select_log_information,
             font=style.overview_font, metrics=self._metrics,
-            palette=HELP_VISUAL_PALETTE, width=self._px(160),
+            palette=HELP_VISUAL_PALETTE, width=self._metrics.action_min_width, px=self._px,
         )
         self._log_choice.button.bind("<FocusIn>", self._reveal_log_choice, add="+")
         self._troubleshooting_button = RoundedActionButton(
@@ -590,6 +590,7 @@ class HelpPanel:
             return
         self._log_information_state = self._log_information_controller.select(value)
         self._render_table(self._content_canvas.winfo_width())
+        self.focus_content()
 
     def _reveal_log_choice(self, _event=None) -> None:
         if self._active_tab_key == "troubleshooting":
@@ -607,7 +608,7 @@ class HelpPanel:
                 intro.content_x, y, window=self._log_choice.widget,
                 anchor="nw", tags="help-content",
             )
-            y += self._metrics.control_height
+            y += self._log_choice.height
         if self._log_information_state.error:
             y += self._metrics.detail_gap_y
             item = canvas.create_text(
