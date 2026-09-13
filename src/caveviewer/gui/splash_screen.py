@@ -1409,7 +1409,7 @@ def _bind_update_label_action(
     for sequence in ("<Button-1>", "<Return>", "<space>"):
         label.unbind(sequence)
     enabled = action is not None
-    label.config(takefocus=enabled)
+    label.config(takefocus=enabled, cursor="hand2" if enabled else "")
     if not enabled:
         return
 

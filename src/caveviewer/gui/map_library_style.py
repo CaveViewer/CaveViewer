@@ -197,6 +197,31 @@ class MapLibraryVisualPalette:
 
 
 @dataclass(frozen=True, slots=True)
+class MapLibraryMenuMetrics:
+    """Logical menu geometry; converted once when the popover is composed."""
+
+    width: int = 204
+    row_height: int = 40
+    inset: int = 16
+    right_inset: int = 16
+    icon_size: int = 16
+    icon_gap: int = 12
+    radius: int = 8
+    border: int = 1
+    shadow_x: int = 16
+    shadow_top: int = 8
+    shadow_bottom: int = 24
+    shadow_offset: int = 8
+    shadow_blur: int = 12
+    shadow_spread: int = 8
+
+    def scaled(self, px: Callable[[int | float], int]) -> MapLibraryMenuMetrics:
+        return MapLibraryMenuMetrics(
+            **{field.name: px(getattr(self, field.name)) for field in fields(self)}
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class MapLibraryTypographyRoles:
     """Names of the shared Tk typography roles used by Map Library."""
 
@@ -259,6 +284,10 @@ class MapLibraryPanelStyle:
     menu_border: str
     menu_hover_bg: str
     menu_text: str
+    menu_selected_text: str
+    menu_font: tuple
+    menu_selected_font: tuple
+    menu_metrics: MapLibraryMenuMetrics
 
 
 def map_library_visual_palette(
@@ -292,10 +321,10 @@ def map_library_visual_palette(
         overflow_foreground=MAP_LIBRARY_MUTED_FG,
         overflow_hover_foreground=theme.secondary_text,
         overflow_hover_background=theme.secondary_button,
-        menu_background=theme.secondary_button,
-        menu_border=theme.secondary_button_border,
-        menu_hover_background=theme.secondary_button_hover,
-        menu_text=theme.body_text,
+        menu_background=MAP_LIBRARY_PANEL_FILL,
+        menu_border=MAP_LIBRARY_RECENT_CARD_BORDER,
+        menu_hover_background="#1B1E25",
+        menu_text=MAP_LIBRARY_MUTED_FG,
     )
 
 
@@ -373,6 +402,16 @@ def create_map_library_panel_style(
         menu_border=palette.menu_border,
         menu_hover_bg=palette.menu_hover_background,
         menu_text=palette.menu_text,
+        menu_selected_text=MAP_LIBRARY_PRIMARY_FG,
+        menu_font=_logical_pixel_font(typography.body, px=px, size=13),
+        menu_selected_font=_logical_pixel_font(
+            typography.body_strong,
+            px=px,
+            size=13,
+            semibold_family=typography.semibold_family,
+            semibold_styles=typography.semibold_styles,
+        ),
+        menu_metrics=MapLibraryMenuMetrics().scaled(px),
     )
 
 

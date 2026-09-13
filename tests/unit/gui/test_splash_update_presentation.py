@@ -54,9 +54,13 @@ def test_returning_library_uses_topmost_only_for_macos(platform_name, expected):
     ),
     ids=lambda module: module.__name__.rsplit(".", 1)[-1],
 )
-def test_splash_components_do_not_override_the_system_cursor(module):
-    """Keep the OS cursor unchanged across every splash-owned surface."""
+def test_splash_components_preserve_system_cursor_except_update_links(module):
+    """Only actionable update links opt into the native hand cursor."""
     tree = ast.parse(inspect.getsource(module))
+    if module is splash_screen:
+        tree.body = [node for node in tree.body if not (
+            isinstance(node, ast.FunctionDef) and node.name == "_bind_update_label_action"
+        )]
     overrides = []
     for node in ast.walk(tree):
         if isinstance(node, ast.keyword) and node.arg == "cursor":
@@ -253,7 +257,7 @@ def test_cancel_update_action_accepts_pointer_and_keyboard_activation(sequence):
         splash_screen._UpdateAction.CANCEL,
     )
 
-    assert label.options == {"takefocus": True}
+    assert label.options == {"takefocus": True, "cursor": "hand2"}
     assert label.unbound == ["<Button-1>", "<Return>", "<space>"]
     assert set(label.bindings) == {"<Button-1>", "<Return>", "<space>"}
     assert label.bindings[sequence]() == "break"
@@ -270,10 +274,15 @@ def test_available_update_uses_one_pointer_and_keyboard_action_label():
         splash_screen._UpdateAction.DOWNLOAD,
     )
 
-    assert label.options == {"takefocus": True}
+    assert label.options == {"takefocus": True, "cursor": "hand2"}
     assert set(label.bindings) == {"<Button-1>", "<Return>", "<space>"}
     assert label.bindings["<Button-1>"]() == "break"
     assert manager.calls == ["start"]
+
+    # The same label may become non-actionable status text after activation.
+    splash_screen._bind_update_label_action(label, manager, None)
+    assert label.options == {"takefocus": False, "cursor": ""}
+    assert label.bindings == {}
 
 
 def test_available_update_without_a_version_uses_the_safe_fallback_copy():
@@ -2037,7 +2046,7 @@ def test_map_library_rows_use_subtle_overflow_menu_for_management():
     assert "column=3" in panel_source
     assert "padx=(0, metrics.row_text_end_pad_x)" in panel_source
     assert "_install_menu_dismissal_bindings" in panel_source
-    assert "tk.Frame(" in row_menu_source
+    assert "MapLibraryMenu(" in row_menu_source
     assert "menu.place(" in row_menu_source
     assert "tk.Toplevel" not in row_menu_source
     assert "menu.geometry" not in row_menu_source
@@ -2082,6 +2091,7 @@ def test_map_library_menu_outside_click_binding_is_scoped_and_removed_on_close()
         ("<ButtonPress-1>", "callback-1"),
         ("<FocusOut>", "callback-2"),
         ("<Escape>", "callback-3"),
+        ("<Configure>", "callback-4"),
     ]
 
 
