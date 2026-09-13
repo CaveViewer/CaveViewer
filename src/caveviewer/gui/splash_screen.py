@@ -90,6 +90,7 @@ from caveviewer.gui.map_library_style import (
     create_map_library_panel_style,
 )
 from caveviewer.gui.map_library_workflow import (
+    CaveMetadataMapTarget,
     MapLibraryActionDependencies,
     MapLibraryCacheRebuildDependencies,
     MapLibraryCatalogDependencies,
@@ -145,6 +146,7 @@ from caveviewer.gui.splash_visuals import (
     navigation_icon_photo,
 )
 from caveviewer.gui.section_spacing import (
+    PRIMARY_LABEL_ROW_GAP,
     PRIMARY_LABEL_ROW_HEIGHT,
     PRIMARY_LABEL_ROW_TOP_INSET,
 )
@@ -182,6 +184,7 @@ class _SplashResumeState:
     preferences: PreferencesPanelSnapshot | None = None
     map_scroll_fraction: float = 0.0
     cave: CaveMetadata | None = None
+    cave_map_target: CaveMetadataMapTarget | None = None
     display_metrics: TkDisplayMetrics | None = None
     window_state: str = "normal"
 
@@ -293,7 +296,7 @@ _NAVIGATION_PANEL_TOP_INSET = PRIMARY_LABEL_ROW_TOP_INSET
 _NAVIGATION_PANEL_BOTTOM_INSET = 16
 _NAVIGATION_ENTRY_WIDTH = 188
 _NAVIGATION_ENTRY_HEIGHT = PRIMARY_LABEL_ROW_HEIGHT
-_NAVIGATION_ITEM_GAP = 8
+_NAVIGATION_ITEM_GAP = PRIMARY_LABEL_ROW_GAP
 _NAVIGATION_ICON_SIZE = 18
 _NAVIGATION_DIVIDER_WIDTH = 1
 _NAVIGATION_LABEL_SIZE = 14
@@ -596,12 +599,12 @@ def _cave_metadata_panel_style() -> CaveMetadataPanelStyle:
     """Return the splash-owned style tokens for in-panel cave details."""
     return CaveMetadataPanelStyle(
         background_color=_BG_COLOR,
-        title_color=_TITLE_COLOR,
-        subtitle_color=_SUBTITLE_COLOR,
-        section_color=_LIBRARY_METADATA_COLOR,
+        title_color=_NAVIGATION_SELECTED_FG,
+        subtitle_color=_NAVIGATION_FOOTER_FG,
+        section_color=_NAVIGATION_FOOTER_FG,
         body_color=_SUBTITLE_COLOR,
         divider_color=_LIBRARY_PANEL_BORDER_COLOR,
-        link_color=_BUTTON_BG,
+        link_color=_NAVIGATION_SELECTED_FG,
         link_hover_color=DARK_THEME.primary_button_hover,
         title_font=_TYPOGRAPHY.display,
         subtitle_font=_TYPOGRAPHY.body,
@@ -1920,6 +1923,7 @@ def _show_splash_composition(
     discard_preferences_dialog_ref: list[object | None] = [None]
     active_surface = ["map_library"]
     active_cave: list[CaveMetadata | None] = [None]
+    active_cave_map_target: list[CaveMetadataMapTarget | None] = [None]
     recompose_request: list[_SplashRecomposeRequest | None] = [None]
     persist_shell_window_state_ref: list[Callable[[], None] | None] = [None]
 
@@ -2662,9 +2666,12 @@ def _show_splash_composition(
                 max_wraplength=420,
             )
 
-    def _show_cave_metadata(cave: CaveMetadata) -> None:
+    def _show_cave_metadata(
+        cave: CaveMetadata, map_target: CaveMetadataMapTarget | None = None,
+    ) -> None:
         """Replace the right surface with one cave's descriptive information."""
         active_cave[0] = cave
+        active_cave_map_target[0] = map_target
         _prepare_surface_change("cave_metadata")
         for child in cave_metadata_surface.winfo_children():
             child.destroy()
@@ -2676,6 +2683,7 @@ def _show_splash_composition(
             style=_cave_metadata_panel_style(),
             on_back=_show_map_library_surface,
             on_open_source=_open_cave_metadata_source,
+            on_open_map=map_library_workflow.cave_map_open_action(map_target),
         )
         panel.create()
         if active_surface[0] != "cave_metadata":
@@ -2806,7 +2814,7 @@ def _show_splash_composition(
             resume_state.active_surface == "cave_metadata"
             and resume_state.cave is not None
         ):
-            _show_cave_metadata(resume_state.cave)
+            _show_cave_metadata(resume_state.cave, resume_state.cave_map_target)
         else:
             _show_map_library_surface()
         if resume_state.map_scroll_fraction > 0.0:
@@ -3053,6 +3061,8 @@ def _show_splash_composition(
         splash_controller.schedule(350, update_manager.check_for_updates)
 
     def _handle_root_return(_event=None):
+        if active_surface[0] == "cave_metadata":
+            return "break"
         if active_surface[0] == "preferences":
             panel = preferences_panel_ref[0]
             if panel is not None:
@@ -3068,7 +3078,7 @@ def _show_splash_composition(
         if active_surface[0] == "preferences":
             _request_leave_preferences(_discard_preferences_and_show_map_library)
             return "break"
-        if active_surface[0] in {"about", "help"}:
+        if active_surface[0] in {"about", "help", "cave_metadata"}:
             _show_map_library_surface()
             return "break"
         on_close()
@@ -3161,6 +3171,7 @@ def _show_splash_composition(
                 ),
                 map_scroll_fraction=map_library_panel.scroll_fraction(),
                 cave=active_cave[0],
+                cave_map_target=active_cave_map_target[0],
                 display_metrics=candidate,
                 window_state=current_window_state,
             )

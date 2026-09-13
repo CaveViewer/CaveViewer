@@ -345,10 +345,6 @@ class PreferencesPanel:
         self.rounded_field_controls: dict[str, RoundedEntryControl] = {}
         self.preference_cards: dict[str, list[RoundedSectionSurface]] = {}
         self.preference_action_buttons: list[RoundedActionButton] = []
-        self.page_focus_targets: dict[
-            str,
-            list[RoundedEntryControl | RoundedActionButton],
-        ] = {}
         self.numeric_entry_states: dict[str, tuple] = {}
         self.numeric_placeholder_keys: set[str] = set()
         self.form_ready = False
@@ -765,7 +761,6 @@ class PreferencesPanel:
             kind="secondary",
             outside_background=self.preferences_palette.section_background,
         )
-        self.page_focus_targets.setdefault("backup", []).append(button)
         button.pack(
             anchor="w",
             pady=(self.preferences_metrics.field_description_to_control_y, 0),
@@ -885,9 +880,6 @@ class PreferencesPanel:
             rounded_entry.pack(side="left")
         entry = rounded_entry.entry
         self.rounded_field_controls[key] = rounded_entry
-        self.page_focus_targets.setdefault(field.section, []).append(
-            rounded_entry
-        )
         self.field_entries[key] = entry
         self.field_entry_states[key] = "readonly" if compact_path else "normal"
         if key in self.numeric_placeholder_keys:
@@ -1806,14 +1798,16 @@ class PreferencesPanel:
         self._cancel_after_callback("_scroll_restore_after_id")
 
     def focus_content(self) -> None:
-        """Move keyboard focus into the active embedded Preferences view."""
+        """Focus the page surface without selecting a field or action."""
         if self.form.state.invalid_key is not None:
             self._focus_invalid_field(self.form.state.invalid_key, select_value=True)
             return
-        targets = self.page_focus_targets.get(self.active_page_key or "", ())
-        for target in targets:
-            if target.focus_set():
-                return
+        if self.page_canvas is None:
+            return
+        try:
+            self.page_canvas.focus_set()
+        except tk.TclError:
+            pass
 
     def on_shown(self) -> None:
         """Recompute wrapping after the embedded surface receives its final width."""

@@ -92,9 +92,9 @@ def test_map_library_cave_details_stay_in_the_splash_content_area():
     assert "_set_active_navigation(\"Map Library\")" in splash_source
     assert "This describes the cave system, not necessarily this 3D map." in details_source
     assert "on_open_source" in details_source
-    assert 'text="‹  Map Library"' in details_source
-    assert "highlightthickness=0" in details_source
-    assert "Focus the neutral detail surface without outlining the back link." in details_source
+    assert "on_open_map=map_library_workflow.cave_map_open_action(map_target)" in splash_source
+    assert "_show_cave_metadata(resume_state.cave, resume_state.cave_map_target)" in splash_source
+    assert "cave_map_target=active_cave_map_target[0]" in splash_source
 
 
 @pytest.mark.parametrize(

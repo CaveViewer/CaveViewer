@@ -40,6 +40,7 @@ from caveviewer.gui.map_library_sources import (
 )
 from caveviewer.gui.map_library import recent_map_key
 from caveviewer.gui.map_library_workflow import (
+    CaveMetadataMapTarget,
     MapLibraryActionDependencies,
     MapLibraryCacheRebuildDependencies,
     MapLibraryCatalogDependencies,
@@ -648,7 +649,7 @@ def test_standard_library_metadata_uses_stable_id_and_offers_about_cave():
         is_downloaded=lambda _root, _map: True,
         existing_path=lambda _root, _map: "/maps/Devils Eye",
         cave_metadata_catalog=load_bundled_cave_metadata_catalog(),
-        show_cave_metadata=shown_caves.append,
+        show_cave_metadata=lambda cave, target: shown_caves.append((cave, target)),
     )
 
     state.workflow.add_standard_row(library_map)
@@ -663,7 +664,11 @@ def test_standard_library_metadata_uses_stable_id_and_offers_about_cave():
         "About cave",
     ]
     actions[-1][1]()
-    assert [cave.id for cave in shown_caves] == ["us-fl-devils-spring-system"]
+    assert [cave.id for cave, _target in shown_caves] == ["us-fl-devils-spring-system"]
+    target = shown_caves[0][1]
+    assert target == CaveMetadataMapTarget(library_map=library_map)
+    state.workflow.cave_map_open_action(target)()
+    assert state.opened == ["/maps/Devils Eye"]
 
 
 def test_recent_map_metadata_uses_the_same_safe_match_and_about_action():
@@ -671,7 +676,7 @@ def test_recent_map_metadata_uses_the_same_safe_match_and_about_action():
     state = _workflow(
         [],
         cave_metadata_catalog=load_bundled_cave_metadata_catalog(),
-        show_cave_metadata=shown_caves.append,
+        show_cave_metadata=lambda cave, target: shown_caves.append((cave, target)),
     )
 
     state.workflow.add_recent_row("/maps/Peacock Springs Cave System")
@@ -684,7 +689,11 @@ def test_recent_map_metadata_uses_the_same_safe_match_and_about_action():
         "About cave",
     ]
     actions[-1][1]()
-    assert [cave.id for cave in shown_caves] == ["us-fl-peacock-springs"]
+    assert [cave.id for cave, _target in shown_caves] == ["us-fl-peacock-springs"]
+    target = shown_caves[0][1]
+    assert target == CaveMetadataMapTarget(recent_path="/maps/Peacock Springs Cave System")
+    state.workflow.cave_map_open_action(target)()
+    assert state.opened == ["/maps/Peacock Springs Cave System"]
 
 
 def test_recent_map_reuses_an_exact_catalog_size_without_scanning_its_folder():
@@ -743,7 +752,7 @@ def test_recent_slice_inherits_root_cave_metadata_and_about_action(tmp_path):
     state = _workflow(
         [],
         cave_metadata_catalog=load_bundled_cave_metadata_catalog(),
-        show_cave_metadata=shown_caves.append,
+        show_cave_metadata=lambda cave, target: shown_caves.append((cave, target)),
     )
 
     state.workflow.add_recent_row(str(map_root))
@@ -757,7 +766,71 @@ def test_recent_slice_inherits_root_cave_metadata_and_about_action(tmp_path):
         "About cave",
     ]
     actions[-1][1]()
-    assert [cave.id for cave in shown_caves] == ["us-fl-devils-spring-system"]
+    assert [cave.id for cave, _target in shown_caves] == ["us-fl-devils-spring-system"]
+    target = shown_caves[0][1]
+    assert target == CaveMetadataMapTarget(recent_path=str(map_root))
+    state.workflow.cave_map_open_action(target)()
+    assert state.opened == [str(map_root)]
+
+
+def test_cave_details_offer_no_open_action_without_a_local_map():
+    library_map = _library_map()
+    state = _workflow([library_map])
+
+    assert state.workflow.cave_map_open_action(None) is None
+    assert state.workflow.cave_map_open_action(CaveMetadataMapTarget()) is None
+    assert state.workflow.cave_map_open_action(
+        CaveMetadataMapTarget(library_map=library_map)
+    ) is None
+    assert state.opened == []
+
+
+def test_cave_details_recheck_library_path_when_open_is_clicked():
+    library_map = _library_map()
+    paths = {"current": "/library/Original"}
+    state = _workflow(
+        [library_map], is_downloaded=lambda _root, _map: True,
+        existing_path=lambda _root, _map: paths["current"],
+    )
+    action = state.workflow.cave_map_open_action(
+        CaveMetadataMapTarget(library_map=library_map)
+    )
+    paths["current"] = "/library/Moved"
+    action()
+    assert state.opened == ["/library/Moved"]
+
+    paths["current"] = None
+    action()
+    assert state.opened == ["/library/Moved"]
+    assert "could not be found" in state.feedback[-1][0]
+
+
+def test_cave_details_keep_managed_recent_map_ownership_checks():
+    state = _workflow([], is_app_supplied_path=lambda _path, _root: True)
+    action = state.workflow.cave_map_open_action(
+        CaveMetadataMapTarget(recent_path="/library/Managed Map")
+    )
+    action()
+    assert state.opened == []
+    assert "still managed by Map Library" in state.feedback[-1][0]
+
+
+def test_cave_details_recheck_active_cache_work_before_opening():
+    library_map = _library_map()
+    state = _workflow(
+        [library_map], is_downloaded=lambda _root, _map: True,
+        existing_path=lambda _root, _map: "/library/Downloaded",
+    )
+    actions = [
+        state.workflow.cave_map_open_action(CaveMetadataMapTarget(library_map=library_map)),
+        state.workflow.cave_map_open_action(CaveMetadataMapTarget(recent_path="/maps/Local")),
+    ]
+    state.cache_rebuild_controller.active = True
+    for action in actions:
+        action()
+    assert state.opened == []
+    assert len(state.feedback) == 2
+    assert all("cache rebuild" in message for message, _options in state.feedback)
 
 
 def test_download_completion_restores_cave_metadata_after_progress_status():
