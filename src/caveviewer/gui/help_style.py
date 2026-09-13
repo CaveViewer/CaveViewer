@@ -241,6 +241,12 @@ HELP_SECTION_CONTENT = (
     ),
     HelpSectionContent(
         "troubleshooting",
+        "log-information",
+        "Log Information",
+        "Configure the amount of information in the logs. The new setting takes effect after a restart.",
+    ),
+    HelpSectionContent(
+        "troubleshooting",
         "application-logs",
         "Application Logs",
         "Open the latest log when you need help diagnosing a problem.",

@@ -248,8 +248,9 @@ uses the same tab-row alignment.
 Each preference group is a subtly raised panel-colored card with a
 12-logical-pixel radius. Cards share one left and right edge beneath the tabs,
 use title-case section-title labels, and remain separated by a 20-logical-pixel
-vertical gap. Amber decoration is reserved for primary actions rather than
-section surfaces. Streaming uses **Memory Use**, **CPU Use**, and **Frame
+vertical gap. Every card has a one-logical-pixel `#30343D` border, including
+Storage and Backup cards. Amber decoration is reserved for primary actions
+rather than section surfaces. Streaming uses **Memory Use**, **CPU Use**, and **Frame
 Loading** headings. Each has one section-summary purpose line beneath its
 heading. Import uses **Map Processing** and **CPU Use** with the
 same purpose-line treatment. Storage uses **Locations** with a short purpose
@@ -329,6 +330,7 @@ instead of reducing type size or card spacing.
 | Capture | **Video** | Record what you see as a video. |
 | Capture | **Dive Trace** | Save camera movement for replay or analysis. |
 | Capture | **Cave Slice** | Save part of a cave as a new pre-compiled map. |
+| Troubleshooting | **Log Information** | Configure the amount of information in the logs. The new setting takes effect after a restart. |
 | Troubleshooting | **Application Logs** | Open the latest log when you need help diagnosing a problem. |
 | Troubleshooting | **Last Error** | Review and copy details from the latest recorded error. |
 
@@ -337,6 +339,14 @@ Keycaps use 4-logical-pixel corners while preserving the geometric unit spans
 defined above. At compact widths, the action lane moves below the keycap lane
 before either can clip. Supporting artifact text follows the action label and
 remains visually subordinate.
+
+All Help cards have a one-logical-pixel `#30343D` border. Reserve the final
+canvas device pixel so the right outline remains visible on every tab. **Log
+Information** comes first and uses a 160-by-40-logical-pixel rounded choice
+control with the shared action typography, a muted border, and an amber
+chevron. Its options are **Essential** (default) and **All**. Keep the restart
+guidance visible; show a failed save beneath the control while retaining the
+previous selection.
 
 **Show latest log** and **Copy** use the same 4-logical-pixel rounded action
 treatment as Preferences. They preserve visible focus, Return and Space

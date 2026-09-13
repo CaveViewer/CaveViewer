@@ -76,6 +76,7 @@ from caveviewer.gui.platform.diagnostic_log_reveal import (
     create_diagnostic_log_reveal_adapter,
 )
 from caveviewer.gui.troubleshooting_logs import TroubleshootingLogController
+from caveviewer.gui.log_information import LogInformationController
 from caveviewer.gui.map_library_controller import MapLibraryController
 from caveviewer.gui.map_history import load_recent_map_paths
 from caveviewer.gui.map_library_panel import (
@@ -2397,6 +2398,13 @@ def _show_splash_composition(
     def _on_preferences_click():
         _show_preferences_surface()
 
+    def _on_log_information_saved(preferences) -> None:
+        if on_preferences_saved is not None:
+            on_preferences_saved(preferences)
+        panel = preferences_panel_ref[0]
+        if panel is not None:
+            panel.accept_log_information(preferences["log_information"])
+
     def _ensure_help_panel() -> HelpPanel:
         panel = help_panel_ref[0]
         if panel is not None:
@@ -2413,6 +2421,9 @@ def _show_splash_composition(
             px=px,
             style=_help_panel_style(px=px),
             sections=keyboard_control_sections(presentation_profile),
+            log_information_controller=LogInformationController(
+                on_saved=_on_log_information_saved,
+            ),
             troubleshooting_controller=TroubleshootingLogController(
                 directory=application_log_directory(
                     platform_name=(
@@ -2435,6 +2446,7 @@ def _show_splash_composition(
             help_surface.tkraise()
             active_surface[0] = "help"
         _set_active_navigation("Help")
+        panel.on_shown()
         panel.focus_content()
 
     def _on_help_click() -> None:

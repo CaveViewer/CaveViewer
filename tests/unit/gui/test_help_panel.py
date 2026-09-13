@@ -474,7 +474,9 @@ def test_help_cards_and_compact_shortcuts_keep_measured_alignment():
 
         card_bounds = rendered_card_bounds()
         assert len(card_bounds) == 3
-        assert {(left, right) for left, _, right, _ in card_bounds} == {(12, 800)}
+        assert {(left, right) for left, _, right, _ in card_bounds} == {(12, 799)}
+        for item in canvas.find_withtag("help-card"):
+            assert canvas.itemcget(item, "outline").lower() == "#30343d"
         card_gaps = [
             card_bounds[index + 1][1] - card_bounds[index][3]
             for index in range(2)
@@ -512,6 +514,9 @@ def test_help_cards_and_compact_shortcuts_keep_measured_alignment():
         panel._render_table(800)
         capture_bounds = rendered_card_bounds()
         assert len(capture_bounds) == 4
+        for item in canvas.find_withtag("help-card"):
+            assert canvas.itemcget(item, "outline").lower() == "#30343d"
+            assert max(canvas.coords(item)[0::2]) < 800
         assert {
             capture_bounds[index + 1][1] - capture_bounds[index][3]
             for index in range(3)
@@ -520,7 +525,11 @@ def test_help_cards_and_compact_shortcuts_keep_measured_alignment():
         panel._show_tab("troubleshooting")
         panel._render_table(800)
         troubleshooting_bounds = rendered_card_bounds()
-        assert len(troubleshooting_bounds) == 2
+        assert len(troubleshooting_bounds) == 3
+        for item in canvas.find_withtag("help-card"):
+            assert canvas.itemcget(item, "outline").lower() == "#30343d"
+            stroke_radius = float(canvas.itemcget(item, "width")) / 2
+            assert max(canvas.coords(item)[0::2]) + stroke_radius < 800
         assert troubleshooting_bounds[1][1] - troubleshooting_bounds[0][3] == 20
         assert panel._troubleshooting_button is not None
         assert int(panel._troubleshooting_button.widget.cget("height")) == 40
@@ -617,6 +626,7 @@ def test_copy_error_excerpt_reports_clipboard_failure():
 def test_help_copy_confirmation_clears_when_panel_is_left():
     cleared = []
     panel = help_panel.HelpPanel.__new__(help_panel.HelpPanel)
+    panel._log_choice = None
     panel._copy_confirmation = SimpleNamespace(clear=lambda: cleared.append(True))
     panel._copy_feedback = "Couldn’t copy. Select the text manually."
     panel._copy_feedback_is_error = False

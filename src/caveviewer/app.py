@@ -799,16 +799,8 @@ def main():
 
     record_startup_stage("runtime_settings_resolution_begin")
     platform_facts = current_runtime_platform_facts()
-    logging_settings = resolve_runtime_settings(
-        preferences={},
-        environ=os.environ,
-        cli_overrides=cli_overrides,
-        platform=platform_facts,
-    )
-    configure_logging(str(logging_settings["log_level"]))
-    _attach_runtime_diagnostics_logging()
-    _attach_startup_diagnostics_logging()
-    record_startup_stage("runtime_settings_resolution_complete")
+    # Help's persisted logging choice must be resolved before file handlers
+    # capture the session threshold. Later saves take effect on next startup.
     record_startup_stage("preferences_load_begin")
     runtime_settings_session = RuntimeSettingsSession(
         preferences=load_saved_preference_values(),
@@ -818,6 +810,10 @@ def main():
     )
     runtime_settings = runtime_settings_session.snapshot
     record_startup_stage("preferences_load_complete")
+    configure_logging(str(runtime_settings["log_level"]))
+    _attach_runtime_diagnostics_logging()
+    _attach_startup_diagnostics_logging()
+    record_startup_stage("runtime_settings_resolution_complete")
     _route_moderngl_window_logging()
     if os.name == "nt":
         try:

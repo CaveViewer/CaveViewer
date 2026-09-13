@@ -93,7 +93,10 @@ class RuntimeDiagnostics:
         with self._lock:
             if self._closed or self._attached_to_root_logger:
                 return
-            logging.getLogger().addHandler(self._handler)
+            root_logger = logging.getLogger()
+            # Ancestor logger levels do not filter explicitly enabled children.
+            self._handler.setLevel(root_logger.getEffectiveLevel())
+            root_logger.addHandler(self._handler)
             self._attached_to_root_logger = True
         self.record("application_logging_attached")
 

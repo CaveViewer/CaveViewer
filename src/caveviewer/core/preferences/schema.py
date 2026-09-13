@@ -28,6 +28,7 @@ class PreferenceValueType(str, Enum):
     FLOAT = "float"
     PATH = "path"
     PATH_CREATE = "path_create"
+    CHOICE = "choice"
 
 
 @dataclass(frozen=True)
@@ -64,6 +65,7 @@ class PreferenceSpec:
     env_to_preference: PreferenceEnvConverter | None = None
     preference_to_env: PreferenceEnvConverter | None = None
     portable: bool = True
+    choices: tuple[str, ...] = ()
 
     def built_in_default(
         self,
@@ -396,6 +398,16 @@ PREFERENCE_FIELDS = (
         default=_map_library_directory_default,
         portable=False,
     ),
+    PreferenceSpec(
+        section="troubleshooting",
+        key="log_information",
+        env_var="CAVEVIEWER_LOG_INFORMATION",
+        label="Log information",
+        hint="Amount of log information after restart: essential or all.",
+        value_type=PreferenceValueType.CHOICE,
+        default="essential",
+        choices=("essential", "all"),
+    ),
 )
 
 
@@ -495,6 +507,14 @@ def validate_preference(
         if field.optional:
             return PreferenceFieldValidationResult(True, None, "")
         return PreferenceFieldValidationResult(False, f"{field.label} is required.", text)
+
+    if field.value_type is PreferenceValueType.CHOICE:
+        value = text.lower()
+        if value not in field.choices:
+            return PreferenceFieldValidationResult(
+                False, f"{field.label} must be one of: {', '.join(field.choices)}.", text,
+            )
+        return PreferenceFieldValidationResult(True, None, value)
 
     if (
         field.minimum is not None
