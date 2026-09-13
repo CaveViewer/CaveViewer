@@ -235,7 +235,14 @@ primitives remain documented in [design-system.md](design-system.md).
   **Essential**; **All** includes debug information. Save on selection and
   explain that the change takes effect after restart. Keep the previous choice
   and show an inline error if saving fails. Support keyboard selection and
-  dismiss the menu when leaving the tab or Help surface.
+  dismiss the menu when leaving the tab or Help surface. Open on Return,
+  Space, Up or Down; navigate rows with arrows or Home/End, confirm with
+  Return/Space, and cancel with Escape. Tab and Shift-Tab dismiss and continue
+  the opener's normal focus order. Keep the check on the saved choice until a
+  new selection is accepted. Close on outside clicks, focus loss, scrolling
+  or layout changes, and place the menu above the trigger when needed to fit.
+  After selection, return focus to Help content so the closed dropdown has no
+  lingering focus highlight. Escape still restores focus to the trigger.
 - Use the shared 4-logical-pixel rounded action treatment for troubleshooting
   actions. Preserve visible focus, keyboard activation, disabled state, stable
   action labels, and adjacent transient copy confirmation.
