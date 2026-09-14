@@ -414,6 +414,7 @@ class HelpPanel:
             style=CanvasScrollbarStyle(background_color=style.background_color),
         )
         self._scrollbar.mount_grid(row=0, column=1, sticky="ns")
+        self._bind_widget_mousewheel_to_scrollbar()
         canvas.bind("<Configure>", self._on_canvas_configure, add="+")
         self._show_tab("keys")
 
@@ -426,6 +427,16 @@ class HelpPanel:
             canvas.focus_set()
         except tk.TclError:
             pass
+
+    def _bind_widget_mousewheel_to_scrollbar(self) -> None:
+        """Route wheel input over embedded Help controls to the page scroller."""
+        scrollbar = self._scrollbar
+        if scrollbar is None:
+            return
+        for control in (self._troubleshooting_button, self._copy_error_button):
+            widget = getattr(control, "widget", None)
+            if widget is not None:
+                scrollbar.bind_mousewheel(widget)
 
     def _show_tab(self, key: str) -> None:
         """Draw the selected Help table without rebuilding Tk widget trees."""
@@ -501,7 +512,8 @@ class HelpPanel:
             )
             y += self._metrics.section_gap_y
 
-        self._content_height = max(0, y - self._metrics.section_gap_y)
+        last_card_bottom = max(0, y - self._metrics.section_gap_y)
+        self._content_height = self._content_scroll_height(last_card_bottom)
         try:
             canvas.configure(scrollregion=(0, 0, width, self._content_height))
         except tk.TclError:
@@ -774,13 +786,17 @@ class HelpPanel:
             content_bottom=y,
             intro=error_intro,
         )
-        self._content_height = max(0, error_bottom + metrics.content_bottom_pad_y)
+        self._content_height = self._content_scroll_height(error_bottom)
         try:
             canvas.configure(scrollregion=(0, 0, width, self._content_height))
         except tk.TclError:
             return
         if self._scrollbar is not None:
             self._scrollbar.sync_overflow(self._content_height)
+
+    def _content_scroll_height(self, last_card_bottom: int) -> int:
+        """Include the Help bottom breathing room in every tab's scroll range."""
+        return max(0, last_card_bottom + self._metrics.content_bottom_pad_y)
 
     def _canvas_item_height(self, canvas, item: int, font_role: str) -> int:
         """Return one rendered text height with a semantic-font fallback."""

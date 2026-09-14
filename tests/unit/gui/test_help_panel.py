@@ -545,6 +545,43 @@ def test_help_panel_is_embedded_and_uses_the_shared_scroll_host():
     assert "tk.Toplevel" not in source
     assert "scrollbar.sync_overflow(self._content_height)" in source
     assert "def focus_content" in source
+    assert "self._bind_widget_mousewheel_to_scrollbar()" in source
+
+
+def test_help_content_scroll_height_includes_bottom_padding_on_every_tab():
+    panel = help_panel.HelpPanel.__new__(help_panel.HelpPanel)
+    panel._metrics = HELP_VISUAL_METRICS.scaled(round)
+
+    assert (
+        panel._content_scroll_height(240)
+        == 240 + HELP_VISUAL_METRICS.content_bottom_pad_y
+    )
+    assert "_content_scroll_height(last_card_bottom)" in inspect.getsource(
+        help_panel.HelpPanel._render_table
+    )
+    assert "_content_scroll_height(error_bottom)" in inspect.getsource(
+        help_panel.HelpPanel._render_troubleshooting
+    )
+
+
+def test_help_embedded_controls_route_mousewheel_to_scrollbar():
+    class Scrollbar:
+        def __init__(self) -> None:
+            self.widgets = []
+
+        def bind_mousewheel(self, widget) -> None:
+            self.widgets.append(widget)
+
+    controls = [SimpleNamespace(widget=object()) for _ in range(3)]
+    panel = help_panel.HelpPanel.__new__(help_panel.HelpPanel)
+    panel._scrollbar = Scrollbar()
+    panel._log_choice = controls[0]
+    panel._troubleshooting_button = controls[1]
+    panel._copy_error_button = controls[2]
+
+    panel._bind_widget_mousewheel_to_scrollbar()
+
+    assert panel._scrollbar.widgets == [control.widget for control in controls[1:]]
 
 
 def test_help_panel_exposes_troubleshooting_tab_and_log_action():

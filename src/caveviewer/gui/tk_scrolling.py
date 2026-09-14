@@ -7,6 +7,7 @@ from typing import Any
 
 
 _WHEEL_NOTCH_DELTA = 120.0
+_WHEEL_NOTCH_PIXELS = 40.0
 
 
 def vertical_scroll_units(event: Any) -> int | None:
@@ -31,4 +32,29 @@ def vertical_scroll_units(event: Any) -> int | None:
         return -1
     if button_number == 5:
         return 1
+    return None
+
+
+def vertical_scroll_pixels(event: Any) -> float | None:
+    """Return a signed pixel delta for one Tk wheel event.
+
+    High-resolution trackpads can emit many small ``delta`` values. Preserve
+    those deltas as pixels so canvas-backed panels move smoothly instead of
+    turning each tiny event into a full canvas unit jump.
+    """
+    try:
+        delta = float(getattr(event, "delta", 0))
+    except (TypeError, ValueError):
+        delta = 0.0
+
+    if isfinite(delta) and delta != 0.0:
+        if abs(delta) >= _WHEEL_NOTCH_DELTA:
+            return -(delta / _WHEEL_NOTCH_DELTA) * _WHEEL_NOTCH_PIXELS
+        return -delta
+
+    button_number = getattr(event, "num", None)
+    if button_number == 4:
+        return -_WHEEL_NOTCH_PIXELS
+    if button_number == 5:
+        return _WHEEL_NOTCH_PIXELS
     return None

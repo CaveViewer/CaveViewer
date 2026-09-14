@@ -175,7 +175,7 @@ def test_tabbed_content_surface_defines_one_standard_content_gap():
         font=("TkDefaultFont", 12, "bold"),
     )
 
-    assert TABBED_CONTENT_TOP_GAP == 26
+    assert TABBED_CONTENT_TOP_GAP == 18
     assert TABBED_CONTENT_ALIGNMENT_INSET == 12
     assert tab_style.tab_pad_x == TABBED_CONTENT_ALIGNMENT_INSET
     assert tab_style.row_height is None

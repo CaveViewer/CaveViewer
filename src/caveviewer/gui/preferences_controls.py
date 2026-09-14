@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import tkinter as tk
+from tkinter import font as tkfont
 from dataclasses import dataclass, replace
 from typing import Callable, Literal
 
@@ -142,6 +143,34 @@ def resolve_action_visual(
         foreground=foreground,
         border_width=border_width,
     )
+
+
+def action_label_inset(metrics: ScaledPreferencesVisualMetrics) -> int:
+    """Return the horizontal inset reserved inside a rounded action."""
+    return max(metrics.control_corner_radius, metrics.control_content_pad_x)
+
+
+def preferred_action_width(
+    *,
+    text_width: int | float,
+    metrics: ScaledPreferencesVisualMetrics,
+) -> int:
+    """Return the default action width needed for one measured label."""
+    measured_text = max(0, int(round(float(text_width))))
+    return max(
+        metrics.action_min_width,
+        measured_text
+        + (action_label_inset(metrics) * 2)
+        + (metrics.control_border_thickness * 2),
+    )
+
+
+def measured_action_text_width(parent, *, text: str, font) -> int:
+    """Measure an action label with the active Tk font metrics."""
+    try:
+        return int(tkfont.Font(root=parent, font=font).measure(text))
+    except (tk.TclError, TypeError, ValueError):
+        return 0
 
 
 class RoundedSectionSurface(_SharedRoundedSectionSurface):
@@ -686,7 +715,11 @@ class RoundedActionButton:
             if outside_background is None
             else outside_background
         )
-        resolved_width = width or metrics.action_min_width
+        resolved_width = (
+            width
+            if width is not None
+            else self._default_width(parent=parent, text=text, font=font)
+        )
         self.widget = tk.Canvas(
             parent,
             width=resolved_width,
@@ -759,13 +792,26 @@ class RoundedActionButton:
         self._metrics = metrics
         options = {"height": metrics.control_height}
         if self._uses_default_width:
-            options["width"] = metrics.action_min_width
+            options["width"] = self._default_width(
+                parent=self.button,
+                text=str(self.button.cget("text")),
+                font=self.button.cget("font"),
+            )
         self.widget.configure(**options)
         self._sync_geometry(self.widget.winfo_width(), metrics.control_height)
         self._apply_visual()
 
     def configure_text(self, text: str) -> None:
         self.button.configure(text=text)
+        if self._uses_default_width:
+            self.widget.configure(
+                width=self._default_width(
+                    parent=self.button,
+                    text=text,
+                    font=self.button.cget("font"),
+                )
+            )
+            self._sync_geometry(self.widget.winfo_width(), self.widget.winfo_height())
 
     def sync_geometry(self) -> None:
         """Refresh native child geometry and visual state after mapping."""
@@ -830,7 +876,7 @@ class RoundedActionButton:
         if (
             was_pressed
             and _event is not None
-            and _event.widget is self.widget
+            and _event.widget in {self.widget, self.button}
         ):
             self._invoke()
 
@@ -853,15 +899,18 @@ class RoundedActionButton:
         self._redraw(width=event.width, height=event.height)
 
     def _sync_geometry(self, width: int, height: int) -> None:
-        inset = max(
-            self._metrics.control_corner_radius,
-            self._metrics.control_content_pad_x,
-        )
+        inset = action_label_inset(self._metrics)
         self.widget.coords(self._button_window, width // 2, height // 2)
         self.widget.itemconfigure(
             self._button_window,
             width=max(1, width - (inset * 2)),
             height=max(1, height - (self._metrics.control_border_thickness * 2)),
+        )
+
+    def _default_width(self, *, parent, text: str, font) -> int:
+        return preferred_action_width(
+            text_width=measured_action_text_width(parent, text=text, font=font),
+            metrics=self._metrics,
         )
 
     def _apply_visual(self) -> None:

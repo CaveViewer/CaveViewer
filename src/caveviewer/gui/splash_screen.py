@@ -2632,6 +2632,8 @@ def _show_splash_composition(
             height=px(_NAVIGATION_ENTRY_HEIGHT),
         )
         item_row.pack_propagate(False)
+        focus_indicator = tk.Frame(item_row, bg=_NAVIGATION_SELECTED_FG)
+        focus_indicator.place_forget()
         icon = _create_navigation_icon(item_row, icon_name)
         icon.pack(side="left", padx=(px(11), px(6)))
         item = tk.Label(
@@ -2644,12 +2646,22 @@ def _show_splash_composition(
             padx=0,
             pady=0,
             takefocus=True,
-            highlightthickness=1,
-            highlightbackground=_NAVIGATION_PANEL_BG,
-            highlightcolor=_NAVIGATION_SELECTED_FG,
+            highlightthickness=0,
         )
         item.pack(side="left", fill="both", expand=True, padx=(0, px(9)))
         state = {"selected": selected}
+
+        def show_keyboard_focus(_event=None) -> None:
+            focus_indicator.place(
+                x=0,
+                y=px(8),
+                width=max(1, px(2)),
+                height=max(1, px(_NAVIGATION_ENTRY_HEIGHT - 16)),
+            )
+            focus_indicator.lift()
+
+        def hide_keyboard_focus(_event=None) -> None:
+            focus_indicator.place_forget()
 
         def refresh_visual() -> None:
             if state["selected"]:
@@ -2662,7 +2674,6 @@ def _show_splash_composition(
                 bg=_NAVIGATION_PANEL_BG,
                 fg=foreground,
                 font=label_font,
-                highlightbackground=_NAVIGATION_PANEL_BG,
             )
             icon._cv_set_appearance(
                 _NAVIGATION_PANEL_BG,
@@ -2676,6 +2687,8 @@ def _show_splash_composition(
         _bind_activation(item_row, callback)
         _bind_activation(item, callback)
         _bind_activation(icon, callback)
+        item.bind("<FocusIn>", show_keyboard_focus, add="+")
+        item.bind("<FocusOut>", hide_keyboard_focus, add="+")
         refresh_visual()
         item_row.pack(fill="x", pady=(0, px(_NAVIGATION_ITEM_GAP)))
         item._cv_set_selected = set_selected

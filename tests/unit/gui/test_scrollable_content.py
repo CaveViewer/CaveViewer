@@ -14,6 +14,8 @@ from caveviewer.gui.scrollable_content import (
 class _FakeCanvas:
     def __init__(self, *, height: int = 200) -> None:
         self.height = height
+        self.current_top = 0.0
+        self.scrollregion = (0, 0, 100, 1000)
         self.scroll_calls = []
         self.moveto_calls = []
 
@@ -25,6 +27,22 @@ class _FakeCanvas:
 
     def yview_moveto(self, fraction) -> None:
         self.moveto_calls.append(fraction)
+        self.current_top = float(fraction) * self.scrollregion[3]
+
+    def yview(self):
+        content_height = self.scrollregion[3] - self.scrollregion[1]
+        return (
+            self.current_top / content_height,
+            (self.current_top + self.height) / content_height,
+        )
+
+    def canvasy(self, _screen_y: int) -> float:
+        return self.scrollregion[1] + self.current_top
+
+    def cget(self, option: str):
+        if option == "scrollregion":
+            return " ".join(str(value) for value in self.scrollregion)
+        raise KeyError(option)
 
 
 class _FakeRail:
@@ -136,7 +154,8 @@ def test_canvas_scrollbar_uses_normalized_wheel_input_and_dragging():
     scrollbar._draw_thumb()
 
     assert scrollbar.scroll_from_event(SimpleNamespace(delta=-1)) == "break"
-    assert canvas.scroll_calls == [(1, "units")]
+    assert canvas.moveto_calls == [0.001]
+    assert canvas.scroll_calls == []
 
     assert scrollbar._start_drag(SimpleNamespace(y=20)) == "break"
     assert scrollbar._drag(SimpleNamespace(y=110)) == "break"
@@ -146,3 +165,11 @@ def test_canvas_scrollbar_uses_normalized_wheel_input_and_dragging():
 
     assert scrollbar._end_drag(SimpleNamespace()) == "break"
     assert rail.item_configurations[-1][1]["fill"] == scrollbar._style.thumb_color
+
+
+def test_canvas_scrollbar_falls_back_to_unit_scrolling_without_scroll_region():
+    scrollbar, canvas, _rail = _scrollbar(visible=True)
+    canvas.scrollregion = ()
+
+    assert scrollbar.scroll_from_event(SimpleNamespace(delta=-120)) == "break"
+    assert canvas.scroll_calls == [(1, "units")]

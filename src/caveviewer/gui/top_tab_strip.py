@@ -7,7 +7,7 @@ from dataclasses import dataclass, replace
 from typing import Callable, Iterable
 
 
-TABBED_CONTENT_TOP_GAP = 26
+TABBED_CONTENT_TOP_GAP = 18
 TABBED_CONTENT_ALIGNMENT_INSET = 12
 
 

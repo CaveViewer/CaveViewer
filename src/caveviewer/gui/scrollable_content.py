@@ -6,7 +6,7 @@ import tkinter as tk
 from dataclasses import dataclass
 from typing import Callable
 
-from caveviewer.gui.tk_scrolling import vertical_scroll_units
+from caveviewer.gui.tk_scrolling import vertical_scroll_pixels, vertical_scroll_units
 from caveviewer.gui.tk_theme import DARK_THEME
 
 
@@ -168,6 +168,9 @@ class CanvasVerticalScrollbar:
         """Scroll the owned canvas for one normalized wheel event."""
         if not self._visible:
             return None
+        pixels = vertical_scroll_pixels(event)
+        if pixels is not None and self._scroll_canvas_pixels(pixels):
+            return "break"
         units = vertical_scroll_units(event)
         if units is None:
             return None
@@ -258,3 +261,52 @@ class CanvasVerticalScrollbar:
         widget.bind("<MouseWheel>", self.scroll_from_event, add="+")
         widget.bind("<Button-4>", self.scroll_from_event, add="+")
         widget.bind("<Button-5>", self.scroll_from_event, add="+")
+
+    def _scroll_canvas_pixels(self, pixels: float) -> bool:
+        """Move the canvas by a bounded pixel delta when its region is known."""
+        extent = self._scroll_extent()
+        if extent is None:
+            return False
+        _region_top, content_height, viewport_height, current_top = extent
+        max_top = max(0.0, content_height - viewport_height)
+        target_top = max(0.0, min(max_top, current_top + float(pixels)))
+        try:
+            self._canvas.yview_moveto(target_top / content_height)
+        except (ZeroDivisionError, tk.TclError):
+            return False
+        return True
+
+    def _scroll_extent(self) -> tuple[float, float, float, float] | None:
+        """Return scroll-region measurements needed for pixel wheel motion."""
+        try:
+            raw_region = self._canvas.cget("scrollregion")
+        except (AttributeError, tk.TclError):
+            return None
+        if not raw_region:
+            return None
+        try:
+            if isinstance(raw_region, str):
+                parts = tuple(float(part) for part in raw_region.split())
+            else:
+                parts = tuple(float(part) for part in raw_region)
+        except (TypeError, ValueError):
+            return None
+        if len(parts) != 4:
+            return None
+
+        region_top = parts[1]
+        content_height = max(1.0, parts[3] - region_top)
+        try:
+            viewport_height = float(self._canvas.winfo_height())
+        except (AttributeError, tk.TclError, TypeError, ValueError):
+            return None
+        if content_height <= viewport_height + 1.0:
+            return None
+        try:
+            current_top = float(self._canvas.canvasy(0)) - region_top
+        except (AttributeError, tk.TclError, TypeError, ValueError):
+            try:
+                current_top = float(self._canvas.yview()[0]) * content_height
+            except (AttributeError, IndexError, tk.TclError, TypeError, ValueError):
+                return None
+        return region_top, content_height, viewport_height, current_top
