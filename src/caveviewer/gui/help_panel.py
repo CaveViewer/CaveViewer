@@ -41,7 +41,6 @@ from caveviewer.gui.scrollable_content import (
     CanvasVerticalScrollbar,
 )
 from caveviewer.gui.top_tab_strip import (
-    TABBED_CONTENT_ALIGNMENT_INSET,
     TopTab,
     TopTabbedContentSurface,
     TopTabbedContentSurfaceStyle,
@@ -330,7 +329,7 @@ class HelpPanel:
             style=TopTabbedContentSurfaceStyle(
                 background_color=style.background_color,
                 content_pad_left_x=0,
-                content_pad_right_x=style.content_pad_x,
+                content_pad_right_x=0,
                 content_bottom_pad_y=14,
             ),
         )
@@ -844,7 +843,7 @@ class HelpPanel:
         style = self._style
         metrics = self._metrics
         content = help_section_content(tab_key, section_id)
-        card_left = self._px(TABBED_CONTENT_ALIGNMENT_INSET)
+        card_left = 0
         initial_geometry = measure_help_card(
             width=width,
             top=top,

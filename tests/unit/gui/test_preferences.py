@@ -806,7 +806,7 @@ def test_preferences_panel_uses_extracted_settings_logic():
     from caveviewer.gui import preferences_dialog, preferences_form, splash_screen
 
     assert preferences_dialog.PREFERENCES_VISUAL_METRICS.numeric_control_width == 90
-    assert preferences_dialog._SCROLLBAR_GUTTER_X == 18
+    assert preferences_dialog._SCROLLBAR_RAIL_WIDTH == 14
     assert preferences_dialog.PREFERENCES_VISUAL_METRICS.unit_gap_x == 12
     assert preferences_dialog.PREFERENCE_FIELDS is settings.PREFERENCE_FIELDS
     assert (
@@ -1331,7 +1331,7 @@ def test_preferences_panel_uses_compact_tabbed_pages():
     assert "self.button_row.pack(" in source
     assert "self.page_scroll_shell.pack(side=\"top\", fill=\"both\", expand=True)" in source
     assert "TopTabbedContentSurface(" in source
-    assert "padx=(self._surface_px(TABBED_CONTENT_ALIGNMENT_INSET), 0)" in card_source
+    assert "padx=(self._surface_px(TABBED_CONTENT_ALIGNMENT_INSET), 0)" not in card_source
     assert "on_selected=self._show_page" in source
     assert "self.tab_strip.select(page_key, notify=False)" in show_page_source
     assert "CanvasVerticalScrollbar(" in source
@@ -1729,7 +1729,7 @@ def test_preferences_rewraps_when_the_active_page_reaches_its_final_width():
     panel._on_page_configured("streaming", 800, 580)
 
     assert scheduled == [True, True]
-    assert label.configure_calls == [{"wraplength": 740}]
+    assert label.configure_calls == [{"wraplength": 752}]
 
 
 def test_preferences_feedback_wraplength_avoids_repeating_identical_geometry_work():
@@ -1822,7 +1822,7 @@ def test_preferences_uses_the_shared_primary_surface_origin():
     assert "if self._layout_px is not None:" in scale_source
     assert "self._layout_px(value)" in scale_source
     assert "content_pad_left_x=0" in source
-    assert "content_pad_right_x=self._layout_policy.body_pad_x" in source
+    assert "content_pad_right_x=0" in source
     assert "self._surface_px(PRIMARY_LABEL_ROW_TOP_INSET)" in source
     assert "self._surface_px(PRIMARY_SURFACE_VERTICAL_MARGIN)" in source
     assert "row_height=PRIMARY_LABEL_ROW_HEIGHT" in source

@@ -319,7 +319,7 @@ def test_help_uses_the_shared_primary_surface_origin():
     create_source = inspect.getsource(help_panel.HelpPanel.create)
 
     assert "content_pad_left_x=0" in create_source
-    assert "content_pad_right_x=style.content_pad_x" in create_source
+    assert "content_pad_right_x=0" in create_source
     assert "self._px(PRIMARY_LABEL_ROW_TOP_INSET)" in create_source
     assert "self._px(PRIMARY_SURFACE_VERTICAL_MARGIN)" in create_source
     assert "row_height=PRIMARY_LABEL_ROW_HEIGHT" in create_source
@@ -404,7 +404,7 @@ def test_help_panel_uses_the_shared_card_alignment_and_spacing():
     intro_source = inspect.getsource(help_panel.HelpPanel._draw_card_intro)
 
     assert "y += self._metrics.section_gap_y" in table_source
-    assert "card_left = self._px(TABBED_CONTENT_ALIGNMENT_INSET)" in intro_source
+    assert "card_left = 0" in intro_source
     assert "initial_geometry = measure_help_card(" in intro_source
     assert "content_x = initial_geometry.content.left" in intro_source
     assert "metrics.section_heading_to_description_y" in intro_source
@@ -474,7 +474,7 @@ def test_help_cards_and_compact_shortcuts_keep_measured_alignment():
 
         card_bounds = rendered_card_bounds()
         assert len(card_bounds) == 3
-        assert {(left, right) for left, _, right, _ in card_bounds} == {(12, 799)}
+        assert {(left, right) for left, _, right, _ in card_bounds} == {(0, 799)}
         for item in canvas.find_withtag("help-card"):
             assert canvas.itemcget(item, "outline").lower() == "#30343d"
         card_gaps = [
@@ -495,8 +495,8 @@ def test_help_cards_and_compact_shortcuts_keep_measured_alignment():
             if canvas.type(item) == "text"
             and canvas.itemcget(item, "text") == first_action
         )
-        assert canvas.coords(title_item)[0] == 36
-        assert canvas.coords(action_item)[0] > 36
+        assert canvas.coords(title_item)[0] == 24
+        assert canvas.coords(action_item)[0] > 24
 
         panel._render_table(380)
         compact_action_item = next(
@@ -505,7 +505,7 @@ def test_help_cards_and_compact_shortcuts_keep_measured_alignment():
             if canvas.type(item) == "text"
             and canvas.itemcget(item, "text") == first_action
         )
-        assert canvas.coords(compact_action_item)[0] == 36
+        assert canvas.coords(compact_action_item)[0] == 24
         keycap_item = canvas.find_withtag("help-keycap")[0]
         keycap_bottom = max(canvas.coords(keycap_item)[1::2])
         assert canvas.coords(compact_action_item)[1] > keycap_bottom

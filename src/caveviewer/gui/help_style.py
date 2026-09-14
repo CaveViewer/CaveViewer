@@ -85,7 +85,7 @@ class HelpVisualMetrics:
     shortcut_row_pad_y: int = 7
     keycap_content_pad_y: int = 2
     keycap_sequence_gap_x: int = 5
-    detail_gap_y: int = 3
+    detail_gap_y: int = PREFERENCES_VISUAL_METRICS.field_label_to_description_y
     error_excerpt_padding: int = 12
     content_bottom_pad_y: int = 16
 

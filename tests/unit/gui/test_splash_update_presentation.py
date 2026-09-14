@@ -54,13 +54,9 @@ def test_returning_library_uses_topmost_only_for_macos(platform_name, expected):
     ),
     ids=lambda module: module.__name__.rsplit(".", 1)[-1],
 )
-def test_splash_components_preserve_system_cursor_except_update_links(module):
-    """Only actionable update links opt into the native hand cursor."""
+def test_splash_components_delegate_link_cursors_to_shared_configuration(module):
+    """Surfaces inherit the system cursor; text links use the shared rule."""
     tree = ast.parse(inspect.getsource(module))
-    if module is splash_screen:
-        tree.body = [node for node in tree.body if not (
-            isinstance(node, ast.FunctionDef) and node.name == "_bind_update_label_action"
-        )]
     overrides = []
     for node in ast.walk(tree):
         if isinstance(node, ast.keyword) and node.arg == "cursor":
@@ -92,7 +88,8 @@ def test_map_library_cave_details_stay_in_the_splash_content_area():
     assert "_set_active_navigation(\"Map Library\")" in splash_source
     assert "This describes the cave system, not necessarily this 3D map." in details_source
     assert "on_open_source" in details_source
-    assert "on_open_map=map_library_workflow.cave_map_open_action(map_target)" in splash_source
+    assert "RoundedActionButton" not in details_source
+    assert "on_open_map=map_library_workflow.cave_map_open_action(map_target)" not in splash_source
     assert "_show_cave_metadata(resume_state.cave, resume_state.cave_map_target)" in splash_source
     assert "cave_map_target=active_cave_map_target[0]" in splash_source
 
@@ -605,14 +602,15 @@ def test_recovered_map_error_is_presented_after_library_reveal():
     )
 
 
-def test_three_action_preferences_modal_uses_shared_warning_heading():
+def test_three_action_preferences_modal_uses_reference_heading_and_copy():
     source = inspect.getsource(splash_screen._show_unsaved_preferences_dialog)
 
-    heading = source.index("create_semantic_heading(")
-    description = source.index('text=(\n            "Your Preferences changes')
+    heading = source.index("heading = tk.Label(")
+    description = source.index("description_text = (")
     assert heading < description
-    assert 'kind="warning"' in source[heading:description]
-    assert 'background=_BG_COLOR' in source[heading:description]
+    assert 'font=_font(22, bold=True)' in source[heading:description]
+    assert 'fg=palette.primary_action_background' in source[heading:description]
+    assert 'Save, discard, or edit them before leaving Preferences.' in source
 
 
 def test_splash_root_creates_new_tk_when_no_macos_root(monkeypatch):
@@ -1422,14 +1420,15 @@ def test_unsaved_preferences_dialog_offers_three_explicit_close_choices():
 
     assert '_make_button("Save"' in source
     assert '_make_button("Discard"' in source
-    assert '_make_button("Keep"' in source
-    assert 'button_row.pack(side="bottom", fill="x")' in source
-    assert "MODAL_MIN_WIDTH" in source
-    assert "MODAL_MIN_HEIGHT" in source
+    assert '_make_button("Edit", _close_dialog' in source
+    assert 'uniform="actions"' in source
+    assert "RoundedActionButton(" in source
+    assert "panel_width = content_width + 2 * px(24)" in source
+    assert "px(219)" in source
     assert "if not on_save():" in source
     assert 'dialog.bind("<Escape>", _close_dialog)' in source
     assert 'dialog.protocol("WM_DELETE_WINDOW", _close_dialog)' in source
-    assert "save_button.focus_set()" in source
+    assert "save_button.focus_set()" not in source
 
 
 def test_preferences_and_help_share_the_primary_semantic_type_scale():

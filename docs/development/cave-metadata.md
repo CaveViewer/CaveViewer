@@ -86,13 +86,12 @@ and the disclaimer that the cave system may not be the exact 3D map. The
 location/type summary remains in the library row. The breadcrumb shares the
 Map Library navigation row's vertical center; the first description line
 shares the Preferences navigation row's center. Descriptions, key facts,
-sources and the primary **Open Map** button use one left edge, with a fixed
+sources and the disclaimer use one left edge, with a fixed
 label/value lane for statistics and no decorative cards or dividers.
 
 The details view retains the originating map separately from its cave match.
-**Open Map** delegates to that recent or downloaded library map's existing
-opening workflow, including its normal ownership, cache-work and path checks.
-For a map not yet downloaded, the action is disabled with a short explanation.
+The details view has no map action buttons. Opening and downloading maps
+remain available from Map Library.
 The originating map survives shell recomposition along with the cave. Escape
 and the back breadcrumb restore Map Library; compact windows scroll the body
 while the breadcrumb stays in place.

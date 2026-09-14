@@ -70,6 +70,7 @@ from caveviewer.gui.cave_metadata_panel import (
 )
 from caveviewer.gui.controls_catalog import keyboard_control_sections
 from caveviewer.gui.help_panel import HelpPanel, HelpPanelStyle
+from caveviewer.gui.text_link import configure_text_link
 from caveviewer.gui.help_style import HELP_VISUAL_PALETTE, create_help_typography
 from caveviewer.core.diagnostics.catalog import application_log_directory
 from caveviewer.gui.platform.diagnostic_log_reveal import (
@@ -1077,11 +1078,11 @@ def _build_themed_about_content(
             font=_TYPOGRAPHY.body,
             fg=_BUTTON_BG if on_open_website is not None else _SUBTITLE_COLOR,
             bg=_BG_COLOR,
-            takefocus=on_open_website is not None,
             highlightthickness=1,
             highlightbackground=_BG_COLOR,
             highlightcolor=_BUTTON_BG,
         )
+        configure_text_link(website_label, enabled=on_open_website is not None)
         if on_open_website is not None:
             def open_website(_event=None, *, url=website_url):
                 on_open_website(url)
@@ -1233,48 +1234,120 @@ def _show_unsaved_preferences_dialog(
         return
 
     import tkinter as tk
-    from caveviewer.gui.modal_dialog import create_semantic_heading
+    from dataclasses import replace
+    from tkinter import font as tkfont
+
+    from caveviewer.gui.field_description import FieldDescription
+    from caveviewer.gui.preferences_controls import RoundedActionButton
+    from caveviewer.gui.preferences_style import (
+        PREFERENCES_VISUAL_METRICS,
+        PREFERENCES_VISUAL_PALETTE,
+    )
+    from caveviewer.gui.rounded_surface import RoundedSectionStyle, RoundedSectionSurface
 
     dialog = tk.Toplevel(root)
     dialog_ref[0] = dialog
     dialog.withdraw()
     dialog.title("Save changes to preferences?")
-    dialog.configure(bg=_BG_COLOR)
+    dialog.configure(bg=DARK_THEME.panel)
     dialog.resizable(False, False)
     dialog.transient(root)
     _set_tk_window_icon(dialog)
 
-    content = tk.Frame(dialog, bg=_BG_COLOR)
-    content.pack(
-        fill="both",
-        expand=True,
-        padx=px(MODAL_CONTENT_PAD_X),
-        pady=px(MODAL_CONTENT_PAD_Y),
-    )
-    create_semantic_heading(
-        content,
-        title="Save changes to preferences?",
-        kind="warning",
-        px=px,
-        font=_TYPOGRAPHY.body_strong,
-        background=_BG_COLOR,
-    ).pack(fill="x")
-    tk.Label(
-        content,
-        text=(
-            "Your Preferences changes have not been saved. "
-            "Save or discard them before leaving Preferences."
-        ),
-        font=_TYPOGRAPHY.body,
-        fg=_SUBTITLE_COLOR,
-        bg=_BG_COLOR,
-        justify="left",
-        anchor="w",
-        wraplength=px(360),
-    ).pack(fill="x", pady=(px(8), px(20)))
+    # The reference is expressed in logical pixels, including its type scale.
+    def _font(size: int, *, bold: bool = False, medium: bool = False) -> tuple:
+        family = _TYPOGRAPHY.medium_family if medium else _TYPOGRAPHY.body[0]
+        styles = ("bold",) if bold else (_TYPOGRAPHY.medium_styles if medium else ())
+        return (family, -max(1, px(size * _TYPOGRAPHY.text_scale)), *styles)
 
-    button_row = tk.Frame(content, bg=_BG_COLOR)
-    button_row.pack(side="bottom", fill="x")
+    action_font = _font(14, medium=True)
+    save_font = _font(15, bold=True)
+    action_measure = tkfont.Font(root=dialog, font=action_font)
+    save_measure = tkfont.Font(root=dialog, font=save_font)
+    action_width = max(
+        px(160), action_measure.measure("Discard") + px(24),
+        save_measure.measure("Save") + px(24),
+    )
+    metrics = replace(
+        PREFERENCES_VISUAL_METRICS.scaled(px),
+        control_height=max(
+            px(44), action_measure.metrics("linespace") + px(16),
+            save_measure.metrics("linespace") + px(16),
+        ),
+    )
+    palette = replace(
+        PREFERENCES_VISUAL_PALETTE,
+        primary_action_background="#F3A812",
+        primary_action_border="#F3A812",
+        primary_action_text="#1A1A1A",
+        secondary_action_background="#2A2D35",
+        secondary_action_border="#2A2D35",
+        secondary_action_text="#C8CBD0",
+    )
+    content_width = action_width * 3 + 2 * px(12)
+    panel_width = content_width + 2 * px(24)
+    surface = RoundedSectionSurface(
+        dialog,
+        style=RoundedSectionStyle(
+            outside_background=DARK_THEME.panel,
+            fill=DARK_THEME.panel,
+            border=palette.section_border,
+            border_width=px(1), radius=px(12),
+            padding_x=px(24), padding_y=px(24),
+            padding_bottom_y=px(23),
+            minimum_height=px(219),
+        ),
+    )
+    surface.widget.configure(width=panel_width)
+    surface.pack(fill="both", expand=True)
+    content = surface.content
+    content.columnconfigure(0, weight=1)
+    heading = tk.Label(
+        content,
+        text="Save changes to preferences?",
+        font=_font(22, bold=True),
+        fg=palette.primary_action_background,
+        bg=DARK_THEME.panel,
+        anchor="w", justify="left", borderwidth=0, padx=0, pady=0,
+        wraplength=content_width,
+    )
+    heading.grid(row=0, column=0, sticky="ew", pady=(0, px(16)))
+    description_text = (
+        "Preferences changes have not been saved. "
+        "Save, discard, or edit them before leaving Preferences."
+    )
+    description_font = _font(15)
+    description_line_height = max(
+        px(22 * _TYPOGRAPHY.text_scale),
+        tkfont.Font(root=dialog, font=description_font).metrics("linespace"),
+    )
+    # A native label can measure word wrapping while the toplevel is withdrawn;
+    # the read-only Text inside FieldDescription gets its width only on mapping.
+    measure = tk.Label(
+        content, text=description_text, font=description_font,
+        wraplength=content_width, borderwidth=0, padx=0, pady=0,
+    )
+    font_line_height = tkfont.Font(root=dialog, font=description_font).metrics("linespace")
+    description_lines = max(1, round(measure.winfo_reqheight() / font_line_height))
+    description_height = description_lines * description_line_height
+    measure.destroy()
+    FieldDescription(
+        content,
+        text=description_text,
+        font=description_font,
+        fg=palette.supporting_text,
+        bg=DARK_THEME.panel,
+        line_height=description_line_height,
+        wraplength=content_width,
+    ).grid(row=1, column=0, sticky="ew")
+
+    content.rowconfigure(2, minsize=px(42))
+    button_row = tk.Frame(content, bg=DARK_THEME.panel)
+    button_row.grid(row=3, column=0, sticky="ew")
+    for column in (0, 2, 4):
+        button_row.columnconfigure(column, weight=1, uniform="actions")
+    for column in (1, 3):
+        button_row.columnconfigure(column, minsize=px(12))
 
     def _close_dialog(_event=None):
         if dialog_ref[0] is dialog:
@@ -1302,43 +1375,33 @@ def _show_unsaved_preferences_dialog(
         return "break"
 
     def _make_button(text: str, callback, *, primary: bool):
-        normal_bg = _BUTTON_BG if primary else DARK_THEME.secondary_button
-        hover_bg = (
-            DARK_THEME.primary_button_hover
-            if primary
-            else DARK_THEME.secondary_button_hover
-        )
-        button = tk.Label(
+        return RoundedActionButton(
             button_row,
             text=text,
-            font=_TYPOGRAPHY.body_strong,
-            fg=DARK_THEME.primary_button_text if primary else _TITLE_COLOR,
-            bg=normal_bg,
-            takefocus=True,
-            padx=px(14),
-            pady=px(7),
-            highlightthickness=1,
-            highlightbackground=_BG_COLOR,
-            highlightcolor=_BUTTON_BORDER_COLOR,
+            command=callback,
+            font=save_font if primary else action_font,
+            metrics=metrics,
+            palette=palette,
+            kind="primary" if primary else "secondary",
+            width=action_width,
+            outside_background=DARK_THEME.panel,
         )
-        for sequence in ("<Button-1>", "<Return>", "<space>"):
-            button.bind(sequence, callback)
-        button.bind("<Enter>", lambda _event: button.config(bg=hover_bg))
-        button.bind("<Leave>", lambda _event: button.config(bg=normal_bg))
-        return button
 
-    save_button = _make_button("Save", _save, primary=True)
+    edit_button = _make_button("Edit", _close_dialog, primary=False)
     discard_button = _make_button("Discard", _discard, primary=False)
-    keep_button = _make_button("Keep", _close_dialog, primary=False)
-    save_button.pack(side="right")
-    discard_button.pack(side="right", padx=(0, px(8)))
-    keep_button.pack(side="right", padx=(0, px(8)))
+    save_button = _make_button("Save", _save, primary=True)
+    edit_button.grid(row=0, column=0, sticky="ew")
+    discard_button.grid(row=0, column=2, sticky="ew")
+    save_button.grid(row=0, column=4, sticky="ew")
 
     dialog.bind("<Escape>", _close_dialog)
     dialog.protocol("WM_DELETE_WINDOW", _close_dialog)
-    dialog.update_idletasks()
-    dialog_width = max(px(MODAL_MIN_WIDTH), dialog.winfo_reqwidth())
-    dialog_height = max(px(MODAL_MIN_HEIGHT), dialog.winfo_reqheight())
+    dialog_width = panel_width
+    dialog_height = max(
+        px(219),
+        px(24 + 23 + 16 + 42) + heading.winfo_reqheight()
+        + description_height + metrics.control_height,
+    )
     try:
         screen_width = dialog.winfo_screenwidth()
         screen_height = dialog.winfo_screenheight()
@@ -1354,7 +1417,6 @@ def _show_unsaved_preferences_dialog(
     dialog.lift(root)
     try:
         dialog.grab_set()
-        save_button.focus_set()
     except tk.TclError:
         pass
 
@@ -1416,7 +1478,7 @@ def _bind_update_label_action(
     for sequence in ("<Button-1>", "<Return>", "<space>"):
         label.unbind(sequence)
     enabled = action is not None
-    label.config(takefocus=enabled, cursor="hand2" if enabled else "")
+    configure_text_link(label, enabled=enabled)
     if not enabled:
         return
 
@@ -2698,7 +2760,6 @@ def _show_splash_composition(
             style=_cave_metadata_panel_style(),
             on_back=_show_map_library_surface,
             on_open_source=_open_cave_metadata_source,
-            on_open_map=map_library_workflow.cave_map_open_action(map_target),
         )
         panel.create()
         if active_surface[0] != "cave_metadata":

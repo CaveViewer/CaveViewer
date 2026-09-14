@@ -3,7 +3,10 @@
 from dataclasses import dataclass
 from typing import Callable
 
+from caveviewer.core.diagnostics.logging import get_logger
 from caveviewer.gui.preferences import Preferences, load_preferences, save_preferences
+
+logger = get_logger("log_information")
 
 
 @dataclass(frozen=True)
@@ -45,6 +48,11 @@ class LogInformationController:
             )
             return self.state
         self.state = LogInformationState(value)
+        if latest["log_information"] != value:
+            logger.info(
+                "Log Information saved: %s -> %s; logging threshold applies on restart.",
+                latest["log_information"], value,
+            )
         if self._on_saved is not None:
             self._on_saved(preferences)
         return self.state

@@ -1,4 +1,4 @@
-"""Present matched cave information and supplied actions inside the library shell."""
+"""Present matched cave information and source links inside the library shell."""
 
 from __future__ import annotations
 
@@ -8,8 +8,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from caveviewer.gui.cave_metadata import CaveMetadata
-from caveviewer.gui.preferences_controls import RoundedActionButton
-from caveviewer.gui.preferences_style import PREFERENCES_VISUAL_METRICS
+from caveviewer.gui.text_link import configure_text_link
 from caveviewer.gui.scrollable_content import CanvasScrollbarStyle, CanvasVerticalScrollbar
 from caveviewer.gui.section_spacing import (
     PRIMARY_LABEL_ROW_GAP,
@@ -22,7 +21,7 @@ from caveviewer.gui.section_spacing import (
 _BODY_INSET = 24
 _PARAGRAPH_GAP = 20
 _SECTION_GAP = 32
-_STATISTIC_LABEL_WIDTH = 190
+_STATISTIC_LABEL_WIDTH = 260
 _STATISTIC_COLUMN_GAP = 16
 
 
@@ -59,7 +58,6 @@ class CaveMetadataPanel:
         style: CaveMetadataPanelStyle,
         on_back: Callable[[], None],
         on_open_source: Callable[[str], None],
-        on_open_map: Callable[[], None] | None = None,
     ) -> None:
         self.parent = parent
         self.cave = cave
@@ -68,7 +66,6 @@ class CaveMetadataPanel:
         self._style = style
         self._on_back = on_back
         self._on_open_source = on_open_source
-        self._on_open_map = on_open_map
         self._content = None
         self._back_control = None
         self._wrapping_labels: list[tk.Label] = []
@@ -171,17 +168,6 @@ class CaveMetadataPanel:
             body, "This describes the cave system, not necessarily this 3D map.",
             color=style.subtitle_color, font=style.small_font, wrap=True,
         ).pack(fill="x", pady=(self._px(28), 0))
-        self._open_button = RoundedActionButton(
-            body, text="Open Map", command=self._on_open_map or (lambda: None),
-            font=style.body_strong_font, metrics=PREFERENCES_VISUAL_METRICS.scaled(self._px),
-            outside_background=style.background_color, enabled=self._on_open_map is not None,
-        )
-        self._open_button.pack(anchor="w", pady=(self._px(44), self._px(16)))
-        if self._on_open_map is None:
-            self._label(
-                body, "Download this map from Map Library to open it.",
-                color=style.subtitle_color, font=style.small_font, wrap=True,
-            ).pack(fill="x", pady=(0, self._px(16)))
 
         self._canvas.bind("<Configure>", self._resize_content, add="+")
         body.bind("<Configure>", self._sync_scroll_region, add="+")
@@ -200,7 +186,7 @@ class CaveMetadataPanel:
 
     def _bind_link(self, link, command, *, color: str) -> None:
         state = {"hovered": False, "focused": False}
-        link.configure(takefocus=True)
+        configure_text_link(link)
         self._bind_activation(link, command)
 
         def update(key, value):
