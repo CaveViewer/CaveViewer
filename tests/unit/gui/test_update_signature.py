@@ -43,7 +43,7 @@ def _signature(private_key, manifest=b"manifest"):
     return base64.b64encode(private_key.sign(manifest))
 
 
-def test_trusted_keys_are_checked_in_primary_recovery_legacy_order(monkeypatch, tmp_path):
+def test_trusted_keys_are_checked_in_primary_recovery_order(monkeypatch, tmp_path):
     private_keys = {}
     public_paths = {}
     for identity in update_signature.TRUSTED_KEY_IDENTITIES:
@@ -61,11 +61,11 @@ def test_trusted_keys_are_checked_in_primary_recovery_legacy_order(monkeypatch, 
 
     verified_by = update_signature.verify_update_manifest_signature(
         b"manifest",
-        _signature(private_keys["legacy"]),
+        _signature(private_keys["recovery"]),
     )
 
-    assert verified_by == "legacy"
-    assert attempted == ["primary", "recovery", "legacy"]
+    assert verified_by == "recovery"
+    assert attempted == ["primary", "recovery"]
 
 
 def test_primary_signature_does_not_consult_fallback_keys(monkeypatch, tmp_path):
@@ -86,15 +86,13 @@ def test_primary_signature_does_not_consult_fallback_keys(monkeypatch, tmp_path)
     assert attempted == ["primary"]
 
 
-def test_missing_and_malformed_keys_do_not_disable_recovery(monkeypatch, tmp_path):
+def test_malformed_primary_key_does_not_disable_recovery(monkeypatch, tmp_path):
     recovery_private, recovery_public = _write_key_pair(tmp_path, "recovery")
     malformed_public = tmp_path / "malformed.pem"
     malformed_public.write_text("not a key", encoding="utf-8")
-    missing_public = tmp_path / "missing.pem"
     paths = {
-        "primary": missing_public,
+        "primary": malformed_public,
         "recovery": recovery_public,
-        "legacy": malformed_public,
     }
     monkeypatch.setattr(
         update_signature,

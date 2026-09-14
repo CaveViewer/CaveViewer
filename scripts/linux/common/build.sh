@@ -335,7 +335,6 @@ CAVEVIEWER_APP_ICON="" \
   --add-data "$repo_root/src/caveviewer/resources/fonts:caveviewer/resources/fonts" \
   --add-data "$repo_root/src/caveviewer/resources/release_signing_primary_public_key.pem:caveviewer/resources" \
   --add-data "$repo_root/src/caveviewer/resources/release_signing_recovery_public_key.pem:caveviewer/resources" \
-  --add-data "$repo_root/src/caveviewer/resources/release_signing_legacy_public_key.pem:caveviewer/resources" \
   --add-data "$repo_root/src/caveviewer/resources/cave_metadata_catalog.v1.json:caveviewer/resources" \
   --add-data "$branding_profile_dir:caveviewer/resources/branding/default" \
   --add-data "$branding_summary:caveviewer/resources/branding" \

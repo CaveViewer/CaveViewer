@@ -25,7 +25,7 @@ on:
         description: "Manifest signing identity"
         required: false
         type: choice
-        options: [primary, recovery, legacy]
+        options: [primary, recovery]
         default: primary
   workflow_call:
     inputs:

@@ -521,10 +521,10 @@ runtime snapshot.
 | `CAVEVIEWER_LINUX_UPDATE_ARCH` | `x86_64` | Linux publish helper only. Linux distribution is x86_64-only; set to `x86_64` when invoking lower-level publish helpers directly. |
 
 The update checker requires manifests to be signed by a trusted release
-Ed25519 identity. The bundled primary, offline-recovery, and retained legacy
-public keys live under `src/caveviewer/resources/`. Startup update
-checks read the branch/channel manifest first; if it advertises a newer version,
-the app checks those keys in primary, recovery, legacy order and confirms that the package URL
+Ed25519 identity. The bundled primary and offline-recovery public keys live
+under `src/caveviewer/resources/`. Startup update checks read the branch/channel
+manifest first; if it advertises a newer version, the app checks those keys in
+primary, then recovery order and confirms that the package URL
 resolves before offering the download. Missing or invalid signatures and
 unavailable packages are logged and do not expose an update action. An absent
 preview manifest is the normal empty-channel state and likewise leaves the

@@ -161,7 +161,7 @@ if ! find "$payload_dir" -type d -path '*caveviewer/resources/shaders' -print -q
   echo "Error: frozen payload is missing CaveViewer shader resources." >&2
   exit 1
 fi
-for signing_identity in primary recovery legacy; do
+for signing_identity in primary recovery; do
   signing_key_name="release_signing_${signing_identity}_public_key.pem"
   if ! find "$payload_dir" -type f -name "$signing_key_name" -print -quit | grep -q .; then
     echo "Error: frozen payload is missing the $signing_identity update-signing public key." >&2

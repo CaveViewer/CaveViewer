@@ -27,7 +27,7 @@ def default_manifest_signature_url(manifest_url: str) -> str:
     return f"{manifest_url}.sig"
 
 
-TRUSTED_KEY_IDENTITIES = ("primary", "recovery", "legacy")
+TRUSTED_KEY_IDENTITIES = ("primary", "recovery")
 
 
 def verify_update_manifest_signature(manifest_bytes: bytes, signature_bytes: bytes) -> str:

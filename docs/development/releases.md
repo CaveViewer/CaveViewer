@@ -451,38 +451,33 @@ branch-level concurrency lock.
 
 The `production-release` environment secret
 `CAVEVIEWER_RELEASE_PRIMARY_PRIVATE_KEY` contains the Ed25519 private key used
-for normal update manifests. `CAVEVIEWER_RELEASE_RECOVERY_PRIVATE_KEY` is
-uploaded only for a controlled recovery operation, then removed; its durable
-copy remains offline. `CAVEVIEWER_RELEASE_LEGACY_PRIVATE_KEY` is optional and
-must be added only if the original private key is recovered and proves an exact
-match to the retained legacy public key. Each publisher's finalizer call
-explicitly inherits secrets across GitHub's reusable-workflow boundary, but
-only the called finalizer attaches the approved environment and resolves the
-one value selected by `signing_identity`. Package, test, and artifact-only jobs
-neither inherit nor receive release secrets. Before downloading release
-artifacts or publishing anything, the finalizer derives the selected private
-key's Ed25519 public key and requires an exact match with the corresponding
-`primary`, `recovery`, or `legacy` bundled public key. A missing, malformed,
+for normal update manifests. Its key material is the former legacy release key,
+and the bundled `release_signing_primary_public_key.pem` contains that key's
+public half. `CAVEVIEWER_RELEASE_RECOVERY_PRIVATE_KEY` is uploaded only for a
+controlled recovery operation, then removed; its durable copy remains offline.
+Each publisher's finalizer call explicitly inherits secrets across GitHub's
+reusable-workflow boundary, but only the called finalizer attaches the approved
+environment and resolves the one value selected by `signing_identity`. Package,
+test, and artifact-only jobs neither inherit nor receive release secrets. Before
+downloading release artifacts or publishing anything, the finalizer derives the
+selected private key's Ed25519 public key and requires an exact match with the
+corresponding `primary` or `recovery` bundled public key. A missing, malformed,
 wrong-type, or mismatched key fails without creating a release or metadata.
 
-The updater checks the primary, recovery, and legacy public keys in that order.
-The first successful Ed25519 verification authenticates the exact manifest
-bytes. Key-selection details are logged but never shown in update labels or
-dialogs. Missing or malformed individual trust roots do not disable the others;
-an unsigned manifest or one rejected by all three keys exposes no update action.
-The legacy public key preserves the trust root used by older installations. If
-its private key remains unavailable, those installations require a manual
-bootstrap installation before they can trust the new primary and recovery
-keys.
+The updater checks the primary and recovery public keys in that order. The first
+successful Ed25519 verification authenticates the exact manifest bytes.
+Key-selection details are logged but never shown in update labels or dialogs.
+Missing or malformed individual trust roots do not disable the other key; an
+unsigned manifest or one rejected by both keys exposes no update action. Older
+installations that already trusted the retained legacy public key can verify
+new manifests because that key now signs normal primary releases.
 
 ### Signing identities and recovery
 
 Normal GitHub releases leave **Manifest signing identity** set to `primary`.
 Selecting `recovery` is an emergency operation that requires explicit
 `production-release` approval and the temporary presence of
-`CAVEVIEWER_RELEASE_RECOVERY_PRIVATE_KEY`. Select `legacy` only after recovering
-the original key and proving it matches
-`release_signing_legacy_public_key.pem`. The workflow validates the selected
+`CAVEVIEWER_RELEASE_RECOVERY_PRIVATE_KEY`. The workflow validates the selected
 identity before creating publisher credentials and fails before artifact
 download when its secret is absent or does not match.
 
@@ -507,7 +502,8 @@ gh secret set CAVEVIEWER_RELEASE_PRIMARY_PRIVATE_KEY \
   < primary-private.pem
 ```
 
-Keep the recovery private key offline. Upload it under
+For the current trust-root rotation, `primary-private.pem` is the former legacy
+private key. Keep the recovery private key offline. Upload it under
 `CAVEVIEWER_RELEASE_RECOVERY_PRIVATE_KEY` only for a recovery exercise or
 release, and delete that environment secret afterward. GitHub does not reveal
 stored secret values, so retain separately controlled offline copies and test
