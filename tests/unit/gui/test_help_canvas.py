@@ -20,15 +20,16 @@ def test_help_card_keeps_equal_padding_and_matches_preferences_content_edges():
     metrics = _metrics()
 
     card = measure_help_card(
-        width=800,
+        width=796,
         top=20,
         content_bottom=140,
-        left=12,
+        left=0,
         metrics=metrics,
     )
 
-    assert card.outer == CanvasBounds(12, 20, 800, 164)
-    assert card.content == CanvasBounds(36, 44, 776, 140)
+    assert card.outer == CanvasBounds(0, 20, 796, 164)
+    assert card.content == CanvasBounds(24, 44, 772, 140)
+    assert card.content.width == 748
     assert card.content.left - card.outer.left == 24
     assert card.outer.right - card.content.right == 24
     assert card.content.top - card.outer.top == 24

@@ -209,17 +209,18 @@ cannot be scaled again.
 | Section-card horizontal and vertical padding | 24 |
 | Gap between section cards | 20 |
 | Card heading to first field | 24 |
-| Card heading to section description | 8 |
+| Card heading to section description | 6 |
 | Section description to divider | 20 |
 | Header divider thickness | 1 |
 | Header divider to content | 24 |
-| Field label to description | 6 |
+| Field label to description | 4 |
 | Field description to control row | 8 |
 | Action and compound path-control height | 40 |
 | Numeric-control height | 36 |
 | Compact numeric-control width | 90 |
 | Minimum action width | 140 |
 | Control horizontal content padding | 12 |
+| Numeric-control vertical content padding | 8 |
 | Inline unit gap | 12 |
 | Gap between fields or actions in one card | 20 |
 | Compound-control seam thickness | 1 |
@@ -236,6 +237,10 @@ The top tab row begins at the same 16-logical-pixel inset as the first sidebar
 entry. Both rows are 44 logical pixels tall, and their labels use middle
 alignment so their text midlines remain aligned at every display scale. Help
 uses the same tab-row alignment.
+
+The first tab label aligns with the card's left edge in Preferences and Help.
+Keep horizontal spacing between tabs rather than inside their labels, with
+only the keyboard focus outline occupying the label's edge.
 
 | Preferences role | Inter weight | Logical size | Color |
 | --- | --- | --- | --- |
@@ -273,6 +278,13 @@ line. Its position follows the wrapped description rather than a fixed card
 coordinate. Card height grows with its content. Keep units outside each input
 border; do not add a border around the field group.
 
+The reference card is 796 by 423 logical pixels, with 748 pixels of content
+between equal 24-pixel insets. A single-line numeric field is approximately
+82 pixels tall; longer descriptions and different content grow naturally.
+Preferences and Help use the Map Library column edges without additional
+tab-content insets. All three reserve the same scrollbar rail, so cards keep
+their width when scrolling becomes necessary.
+
 | Tab | Card heading | Purpose line |
 | --- | --- | --- |
 | Streaming | **Memory Use** | Control system and graphics memory limits. |
@@ -292,9 +304,10 @@ not repeat that range beneath the control. Consecutive fields and actions use
 a compact 20-logical-pixel gap without a divider. The final field has no
 explanatory footer beneath it.
 
-The Preferences footer reserves the same scrollbar gutter and rail width as
-the page viewport. The right border of **Save changes** therefore aligns with
-the right edge of the cards on every tab and at every display scale.
+The Preferences footer follows the measured page viewport edge, including the
+space reserved for the scrollbar rail. The right border
+of **Save changes** aligns with the right edge of the cards on every tab and
+at every display scale.
 
 Entries and action buttons use the 4-logical-pixel radius. Their normal, hover,
 pressed, focused, invalid, read-only, and disabled colors resolve from
@@ -312,13 +325,31 @@ right-aligned. Clean or invalid state uses the neutral disabled treatment;
 valid pending edits enable the actions without moving the footer or form
 content.
 
+The unsaved Preferences confirmation follows its supplied SVG with the reviewed
+42-pixel description-to-action gap: a 552-by-219
+logical-pixel panel with a 12-pixel radius, `#15171C` fill and one-pixel
+`#30343D` border. Its 22-pixel Inter Bold heading uses `#F3A812`; the explanation
+uses 15-pixel Inter Regular `#A9AFBC` with 22-pixel line height. Text starts
+24 pixels from the top and sides. Three equal 160-by-44 actions have 4-pixel
+corners, 12-pixel gaps, 24-pixel side insets and a 23-pixel bottom inset.
+The title, description and Edit button share the same left edge. Window width
+equals the three button widths plus the two gaps and equal side padding.
+**Edit** and **Discard** use `#2A2D35` with 14-pixel Medium `#C8CBD0` text;
+**Save** uses `#F3A812` with 15-pixel Bold `#1A1A1A` text. The window grows
+for enlarged text and fallback fonts. Native window chrome and shadow remain
+platform-owned; this reference uses a text heading without a separate icon.
+**Edit**, Escape and native close return to the unsaved form. **Discard**
+discards and proceeds; **Save** proceeds only after a successful save. Save
+is not focused automatically; all actions retain keyboard traversal, visible
+keyboard focus and keyboard activation.
+
 ## Help visual contract
 
 `caveviewer.gui.help_style` is the canonical source for Help geometry,
 semantic palette mappings, exact typography, and card purpose lines. Help
 shares the Preferences 4-logical-pixel control radius, 10-logical-pixel card
 radius, 24-logical-pixel card padding, header-divider spacing, and
-20-logical-pixel gaps. Help-only
+20-logical-pixel card and field gaps. Help-only
 canvas measurements define the keycap and action lanes, responsive stacking,
 error excerpt, and bottom scroll padding. The active shell display-scale helper
 converts every logical metric exactly once.
@@ -421,8 +452,10 @@ status row in muted `#A9AFBC`; omit the block entirely when there is no update
 state to communicate. Keep it within the 188-pixel content column without a
 card, pill, border, or divider.
 
-Clickable update labels use the native hand cursor; non-actionable status labels
-inherit the default cursor.
+All actionable text links use the native hand cursor through the shared
+`text_link.configure_text_link` configuration. This includes About websites,
+cave source and back links, and update actions. Non-actionable text inherits
+the default cursor. Link activation remains available by mouse, Enter, and Space.
 For an available update, use one label: **Update to version &lt;version&gt;**. If
 the update source omits its version unexpectedly, fall back to **Update** rather
 than presenting an incomplete sentence. Reserve the thin progress lane and its

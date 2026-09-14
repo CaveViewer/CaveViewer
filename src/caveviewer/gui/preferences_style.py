@@ -35,6 +35,7 @@ class ScaledPreferencesVisualMetrics:
     numeric_control_width: int
     action_min_width: int
     control_content_pad_x: int
+    numeric_content_pad_y: int
     unit_gap_x: int
     control_seam_thickness: int
     card_item_gap_y: int
@@ -54,17 +55,18 @@ class PreferencesVisualMetrics:
     section_padding_y: int = 24
     section_gap_y: int = 20
     section_heading_to_fields_y: int = 24
-    section_heading_to_description_y: int = 8
+    section_heading_to_description_y: int = 6
     section_description_to_divider_y: int = 20
     section_divider_to_content_y: int = 24
     section_divider_thickness: int = 1
-    field_label_to_description_y: int = 6
+    field_label_to_description_y: int = 4
     field_description_to_control_y: int = 8
     control_height: int = 40
     numeric_control_height: int = 36
     numeric_control_width: int = 90
     action_min_width: int = 140
     control_content_pad_x: int = 12
+    numeric_content_pad_y: int = 8
     unit_gap_x: int = 12
     control_seam_thickness: int = 1
     card_item_gap_y: int = 20

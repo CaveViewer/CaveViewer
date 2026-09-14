@@ -33,7 +33,8 @@ def test_help_metrics_align_with_the_approved_preferences_pattern():
     assert metrics.section_padding_y == preferences.section_padding_y == 24
     assert metrics.section_gap_y == preferences.section_gap_y == 20
     assert metrics.card_item_gap_y == preferences.card_item_gap_y == 20
-    assert metrics.section_heading_to_description_y == 8
+    assert metrics.section_heading_to_description_y == 6
+    assert metrics.detail_gap_y == preferences.field_label_to_description_y == 4
     assert metrics.section_description_to_divider_y == 20
 
 

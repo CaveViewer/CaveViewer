@@ -34,8 +34,8 @@ def test_native_entry_window_leaves_the_full_focus_outline_visible():
 
     entry._sync_geometry(90)
 
-    entry.widget.coords.assert_called_once_with(1, 12, 2)
-    entry.widget.itemconfigure.assert_called_once_with(1, width=66, height=32)
+    entry.widget.coords.assert_called_once_with(1, 12, 8)
+    entry.widget.itemconfigure.assert_called_once_with(1, width=66, height=20)
 
     entry._numeric = False
     entry._sync_geometry(200)

@@ -63,7 +63,6 @@ from caveviewer.gui.scrollable_content import (
 )
 from caveviewer.gui.modal_dialog import ask_confirmation
 from caveviewer.gui.top_tab_strip import (
-    TABBED_CONTENT_ALIGNMENT_INSET,
     TopTab,
     TopTabbedContentSurface,
     TopTabbedContentSurfaceStyle,
@@ -88,7 +87,6 @@ class PreferencesPanelSnapshot:
 
 _BG_COLOR = DARK_THEME.background
 
-_SCROLLBAR_GUTTER_X = 18
 _SCROLLBAR_RAIL_WIDTH = 14
 _INLINE_FEEDBACK_PAD_X = 10
 _MIN_HINT_WRAP_LENGTH = 200
@@ -613,7 +611,6 @@ class PreferencesPanel:
         )
         card.pack(
             fill="x",
-            padx=(self._surface_px(TABBED_CONTENT_ALIGNMENT_INSET), 0),
             pady=(
                 0 if first else self.preferences_metrics.section_gap_y,
                 0,
@@ -1008,7 +1005,6 @@ class PreferencesPanel:
         return max(
             _MIN_HINT_WRAP_LENGTH,
             page_width
-            - self._surface_px(TABBED_CONTENT_ALIGNMENT_INSET)
             - (self.preferences_metrics.section_padding_x * 2),
         )
 
@@ -1202,6 +1198,10 @@ class PreferencesPanel:
             self._scrollbar_layout_state = layout_state
 
     def _resize_page_canvas_window(self, event) -> None:
+        # Follow the card viewport edge, including device-pixel rounding of
+        # the reserved scrollbar rail shared with Map Library and Help.
+        right_inset = max(0, self.page_scroll_shell.winfo_width() - event.width)
+        self.button_row.pack_configure(padx=(0, right_inset))
         self._schedule_page_layout_sync(viewport_width=event.width)
 
     def _ensure_page(self, page_key: str) -> tk.Frame | None:
@@ -1323,7 +1323,7 @@ class PreferencesPanel:
             style=TopTabbedContentSurfaceStyle(
                 background_color=_BG_COLOR,
                 content_pad_left_x=0,
-                content_pad_right_x=self._layout_policy.body_pad_x,
+                content_pad_right_x=0,
                 content_bottom_pad_y=DIALOG_BODY_PAD_Y,
             ),
         )
@@ -1349,12 +1349,6 @@ class PreferencesPanel:
         self.button_row.pack(
             side="bottom",
             fill="x",
-            padx=(
-                0,
-                self._surface_px(
-                    _SCROLLBAR_GUTTER_X + _SCROLLBAR_RAIL_WIDTH
-                ),
-            ),
             pady=(self.preferences_metrics.footer_top_gap_y, 0),
         )
 
@@ -1419,7 +1413,6 @@ class PreferencesPanel:
             row=0,
             column=1,
             sticky="ns",
-            padx=(self._surface_px(_SCROLLBAR_GUTTER_X), 0),
         )
 
         self.page_stack = tk.Frame(self.page_canvas, bg=_BG_COLOR)

@@ -1,6 +1,7 @@
 """Verify persisted Help choices, restart behavior, and retained Preferences state."""
 
 import logging
+from io import StringIO
 
 import pytest
 
@@ -38,7 +39,8 @@ def test_default_and_saved_choice_survive_restart_and_preserve_latest_preference
     assert load()["log_information"] == "essential"
 
 
-def test_failed_save_keeps_previous_choice_and_does_not_notify(tmp_path):
+def test_failed_save_keeps_previous_choice_and_does_not_notify(tmp_path, caplog):
+    caplog.set_level(logging.INFO, logger="caveviewer")
     path = tmp_path / "preferences.json"
     original = load_preferences(path)
     notifications = []
@@ -55,8 +57,45 @@ def test_failed_save_keeps_previous_choice_and_does_not_notify(tmp_path):
     assert "Couldn’t save" in state.error
     assert load_preferences(path) == original
     assert notifications == []
+    assert "Log Information saved:" not in caplog.text
     with pytest.raises(ValueError):
         controller.select("verbose")
+
+
+@pytest.mark.parametrize("previous,selected", [("essential", "all"), ("all", "essential")])
+def test_saved_change_reaches_terminal_and_file_with_latest_values(tmp_path, caplog, previous, selected):
+    caplog.set_level(logging.INFO, logger="caveviewer")
+    preferences_path = tmp_path / "preferences.json"
+    defaults = load_preferences(preferences_path)
+    save_preferences(Preferences({**defaults, "log_information": selected}), preferences_path)
+    controller = LogInformationController(
+        load=lambda: load_preferences(preferences_path),
+        save=lambda preferences: save_preferences(preferences, preferences_path),
+    )
+    controller.refresh()
+    # Another save after refresh must be the source of the logged previous value.
+    save_preferences(Preferences({**defaults, "log_information": previous}), preferences_path)
+    terminal = StringIO()
+    log_path = tmp_path / "session.log"
+    handlers = [logging.StreamHandler(terminal), logging.FileHandler(log_path, encoding="utf-8")]
+    root = logging.getLogger()
+    for handler in handlers:
+        handler.setLevel(logging.INFO)
+        root.addHandler(handler)
+    try:
+        assert controller.select(selected).error == ""
+        assert load_preferences(preferences_path)["log_information"] == selected
+        controller.select(selected)
+    finally:
+        for handler in handlers:
+            root.removeHandler(handler)
+            handler.close()
+    message = (
+        f"Log Information saved: {previous} -> {selected}; "
+        "logging threshold applies on restart."
+    )
+    assert terminal.getvalue().count(message) == 1
+    assert log_path.read_text(encoding="utf-8").count(message) == 1
 
 
 def test_help_save_updates_retained_preferences_without_losing_other_staged_edits(valid_preferences):

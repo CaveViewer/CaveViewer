@@ -445,11 +445,15 @@ class RoundedEntryControl:
             self._metrics.focus_border_thickness,
         )
         inset = max(inset, border_inset)
-        self.widget.coords(self._content_window, inset, border_inset)
+        vertical_inset = (
+            max(border_inset, self._metrics.numeric_content_pad_y)
+            if self._numeric else border_inset
+        )
+        self.widget.coords(self._content_window, inset, vertical_inset)
         self.widget.itemconfigure(
             self._content_window,
             width=max(1, resolved_width - (inset * 2)),
-            height=max(1, height - (border_inset * 2)),
+            height=max(1, height - (vertical_inset * 2)),
         )
 
     def _on_configure(self, event) -> None:

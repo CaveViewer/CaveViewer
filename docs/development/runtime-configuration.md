@@ -45,6 +45,10 @@ ERROR, and CRITICAL as well as INFO.
 Saving the Help choice does not reconfigure the active logging session. The
 new threshold applies on restart. A retained Preferences editor synchronizes
 this saved field without discarding unrelated staged edits.
+Successful changes emit an INFO diagnostic with the previous and new saved
+values and a restart reminder through the existing terminal and file handlers.
+Unchanged selections and failed saves do not emit a successful-change message.
+Explicit logging thresholds above INFO still filter this diagnostic normally.
 
 ## Authority boundaries
 

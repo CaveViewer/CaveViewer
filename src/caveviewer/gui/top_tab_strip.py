@@ -120,6 +120,7 @@ class TopTabStrip:
                 fg=style.inactive_color,
                 bg=style.background_color,
                 anchor="center",
+                borderwidth=0,
                 padx=self._px(style.tab_pad_x),
                 pady=self._px(style.tab_pad_y),
                 takefocus=True,
@@ -296,6 +297,9 @@ class TopTabbedContentSurface:
                 tab_style,
                 horizontal_inset=0,
                 top_inset=0,
+                # Keep label spacing without indenting the first tab.
+                tab_pad_x=0,
+                tab_gap=tab_style.tab_gap + 2 * tab_style.tab_pad_x,
             ),
         )
         self.tab_strip.pack(fill="x")
