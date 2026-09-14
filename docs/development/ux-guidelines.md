@@ -71,8 +71,9 @@ primitives remain documented in [design-system.md](design-system.md).
   1080-by-740 logical-pixel default, then clamp to the destination work area;
   preserve a maximized window as maximized and retain its transformed normal
   restore bounds.
-- Use semantic typography roles from `caveviewer.gui.tk_typography`; do not
-  introduce a new font size to solve a spacing problem.
+- Use the logical-pixel typography contract in
+  [design-system.md](design-system.md). Do not introduce a platform-specific
+  font size or a new size to solve a spacing problem.
 - Use the bundled Inter family selected by the presentation layer. Keep
   process-local registration, platform fallback, and FreeType path selection
   out of individual screens and controls.

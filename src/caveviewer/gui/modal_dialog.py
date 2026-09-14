@@ -11,10 +11,10 @@ from caveviewer.gui.action_confirmation import (
     create_confirmation_mark,
 )
 from caveviewer.gui.dialog_style import create_dialog_action_button
-from caveviewer.gui.dpi_utils import tk_display_scale
+from caveviewer.gui.dpi_utils import resolve_tk_display_metrics
 from caveviewer.gui.platform.presentation import get_presentation_profile
 from caveviewer.gui.tk_theme import DARK_THEME
-from caveviewer.gui.tk_typography import create_tk_typography
+from caveviewer.gui.tk_typography import create_tk_typography, resolve_tk_text_scale
 
 
 MessageKind = Literal["info", "warning", "error"]
@@ -203,8 +203,15 @@ def _show_modal(
 ) -> bool:
     """Show one branded modal and return whether its primary action was used."""
     profile = get_presentation_profile()
-    typography = create_tk_typography(profile.ui_font_family)
-    display_scale = tk_display_scale(parent, presentation_profile=profile)
+    display_scale = resolve_tk_display_metrics(
+        parent,
+        presentation_profile=profile,
+    ).layout_scale
+    typography = create_tk_typography(
+        profile.ui_font_family,
+        text_scale=resolve_tk_text_scale(parent, profile),
+        display_scale=display_scale,
+    )
 
     def px(value: int | float) -> int:
         return max(1, int(round(float(value) * display_scale)))

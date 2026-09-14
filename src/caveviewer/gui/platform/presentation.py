@@ -453,9 +453,9 @@ def select_presentation_profile(*, platform_name: str) -> PresentationProfile:
                 notice_wrap_length=600,
             ),
             default_text_antialiasing_mode="light",
-            # Tk's Linux DPI scaling already changes the physical size of Tk
-            # point fonts. Do not also scale the semantic type system from a
-            # distribution's TkDefaultFont size.
+            # A distribution's TkDefaultFont size is a desktop default, not a
+            # reliable accessibility multiplier for app-owned pixel fonts.
+            # Logical-pixel typography follows the resolved display scale.
             uses_tk_default_font_scale=False,
             supports_tk_display_scaling=True,
             viewer_uses_glfw_native_initial_size=True,

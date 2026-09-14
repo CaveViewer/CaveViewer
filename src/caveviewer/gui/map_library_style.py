@@ -38,7 +38,9 @@ def _scaled_font(font: tuple, factor: float) -> tuple:
     if len(font) < 2:
         return font
     values = list(font)
-    values[1] = max(1, int(round(float(values[1]) * factor)))
+    source_size = float(values[1])
+    sign = -1 if source_size < 0 else 1
+    values[1] = sign * max(1, int(round(abs(source_size) * factor)))
     return tuple(values)
 
 
@@ -47,13 +49,14 @@ def _logical_pixel_font(
     *,
     px: Callable[[int | float], int],
     size: int,
+    text_scale: float,
     semibold_family: str | None = None,
     semibold_styles: tuple[str, ...] = (),
 ) -> tuple:
     """Resolve an exact logical-pixel font with a platform-safe emphasis."""
     return (
         semibold_family or font[0],
-        -max(1, px(size)),
+        -max(1, px(size * text_scale)),
         *semibold_styles,
     )
 
@@ -356,6 +359,7 @@ def create_map_library_panel_style(
             typography.body_strong,
             px=px,
             size=14,
+            text_scale=typography.text_scale,
             semibold_family=typography.semibold_family,
             semibold_styles=typography.semibold_styles,
         ),
@@ -363,12 +367,19 @@ def create_map_library_panel_style(
             typography.body,
             px=px,
             size=14,
+            text_scale=typography.text_scale,
         ),
-        body_font=_logical_pixel_font(typography.body, px=px, size=12),
+        body_font=_logical_pixel_font(
+            typography.body,
+            px=px,
+            size=12,
+            text_scale=typography.text_scale,
+        ),
         supporting_font=_logical_pixel_font(
             typography.supporting,
             px=px,
             size=12,
+            text_scale=typography.text_scale,
         ),
         section_font=_scaled_font(typography.heading, SECTION_HEADING_FONT_SCALE),
         button_bg=palette.action_background,
@@ -403,11 +414,17 @@ def create_map_library_panel_style(
         menu_hover_bg=palette.menu_hover_background,
         menu_text=palette.menu_text,
         menu_selected_text=MAP_LIBRARY_PRIMARY_FG,
-        menu_font=_logical_pixel_font(typography.body, px=px, size=13),
+        menu_font=_logical_pixel_font(
+            typography.body,
+            px=px,
+            size=13,
+            text_scale=typography.text_scale,
+        ),
         menu_selected_font=_logical_pixel_font(
             typography.body_strong,
             px=px,
             size=13,
+            text_scale=typography.text_scale,
             semibold_family=typography.semibold_family,
             semibold_styles=typography.semibold_styles,
         ),

@@ -706,7 +706,11 @@ def test_splash_fonts_scale_from_runtime_tk_default(monkeypatch):
     import tkinter.font as tkfont
 
     monkeypatch.setattr(tkfont, "families", lambda _root: ["Helvetica Neue"])
-    monkeypatch.setattr(tkfont, "nametofont", lambda _name: FakeDefaultFont())
+    monkeypatch.setattr(
+        tkfont,
+        "nametofont",
+        lambda _name, **_kwargs: FakeDefaultFont(),
+    )
     monkeypatch.setattr(splash_screen, "_LINUX_SPLASH_LAYOUT", False)
 
     try:
@@ -718,20 +722,20 @@ def test_splash_fonts_scale_from_runtime_tk_default(monkeypatch):
         assert splash_screen._TK_TEXT_SCALE == pytest.approx(1.25)
         assert splash_screen._TYPOGRAPHY.display == (
             "Helvetica Neue",
-            22,
+            -30,
             "bold",
         )
-        assert splash_screen._TYPOGRAPHY.heading == ("Helvetica Neue", 18, "bold")
+        assert splash_screen._TYPOGRAPHY.heading == ("Helvetica Neue", -24, "bold")
         assert splash_screen._TYPOGRAPHY.body_strong == (
             "Helvetica Neue",
-            12,
+            -16,
             "bold",
         )
-        assert splash_screen._TYPOGRAPHY.body == ("Helvetica Neue", 12)
-        assert splash_screen._TYPOGRAPHY.supporting == ("Helvetica Neue", 11)
+        assert splash_screen._TYPOGRAPHY.body == ("Helvetica Neue", -16)
+        assert splash_screen._TYPOGRAPHY.supporting == ("Helvetica Neue", -15)
         assert splash_screen._TYPOGRAPHY.section == (
             "Helvetica Neue",
-            11,
+            -15,
             "bold",
         )
     finally:
@@ -758,7 +762,11 @@ def test_splash_linux_fonts_do_not_multiply_the_tk_default_font(monkeypatch):
     import tkinter.font as tkfont
 
     monkeypatch.setattr(tkfont, "families", lambda _root: ["sans-serif"])
-    monkeypatch.setattr(tkfont, "nametofont", lambda _name: FakeDefaultFont())
+    monkeypatch.setattr(
+        tkfont,
+        "nametofont",
+        lambda _name, **_kwargs: FakeDefaultFont(),
+    )
 
     try:
         splash_screen._configure_runtime_tk_fonts(
@@ -769,16 +777,16 @@ def test_splash_linux_fonts_do_not_multiply_the_tk_default_font(monkeypatch):
         assert splash_screen._TK_TEXT_SCALE == pytest.approx(1.0)
         assert splash_screen._TYPOGRAPHY.body_strong == (
             "sans-serif",
-            10,
+            -13,
             "bold",
         )
-        assert splash_screen._TYPOGRAPHY.supporting == ("sans-serif", 9)
+        assert splash_screen._TYPOGRAPHY.supporting == ("sans-serif", -12)
     finally:
         for name, value in original_values.items():
             setattr(splash_screen, name, value)
 
 
-def test_splash_windows_fonts_apply_large_monitor_density_once(monkeypatch):
+def test_splash_windows_fonts_apply_display_scale_once(monkeypatch):
     font_globals = (
         "_UI_FONT_FAMILY",
         "_UI_MEDIUM_FONT_FAMILY",
@@ -797,19 +805,23 @@ def test_splash_windows_fonts_apply_large_monitor_density_once(monkeypatch):
     import tkinter.font as tkfont
 
     monkeypatch.setattr(tkfont, "families", lambda _root: ["Segoe UI"])
-    monkeypatch.setattr(tkfont, "nametofont", lambda _name: FakeDefaultFont())
+    monkeypatch.setattr(
+        tkfont,
+        "nametofont",
+        lambda _name, **_kwargs: FakeDefaultFont(),
+    )
 
     try:
         splash_screen._configure_runtime_tk_fonts(
             object(),
             presentation_profile=select_presentation_profile(platform_name="win32"),
-            density_scale=0.95,
+            display_scale=1.5,
         )
 
-        assert splash_screen._TK_TEXT_SCALE == pytest.approx(0.95)
-        assert splash_screen._TYPOGRAPHY.body == ("Segoe UI", 10)
-        assert splash_screen._TYPOGRAPHY.supporting == ("Segoe UI", 9)
-        assert splash_screen._TYPOGRAPHY.display == ("Segoe UI", 17, "bold")
+        assert splash_screen._TK_TEXT_SCALE == pytest.approx(1.0)
+        assert splash_screen._TYPOGRAPHY.body == ("Segoe UI", -20)
+        assert splash_screen._TYPOGRAPHY.supporting == ("Segoe UI", -18)
+        assert splash_screen._TYPOGRAPHY.display == ("Segoe UI", -36, "bold")
     finally:
         for name, value in original_values.items():
             setattr(splash_screen, name, value)
@@ -838,7 +850,11 @@ def test_splash_prefers_registered_inter_static_faces(monkeypatch):
         "families",
         lambda _root: ["Segoe UI", "Inter", "Inter Medium", "Inter SemiBold"],
     )
-    monkeypatch.setattr(tkfont, "nametofont", lambda _name: FakeDefaultFont())
+    monkeypatch.setattr(
+        tkfont,
+        "nametofont",
+        lambda _name, **_kwargs: FakeDefaultFont(),
+    )
 
     try:
         splash_screen._configure_runtime_tk_fonts(
@@ -851,7 +867,7 @@ def test_splash_prefers_registered_inter_static_faces(monkeypatch):
         assert splash_screen._UI_MEDIUM_FONT_STYLES == ()
         assert splash_screen._UI_SEMIBOLD_FONT_FAMILY == "Inter SemiBold"
         assert splash_screen._UI_SEMIBOLD_FONT_STYLES == ()
-        assert splash_screen._TYPOGRAPHY.body == ("Inter", 10)
+        assert splash_screen._TYPOGRAPHY.body == ("Inter", -13)
         assert splash_screen._TYPOGRAPHY.medium_family == "Inter Medium"
         assert splash_screen._TYPOGRAPHY.medium_styles == ()
         assert splash_screen._TYPOGRAPHY.semibold_family == "Inter SemiBold"
@@ -1401,7 +1417,8 @@ def test_splash_navigation_uses_transparent_entries_and_type_only_selection():
     assert splash_screen._NAVIGATION_PANEL_BG == "#15171C"
     assert splash_screen._NAVIGATION_SELECTED_FG == "#F5C451"
     assert splash_screen._NAVIGATION_INACTIVE_FG == "#EFF1F5"
-    assert splash_screen._NAVIGATION_LABEL_SIZE == 14
+    assert splash_screen._NAVIGATION_LABEL_SIZE == 13
+    assert "_NAVIGATION_LABEL_SIZE * _TYPOGRAPHY.text_scale" in source
     assert splash_screen._NAVIGATION_ICON_SIZE == 18
     assert "size = px(_NAVIGATION_ICON_SIZE)" in source
     assert "_NAVIGATION_SELECTED_BG" not in module_source
@@ -1493,6 +1510,7 @@ def test_splash_navigation_panel_uses_specified_bounds_insets_and_footer():
         in source
     )
     assert splash_screen._NAVIGATION_FOOTER_SIZE == 13
+    assert "_NAVIGATION_FOOTER_SIZE * _TYPOGRAPHY.text_scale" in source
     assert splash_screen._NAVIGATION_FOOTER_FG == "#A9AFBC"
     assert "font=navigation_footer_font" in source
     assert "fg=_NAVIGATION_FOOTER_FG" in source
@@ -2130,7 +2148,7 @@ def test_map_library_menu_popover_position_stays_inside_the_splash():
 
 
 def test_library_action_buttons_use_normalized_dimensions():
-    assert splash_screen._TYPOGRAPHY.supporting[1] == 9
+    assert splash_screen._TYPOGRAPHY.supporting[1] == -12
     style = splash_screen._map_library_panel_style()
     assert not hasattr(style, "scrollbar_right_inset")
     assert style.metrics.action_button_size == 28
