@@ -1384,13 +1384,13 @@ class PreferencesPanel:
 
         self.discard_button = self._new_preferences_action(
             self.button_row,
-            "Discard changes",
+            "Discard",
             self.discard_changes,
             kind="secondary",
         )
         self.apply_button = self._new_preferences_action(
             self.button_row,
-            "Save changes",
+            "Save",
             self.apply,
             kind="primary",
         )

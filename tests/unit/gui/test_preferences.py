@@ -900,8 +900,8 @@ def test_preferences_panel_uses_dirty_controls_without_generic_status_message():
 
     assert "self.action_font = preferences_typography.field_label" in init_source
     assert "self.action_font = self.typography.body_strong" not in init_source
-    assert '"Save changes"' in build_source
-    assert '"Discard changes"' in build_source
+    assert '"Save"' in build_source
+    assert '"Discard"' in build_source
     assert "state.dirty_sections" in dirty_source
     assert "state.dirty_keys" in dirty_source
     assert 'suffix = " •"' in dirty_source

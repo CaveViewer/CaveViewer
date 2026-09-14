@@ -104,7 +104,7 @@ def test_default_width_action_updates_for_text_and_metric_changes():
 
     class Label:
         def __init__(self) -> None:
-            self.text = "Discard changes"
+            self.text = "Discard"
 
         def configure(self, **options) -> None:
             self.text = options["text"]
@@ -122,7 +122,7 @@ def test_default_width_action_updates_for_text_and_metric_changes():
     button._sync_geometry = lambda width, height: synced.append((width, height))
     button._apply_visual = lambda: None
 
-    button.configure_text("Discard changes")
+    button.configure_text("Discard")
 
     assert configured == [{"width": 166}]
     assert synced == [(160, 40)]
