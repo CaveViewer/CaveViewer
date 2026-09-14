@@ -324,7 +324,7 @@ class PreferencesPanel:
         )
         self.heading_font = preferences_typography.section_title
         self.section_summary_font = preferences_typography.section_summary
-        self.action_font = self.typography.body_strong
+        self.action_font = preferences_typography.field_label
         self.body_font = preferences_typography.field_value
         self.body_strong_font = preferences_typography.field_label
         self.small_font = preferences_typography.field_description
@@ -1168,11 +1168,41 @@ class PreferencesPanel:
                 feedback_width = 0
             if feedback_width > 1:
                 self._sync_feedback_wraplength(feedback_width)
+        self._sync_active_page_card_geometry()
+        self._sync_active_page_field_geometry()
+        self._sync_action_button_geometry()
         self._sync_page_scrollbar()
         if hints_changed:
             # Wrapping can change the requested page height. One final pass
             # updates the scroll region after Tk propagates that new height.
             self._schedule_page_layout_sync()
+
+    def _sync_active_page_card_geometry(self) -> None:
+        """Settle nested card canvas windows before measuring page overflow."""
+        for card in self.preference_cards.get(self.active_page_key or "", ()):
+            try:
+                card.sync_geometry()
+            except tk.TclError:
+                continue
+
+    def _sync_active_page_field_geometry(self) -> None:
+        """Refresh native field children after the active page is mapped."""
+        page_key = self.active_page_key or ""
+        for key, control in self.rounded_field_controls.items():
+            if self.field_page_keys.get(key) != page_key:
+                continue
+            try:
+                control.sync_geometry()
+            except tk.TclError:
+                continue
+
+    def _sync_action_button_geometry(self) -> None:
+        """Refresh native action children after the page and footer are mapped."""
+        for button in self.preference_action_buttons:
+            try:
+                button.sync_geometry()
+            except tk.TclError:
+                continue
 
     def _sync_page_scrollbar(self) -> None:
         if (

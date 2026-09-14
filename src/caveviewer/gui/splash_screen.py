@@ -1255,13 +1255,20 @@ def _show_unsaved_preferences_dialog(
     _set_tk_window_icon(dialog)
 
     # The reference is expressed in logical pixels, including its type scale.
-    def _font(size: int, *, bold: bool = False, medium: bool = False) -> tuple:
+    def _font(
+        size: int,
+        *,
+        bold: bool = False,
+        medium: bool = False,
+        scale_text: bool = True,
+    ) -> tuple:
         family = _TYPOGRAPHY.medium_family if medium else _TYPOGRAPHY.body[0]
         styles = ("bold",) if bold else (_TYPOGRAPHY.medium_styles if medium else ())
-        return (family, -max(1, px(size * _TYPOGRAPHY.text_scale)), *styles)
+        text_scale = _TYPOGRAPHY.text_scale if scale_text else 1.0
+        return (family, -max(1, px(size * text_scale)), *styles)
 
-    action_font = _font(14, medium=True)
-    save_font = _font(15, bold=True)
+    action_font = _font(14, medium=True, scale_text=False)
+    save_font = _font(15, bold=True, scale_text=False)
     action_measure = tkfont.Font(root=dialog, font=action_font)
     save_measure = tkfont.Font(root=dialog, font=save_font)
     action_width = max(

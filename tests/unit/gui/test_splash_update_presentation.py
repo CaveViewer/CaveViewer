@@ -610,6 +610,8 @@ def test_three_action_preferences_modal_uses_reference_heading_and_copy():
     assert heading < description
     assert 'font=_font(22, bold=True)' in source[heading:description]
     assert 'fg=palette.primary_action_background' in source[heading:description]
+    assert "action_font = _font(14, medium=True, scale_text=False)" in source
+    assert "save_font = _font(15, bold=True, scale_text=False)" in source
     assert 'Save, discard, or edit them before leaving Preferences.' in source
 
 
@@ -713,23 +715,23 @@ def test_splash_fonts_scale_from_runtime_tk_default(monkeypatch):
             presentation_profile=select_presentation_profile(platform_name="darwin"),
         )
 
-        assert splash_screen._TK_TEXT_SCALE == pytest.approx(1.4)
+        assert splash_screen._TK_TEXT_SCALE == pytest.approx(1.25)
         assert splash_screen._TYPOGRAPHY.display == (
             "Helvetica Neue",
-            25,
+            22,
             "bold",
         )
-        assert splash_screen._TYPOGRAPHY.heading == ("Helvetica Neue", 20, "bold")
+        assert splash_screen._TYPOGRAPHY.heading == ("Helvetica Neue", 18, "bold")
         assert splash_screen._TYPOGRAPHY.body_strong == (
             "Helvetica Neue",
-            14,
+            12,
             "bold",
         )
-        assert splash_screen._TYPOGRAPHY.body == ("Helvetica Neue", 14)
-        assert splash_screen._TYPOGRAPHY.supporting == ("Helvetica Neue", 13)
+        assert splash_screen._TYPOGRAPHY.body == ("Helvetica Neue", 12)
+        assert splash_screen._TYPOGRAPHY.supporting == ("Helvetica Neue", 11)
         assert splash_screen._TYPOGRAPHY.section == (
             "Helvetica Neue",
-            13,
+            11,
             "bold",
         )
     finally:

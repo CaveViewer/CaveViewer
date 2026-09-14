@@ -889,6 +889,7 @@ def test_preferences_panel_exposes_backup_and_restore_as_a_separate_tab():
 def test_preferences_panel_uses_dirty_controls_without_generic_status_message():
     from caveviewer.gui import preferences_dialog
 
+    init_source = inspect.getsource(preferences_dialog.PreferencesPanel.__init__)
     build_source = inspect.getsource(preferences_dialog.PreferencesPanel._build)
     dirty_source = inspect.getsource(
         preferences_dialog.PreferencesPanel._render_dirty_state
@@ -897,6 +898,8 @@ def test_preferences_panel_uses_dirty_controls_without_generic_status_message():
         preferences_dialog.PreferencesPanel._sync_feedback_to_current_state
     )
 
+    assert "self.action_font = preferences_typography.field_label" in init_source
+    assert "self.action_font = self.typography.body_strong" not in init_source
     assert '"Save changes"' in build_source
     assert '"Discard changes"' in build_source
     assert "state.dirty_sections" in dirty_source
@@ -1584,13 +1587,111 @@ def test_preferences_layout_waits_for_canvas_width_before_measuring_hints():
     assert scheduled == [True]
 
     scheduled.clear()
+    active_card_syncs = []
+    active_field_syncs = []
+    action_syncs = []
     panel._sync_active_page_hint_wraplengths = lambda: True
+    panel._sync_active_page_card_geometry = lambda: active_card_syncs.append(True)
+    panel._sync_active_page_field_geometry = lambda: active_field_syncs.append(True)
+    panel._sync_action_button_geometry = lambda: action_syncs.append(True)
     panel.feedback_frame = None
     panel._sync_page_scrollbar = lambda: scrollbar_syncs.append(True)
     panel._sync_page_layout()
 
+    assert active_card_syncs == [True]
+    assert active_field_syncs == [True]
+    assert action_syncs == [True]
     assert scrollbar_syncs == [True]
     assert scheduled == [True]
+
+
+def test_preferences_layout_syncs_active_page_cards_before_scroll_measurement():
+    from caveviewer.gui import preferences_dialog
+
+    synced = []
+
+    class _FakeCard:
+        def __init__(self, name: str, *, raises: bool = False) -> None:
+            self.name = name
+            self.raises = raises
+
+        def sync_geometry(self) -> None:
+            synced.append(self.name)
+            if self.raises:
+                raise preferences_dialog.tk.TclError("card was destroyed")
+
+    panel = object.__new__(preferences_dialog.PreferencesPanel)
+    panel.active_page_key = "storage"
+    panel.preference_cards = {
+        "streaming": [_FakeCard("streaming")],
+        "storage": [
+            _FakeCard("storage-locations"),
+            _FakeCard("storage-stale", raises=True),
+        ],
+    }
+
+    panel._sync_active_page_card_geometry()
+
+    assert synced == ["storage-locations", "storage-stale"]
+
+
+def test_preferences_layout_syncs_only_active_page_fields():
+    from caveviewer.gui import preferences_dialog
+
+    synced = []
+
+    class _FakeControl:
+        def __init__(self, name: str, *, raises: bool = False) -> None:
+            self.name = name
+            self.raises = raises
+
+        def sync_geometry(self) -> None:
+            synced.append(self.name)
+            if self.raises:
+                raise preferences_dialog.tk.TclError("field was destroyed")
+
+    panel = object.__new__(preferences_dialog.PreferencesPanel)
+    panel.active_page_key = "storage"
+    panel.field_page_keys = {
+        "io_workers": "streaming",
+        "recording_dir": "storage",
+        "map_library_dir": "storage",
+    }
+    panel.rounded_field_controls = {
+        "io_workers": _FakeControl("streaming-workers"),
+        "recording_dir": _FakeControl("recording-dir"),
+        "map_library_dir": _FakeControl("map-library-dir", raises=True),
+    }
+
+    panel._sync_active_page_field_geometry()
+
+    assert synced == ["recording-dir", "map-library-dir"]
+
+
+def test_preferences_layout_syncs_action_buttons():
+    from caveviewer.gui import preferences_dialog
+
+    synced = []
+
+    class _FakeButton:
+        def __init__(self, name: str, *, raises: bool = False) -> None:
+            self.name = name
+            self.raises = raises
+
+        def sync_geometry(self) -> None:
+            synced.append(self.name)
+            if self.raises:
+                raise preferences_dialog.tk.TclError("button was destroyed")
+
+    panel = object.__new__(preferences_dialog.PreferencesPanel)
+    panel.preference_action_buttons = [
+        _FakeButton("export"),
+        _FakeButton("save-footer", raises=True),
+    ]
+
+    panel._sync_action_button_geometry()
+
+    assert synced == ["export", "save-footer"]
 
 
 def test_preferences_hint_wrapping_only_updates_the_active_page():
