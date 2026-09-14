@@ -120,10 +120,10 @@ def test_map_library_panel_style_resolves_metrics_fonts_and_progress_colors():
     assert SECTION_HEADING_FONT_SCALE == 0.8
     assert style.section_font == (
         typography.heading[0],
-        round(typography.heading[1] * SECTION_HEADING_FONT_SCALE),
+        -round(abs(typography.heading[1]) * SECTION_HEADING_FONT_SCALE),
         *typography.heading[2:],
     )
-    assert style.section_font[1] < typography.heading[1]
+    assert abs(style.section_font[1]) < abs(typography.heading[1])
     assert style.title_font == (typography.body_strong[0], -21, "bold")
     assert style.local_action_font == (typography.body[0], -21)
     assert style.supporting_font == (typography.supporting[0], -18)
@@ -150,6 +150,23 @@ def test_map_library_windows_titles_use_the_semibold_face_at_14_pixels():
     assert style.title_font == ("Segoe UI Semibold", -21)
     assert style.body_font == ("Segoe UI", -18)
     assert style.supporting_font == ("Segoe UI", -18)
+
+
+def test_map_library_logical_pixel_fonts_follow_the_runtime_text_scale():
+    typography = create_tk_typography("Inter", text_scale=1.25)
+
+    style = create_map_library_panel_style(
+        px=lambda value: int(round(value)),
+        typography=typography,
+        progress_track_color="#111111",
+        progress_fill_color="#ffaa00",
+    )
+
+    assert style.title_font == ("Inter", -18, "bold")
+    assert style.local_action_font == ("Inter", -18)
+    assert style.body_font == ("Inter", -15)
+    assert style.supporting_font == ("Inter", -15)
+    assert style.menu_font == ("Inter", -16)
 
 
 def test_map_library_copy_and_typography_match_the_prototype():

@@ -160,7 +160,11 @@ from caveviewer.gui.tk_feedback import (
 )
 from caveviewer.gui.tk_shortcuts import bind_primary_shortcut
 from caveviewer.gui.tk_theme import DARK_THEME
-from caveviewer.gui.tk_typography import TkTypography, create_tk_typography
+from caveviewer.gui.tk_typography import (
+    TkTypography,
+    create_tk_typography,
+    resolve_tk_text_scale,
+)
 from caveviewer.gui.update_manager import (
     UpdateManager,
     UpdateSnapshot,
@@ -302,7 +306,7 @@ _NAVIGATION_ENTRY_HEIGHT = PRIMARY_LABEL_ROW_HEIGHT
 _NAVIGATION_ITEM_GAP = PRIMARY_LABEL_ROW_GAP
 _NAVIGATION_ICON_SIZE = 18
 _NAVIGATION_DIVIDER_WIDTH = 1
-_NAVIGATION_LABEL_SIZE = 14
+_NAVIGATION_LABEL_SIZE = 13
 _NAVIGATION_FOOTER_SIZE = 13
 _EMBEDDED_PANEL_TEXT_SCALE_FACTOR = 1.0
 _WINDOWS_SPLASH_LAYOUT = _SPLASH_LAYOUT_POLICY.windows_layout
@@ -447,7 +451,7 @@ def _select_tk_font_family(
     return default_family
 
 
-def _refresh_tk_font_tokens() -> None:
+def _refresh_tk_font_tokens(*, display_scale: float = 1.0) -> None:
     """Rebuild semantic Tk typography after selecting family or text scaling."""
     global _TYPOGRAPHY
 
@@ -458,6 +462,7 @@ def _refresh_tk_font_tokens() -> None:
         semibold_family=_UI_SEMIBOLD_FONT_FAMILY,
         semibold_styles=_UI_SEMIBOLD_FONT_STYLES,
         text_scale=_TK_TEXT_SCALE,
+        display_scale=display_scale,
     )
 
 
@@ -509,7 +514,7 @@ def _configure_runtime_tk_fonts(
     root,
     *,
     presentation_profile: PresentationProfile | None = None,
-    density_scale: float = 1.0,
+    display_scale: float = 1.0,
 ) -> None:
     """Resolve the UI font against fonts Tk can actually render."""
     global _UI_FONT_FAMILY, _UI_MEDIUM_FONT_FAMILY, _UI_SEMIBOLD_FONT_FAMILY
@@ -518,7 +523,6 @@ def _configure_runtime_tk_fonts(
     profile = presentation_profile or _PRESENTATION_PROFILE
     splash_layout = profile.splash_layout
 
-    default_font_points = 12.0
     try:
         import tkinter.font as tkfont
 
@@ -531,7 +535,6 @@ def _configure_runtime_tk_fonts(
 
         default_font = tkfont.nametofont("TkDefaultFont")
         fallback_family = default_font.actual("family")
-        default_font_points = abs(float(default_font.actual("size") or default_font_points))
         resolved_family = _select_tk_font_family(
             available,
             fallback_family,
@@ -578,8 +581,8 @@ def _configure_runtime_tk_fonts(
     except Exception as exc:
         _LOG.warning(f"could not resolve Tk UI font family ({exc}); using {_UI_FONT_FAMILY}.")
 
-    _TK_TEXT_SCALE = profile.tk_text_scale(default_font_points) * density_scale
-    _refresh_tk_font_tokens()
+    _TK_TEXT_SCALE = resolve_tk_text_scale(root, profile)
+    _refresh_tk_font_tokens(display_scale=display_scale)
 
 
 def _map_library_panel_style(
@@ -627,6 +630,7 @@ def _embedded_panel_typography() -> TkTypography:
         semibold_family=_UI_SEMIBOLD_FONT_FAMILY,
         semibold_styles=_UI_SEMIBOLD_FONT_STYLES,
         text_scale=_TK_TEXT_SCALE * _EMBEDDED_PANEL_TEXT_SCALE_FACTOR,
+        display_scale=_TYPOGRAPHY.display_scale,
     )
 
 
@@ -1759,7 +1763,7 @@ def _show_splash_composition(
     _configure_runtime_tk_fonts(
         root,
         presentation_profile=presentation_profile,
-        density_scale=display_metrics.density_scale,
+        display_scale=display_metrics.layout_scale,
     )
     splash_scale = display_metrics.layout_scale
     try:
@@ -2004,7 +2008,7 @@ def _show_splash_composition(
     # completely quiet until an update has a meaningful state.
     navigation_footer_font = (
         _UI_SEMIBOLD_FONT_FAMILY,
-        -max(1, px(_NAVIGATION_FOOTER_SIZE)),
+        -max(1, px(_NAVIGATION_FOOTER_SIZE * _TYPOGRAPHY.text_scale)),
         *_UI_SEMIBOLD_FONT_STYLES,
     )
     update_cluster = tk.Frame(app_status_frame, bg=_NAVIGATION_PANEL_BG)
@@ -2564,7 +2568,10 @@ def _show_splash_composition(
     def _focus_map_library() -> None:
         _request_leave_preferences(_show_map_library_surface)
 
-    navigation_label_pixel_size = -max(1, px(_NAVIGATION_LABEL_SIZE))
+    navigation_label_pixel_size = -max(
+        1,
+        px(_NAVIGATION_LABEL_SIZE * _TYPOGRAPHY.text_scale),
+    )
     navigation_selected_font = (
         _UI_SEMIBOLD_FONT_FAMILY,
         navigation_label_pixel_size,

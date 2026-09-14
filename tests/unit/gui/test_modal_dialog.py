@@ -164,3 +164,14 @@ def test_standard_modal_uses_shared_heading_before_left_aligned_description():
     description = source.index("text=message")
     assert heading < description
     assert ').pack(fill="x")' in source[heading:description]
+
+
+def test_standard_modal_scales_logical_pixel_typography_with_its_geometry():
+    source = inspect.getsource(modal_dialog._show_modal)
+
+    display_scale = source.index("display_scale = resolve_tk_display_metrics(")
+    typography = source.index("typography = create_tk_typography(")
+    assert display_scale < typography
+    assert ").layout_scale" in source[display_scale:typography]
+    assert "text_scale=resolve_tk_text_scale(parent, profile)" in source[typography:]
+    assert "display_scale=display_scale" in source[typography:]

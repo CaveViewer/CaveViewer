@@ -32,7 +32,16 @@ class RoundedChoiceControl:
         self._bindings = []
         self._focus_check = None
         self._closed = False
-        self._row_font = (font[0], -px(13), *font[2:])
+
+        def relative_font(size: int) -> tuple:
+            base_pixel_size = abs(int(font[1]))
+            return (
+                font[0],
+                -max(1, int(round(base_pixel_size * size / 14))),
+                *font[2:],
+            )
+
+        self._row_font = relative_font(13)
         choice_palette = replace(
             palette,
             secondary_action_background=palette.section_background,
@@ -43,7 +52,7 @@ class RoundedChoiceControl:
         )
         self._action = RoundedActionButton(
             parent, text=self._choices[value], command=self.open_menu,
-            font=(font[0], -px(15), *font[2:]),
+            font=relative_font(15),
             metrics=self._metrics, palette=choice_palette, kind="secondary", width=width,
             outside_background=palette.section_background,
         )

@@ -8,9 +8,11 @@ owns its title-bar typography.
 
 ## Typography
 
-`src/caveviewer/gui/tk_typography.py` is the canonical source for Tk text
-roles. Components receive those roles through their presentation style or
-constructor rather than choosing a font size for an individual widget.
+`src/caveviewer/gui/tk_typography.py` is the canonical source for shared Tk
+logical-pixel roles. Measured surfaces define their exact logical-pixel sizes in
+`preferences_style.py`, `help_style.py`, and `map_library_style.py`. Components
+receive those roles through their presentation style or constructor rather
+than choosing a font size for an individual widget.
 
 CaveViewer bundles the official hinted static Inter 4.0 Regular, Medium,
 SemiBold, and Bold TrueType faces. The application registers them for the
@@ -29,29 +31,64 @@ its existing priority, followed by bundled Inter and the platform system-font
 candidates. Missing or invalid candidates are skipped rather than making an
 otherwise usable fallback unreachable.
 
-| Role | Base Tk size | Weight | Use |
+Every size below is a logical-pixel base size before the active accessibility
+and display scales are applied. Application-owned Tk font tuples always use a
+negative size because Tk interprets negative font sizes as pixels. Positive Tk
+font sizes are points and are not allowed for CaveViewer typography.
+
+| Shared role | Base size | Weight | Use |
 | --- | ---: | --- | --- |
-| `display` | 18 | bold | One primary page subject, such as a cave name. |
-| `heading` | 14 | bold | App identity and top-level panel headings. |
-| `body_strong` | 10 | bold | Primary actions, selected navigation, map titles, and key values. |
-| `body` | 10 | regular | Navigation, prose, editable controls, links, and menu actions. |
-| `supporting` | 9 | regular | Locations, descriptions, version text, hints, statuses, and disclaimers. |
-| `section` | 9 | bold | Section labels such as **CaveViewer Maps**, **Key facts**, and **Source**. |
+| `display` | 24 px | Bold | One primary page subject, such as a cave name. |
+| `heading` | 19 px | Bold | App identity and top-level panel headings. |
+| `body_strong` | 13 px | Bold | Primary actions, selected values, and compact headings. |
+| `body` | 13 px | Regular | Prose, editable controls, links, and menu actions. |
+| `supporting` | 12 px | Regular | Locations, descriptions, version text, hints, statuses, and disclaimers. |
+| `section` | 12 px | Bold | Section labels such as **CaveViewer Maps**, **Key facts**, and **Source**. |
 
-The base values are logical Tk points, not fixed screen pixels. CaveViewer
-applies the active platform accessibility scale once when it creates a
-`TkTypography` instance. Components must not add a second multiplier or use
-platform-specific replacements for these roles.
+The following table is the complete logical-pixel size contract for the Tk
+shell and its card-based surfaces:
 
-On Linux, Tk's own DPI scaling determines the physical size of point fonts.
-The semantic type system therefore does not add a second multiplier based on
-the desktop's `TkDefaultFont` size.
+| Surface and role | Base size | Weight | Line height |
+| --- | ---: | --- | ---: |
+| Navigation label | 13 px | Regular; SemiBold when active | Native |
+| Navigation update/status text | 13 px | Medium | Native |
+| Map Library section heading | 15 px | Bold | Native |
+| Map Library map title | 14 px | SemiBold | Native |
+| Map Library local-map action | 14 px | Regular | Native |
+| Map Library description, status, and file size | 12 px | Regular | Native |
+| Map Library menu item | 13 px | Regular; SemiBold when selected | Native |
+| Preferences and Help tab | 14 px | Regular; SemiBold when active | Native |
+| Preferences and Help card title | 16 px | Bold | Native |
+| Preferences and Help card description | 13 px | Regular | Native |
+| Preferences field label | 14 px | SemiBold | Native |
+| Preferences field description | 12 px | Regular | 16.8 px (140%) |
+| Preferences input value | 14 px | Medium | Native |
+| Preferences unit | 14 px | Regular | Native |
+| Help action | 14 px | SemiBold | Native |
+| Help detail and error text | 12 px | Regular | Native |
+| Help keycap | 14 px | Medium | Native |
+| Unsaved Preferences title | 22 px | Bold | Native |
+| Unsaved Preferences description | 15 px | Regular | 22 px |
+| Unsaved Preferences Edit and Discard actions | 14 px | Medium | Native |
+| Unsaved Preferences Save action | 15 px | Bold | Native |
 
-On Windows, keep Tk point scaling and logical-pixel geometry as separate native
-conversions. Tk initializes its pixels-per-point value for fonts; CaveViewer
-does not rewrite it during normal startup. Pixel geometry uses the effective
-window DPI divided by 96 exactly once. The shell then applies the same bounded
-physical-density factor to semantic fonts and logical geometry: monitors up to
+The Map Library section heading is 80% of the 19-pixel `heading` role and
+resolves to 15 logical pixels at the base scale. About, cave details, launch
+text, feedback, and shared message dialogs use the shared logical-pixel roles
+above; their exact role assignments are listed below.
+
+CaveViewer applies the active text scale once to every logical-pixel role,
+except for the reviewed fixed 14 px and 15 px action labels in the unsaved
+Preferences dialog. It then applies the same display scale used by logical-pixel
+geometry exactly once and rounds the final Tk pixel size. Windows and macOS
+derive accessibility text scale from `max(1.0, TkDefaultFont points / 12)`;
+Linux retains `1.0` because its desktop configuration is already represented by
+the resolved display scale. A fallback font may change the typeface and font
+metrics, but it must not replace any base size in these tables.
+
+On Windows, logical-pixel geometry and typography use the effective window DPI
+divided by 96 exactly once. The shell then applies the same bounded
+physical-density factor to fonts and geometry: monitors up to
 24 inches retain `1.00`, larger monitors use `clamp(24 / diagonal_inches,
 0.95, 1.00)`, and invalid or unavailable raw measurements retain `1.00`. This
 keeps monitors of approximately 25.3 inches and larger at the same modest
@@ -65,43 +102,45 @@ are rejected. The current outer window size changes by the same
 scale ratio. Normal windows retain at least the destination's 1040-by-740
 logical-pixel default when the work area permits, larger user sizing is
 preserved proportionally, and maximized windows remain maximized. All resulting
-bounds are clamped to the destination work area. Tk 8.6 retains one
-pixels-per-point value on the process-owned root, so monitor recomposition also
-synchronizes that value to the destination's native DPI divided by 72 before
-creating replacement widgets. This is the font conversion paired with, not an
-additional multiplier on, the independent DPI-divided-by-96 geometry scale.
-Window geometry follows the same single-conversion rule: retain the last
+bounds are clamped to the destination work area. Tk's retained interpreter may
+still synchronize its native point scale during monitor recomposition for
+platform-owned defaults, but CaveViewer font tokens remain negative pixel sizes
+and do not depend on that conversion. Window geometry follows the same
+single-conversion rule: retain the last
 settled source-monitor normal bounds, apply the destination/source layout-scale
 ratio once, and use Windows' settled destination position. Do not multiply
 dimensions that Windows or Tk has already adjusted for the destination DPI.
 
-The development-only `CAVEVIEWER_TK_SCALE` override is expressed in Tk pixels
-per point and is the only path that deliberately replaces Tk's native value;
-while active, it also bypasses adaptive density. CaveViewer does not expose a
+The development-only `CAVEVIEWER_TK_SCALE` override retains its historical Tk
+pixels-per-point input but is converted to the same logical display scale; while
+active, it also bypasses adaptive density. CaveViewer does not expose a
 persisted UI-size preference. macOS, Linux, and OpenGL surfaces do not use the
 Windows physical-density factor.
 
 ### Role mapping
 
-- Map Library rows use `body_strong` for map names and `supporting` for their
-  location, availability, and cache status. Map names use all width remaining
-  after fixed trailing columns for size, primary action, and overflow action;
-  they wrap only when the live window width truly requires it, rather than at a
-  fixed column width. Text never displaces or clips those controls.
-- The **Open a local map** card uses `body_strong` for its action and
-  `supporting` for its explanation.
+- Map Library rows use the measured 14-pixel semibold map-title role and the
+  12-pixel regular supporting role for location, availability, and cache
+  status. Map names use all width remaining after fixed trailing columns for
+  size, primary action, and overflow action; they wrap only when the live window
+  width truly requires it, rather than at a fixed column width. Text never
+  displaces or clips those controls.
+- The **Open a local map** card uses the measured 14-pixel regular action role
+  and 12-pixel regular supporting role.
 - Primary-shell navigation uses an exact 13-logical-pixel label. Inactive items
   use the platform regular face; the active item uses the platform semibold
   face where available and a bold fallback elsewhere.
 - Cave details use `display` only for the cave name, `body` for facts and
   sources, `body_strong` for statistic values, `supporting` for its location
   and disclaimer, and `section` for section labels.
-- Preferences use `body_strong` for the active tab, field labels, and actions;
-  `body` for inactive tabs, values, and inline units; `heading` for title-case
-  card headings; and `supporting` for descriptions and feedback.
-- Help uses `body_strong` for the active tab, keycaps, and emphasized actions;
-  `body` for inactive tabs and ordinary actions; `heading` for title-case card
-  headings; and `supporting` for purpose lines, details, and status text.
+- Preferences and Help use the measured roles in the logical-pixel table. Their
+  role names describe hierarchy and emphasis; they do not inherit the numeric
+  sizes of similarly named shared roles.
+- About uses `heading` for the product name, `supporting` for version text and
+  the copyright mark, `body` for credits and links, and `body_strong` for its
+  close action when one is shown.
+- Shared message dialogs use `body_strong` for the heading and actions, `body`
+  for the message, and `supporting` for secondary status text.
 - Tk and OpenGL Help keycaps use geometric unit spans. One unit (`1u`) is the
   standard single-key cap; an `n`-unit cap is exactly `n` single-key widths plus
   the `n - 1` ordinary gaps those keys would contain as a row. Compact named
@@ -151,7 +190,7 @@ Both cards use `#15171C`. The Recent border is `#30343D`; the catalog border is
 `#313337`. Map titles use 14-pixel semibold `#EFF1F5`, descriptions use
 12-pixel regular `#B6BCC8`, and file sizes use 12-pixel regular `#A9AFBC`.
 Disclosure and primary row actions use `#F5C451`; overflow uses `#A9AFBC`.
-Section headings retain the reviewed reduced heading scale.
+Section headings use 15 logical pixels bold at the base text scale.
 Their disclosure triangles span 10 by 5 logical pixels when expanded and 5 by
 10 when collapsed, centered vertically beside the title.
 
@@ -515,8 +554,10 @@ with the live two-tone product wordmark above the bar and the supplied subdued
 cave mesh behind it. The mesh covers the viewport without stretching and fades
 to the application surface at the center. Initial streaming and first-time map
 building retain their solid background. Renderer-specific font technology
-remains separate: Tk uses the process-registered Inter family and OpenGL
-rasterizes the bundled Inter file at its independent bitmap-renderer scale.
+remains separate: Tk uses negative logical-pixel font tuples from the
+process-registered Inter family and OpenGL rasterizes the bundled Inter file in
+renderer logical units. Neither path uses Tk point sizes for application-owned
+text.
 For map opening, source import/cache construction and initial streaming are
 one user-facing progress session: keep the bar continuous and retain the
 current stage as the primary message. Do not add a separate operation title;
@@ -542,7 +583,10 @@ the lane, so neighboring rows remain fixed.
 ## Applying the system
 
 1. Use `create_tk_typography(font_family, semibold_family=...,
-   semibold_styles=..., text_scale=...)` to obtain the semantic font roles.
+   semibold_styles=..., text_scale=..., display_scale=...)` to obtain the
+   semantic font roles. Standalone Tk surfaces obtain `text_scale` through
+   `resolve_tk_text_scale(root, profile)` and `display_scale` from the resolved
+   display metrics; the retained shell passes its existing scale snapshot.
 2. Pass the relevant roles into a panel's style object or constructor.
 3. Reuse the role appropriate to the text's meaning. Avoid raw `(family,
    size)` tuples in presentation components.
