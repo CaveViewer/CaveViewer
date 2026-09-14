@@ -132,7 +132,7 @@ def test_platform_release_workflows_package_immutable_source_before_finalizing()
         assert "publish:" in workflow, workflow_name
         assert "preview:" in workflow, workflow_name
         assert "signing_identity:" in workflow, workflow_name
-        assert "options: [primary, recovery, legacy]" in workflow, workflow_name
+        assert "options: [primary, recovery]" in workflow, workflow_name
         assert "signing_identity: ${{ inputs.signing_identity }}" in workflow, workflow_name
         assert "CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY" not in workflow, workflow_name
         assert "uses: ./.github/workflows/tests.yml" in workflow, workflow_name
@@ -719,20 +719,24 @@ def test_release_finalizer_is_the_single_shared_state_writer():
     assert "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8" in workflow
     assert "merge-multiple: true" in workflow
     assert "CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY" in workflow
-    for identity in ("PRIMARY", "RECOVERY", "LEGACY"):
+    for identity in ("PRIMARY", "RECOVERY"):
         secret_name = f"CAVEVIEWER_RELEASE_{identity}_PRIVATE_KEY"
         assert workflow.count(secret_name) == 2
-    assert "options: [primary, recovery, legacy]" not in workflow
+    assert "CAVEVIEWER_RELEASE_LEGACY_PRIVATE_KEY" not in workflow
+    assert "options: [primary, recovery]" not in workflow
     assert 'default: primary' in workflow
-    assert 'primary|recovery|legacy' in workflow
+    assert 'primary|recovery' in workflow
+    assert 'primary|recovery|legacy' not in workflow
     assert workflow.index("Validate signing identity") < workflow.index(
         "Create release publisher token"
     )
-    for identity in ("primary", "recovery", "legacy"):
+    for identity in ("primary", "recovery"):
         assert f"inputs.signing_identity == '{identity}'" in workflow
         assert (
             f"release_signing_{identity}_public_key.pem" in workflow
         )
+    assert "inputs.signing_identity == 'legacy'" not in workflow
+    assert "release_signing_legacy_public_key.pem" not in workflow
     assert "scripts/verify_release_signing_key.py" in workflow
     assert workflow.index("Verify release signing key pair") < workflow.index(
         "Download platform packages"

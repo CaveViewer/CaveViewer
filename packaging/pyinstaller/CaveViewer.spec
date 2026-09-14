@@ -134,7 +134,6 @@ a = Analysis(
             for filename in (
                 'release_signing_primary_public_key.pem',
                 'release_signing_recovery_public_key.pem',
-                'release_signing_legacy_public_key.pem',
             )
         ),
         (

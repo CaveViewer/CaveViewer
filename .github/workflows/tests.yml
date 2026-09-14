@@ -290,7 +290,7 @@ jobs:
             signature="$signature_dir/$(tr '/' '_' <<< "$manifest").sig"
             base64 --decode "$manifest.sig" > "$signature"
             verified=false
-            for identity in primary recovery legacy; do
+            for identity in primary recovery; do
               if openssl pkeyutl -verify -pubin \
                 -inkey "src/caveviewer/resources/release_signing_${identity}_public_key.pem" \
                 -rawin \

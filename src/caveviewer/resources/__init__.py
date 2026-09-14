@@ -59,7 +59,6 @@ def shader_path(filename: str) -> Path:
 RELEASE_PUBLIC_KEY_FILENAMES = {
     "primary": "release_signing_primary_public_key.pem",
     "recovery": "release_signing_recovery_public_key.pem",
-    "legacy": "release_signing_legacy_public_key.pem",
 }
 
 

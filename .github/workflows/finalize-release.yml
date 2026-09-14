@@ -35,7 +35,7 @@ on:
         type: boolean
         default: false
       signing_identity:
-        description: "Trusted manifest-signing identity: primary, recovery, or legacy"
+        description: "Trusted manifest-signing identity: primary or recovery"
         required: false
         type: string
         default: primary
@@ -62,9 +62,9 @@ jobs:
           SIGNING_IDENTITY: ${{ inputs.signing_identity }}
         run: |
           case "$SIGNING_IDENTITY" in
-            primary|recovery|legacy) ;;
+            primary|recovery) ;;
             *)
-              echo "Error: signing_identity must be primary, recovery, or legacy."
+              echo "Error: signing_identity must be primary or recovery."
               exit 1
               ;;
           esac
@@ -133,21 +133,6 @@ jobs:
           chmod 600 "$key_path"
           echo "CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY=$key_path" >> "$GITHUB_ENV"
           echo "CAVEVIEWER_RELEASE_SIGNING_PUBLIC_KEY=src/caveviewer/resources/release_signing_recovery_public_key.pem" >> "$GITHUB_ENV"
-
-      - name: Configure legacy release signing key
-        if: ${{ inputs.signing_identity == 'legacy' }}
-        env:
-          SIGNING_PRIVATE_KEY_PEM: ${{ secrets.CAVEVIEWER_RELEASE_LEGACY_PRIVATE_KEY }}
-        run: |
-          if [ -z "$SIGNING_PRIVATE_KEY_PEM" ]; then
-            echo "Error: CAVEVIEWER_RELEASE_LEGACY_PRIVATE_KEY secret is required."
-            exit 1
-          fi
-          key_path="$RUNNER_TEMP/release_signing_private_key.pem"
-          printf '%s' "$SIGNING_PRIVATE_KEY_PEM" > "$key_path"
-          chmod 600 "$key_path"
-          echo "CAVEVIEWER_RELEASE_SIGNING_PRIVATE_KEY=$key_path" >> "$GITHUB_ENV"
-          echo "CAVEVIEWER_RELEASE_SIGNING_PUBLIC_KEY=src/caveviewer/resources/release_signing_legacy_public_key.pem" >> "$GITHUB_ENV"
 
       - name: Verify release signing key pair
         run: >-

@@ -76,7 +76,6 @@ def test_application_uses_src_package_layout():
         PACKAGE_ROOT / "resources" / "shaders" / "mesh.vert",
         PACKAGE_ROOT / "resources" / "release_signing_primary_public_key.pem",
         PACKAGE_ROOT / "resources" / "release_signing_recovery_public_key.pem",
-        PACKAGE_ROOT / "resources" / "release_signing_legacy_public_key.pem",
         PACKAGE_ROOT / "resources" / "map_library_catalog.v1.json",
         PACKAGE_ROOT / "resources" / "cave_metadata_catalog.v1.json",
         REPOSITORY_ROOT / "benchmarks" / "viewer-benchmark-scenario.v1.json",
@@ -169,7 +168,6 @@ def test_package_resource_service_resolves_runtime_files():
         assert ui_icon_path(icon_name).is_file()
     assert release_public_key_path().is_file()
     assert release_public_key_path("recovery").is_file()
-    assert release_public_key_path("legacy").is_file()
     assert map_library_catalog_path().is_file()
     assert cave_metadata_catalog_path().is_file()
     pyproject = (REPOSITORY_ROOT / "pyproject.toml").read_text(encoding="utf-8")
@@ -269,6 +267,9 @@ def test_packaging_consumers_reference_migrated_paths():
     assert "caveviewer/resources/shaders" in pyinstaller_spec
     assert "cave_metadata_catalog.v1.json" in pyinstaller_spec
     assert "cave_metadata_catalog.v1.json" in linux_builder
+    assert "release_signing_primary_public_key.pem" in pyinstaller_spec
+    assert "release_signing_recovery_public_key.pem" in pyinstaller_spec
+    assert "release_signing_legacy_public_key.pem" not in pyinstaller_spec
     assert "release_metadata.v1.json" in pyinstaller_spec
     assert "CAVEVIEWER_BRAND_PROFILE_DIR" in pyinstaller_spec
     assert "CAVEVIEWER_BRANDING_EXPORT_SUMMARY" in pyinstaller_spec
