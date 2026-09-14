@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from caveviewer.gui.tk_scrolling import vertical_scroll_units
+from caveviewer.gui.tk_scrolling import vertical_scroll_pixels, vertical_scroll_units
 
 
 @pytest.mark.parametrize(
@@ -29,3 +29,22 @@ def test_vertical_scroll_units_preserves_direction_for_every_tk_wheel_style(
     expected,
 ):
     assert vertical_scroll_units(event) == expected
+
+
+@pytest.mark.parametrize(
+    ("event", "expected"),
+    [
+        (SimpleNamespace(delta=120), -40.0),
+        (SimpleNamespace(delta=-120), 40.0),
+        (SimpleNamespace(delta=240), -80.0),
+        (SimpleNamespace(delta=-240), 80.0),
+        (SimpleNamespace(delta=1), -1.0),
+        (SimpleNamespace(delta=-1), 1.0),
+        (SimpleNamespace(delta=0, num=4), -40.0),
+        (SimpleNamespace(delta=0, num=5), 40.0),
+        (SimpleNamespace(delta="invalid", num=4), -40.0),
+        (SimpleNamespace(delta=float("nan")), None),
+    ],
+)
+def test_vertical_scroll_pixels_keeps_trackpad_deltas_smooth(event, expected):
+    assert vertical_scroll_pixels(event) == expected

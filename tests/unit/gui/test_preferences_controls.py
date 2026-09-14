@@ -1,5 +1,6 @@
 """Exercise pure state and lifecycle contracts for rounded Preferences controls."""
 
+from dataclasses import replace
 from types import SimpleNamespace
 
 from caveviewer.gui.preferences_controls import (
@@ -8,6 +9,8 @@ from caveviewer.gui.preferences_controls import (
     RoundedEntryControl,
     RoundedSectionSurface,
     RoundedSurfaceRenderer,
+    action_label_inset,
+    preferred_action_width,
     resolve_action_visual,
     resolve_entry_visual,
     right_rounded_segment_points,
@@ -80,6 +83,59 @@ def test_action_sync_geometry_refreshes_native_child_visuals_after_mapping():
     assert widget_calls == [True]
     assert geometry_syncs == [(160, 40)]
     assert visual_syncs == [True]
+
+
+def test_default_width_action_updates_for_text_and_metric_changes():
+    button = object.__new__(RoundedActionButton)
+    button._uses_default_width = True
+    button._metrics = _METRICS
+    configured = []
+    synced = []
+
+    class Widget:
+        def configure(self, **options) -> None:
+            configured.append(options)
+
+        def winfo_width(self) -> int:
+            return 160
+
+        def winfo_height(self) -> int:
+            return 40
+
+    class Label:
+        def __init__(self) -> None:
+            self.text = "Discard changes"
+
+        def configure(self, **options) -> None:
+            self.text = options["text"]
+
+        def cget(self, option: str):
+            if option == "text":
+                return self.text
+            if option == "font":
+                return "font"
+            raise KeyError(option)
+
+    button.widget = Widget()
+    button.button = Label()
+    button._default_width = lambda **_options: 166
+    button._sync_geometry = lambda width, height: synced.append((width, height))
+    button._apply_visual = lambda: None
+
+    button.configure_text("Discard changes")
+
+    assert configured == [{"width": 166}]
+    assert synced == [(160, 40)]
+
+    configured.clear()
+    synced.clear()
+    next_metrics = replace(_METRICS, action_min_width=180)
+    button._default_width = lambda **_options: next_metrics.action_min_width
+
+    button.set_metrics(next_metrics)
+
+    assert configured == [{"height": 40, "width": 180}]
+    assert synced == [(160, 40)]
 
 
 class _FakeCanvas:
@@ -222,6 +278,18 @@ def test_action_visual_covers_hover_press_focus_and_disabled_states():
     assert focused.border_width == _METRICS.focus_border_thickness
     assert disabled.background == _PALETTE.disabled_action_background
     assert disabled.foreground == _PALETTE.disabled_action_text
+
+
+def test_preferred_action_width_grows_for_platform_text_metrics():
+    assert action_label_inset(_METRICS) == _METRICS.control_content_pad_x
+    assert preferred_action_width(text_width=40, metrics=_METRICS) == (
+        _METRICS.action_min_width
+    )
+    assert preferred_action_width(text_width=130, metrics=_METRICS) == (
+        130
+        + (_METRICS.control_content_pad_x * 2)
+        + (_METRICS.control_border_thickness * 2)
+    )
 
 
 def test_surface_renderer_replaces_geometry_on_resize_and_stops_after_close():
@@ -367,6 +435,38 @@ def test_action_invocation_and_disabled_transition_share_one_enabled_state():
 
     assert calls == ["invoked", "invoked"]
     assert button._interaction == ControlInteractionState(enabled=False)
+
+
+def test_rounded_action_invokes_when_visible_label_receives_pointer_release():
+    calls: list[str] = []
+    button = object.__new__(RoundedActionButton)
+    button.widget = object()
+    button.button = object()
+    button._command = lambda: calls.append("invoked")
+    button._interaction = ControlInteractionState(enabled=True, pressed=True)
+    applied: list[ControlInteractionState] = []
+    button._apply_visual = lambda: applied.append(button._interaction)
+
+    button._on_release(SimpleNamespace(widget=button.button))
+
+    assert calls == ["invoked"]
+    assert button._interaction.pressed is False
+    assert applied == [button._interaction]
+
+
+def test_disabled_rounded_action_ignores_pointer_release_from_label():
+    calls: list[str] = []
+    button = object.__new__(RoundedActionButton)
+    button.widget = object()
+    button.button = object()
+    button._command = lambda: calls.append("invoked")
+    button._interaction = ControlInteractionState(enabled=False, pressed=True)
+    button._apply_visual = lambda: None
+
+    button._on_release(SimpleNamespace(widget=button.button))
+
+    assert calls == []
+    assert button._interaction.pressed is True
 
 
 def test_rounded_action_explicitly_supports_return_and_space_activation():

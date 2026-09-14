@@ -1258,6 +1258,10 @@ def test_splash_navigation_actions_are_keyboard_accessible_without_fallthrough()
     assert "_bind_activation(icon, callback)" in source
     assert "navigation_selected_font if selected else navigation_inactive_font" in source
     assert "takefocus=True" in source
+    assert "focus_indicator = tk.Frame(item_row, bg=_NAVIGATION_SELECTED_FG)" in source
+    assert "focus_indicator.place_forget()" in source
+    assert "item.bind(\"<FocusIn>\", show_keyboard_focus" in source
+    assert "item.bind(\"<FocusOut>\", hide_keyboard_focus" in source
     assert 'label.bind("<Return>", invoke)' in update_action_source
     assert 'label.bind("<space>", invoke)' in update_action_source
     assert "def _invoke_and_break(callback):" in source
@@ -1413,6 +1417,11 @@ def test_splash_navigation_uses_consistent_row_spacing():
 def test_splash_navigation_uses_transparent_entries_and_type_only_selection():
     source = inspect.getsource(splash_screen._show_splash_composition)
     module_source = inspect.getsource(splash_screen)
+    navigation_item_source = source[
+        source.index("def _create_navigation_item(") : source.index(
+            "navigation_items: dict[str, object] = {}"
+        )
+    ]
 
     assert splash_screen._NAVIGATION_PANEL_BG == "#15171C"
     assert splash_screen._NAVIGATION_SELECTED_FG == "#F5C451"
@@ -1429,6 +1438,9 @@ def test_splash_navigation_uses_transparent_entries_and_type_only_selection():
     assert "foreground = _NAVIGATION_SELECTED_FG" in source
     assert "foreground = _NAVIGATION_INACTIVE_FG" in source
     assert "bg=_NAVIGATION_PANEL_BG" in source
+    assert "highlightthickness=0" in navigation_item_source
+    assert "highlightbackground=_NAVIGATION_PANEL_BG" not in navigation_item_source
+    assert "highlightcolor=_NAVIGATION_SELECTED_FG" not in navigation_item_source
     assert "_UI_SEMIBOLD_FONT_FAMILY" in source
     assert "*_UI_SEMIBOLD_FONT_STYLES" in source
     assert "navigation_inactive_font" in source
