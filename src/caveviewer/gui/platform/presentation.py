@@ -354,7 +354,6 @@ def select_presentation_profile(*, platform_name: str) -> PresentationProfile:
             compact_manual_controls_layout=False,
             default_text_antialiasing_mode="light",
             viewer_overlay_text_scale_factor=1.15,
-            minimum_tk_text_scale=1.4,
             suppress_startup_focus_when_frozen=True,
             command_modifier_uses_control_fallback=True,
             shift_digit_bookmark_save_fallback=True,

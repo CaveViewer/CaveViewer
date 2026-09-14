@@ -42,6 +42,46 @@ def test_native_entry_window_leaves_the_full_focus_outline_visible():
     assert entry.widget.itemconfigure.call_args.kwargs["height"] == 36
 
 
+def test_entry_sync_geometry_refreshes_native_child_visuals_after_mapping():
+    widget_calls = []
+    entry = object.__new__(RoundedEntryControl)
+    entry.widget = SimpleNamespace(update_idletasks=lambda: widget_calls.append(True))
+    entry._closed = False
+    geometry_syncs = []
+    visual_syncs = []
+    entry._sync_geometry = lambda: geometry_syncs.append(True)
+    entry._apply_visual = lambda: visual_syncs.append(True)
+
+    entry.sync_geometry()
+
+    assert widget_calls == [True]
+    assert geometry_syncs == [True]
+    assert visual_syncs == [True]
+
+
+def test_action_sync_geometry_refreshes_native_child_visuals_after_mapping():
+    widget_calls = []
+    action = object.__new__(RoundedActionButton)
+    action.widget = SimpleNamespace(
+        update_idletasks=lambda: widget_calls.append(True),
+        winfo_width=lambda: 160,
+        winfo_height=lambda: 40,
+    )
+    action._closed = False
+    geometry_syncs = []
+    visual_syncs = []
+    action._sync_geometry = lambda width, height: geometry_syncs.append(
+        (width, height)
+    )
+    action._apply_visual = lambda: visual_syncs.append(True)
+
+    action.sync_geometry()
+
+    assert widget_calls == [True]
+    assert geometry_syncs == [(160, 40)]
+    assert visual_syncs == [True]
+
+
 class _FakeCanvas:
     def __init__(self) -> None:
         self.deleted: list[str] = []
@@ -262,9 +302,9 @@ def test_entry_compound_focus_waits_for_the_destination_widget():
 
 def test_compound_entry_action_invokes_only_while_the_outer_control_is_enabled():
     invoked = []
-    action = SimpleNamespace(invoke=lambda: invoked.append("browse"))
     entry = object.__new__(RoundedEntryControl)
-    entry.action_button = action
+    entry.action_button = object()
+    entry._action_command = lambda: invoked.append("browse")
     entry._interaction = ControlInteractionState(enabled=True)
 
     assert entry._invoke_action() == "break"
@@ -281,10 +321,12 @@ def test_compound_entry_owns_one_internal_seam_and_shared_focus_members():
 
     assert "self.action_seam = tk.Frame(" in source
     assert "width=metrics.control_seam_thickness" in source
+    assert "self.action_button = tk.Label(" in source
+    assert "command=action_command" not in source
     assert "self.register_focus_member(self.action_button)" in source
     assert 'self.action_button.bind("<Return>", self._invoke_action' in source
     assert 'self.action_button.bind("<space>", self._invoke_action' in source
-    assert 'state="normal" if self._interaction.enabled else "disabled"' in source
+    assert "self._action_command()" in source
 
 
 def test_entry_destroy_cancels_owned_focus_callback_and_closes_renderer():
@@ -332,5 +374,7 @@ def test_rounded_action_explicitly_supports_return_and_space_activation():
 
     source = inspect.getsource(RoundedActionButton)
 
+    assert "self.button = tk.Label(" in source
+    assert "command=self._invoke" not in source
     assert 'self.button.bind("<Return>", self._invoke_from_key' in source
     assert 'self.button.bind("<space>", self._invoke_from_key' in source

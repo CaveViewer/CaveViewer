@@ -135,7 +135,7 @@ def test_macos_profile_keeps_its_static_layout_and_input_fallbacks():
     assert profile.command_modifier_uses_control_fallback is True
     assert profile.shift_digit_bookmark_save_fallback is True
     assert profile.option_left_mouse_look_enabled is True
-    assert profile.tk_text_scale(15.0) == pytest.approx(1.4)
+    assert profile.tk_text_scale(15.0) == pytest.approx(1.25)
     assert profile.suppress_forced_startup_focus(
         is_frozen=True,
         force_requested=False,

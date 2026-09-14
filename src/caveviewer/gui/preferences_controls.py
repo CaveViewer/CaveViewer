@@ -244,6 +244,7 @@ class RoundedEntryControl:
         self._action_interaction = ControlInteractionState(
             enabled=state != "disabled"
         )
+        self._action_command = action_command
         self.widget = tk.Canvas(
             parent,
             width=width or metrics.numeric_control_width,
@@ -281,7 +282,7 @@ class RoundedEntryControl:
         if validatecommand is not None:
             entry_options["validatecommand"] = validatecommand
         self.entry = tk.Entry(self.content, **entry_options)
-        self.action_button: tk.Button | None = None
+        self.action_button: tk.Label | None = None
         self.action_seam: tk.Frame | None = None
         if action_text is None:
             self.entry.pack(fill="both", expand=True)
@@ -295,14 +296,15 @@ class RoundedEntryControl:
             )
             self.action_seam.grid(row=0, column=1, sticky="ns")
             self.content.grid_columnconfigure(2, minsize=self._action_width)
-            self.action_button = tk.Button(
+            self.action_button = tk.Label(
                 self.content,
                 text=action_text,
-                command=action_command,
                 font=action_font or font,
                 relief="flat",
                 borderwidth=0,
                 highlightthickness=0,
+                takefocus=state != "disabled",
+                anchor="center",
             )
             self.action_button.grid(row=0, column=2, sticky="nsew")
             self.action_button.bind("<Return>", self._invoke_action, add="+")
@@ -411,6 +413,14 @@ class RoundedEntryControl:
     def destroy(self) -> None:
         self.widget.destroy()
 
+    def sync_geometry(self) -> None:
+        """Refresh native child geometry and visual state after mapping."""
+        if self._closed:
+            return
+        self.widget.update_idletasks()
+        self._sync_geometry()
+        self._apply_visual()
+
     def focus_set(self) -> bool:
         """Focus the real entry when the compound control is available."""
         if self._closed or not self._interaction.enabled:
@@ -468,8 +478,12 @@ class RoundedEntryControl:
         return "break"
 
     def _invoke_action(self, _event=None) -> str:
-        if self._interaction.enabled and self.action_button is not None:
-            self.action_button.invoke()
+        if (
+            self._interaction.enabled
+            and self.action_button is not None
+            and self._action_command is not None
+        ):
+            self._action_command()
         return "break"
 
     def _on_action_enter(self, _event=None) -> None:
@@ -571,7 +585,6 @@ class RoundedEntryControl:
                 activebackground=self._palette.secondary_action_hover_background,
                 activeforeground=self._palette.secondary_action_text,
                 disabledforeground=self._palette.disabled_action_text,
-                state="normal" if self._interaction.enabled else "disabled",
                 takefocus=self._interaction.enabled,
             )
         if self.action_seam is not None:
@@ -684,15 +697,15 @@ class RoundedActionButton:
             takefocus=False,
         )
         self._renderer = RoundedSurfaceRenderer(self.widget)
-        self.button = tk.Button(
+        self.button = tk.Label(
             self.widget,
             text=text,
-            command=self._invoke,
             font=font,
             relief="flat",
             borderwidth=0,
             highlightthickness=0,
             takefocus=enabled,
+            anchor="center",
         )
         self._button_window = self.widget.create_window(
             (resolved_width // 2, metrics.control_height // 2),
@@ -753,6 +766,14 @@ class RoundedActionButton:
 
     def configure_text(self, text: str) -> None:
         self.button.configure(text=text)
+
+    def sync_geometry(self) -> None:
+        """Refresh native child geometry and visual state after mapping."""
+        if self._closed:
+            return
+        self.widget.update_idletasks()
+        self._sync_geometry(self.widget.winfo_width(), self.widget.winfo_height())
+        self._apply_visual()
 
     def focus_set(self) -> bool:
         """Focus the real button when the rounded action is available."""
@@ -852,14 +873,12 @@ class RoundedActionButton:
             palette=self._palette,
             metrics=self._metrics,
         )
-        state = "normal" if self._interaction.enabled else "disabled"
         self.button.configure(
             bg=visual.background,
             fg=visual.foreground,
             activebackground=visual.background,
             activeforeground=visual.foreground,
             disabledforeground=visual.foreground,
-            state=state,
             takefocus=self._interaction.enabled,
         )
         self._redraw(visual=visual)
