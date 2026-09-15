@@ -1,13 +1,13 @@
 {
   "authenticode_status": "unsigned-community",
-  "download_size_bytes": 65093200,
-  "download_size_bytes_windows_exe": 65093200,
-  "download_url": "https://github.com/CaveViewer/CaveViewer/releases/download/v1.1.0/CaveViewer-1.1.0-windows.exe",
-  "download_url_windows_exe": "https://github.com/CaveViewer/CaveViewer/releases/download/v1.1.0/CaveViewer-1.1.0-windows.exe",
+  "download_size_bytes": 65098580,
+  "download_size_bytes_windows_exe": 65098580,
+  "download_url": "https://github.com/CaveViewer/CaveViewer/releases/download/v1.1.1/CaveViewer-1.1.1-windows.exe",
+  "download_url_windows_exe": "https://github.com/CaveViewer/CaveViewer/releases/download/v1.1.1/CaveViewer-1.1.1-windows.exe",
   "install_channel": "windows_installer",
-  "latest_version": "1.1.0",
+  "latest_version": "1.1.1",
   "release_channel": "preview",
-  "release_notes": "Preview release 1.1.0",
-  "sha256": "d2af01e09282067cc0bf5c16b0c96b8dfd58a229e2d56a5aa14e66d2fa2f69f5",
-  "sha256_windows_exe": "d2af01e09282067cc0bf5c16b0c96b8dfd58a229e2d56a5aa14e66d2fa2f69f5"
+  "release_notes": "Improves viewer startup performance and readability, remembers viewer window size, and adds minimap navigation guidance.",
+  "sha256": "8361dd529f28d396b1be44a99b16a58061b2267abdd2d954a5266d6bb9d7c736",
+  "sha256_windows_exe": "8361dd529f28d396b1be44a99b16a58061b2267abdd2d954a5266d6bb9d7c736"
 }

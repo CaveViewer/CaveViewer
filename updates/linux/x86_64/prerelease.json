@@ -1,11 +1,11 @@
 {
-  "download_size_bytes": 93534712,
-  "download_size_bytes_linux_appimage": 93534712,
-  "download_url": "https://github.com/CaveViewer/CaveViewer/releases/download/v1.1.0/CaveViewer-1.1.0-x86_64.AppImage",
-  "download_url_linux_appimage": "https://github.com/CaveViewer/CaveViewer/releases/download/v1.1.0/CaveViewer-1.1.0-x86_64.AppImage",
-  "latest_version": "1.1.0",
+  "download_size_bytes": 93542904,
+  "download_size_bytes_linux_appimage": 93542904,
+  "download_url": "https://github.com/CaveViewer/CaveViewer/releases/download/v1.1.1/CaveViewer-1.1.1-x86_64.AppImage",
+  "download_url_linux_appimage": "https://github.com/CaveViewer/CaveViewer/releases/download/v1.1.1/CaveViewer-1.1.1-x86_64.AppImage",
+  "latest_version": "1.1.1",
   "release_channel": "preview",
-  "release_notes": "Preview release 1.1.0",
-  "sha256": "50629edc9c8e5bf70126aa0a76e0fb3e6df3a3520cb6270174c4859265866b94",
-  "sha256_linux_appimage": "50629edc9c8e5bf70126aa0a76e0fb3e6df3a3520cb6270174c4859265866b94"
+  "release_notes": "Improves viewer startup performance and readability, remembers viewer window size, and adds minimap navigation guidance.",
+  "sha256": "51fc85835ad93b66e939f979520108ebd8d34fa719291125f55cfad12ff8ee81",
+  "sha256_linux_appimage": "51fc85835ad93b66e939f979520108ebd8d34fa719291125f55cfad12ff8ee81"
 }

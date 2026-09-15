@@ -1,13 +1,13 @@
 {
   "architecture": "x86_64",
-  "download_size_bytes": 82944150,
-  "download_size_bytes_macosx_dmg": 82944150,
-  "download_url": "https://github.com/CaveViewer/CaveViewer/releases/download/v1.1.0/CaveViewer-1.1.0-macos-x86_64.dmg",
-  "download_url_macosx_dmg": "https://github.com/CaveViewer/CaveViewer/releases/download/v1.1.0/CaveViewer-1.1.0-macos-x86_64.dmg",
-  "latest_version": "1.1.0",
+  "download_size_bytes": 82350019,
+  "download_size_bytes_macosx_dmg": 82350019,
+  "download_url": "https://github.com/CaveViewer/CaveViewer/releases/download/v1.1.1/CaveViewer-1.1.1-macos-x86_64.dmg",
+  "download_url_macosx_dmg": "https://github.com/CaveViewer/CaveViewer/releases/download/v1.1.1/CaveViewer-1.1.1-macos-x86_64.dmg",
+  "latest_version": "1.1.1",
   "platform": "macos",
   "release_channel": "preview",
-  "release_notes": "Preview release 1.1.0",
-  "sha256": "890451a26bbccf4f69c4657ce4de3114024396313536ef1dbe84578db0b6d7aa",
-  "sha256_macosx_dmg": "890451a26bbccf4f69c4657ce4de3114024396313536ef1dbe84578db0b6d7aa"
+  "release_notes": "Improves viewer startup performance and readability, remembers viewer window size, and adds minimap navigation guidance.",
+  "sha256": "da290793f613cb3d1e48f3565d9e8fbde910bc750849e481acffe9378d34b14d",
+  "sha256_macosx_dmg": "da290793f613cb3d1e48f3565d9e8fbde910bc750849e481acffe9378d34b14d"
 }
