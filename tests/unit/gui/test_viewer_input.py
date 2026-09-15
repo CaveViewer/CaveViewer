@@ -173,6 +173,13 @@ def test_pointer_press_policy_preserves_modal_and_mouse_look_priority():
     ).kind is viewer_input.PointerPressKind.HUD
 
 
+def test_shift_left_click_requests_a_viewport_jump_after_hud_hit_testing():
+    intent = viewer_input.pointer_press_intent(_pointer_facts(shift_down=True))
+
+    assert intent.kind is viewer_input.PointerPressKind.HUD
+    assert intent.scene_teleport_requested is True
+
+
 def test_pointer_release_policy_cleans_up_option_and_platform_look_buttons():
     facts = viewer_input.PointerReleaseFacts(
         setup_complete=True,

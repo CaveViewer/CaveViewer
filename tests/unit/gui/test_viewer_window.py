@@ -25,6 +25,7 @@ from caveviewer.gui import (
     recording,
     viewer_window,
     viewer_window_capture_integration,
+    viewer_window_input_integration,
     viewer_window_map_integration,
 )
 from caveviewer.gui.features import (
@@ -5726,6 +5727,66 @@ def test_minimap_teleport_applies_landing_pose_and_trace_boundary(monkeypatch):
         ("stop", "minimap_teleport"),
         ("landing", window.manifest, 10.0, 20.0, 2.0),
         ("trace", "before", "minimap_teleport"),
+        "panel",
+    ]
+
+
+def test_viewport_teleport_uses_surface_height_and_existing_jump_flow(monkeypatch):
+    events = []
+    camera = SimpleNamespace(
+        position=np.array((1.0, 2.0, 3.0), dtype=np.float32),
+        yaw=0.0,
+        pitch=0.4,
+        roll=0.5,
+        view_matrix=lambda: np.identity(4),
+        projection_matrix=lambda _aspect: np.identity(4),
+    )
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window.wnd = SimpleNamespace(size=(800, 600))
+    window.camera = camera
+    window.manifest = {"chunk_size": 10}
+    window._chunk_aabbs = {"cell": object()}
+    window._chunk_normal_cache = {"cell": object()}
+    window.controls_overlay = SimpleNamespace(show_panel=lambda: events.append("panel"))
+    window._recorded_dive_is_active = lambda: True
+    window._stop_recorded_dive = lambda *, reason: events.append(("stop", reason))
+    window._manual_dive_trace_pose = lambda: "before"
+    window._mark_manual_dive_trace_discontinuity = (
+        lambda pose, *, reason: events.append(("trace", pose, reason))
+    )
+    monkeypatch.setattr(
+        viewer_window_input_integration.viewer_picking,
+        "viewport_ray",
+        lambda **kwargs: events.append(("ray", kwargs["screen_x"], kwargs["screen_y"])) or "ray",
+    )
+    monkeypatch.setattr(
+        viewer_window_input_integration.viewer_picking,
+        "nearest_surface_hit",
+        lambda *_args, **_kwargs: viewer_window_input_integration.viewer_picking.SurfaceHit(
+            point=(10.0, 14.0, 20.0),
+            distance=25.0,
+        ),
+    )
+    monkeypatch.setattr(
+        viewer_window.chunker,
+        "find_landing_position",
+        lambda manifest, x, z, *, preferred_y: (
+            events.append(("landing", manifest, x, z, preferred_y))
+            or (11.0, 12.0, 13.0)
+        ),
+    )
+
+    window._apply_viewport_teleport(400.0, 300.0)
+
+    assert tuple(camera.position) == pytest.approx((11.0, 12.0, 13.0))
+    assert camera.yaw == pytest.approx(np.arctan2(10.0, 10.0))
+    assert camera.pitch == 0.0
+    assert camera.roll == 0.0
+    assert events == [
+        ("ray", 400.0, 300.0),
+        ("stop", "viewport_teleport"),
+        ("landing", window.manifest, 10.0, 20.0, 14.0),
+        ("trace", "before", "viewport_teleport"),
         "panel",
     ]
 
