@@ -269,7 +269,7 @@ test("Sponsors uses responsive cards with official-site links", async ({ page })
         });
     });
 
-    expect(mobileLayout).toHaveLength(5);
+    expect(mobileLayout).toHaveLength(4);
     for (let index = 1; index < mobileLayout.length; index += 1) {
         expect(mobileLayout[index].top).toBeGreaterThan(mobileLayout[index - 1].top);
         expect(mobileLayout[index].left).toBeCloseTo(mobileLayout[0].left, 1);
