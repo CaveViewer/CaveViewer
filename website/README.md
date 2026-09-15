@@ -70,5 +70,5 @@ intrinsic dimensions to reserve layout space before images load.
 | Why CaveViewer | Rendering, Map Library, Capture, and Streaming WebP images | 0.45 MB |
 | Documentation | Import, Streaming, Backup, and Troubleshooting WebP images | 0.13 MB |
 | Team | Six responsive portrait WebP images | 0.80 MB |
-| Sponsors | KISS Rebreathers and XDEEP logo WebP images | 0.05 MB |
+| Sponsors | KISS Rebreathers logo WebP image | 0.05 MB |
 | Projects | No local image assets; two privacy-enhanced YouTube embeds | — |
