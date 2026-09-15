@@ -119,7 +119,9 @@ def test_native_launch_clamps_the_remembered_viewer_size():
         desktop_relative_window_size=lambda: pytest.fail("default sizing is unused"),
         desktop_size=lambda: (1920, 1080),
         launch_preflight=lambda **_kwargs: object(),
-        authorize_launch_target=lambda _preflight: object(),
+        authorize_launch_target=lambda _preflight: SimpleNamespace(
+            route_key="native"
+        ),
         config_class_factory=lambda _session, *, window_size: type(
             "Config", (), {"window_size": window_size}
         ),
@@ -149,7 +151,9 @@ def test_glfw_launch_bounds_the_remembered_viewer_size_to_its_work_area():
         desktop_relative_window_size=lambda: pytest.fail("GLFW owns sizing"),
         desktop_size=lambda: pytest.fail("GLFW owns work-area detection"),
         launch_preflight=lambda **_kwargs: object(),
-        authorize_launch_target=lambda _preflight: object(),
+        authorize_launch_target=lambda _preflight: SimpleNamespace(
+            route_key="glfw"
+        ),
         config_class_factory=lambda _session, *, window_size: type(
             "Config", (), {"window_size": window_size}
         ),

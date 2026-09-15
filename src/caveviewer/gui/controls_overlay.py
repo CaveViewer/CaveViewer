@@ -40,6 +40,7 @@ from caveviewer.gui.platform.presentation import (
 from caveviewer.core.diagnostics.logging import get_logger
 from caveviewer.gui.loading_progress import (
     OPENGL_PROGRESS_LABEL_TEXT_SIZE,
+    OPENGL_PROGRESS_LAYOUT_SCALE_MAX,
     ROUTINE_PROGRESS_BAR_HEIGHT,
     ROUTINE_PROGRESS_TITLE_TO_BAR_GAP,
     hex_color_rgb,
