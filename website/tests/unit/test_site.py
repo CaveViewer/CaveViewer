@@ -778,7 +778,7 @@ def test_website_uses_one_header_and_has_no_member_profile_routes() -> None:
     assert 'href="sponsors.html" aria-current="page">Sponsors</a>' in sponsors
     assert '<section class="sponsors-page" aria-labelledby="sponsors-page-title">' in sponsors
     assert '<div class="sponsors-page__grid">' in sponsors
-    assert sponsors.count('<a class="sponsor-card ') == 5
+    assert sponsors.count('<a class="sponsor-card ') == 4
     for sponsor, href, image, width, height in (
         (
             "KISS Rebreathers",
@@ -787,13 +787,14 @@ def test_website_uses_one_header_and_has_no_member_profile_routes() -> None:
             "487",
             "82",
         ),
-        ("XDEEP", "https://www.xdeep.eu/", "xdeep-logo", "95", "24"),
     ):
         assert f'href="{href}" target="_blank" rel="noopener noreferrer"' in sponsors
         assert f'<h2>{sponsor}</h2>' in sponsors
         assert f'assets/images/sponsors/{image}.webp' in sponsors
         assert f'assets/images/sponsors/{image}.png' in sponsors
         assert f'width="{width}" height="{height}"' in sponsors
+    assert "XDEEP" not in sponsors
+    assert "xdeep" not in sponsors.lower()
 
     advantage = (SITE_ROOT / "advantage.html").read_text(encoding="utf-8")
     assert 'href="advantage.html" aria-current="page">Why CaveViewer</a>' in advantage
@@ -824,15 +825,15 @@ def test_sponsors_grid_uses_local_logo_fallbacks_and_accepts_future_cards() -> N
     styles = (SITE_ROOT / "assets/css/sponsors.css").read_text(encoding="utf-8")
 
     assert 'assets/css/sponsors.css' in sponsors
-    assert sponsors.count("<picture>") == 2
-    assert sponsors.count('type="image/webp"') == 2
-    assert sponsors.count('<a class="sponsor-card ') == 5
-    assert sponsors.count('decoding="async"') == 5
+    assert sponsors.count("<picture>") == 1
+    assert sponsors.count('type="image/webp"') == 1
+    assert sponsors.count('<a class="sponsor-card ') == 4
+    assert sponsors.count('decoding="async"') == 4
     assert 'loading="eager" fetchpriority="high"' in sponsors
     assert (SITE_ROOT / "assets/images/sponsors/kiss-rebreathers-logo.png").is_file()
     assert (SITE_ROOT / "assets/images/sponsors/kiss-rebreathers-logo.webp").is_file()
-    assert (SITE_ROOT / "assets/images/sponsors/xdeep-logo.png").is_file()
-    assert (SITE_ROOT / "assets/images/sponsors/xdeep-logo.webp").is_file()
+    assert not (SITE_ROOT / "assets/images/sponsors/xdeep-logo.png").exists()
+    assert not (SITE_ROOT / "assets/images/sponsors/xdeep-logo.webp").exists()
     for logo in (
         "seal-drysuits-logo.svg",
         "agisoft-logo.svg",
@@ -1064,7 +1065,6 @@ def test_image_delivery_uses_responsive_webp_and_reserves_layout_space() -> None
             50_000,
             (
                 "assets/images/sponsors/kiss-rebreathers-logo.webp",
-                "assets/images/sponsors/xdeep-logo.webp",
             ),
         ),
     }
@@ -1078,7 +1078,7 @@ def test_image_delivery_uses_responsive_webp_and_reserves_layout_space() -> None
     assert "`image-set`" in readme
     assert "Six responsive portrait WebP images" in readme
     assert "Import, Streaming, Backup, and Troubleshooting WebP images" in readme
-    assert "KISS Rebreathers and XDEEP logo WebP images" in readme
+    assert "KISS Rebreathers logo WebP image" in readme
     assert "two privacy-enhanced YouTube embeds" in readme
 
     for asset in (
@@ -1132,9 +1132,9 @@ def test_image_delivery_uses_responsive_webp_and_reserves_layout_space() -> None
     assert about.count(' width="') >= 6
     assert ".about-person__media picture" in about_styles
 
-    assert sponsors.count("<picture>") == 2
+    assert sponsors.count("<picture>") == 1
     assert 'alt="KISS Rebreathers logo"' in sponsors
-    assert 'alt="XDEEP logo"' in sponsors
+    assert "XDEEP" not in sponsors
 
 
 def test_wide_home_hero_has_explicit_art_direction_and_aligned_gutters() -> None:

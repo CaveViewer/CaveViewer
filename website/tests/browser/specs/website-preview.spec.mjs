@@ -233,7 +233,6 @@ test("Sponsors uses responsive cards with official-site links", async ({ page })
     const grid = page.locator(".sponsors-page__grid");
     const cards = grid.locator(".sponsor-card");
     const kiss = cards.filter({ has: page.getByRole("heading", { name: "KISS Rebreathers" }) });
-    const xdeep = cards.filter({ has: page.getByRole("heading", { name: "XDEEP" }) });
 
     await navigation.getByText("Team & Partners", { exact: true }).click();
     await expect(navigation.getByRole("link", { name: "Sponsors" })).toHaveAttribute(
@@ -247,20 +246,15 @@ test("Sponsors uses responsive cards with official-site links", async ({ page })
 
         return { height: bounds.height, width: bounds.width };
     })).toEqual({ height: 1, width: 1 });
-    await expect(cards).toHaveCount(5);
+    await expect(cards).toHaveCount(4);
     await expect(kiss).toHaveAttribute("href", "https://www.kissrebreathers.com/");
-    await expect(xdeep).toHaveAttribute("href", "https://www.xdeep.eu/");
     await expect(kiss).toHaveAttribute("target", "_blank");
-    await expect(xdeep).toHaveAttribute("rel", "noopener noreferrer");
     await expect(kiss.getByRole("img", { name: "KISS Rebreathers logo" })).toBeVisible();
-    await expect(xdeep.getByRole("img", { name: "XDEEP logo" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "XDEEP" })).toHaveCount(0);
     await kiss.focus();
     await expect(kiss).toHaveCSS("outline-style", "solid");
     expect(await kiss.locator("img").evaluate(image => image.currentSrc)).toMatch(
         /kiss-rebreathers-logo\.webp$/,
-    );
-    expect(await xdeep.locator("img").evaluate(image => image.currentSrc)).toMatch(
-        /xdeep-logo\.webp$/,
     );
     await expectNoHorizontalOverflow(page);
 
@@ -275,7 +269,7 @@ test("Sponsors uses responsive cards with official-site links", async ({ page })
         });
     });
 
-    expect(mobileLayout).toHaveLength(5);
+    expect(mobileLayout).toHaveLength(4);
     for (let index = 1; index < mobileLayout.length; index += 1) {
         expect(mobileLayout[index].top).toBeGreaterThan(mobileLayout[index - 1].top);
         expect(mobileLayout[index].left).toBeCloseTo(mobileLayout[0].left, 1);
