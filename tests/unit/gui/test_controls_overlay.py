@@ -10,17 +10,13 @@ from caveviewer.gui import controls_overlay
 from caveviewer.gui.platform.presentation import select_presentation_profile
 
 
-def test_fullscreen_layout_scale_grows_for_large_viewer_surfaces():
+def test_fullscreen_layout_scale_keeps_startup_help_at_its_baseline():
     assert controls_overlay._fullscreen_layout_scale((1536, 864)) == 1.0
-    assert controls_overlay._fullscreen_layout_scale((2048, 1152)) == pytest.approx(
-        controls_overlay._FULLSCREEN_LAYOUT_SCALE_MAX
-    )
+    assert controls_overlay._fullscreen_layout_scale((1920, 1080)) == 1.0
 
 
-def test_fullscreen_layout_scale_is_capped_for_very_large_viewer_surfaces():
-    assert controls_overlay._fullscreen_layout_scale((3840, 2160)) == pytest.approx(
-        controls_overlay._FULLSCREEN_LAYOUT_SCALE_MAX
-    )
+def test_fullscreen_layout_scale_stays_at_baseline_for_very_large_viewer_surfaces():
+    assert controls_overlay._fullscreen_layout_scale((3840, 2160)) == 1.0
 
 
 def test_minimum_control_row_height_reserves_space_between_keycaps(monkeypatch):
@@ -194,6 +190,7 @@ def test_keycap_unit_spans_fit_control_labels(
         "↓": 10.0,
         "Left-drag": 58.0,
         "Minimap click": 64.0,
+        "map click": 64.0,
         "+": 8.0,
     }
     monkeypatch.setattr(
@@ -230,10 +227,10 @@ def test_keycap_unit_spans_fit_control_labels(
         == overlay._measure_keycap_sequence("← → ↑ ↓", 1.0, 4.0)
     )
     assert overlay._measure_keycap_sequence("Ctrl + R", 1.0, 4.0) == 111.0
-    assert overlay._keycap_width("Minimap click", 1.0, 4.0) == 140.0
+    assert overlay._keycap_width("Minimap click", 1.0, 4.0) == 159.0
     assert (
         overlay._keycap_width("Minimap click", 1.0, 4.0)
-        == overlay._measure_keycap_sequence("Del + 1–9", 1.0, 4.0)
+        == overlay._measure_keycap_sequence("Shift + map click", 1.0, 4.0)
     )
 
 

@@ -11,6 +11,7 @@ from caveviewer.gui.controls_catalog import (
     KeyboardShortcut,
     KeyboardShortcutSection,
     is_help_shortcut_visible,
+    minimap_navigation_control_shortcuts,
     shortcut_keycap_parts,
     shortcut_keycap_unit_count,
 )
@@ -128,6 +129,8 @@ def key_help_sections(
                     for shortcut in source_section.shortcuts
                     if is_help_shortcut_visible(shortcut)
                 )
+        if section_id == "navigate":
+            shortcuts.extend(minimap_navigation_control_shortcuts())
         if shortcuts:
             if section_id == "move":
                 speed_ids = {"move-speed-decrease", "move-speed-increase"}

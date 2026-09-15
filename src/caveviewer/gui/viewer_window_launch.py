@@ -12,6 +12,7 @@ from caveviewer.core.diagnostics.runtime import (
 )
 from caveviewer.gui.platform.window_backend import ViewerWindowLaunchRequest
 from caveviewer.gui.viewer_session import ViewerSession
+from caveviewer.gui.viewer_window_sizing import clamp_window_size_to_desktop_size
 
 
 _LOG = get_logger("CaveViewer")
@@ -103,10 +104,12 @@ def launch_viewer_window(
     session: ViewerSession,
     *,
     window_size_override: tuple[int, int] | None,
+    remembered_window_size: tuple[int, int] | None,
     default_window_size: tuple[int, int],
     desktop_window_scale: float,
     presentation_profile,
     desktop_relative_window_size: Callable[[], tuple[int, int]],
+    desktop_size: Callable[[], tuple[int, int] | None],
     launch_preflight: Callable[..., Any],
     authorize_launch_target: Callable[[Any], Any],
     config_class_factory: Callable[..., type],
@@ -130,14 +133,35 @@ def launch_viewer_window(
         requested_window_size = window_size_override
         window_size_fraction = None
         fallback_window_size = window_size_override
+        maximum_window_size = None
+    elif remembered_window_size is not None:
+        if presentation_profile.viewer_uses_glfw_native_initial_size:
+            # GLFW discovers the monitor work area after backend selection.
+            # A full-workarea request capped at the remembered bounds keeps a
+            # moved-to-smaller-display window visible without changing its
+            # saved size on displays where it already fits.
+            requested_window_size = remembered_window_size
+            window_size_fraction = 1.0
+            fallback_window_size = remembered_window_size
+            maximum_window_size = remembered_window_size
+        else:
+            requested_window_size = clamp_window_size_to_desktop_size(
+                remembered_window_size,
+                desktop_size(),
+            )
+            window_size_fraction = None
+            fallback_window_size = requested_window_size
+            maximum_window_size = None
     elif presentation_profile.viewer_uses_glfw_native_initial_size:
         requested_window_size = default_window_size
         window_size_fraction = desktop_window_scale
         fallback_window_size = default_window_size
+        maximum_window_size = default_window_size
     else:
         requested_window_size = desktop_relative_window_size()
         window_size_fraction = desktop_window_scale
         fallback_window_size = default_window_size
+        maximum_window_size = default_window_size
 
     request = ViewerWindowLaunchRequest(
         config_class=config_class_factory(
@@ -147,6 +171,7 @@ def launch_viewer_window(
         runner=runner,
         window_size_fraction=window_size_fraction,
         fallback_window_size=fallback_window_size,
+        maximum_window_size=maximum_window_size,
         force_resizable_window=True,
     )
     stage_recorder(

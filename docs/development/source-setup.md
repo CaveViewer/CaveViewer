@@ -715,11 +715,15 @@ font bitmaps. The always-visible viewer HUD also grows automatically on larger
 viewer surfaces so AppImage/XWayland and maximized GNOME windows keep legible
 controls without asking users to set environment variables.
 
-Viewer window geometry is separate from overlay text scaling. On Linux it is
-derived from 80% of GLFW's primary-monitor work area in backend-native screen
-coordinates. GLFW continues to scale the framebuffer for high-DPI rendering,
-but its X11 `SCALE_TO_MONITOR` size expansion is suppressed because applying it
-to an already monitor-relative window would scale the geometry twice.
+Viewer window geometry is separate from overlay text scaling. CaveViewer
+remembers the final size of an interactive viewer window and restores it for
+the next map, clamped to the current display. First launch, invalid state, and
+benchmark sessions use the normal default policy. On Linux that policy derives
+the initial size from 80% of GLFW's primary-monitor work area in backend-native
+screen coordinates. GLFW continues to scale the framebuffer for high-DPI
+rendering, but its X11 `SCALE_TO_MONITOR` size expansion is suppressed because
+applying it to an already monitor-relative window would scale the geometry
+twice.
 
 The accepted range is `0.5` through `3.0`. The controls/help overlay derives
 its row height from the resulting FreeType line metrics, so increasing the text

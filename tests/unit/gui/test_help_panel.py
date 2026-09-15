@@ -263,6 +263,15 @@ def test_keys_help_groups_shortcuts_as_move_look_and_navigate():
         "bookmark-delete",
         "map-open",
         "recorded-dive-space",
+        "minimap-click",
+        "shift-map-click",
+    ]
+    assert [
+        (shortcut.shortcut, shortcut.action)
+        for shortcut in key_sections[2].shortcuts[-2:]
+    ] == [
+        ("Minimap click", "Jump to that spot"),
+        ("Shift + map click", "Jump to that spot"),
     ]
 
 

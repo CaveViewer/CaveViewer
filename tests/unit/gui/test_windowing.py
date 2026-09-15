@@ -110,6 +110,7 @@ def _launch_glfw(
     plan,
     window_size_fraction=None,
     fallback_window_size=None,
+    maximum_window_size=None,
     force_resizable_window=False,
 ):
     PlatformWindowBackendAdapter(glfw_loader=glfw_loader).launch_viewer(
@@ -119,6 +120,7 @@ def _launch_glfw(
             runner=runner,
             window_size_fraction=window_size_fraction,
             fallback_window_size=fallback_window_size,
+            maximum_window_size=maximum_window_size,
             force_resizable_window=force_resizable_window,
         ),
     )
@@ -272,6 +274,27 @@ def test_relative_size_uses_glfw_workarea_without_duplicate_dpi_scaling():
     # The override is scoped to window creation and does not mutate pyGLFW.
     glfw.window_hint(glfw.SCALE_TO_MONITOR, glfw.TRUE)
     assert glfw.calls[-1] == ("window_hint", glfw.SCALE_TO_MONITOR, glfw.TRUE)
+
+
+def test_relative_size_caps_glfw_workarea_at_the_viewer_default():
+    glfw = FakeGlfw()
+    glfw.get_monitor_workarea = lambda _monitor: (0, 0, 2560, 1440)
+
+    class Config:
+        window_size = (1920, 1080)
+
+    observed = []
+    _launch_glfw(
+        Config,
+        runner=lambda config, args: observed.append((config.window_size, args)),
+        glfw_loader=lambda _system: glfw,
+        plan=WindowBackendPlan(WindowSystem.X11, (WindowSystem.X11,)),
+        window_size_fraction=0.8,
+        fallback_window_size=(1920, 1080),
+        maximum_window_size=(1920, 1080),
+    )
+
+    assert observed == [((1920, 1080), ["--window", "glfw"])]
 
 
 def test_viewer_launch_can_force_glfw_window_resizable_and_decorated():

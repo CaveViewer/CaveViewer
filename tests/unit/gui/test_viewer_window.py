@@ -27,6 +27,7 @@ from caveviewer.gui import (
     viewer_window_capture_integration,
     viewer_window_input_integration,
     viewer_window_map_integration,
+    viewer_window_sizing,
 )
 from caveviewer.gui.features import (
     FeatureDecision,
@@ -73,6 +74,155 @@ def _pending_import_session():
             ),
         )
     )
+
+
+def _benchmark_session():
+    return viewer_window.ViewerSession(
+        viewer_window.ViewerSessionConfig(
+            mode=viewer_window.ViewerLaunchMode.BENCHMARK,
+            cache_dir="/cache",
+            textures_dir="/textures",
+            manifest={"chunks": {}},
+            benchmark=viewer_window.ViewerBenchmarkConfig(
+                scenario=SimpleNamespace(name="test"),
+                output_dir="/output",
+                environment={},
+            ),
+        )
+    )
+
+
+def test_remembered_viewer_size_clamps_to_the_current_desktop():
+    assert viewer_window_sizing.clamp_window_size_to_desktop_size(
+        (2560, 1440),
+        (1920, 1080),
+    ) == (1920, 1080)
+    assert viewer_window_sizing.clamp_window_size_to_desktop_size(
+        (1440, 900),
+        None,
+    ) == (1440, 900)
+
+
+def test_native_launch_clamps_the_remembered_viewer_size():
+    requests = []
+    session = _viewer_session()
+
+    viewer_window.viewer_window_launch.launch_viewer_window(
+        session,
+        window_size_override=None,
+        remembered_window_size=(2560, 1440),
+        default_window_size=(1920, 1080),
+        desktop_window_scale=0.8,
+        presentation_profile=select_presentation_profile(
+            platform_name="windows"
+        ),
+        desktop_relative_window_size=lambda: pytest.fail("default sizing is unused"),
+        desktop_size=lambda: (1920, 1080),
+        launch_preflight=lambda **_kwargs: object(),
+        authorize_launch_target=lambda _preflight: SimpleNamespace(
+            route_key="native"
+        ),
+        config_class_factory=lambda _session, *, window_size: type(
+            "Config", (), {"window_size": window_size}
+        ),
+        runner=lambda *_args, **_kwargs: None,
+        window_backend_adapter_factory=lambda: SimpleNamespace(
+            launch_viewer=lambda _target, request: requests.append(request)
+        ),
+        stage_recorder=lambda *_args, **_kwargs: None,
+        exception_recorder=lambda *_args, **_kwargs: None,
+    )
+
+    assert requests[0].config_class.window_size == (1920, 1080)
+    assert requests[0].window_size_fraction is None
+
+
+def test_glfw_launch_bounds_the_remembered_viewer_size_to_its_work_area():
+    requests = []
+    session = _viewer_session()
+
+    viewer_window.viewer_window_launch.launch_viewer_window(
+        session,
+        window_size_override=None,
+        remembered_window_size=(2560, 1440),
+        default_window_size=(1920, 1080),
+        desktop_window_scale=0.8,
+        presentation_profile=select_presentation_profile(platform_name="linux"),
+        desktop_relative_window_size=lambda: pytest.fail("GLFW owns sizing"),
+        desktop_size=lambda: pytest.fail("GLFW owns work-area detection"),
+        launch_preflight=lambda **_kwargs: object(),
+        authorize_launch_target=lambda _preflight: SimpleNamespace(
+            route_key="glfw"
+        ),
+        config_class_factory=lambda _session, *, window_size: type(
+            "Config", (), {"window_size": window_size}
+        ),
+        runner=lambda *_args, **_kwargs: None,
+        window_backend_adapter_factory=lambda: SimpleNamespace(
+            launch_viewer=lambda _target, request: requests.append(request)
+        ),
+        stage_recorder=lambda *_args, **_kwargs: None,
+        exception_recorder=lambda *_args, **_kwargs: None,
+    )
+
+    assert requests[0].config_class.window_size == (2560, 1440)
+    assert requests[0].window_size_fraction == 1.0
+    assert requests[0].fallback_window_size == (2560, 1440)
+    assert requests[0].maximum_window_size == (2560, 1440)
+
+
+def test_final_close_persists_the_viewer_size_before_releasing_resources():
+    calls = []
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window._closing_requested = False
+    window._ensure_capture_workflow = lambda: SimpleNamespace(
+        complete_close_workflows=lambda: calls.append("complete_workflows")
+    )
+    window._import_active = False
+    window._finish_benchmark = lambda **_kwargs: calls.append("finish_benchmark")
+    window._persist_viewer_window_size = lambda: calls.append("persist_size")
+    window._has_map_loaded = False
+    window._release_window_resources = lambda: calls.append("release_resources")
+    window.wnd = SimpleNamespace(close=lambda: calls.append("close"))
+
+    window._complete_window_close()
+
+    assert calls == [
+        "complete_workflows",
+        "finish_benchmark",
+        "persist_size",
+        "release_resources",
+        "close",
+    ]
+
+
+def test_viewer_size_persistence_saves_the_final_native_dimensions(monkeypatch):
+    saved = []
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window._viewer_session = _viewer_session()
+    window.wnd = SimpleNamespace(size=(1680, 960))
+    monkeypatch.setattr(
+        viewer_window,
+        "save_viewer_window_state",
+        lambda state: saved.append(state) or True,
+    )
+
+    window._persist_viewer_window_size()
+
+    assert saved == [viewer_window.ViewerWindowState(width=1680, height=960)]
+
+
+def test_viewer_size_persistence_skips_benchmark_sessions(monkeypatch):
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window._viewer_session = _benchmark_session()
+    window.wnd = SimpleNamespace(size=(1680, 960))
+    monkeypatch.setattr(
+        viewer_window,
+        "save_viewer_window_state",
+        lambda _state: pytest.fail("benchmark size must not be saved"),
+    )
+
+    window._persist_viewer_window_size()
 
 
 def test_viewer_default_framebuffer_uses_multisampling_for_graphics_edges():
@@ -1893,7 +2043,7 @@ def test_desktop_relative_window_size_reuses_existing_tk_root(monkeypatch):
         ),
     )
 
-    assert viewer_window._desktop_relative_window_size() == (2048, 1152)
+    assert viewer_window._desktop_relative_window_size() == (1920, 1080)
     assert root.withdrawn is False
     assert root.destroyed is False
 
@@ -1904,7 +2054,7 @@ def test_desktop_relative_window_size_uses_default_for_bad_existing_root():
         winfo_screenheight=lambda: 1440,
     )
 
-    assert viewer_window._desktop_relative_window_size(root) == (1600, 1000)
+    assert viewer_window._desktop_relative_window_size(root) == (1920, 1080)
 
 
 def test_desktop_relative_window_size_does_not_replace_bad_live_default_root(
@@ -1926,7 +2076,7 @@ def test_desktop_relative_window_size_does_not_replace_bad_live_default_root(
         ),
     )
 
-    assert viewer_window._desktop_relative_window_size() == (1600, 1000)
+    assert viewer_window._desktop_relative_window_size() == (1920, 1080)
 
 
 def test_window_pixel_ratio_uses_framebuffer_size():
@@ -3297,6 +3447,7 @@ def test_linux_launch_defers_sizing_to_glfw_workarea(monkeypatch):
         "_presentation_profile_for_runtime",
         lambda _runtime: select_presentation_profile(platform_name="linux"),
     )
+    monkeypatch.setattr(viewer_window, "load_viewer_window_state", lambda: None)
     monkeypatch.setattr(
         viewer_window,
         "_desktop_relative_window_size",
@@ -3327,16 +3478,17 @@ def test_linux_launch_defers_sizing_to_glfw_workarea(monkeypatch):
     session = _viewer_session()
     viewer_window._launch_viewer_window(session)
 
-    assert viewer_window.CaveViewerWindow.window_size == (1600, 1000)
+    assert viewer_window.CaveViewerWindow.window_size == (1920, 1080)
     assert calls[0][0] is target
     request = calls[0][1]
     assert request.config_class is not viewer_window.CaveViewerWindow
     assert issubclass(request.config_class, viewer_window.CaveViewerWindow)
     assert request.config_class._viewer_session is session
-    assert request.config_class.window_size == (1600, 1000)
+    assert request.config_class.window_size == (1920, 1080)
     assert request.runner is viewer_window._run_moderngl_window_config
     assert request.window_size_fraction == 0.8
-    assert request.fallback_window_size == (1600, 1000)
+    assert request.fallback_window_size == (1920, 1080)
+    assert request.maximum_window_size == (1920, 1080)
     assert request.force_resizable_window is True
 
 
@@ -3395,6 +3547,7 @@ def test_viewer_launch_uses_injected_runtime_presentation_profile(monkeypatch):
         "create_window_backend_adapter",
         lambda: pytest.fail("launch must use the injected runtime window adapter"),
     )
+    monkeypatch.setattr(viewer_window, "load_viewer_window_state", lambda: None)
     monkeypatch.setattr(
         viewer_window,
         "authorized_viewer_launch_target",
@@ -3405,7 +3558,8 @@ def test_viewer_launch_uses_injected_runtime_presentation_profile(monkeypatch):
 
     assert calls[0][0] is target
     assert calls[0][1].window_size_fraction == 0.8
-    assert calls[0][1].fallback_window_size == (1600, 1000)
+    assert calls[0][1].fallback_window_size == (1920, 1080)
+    assert calls[0][1].maximum_window_size == (1920, 1080)
 
 
 def test_viewer_launch_refuses_disabled_preflight_before_window_execution(monkeypatch):

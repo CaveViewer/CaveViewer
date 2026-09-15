@@ -35,7 +35,6 @@ from caveviewer.gui.loading_progress import (
     ROUTINE_PROGRESS_TITLE_TO_BAR_GAP,
     circular_progress_ranges,
     hex_color_rgb,
-    progress_layout_scale,
     progress_segments,
     routine_progress_layout,
 )
@@ -72,9 +71,9 @@ def _hex_color_rgb(color: str) -> tuple[float, float, float]:
     return hex_color_rgb(color)
 
 
-def _progress_label_layout_scale(window_size: tuple[int, int]) -> float:
-    """Match the fullscreen controls prompt's responsive text scale."""
-    return progress_layout_scale(window_size)
+def _progress_label_layout_scale(_window_size: tuple[int, int]) -> float:
+    """Keep map-opening feedback at the startup/help visual baseline."""
+    return 1.0
 
 
 class ImportProgressPanel:
