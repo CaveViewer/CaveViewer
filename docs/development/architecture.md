@@ -733,9 +733,12 @@ debugger, and AppImage launches on the same GNOME window-management path with
 normal titlebar and resize decorations. Explicit `wayland` and `x11` modes
 never silently switch protocols. The Wayland application ID and X11 window class
 both use `io.github.caveviewer.caveviewer`. Initial window geometry is 80% of
-GLFW's primary-monitor work area in screen coordinates. Framebuffer DPI scaling
-remains enabled, while duplicate X11 monitor scaling of that already-relative
-geometry is suppressed during window creation.
+GLFW's primary-monitor work area in screen coordinates when no valid
+interactive viewer size has been remembered. The remembered size is stored
+independently from the Tk shell and clamped to the active display before the
+native window opens. Framebuffer DPI scaling remains enabled, while duplicate
+X11 monitor scaling of that already-relative geometry is suppressed during
+window creation.
 OpenGL HUD text is rasterized at framebuffer scale for crispness, while the
 always-visible right-side viewer controls use a separate responsive HUD scale
 based on the current viewer surface size. That keeps maximized and AppImage

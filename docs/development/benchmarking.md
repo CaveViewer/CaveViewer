@@ -206,12 +206,13 @@ Set `--history-limit 0` when deliberately hiding that previous-run comparison.
 Detailed threshold checks are still written to `comparison.json`.
 
 The benchmark viewer launches through the same window-sizing path as the
-regular CaveViewer app: 80% of the detected desktop/work area using the active
-GLFW backend and DPI coordinate policy. The scenario's `window_size` remains in
-the JSON for historical compatibility, but it is not used to force the local
-benchmark viewer window. The actual logical window size, framebuffer size, and
-UI surface size are recorded in the run environment and text summary; runs with
-different actual sizes are treated as incompatible local baselines.
+regular CaveViewer app: 80% of the detected desktop/work area, capped at
+1920 by 1080 logical pixels, using the active GLFW backend and DPI coordinate
+policy. The scenario's `window_size` remains in the JSON for historical
+compatibility, but it is not used to force the local benchmark viewer window.
+The actual logical window size, framebuffer size, and UI surface size are
+recorded in the run environment and text summary; runs with different actual
+sizes are treated as incompatible local baselines.
 
 For an existing `_cache`, the runner matches the regular app's cache-open path
 by using `<map-dir>/_cache` as both the chunk cache and texture root. That keeps

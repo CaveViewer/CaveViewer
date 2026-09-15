@@ -138,11 +138,17 @@ from caveviewer.gui.viewer_window_sizing import (
     DEFAULT_WINDOW_SIZE as _DEFAULT_WINDOW_SIZE,
     DESKTOP_WINDOW_SCALE as _DESKTOP_WINDOW_SCALE,
     VIEWER_UI_SCALE_MAX as _VIEWER_UI_SCALE_MAX,
+    desktop_size as _desktop_size,
     desktop_relative_window_size as _desktop_relative_window_size,
     viewer_overlay_text_scale as _viewer_overlay_text_scale,
     viewer_ui_scale_for_window_size as _viewer_ui_scale_for_window_size,
     viewer_ui_surface_size as _viewer_ui_surface_size,
     window_pixel_ratio as _window_pixel_ratio,
+)
+from caveviewer.gui.viewer_window_state import (
+    ViewerWindowState,
+    load_viewer_window_state,
+    save_viewer_window_state,
 )
 from caveviewer.gui.platform.window_backend import (
     WindowBackendAdapter,
@@ -1810,6 +1816,7 @@ class CaveViewerWindow(
                 self._shutdown_active_import()
 
             self._finish_benchmark(reason="viewer_closed")
+            self._persist_viewer_window_size()
 
             if self._has_map_loaded:
                 self._teardown_current_map(final_shutdown=True)
@@ -1824,6 +1831,22 @@ class CaveViewerWindow(
         finally:
             if workflows is not None:
                 workflows.complete_shutdown()
+
+    def _persist_viewer_window_size(self) -> None:
+        """Remember the final interactive viewer size without blocking close."""
+        session = getattr(self, "_viewer_session", None)
+        if (
+            session is None
+            or session.config.mode is ViewerLaunchMode.BENCHMARK
+        ):
+            return
+        try:
+            width, height = self.wnd.size
+            state = ViewerWindowState(width=int(width), height=int(height))
+        except (AttributeError, TypeError, ValueError):
+            return
+        if not save_viewer_window_state(state):
+            _LOG.warning("Could not persist the viewer window size.")
 
     def on_close(self):
         if self._closing_requested:
@@ -1891,15 +1914,30 @@ def _launch_viewer_window(
     window_size_override: tuple[int, int] | None = None,
 ) -> None:
     """Launch one session through the selected native backend."""
+    remembered_state = (
+        None
+        if (
+            window_size_override is not None
+            or session.config.mode is ViewerLaunchMode.BENCHMARK
+        )
+        else load_viewer_window_state()
+    )
+    remembered_window_size = (
+        None
+        if remembered_state is None
+        else (remembered_state.width, remembered_state.height)
+    )
     viewer_window_launch.launch_viewer_window(
         session,
         window_size_override=window_size_override,
+        remembered_window_size=remembered_window_size,
         default_window_size=_DEFAULT_WINDOW_SIZE,
         desktop_window_scale=_DESKTOP_WINDOW_SCALE,
         presentation_profile=_presentation_profile_for_runtime(
             session.config.platform_runtime
         ),
         desktop_relative_window_size=_desktop_relative_window_size,
+        desktop_size=_desktop_size,
         launch_preflight=viewer_launch_preflight,
         authorize_launch_target=authorized_viewer_launch_target,
         config_class_factory=_session_window_config_class,

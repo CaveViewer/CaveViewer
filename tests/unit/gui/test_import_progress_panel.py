@@ -160,7 +160,7 @@ def test_bar_note_flattens_line_breaks_to_one_supporting_line(monkeypatch):
     ]
 
 
-def test_progress_labels_match_fullscreen_prompt_scaling(monkeypatch):
+def test_progress_labels_keep_the_startup_help_baseline(monkeypatch):
     panel = object.__new__(ImportProgressPanel)
     text_calls = []
     monkeypatch.setattr(
@@ -178,10 +178,10 @@ def test_progress_labels_match_fullscreen_prompt_scaling(monkeypatch):
     assert import_progress_panel._progress_label_layout_scale((1280, 720)) == 1.0
     assert import_progress_panel._progress_label_layout_scale(
         (1920, 1080)
-    ) == pytest.approx(1.25)
+    ) == 1.0
     assert import_progress_panel._progress_label_layout_scale(
         (3840, 2160)
-    ) == pytest.approx(1.32)
+    ) == 1.0
 
     panel._add_bar_labels(
         add_quad_px=lambda *_args: None,
@@ -191,20 +191,20 @@ def test_progress_labels_match_fullscreen_prompt_scaling(monkeypatch):
         title="Preparing map",
         stage="Building map chunks",
         note="First-time setup in progress.",
-        layout_scale=1.25,
+        layout_scale=1.0,
     )
 
     assert text_calls == [
-        ("Preparing map", pytest.approx(130.0), pytest.approx(3.1875)),
+        ("Preparing map", pytest.approx(164.0), pytest.approx(2.55)),
         (
             "Building map chunks",
-            pytest.approx(244.3125),
-            pytest.approx(3.1875),
+            pytest.approx(255.45),
+            pytest.approx(2.55),
         ),
         (
             "First-time setup in progress.",
-            pytest.approx(340.0),
-            pytest.approx(2.425),
+            pytest.approx(332.0),
+            pytest.approx(1.94),
         ),
     ]
 

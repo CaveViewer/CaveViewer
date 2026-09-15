@@ -29,6 +29,7 @@ from caveviewer.gui import bitmap_font
 from caveviewer.gui.controls_catalog import (
     is_help_shortcut_visible,
     keyboard_control_sections,
+    minimap_navigation_control_shortcuts,
     shortcut_keycap_parts,
     shortcut_keycap_unit_count,
 )
@@ -38,9 +39,7 @@ from caveviewer.gui.platform.presentation import (
 )
 from caveviewer.core.diagnostics.logging import get_logger
 from caveviewer.gui.loading_progress import (
-    OPENGL_PROGRESS_BASE_WINDOW_SIZE,
     OPENGL_PROGRESS_LABEL_TEXT_SIZE,
-    OPENGL_PROGRESS_LAYOUT_SCALE_MAX,
     ROUTINE_PROGRESS_BAR_HEIGHT,
     ROUTINE_PROGRESS_TITLE_TO_BAR_GAP,
     hex_color_rgb,
@@ -80,8 +79,6 @@ _SPLASH_SUBTITLE_RGBA = (0.8000, 0.8039, 0.8392, 1.0)    # #cccdd6
 _SPLASH_INSTRUCTION_RGBA = (0.6039, 0.6039, 0.6510, 1.0) # #9a9aa6
 _LOADING_BACKGROUND_RGBA = (*hex_color_rgb(DARK_THEME.background), 1.0)
 
-_FULLSCREEN_BASE_WINDOW_SIZE = OPENGL_PROGRESS_BASE_WINDOW_SIZE
-_FULLSCREEN_LAYOUT_SCALE_MAX = OPENGL_PROGRESS_LAYOUT_SCALE_MAX
 _FULLSCREEN_SUBTITLE_TEXT_SIZE = OPENGL_PROGRESS_LABEL_TEXT_SIZE
 _CONTROL_KEYCAP_ROW_GAP = 4.0
 _KEYCAP_SEQUENCE_GAP = 5.0
@@ -90,12 +87,11 @@ _KEYCAP_SEQUENCE_GAP = 5.0
 def _fullscreen_layout_scale(window_size: tuple[int, int]) -> float:
     """Return bounded scaling for fullscreen loading/help overlay text.
 
-    The startup/help screen occupies the whole viewer, so it should grow on
-    large XWayland/AppImage surfaces instead of staying at the compact
-    1536x864 baseline.  Cap the multiplier so very large monitors do not turn
-    the reference table into billboard-sized text.
+    The startup/help screen retains its compact 1536x864 visual baseline even
+    when the viewer uses a larger initial window. This keeps the controls
+    reference readable without turning it into a billboard-sized table.
     """
-    return progress_layout_scale(window_size)
+    return min(1.0, progress_layout_scale(window_size))
 
 
 def _minimum_control_row_height(
@@ -190,10 +186,8 @@ def _get_platform_control_sections(
     look = [*visual_look_rows, *catalog_rows("view")]
     navigate = catalog_rows("bookmarks")
     navigate.extend(
-        [
-            ("Minimap click", "Jump to that spot"),
-            ("Shift + map click", "Jump to that spot"),
-        ]
+        (shortcut.shortcut, shortcut.action)
+        for shortcut in minimap_navigation_control_shortcuts()
     )
     capture = catalog_rows("capture", "map-import", "recorded-dive")
     return [
@@ -978,10 +972,10 @@ class ControlsOverlay:
             # gesture while preserving their shared trailing edge.
             return self._keycap_span_width(4, key_size, key_pad_x)
         if part == "Minimap click":
-            # Align the standalone minimap control with the compound bookmark
-            # delete shortcut immediately above it in the Navigate section.
+            # Match the full compound mouse-control span in Navigate, so this
+            # standalone keycap shares the adjacent row's left and right edges.
             return self._measure_keycap_sequence(
-                "Del + 1–9",
+                "Shift + map click",
                 key_size,
                 key_pad_x,
             )

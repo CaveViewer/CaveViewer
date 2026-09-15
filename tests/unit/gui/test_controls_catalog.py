@@ -5,6 +5,7 @@ from __future__ import annotations
 from caveviewer.gui.controls_catalog import (
     is_help_shortcut_visible,
     keyboard_control_sections,
+    minimap_navigation_control_shortcuts,
     shortcut_keycap_parts,
     shortcut_keycap_unit_count,
 )
@@ -107,6 +108,16 @@ def test_keyboard_catalog_excludes_contextual_splash_navigation_shortcuts():
     assert "Return" not in rendered_shortcuts
     assert "Tab / Shift + Tab" not in rendered_shortcuts
     assert "Return, cancel, or close" not in actions
+
+
+def test_minimap_navigation_controls_are_shared_by_viewer_references():
+    assert [
+        (shortcut.id, shortcut.shortcut, shortcut.action)
+        for shortcut in minimap_navigation_control_shortcuts()
+    ] == [
+        ("minimap-click", "Minimap click", "Jump to that spot"),
+        ("shift-map-click", "Shift + map click", "Jump to that spot"),
+    ]
 
 
 def test_keycap_parts_keep_compound_shortcuts_readable():

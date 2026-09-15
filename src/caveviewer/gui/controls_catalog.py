@@ -12,7 +12,7 @@ from caveviewer.gui.platform.presentation import (
 
 @dataclass(frozen=True, slots=True)
 class KeyboardShortcut:
-    """One direct viewer key binding and its concise user-facing action."""
+    """One viewer control reference and its concise user-facing action."""
 
     id: str
     shortcut: str
@@ -92,6 +92,22 @@ def shortcut_keycap_unit_count(part: str) -> int | None:
     if part in _TWO_UNIT_KEYCAPS:
         return 2
     return None
+
+
+def minimap_navigation_control_shortcuts() -> tuple[KeyboardShortcut, ...]:
+    """Return the pointer controls shared by the viewer's Navigate references."""
+    return (
+        KeyboardShortcut(
+            "minimap-click",
+            "Minimap click",
+            "Jump to that spot",
+        ),
+        KeyboardShortcut(
+            "shift-map-click",
+            "Shift + map click",
+            "Jump to that spot",
+        ),
+    )
 
 
 def keyboard_control_sections(

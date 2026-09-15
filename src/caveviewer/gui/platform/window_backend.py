@@ -39,6 +39,7 @@ class ViewerWindowLaunchRequest:
     runner: Callable[..., None]
     window_size_fraction: float | None = None
     fallback_window_size: tuple[int, int] | None = None
+    maximum_window_size: tuple[int, int] | None = None
     force_resizable_window: bool = False
 
     def __post_init__(self) -> None:
@@ -49,6 +50,17 @@ class ViewerWindowLaunchRequest:
             raise ValueError(
                 "window_size_fraction must be greater than 0 and at most 1"
             )
+        if self.maximum_window_size is not None:
+            try:
+                invalid_maximum_size = len(self.maximum_window_size) != 2 or any(
+                    int(dimension) <= 0 for dimension in self.maximum_window_size
+                )
+            except (TypeError, ValueError):
+                invalid_maximum_size = True
+            if invalid_maximum_size:
+                raise ValueError(
+                    "maximum_window_size must contain two positive dimensions"
+                )
 
 
 class WindowBackendAdapter(Protocol):
@@ -113,6 +125,7 @@ class PlatformWindowBackendAdapter:
                         window_system=window_system,
                         fraction=request.window_size_fraction,
                         fallback=fallback,
+                        maximum_size=request.maximum_window_size,
                     )
                 _LOG.info(
                     "Starting GLFW viewer with %s (mode=%s).",
@@ -199,6 +212,7 @@ def _glfw_workarea_window_size(
     window_system: WindowSystem,
     fraction: float,
     fallback: tuple[int, int],
+    maximum_size: tuple[int, int] | None = None,
 ) -> tuple[int, int]:
     """Scale the primary monitor's usable work area for a windowed launch."""
     try:
@@ -234,15 +248,28 @@ def _glfw_workarea_window_size(
         work_width = int(round(work_width / content_scale[0]))
         work_height = int(round(work_height / content_scale[1]))
 
-    window_size = (
+    requested_size = (
         max(1, int(round(work_width * fraction))),
         max(1, int(round(work_height * fraction))),
     )
+    window_size = (
+        tuple(
+            min(requested, maximum)
+            for requested, maximum in zip(requested_size, maximum_size, strict=True)
+        )
+        if maximum_size is not None
+        else requested_size
+    )
     _LOG.info(
-        "GLFW work area is %dx%d screen coordinates; opening at %dx%d.",
+        "GLFW work area is %dx%d screen coordinates; opening at %dx%d%s.",
         work_width,
         work_height,
         *window_size,
+        (
+            ""
+            if maximum_size is None
+            else f" (capped at {maximum_size[0]}x{maximum_size[1]})"
+        ),
     )
     return window_size
 

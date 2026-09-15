@@ -12,7 +12,7 @@ from caveviewer.gui.platform.presentation import PresentationProfile
 
 _LOG = get_logger("CaveViewer")
 
-DEFAULT_WINDOW_SIZE = (1600, 1000)
+DEFAULT_WINDOW_SIZE = (1920, 1080)
 DESKTOP_WINDOW_SCALE = 0.80
 VIEWER_UI_BASE_WINDOW_SIZE = (1536, 864)
 UI_TEXT_SCALE_ENV = "CAVEVIEWER_UI_TEXT_SCALE"
@@ -42,38 +42,10 @@ def screen_size_from_tk_root(root) -> tuple[int, int] | None:
     return desktop_width, desktop_height
 
 
-def window_size_from_desktop_size(
-    desktop_size: tuple[int, int],
-) -> tuple[int, int]:
-    """Return CaveViewer's default viewer size for a detected desktop."""
-    desktop_width, desktop_height = desktop_size
-    if desktop_width <= 0 or desktop_height <= 0:
-        return DEFAULT_WINDOW_SIZE
-
-    window_size = (
-        max(1, int(round(desktop_width * DESKTOP_WINDOW_SCALE))),
-        max(1, int(round(desktop_height * DESKTOP_WINDOW_SCALE))),
-    )
-    _LOG.info(
-        "Desktop size %dx%d; opening viewer at %dx%d.",
-        desktop_width,
-        desktop_height,
-        *window_size,
-    )
-    return window_size
-
-
-def desktop_relative_window_size(screen_source=None) -> tuple[int, int]:
-    """Return an 80%-of-screen fallback for non-GLFW desktop backends."""
+def desktop_size(screen_source=None) -> tuple[int, int] | None:
+    """Read the current desktop dimensions without applying viewer policy."""
     if screen_source is not None:
-        screen_size = screen_size_from_tk_root(screen_source)
-        if screen_size is None:
-            _LOG.warning(
-                "Could not detect desktop size from existing Tk root; using %dx%d.",
-                *DEFAULT_WINDOW_SIZE,
-            )
-            return DEFAULT_WINDOW_SIZE
-        return window_size_from_desktop_size(screen_size)
+        return screen_size_from_tk_root(screen_source)
 
     root = None
     owns_root = False
@@ -82,35 +54,71 @@ def desktop_relative_window_size(screen_source=None) -> tuple[int, int]:
 
         default_root = getattr(tk, "_default_root", None)
         if tk_root_exists(default_root):
-            screen_size = screen_size_from_tk_root(default_root)
-            if screen_size is None:
-                _LOG.warning(
-                    "Could not detect desktop size from existing Tk root; using %dx%d.",
-                    *DEFAULT_WINDOW_SIZE,
-                )
-                return DEFAULT_WINDOW_SIZE
-            return window_size_from_desktop_size(screen_size)
+            return screen_size_from_tk_root(default_root)
 
         root = tk.Tk(**tk_root_options())
         owns_root = True
         root.withdraw()
-        screen_size = screen_size_from_tk_root(root)
-        if screen_size is None:
-            return DEFAULT_WINDOW_SIZE
-        return window_size_from_desktop_size(screen_size)
+        return screen_size_from_tk_root(root)
     except Exception as error:
-        _LOG.warning(
-            "Could not detect desktop size (%s); using %dx%d.",
-            error,
-            *DEFAULT_WINDOW_SIZE,
-        )
-        return DEFAULT_WINDOW_SIZE
+        _LOG.warning("Could not detect desktop size (%s).", error)
+        return None
     finally:
         if owns_root and root is not None:
             try:
                 root.destroy()
             except Exception:
                 pass
+
+
+def clamp_window_size_to_desktop_size(
+    window_size: tuple[int, int],
+    desktop_size: tuple[int, int] | None,
+) -> tuple[int, int]:
+    """Keep a remembered size visible on the currently available desktop."""
+    try:
+        width, height = (max(1, int(value)) for value in window_size)
+        desktop_width, desktop_height = (
+            max(1, int(value)) for value in desktop_size or window_size
+        )
+    except (TypeError, ValueError):
+        return DEFAULT_WINDOW_SIZE
+    return min(width, desktop_width), min(height, desktop_height)
+
+
+def window_size_from_desktop_size(
+    desktop_size: tuple[int, int],
+) -> tuple[int, int]:
+    """Return CaveViewer's default viewer size for a detected desktop."""
+    desktop_width, desktop_height = desktop_size
+    if desktop_width <= 0 or desktop_height <= 0:
+        return DEFAULT_WINDOW_SIZE
+
+    requested_size = (
+        max(1, int(round(desktop_width * DESKTOP_WINDOW_SCALE))),
+        max(1, int(round(desktop_height * DESKTOP_WINDOW_SCALE))),
+    )
+    window_size = tuple(
+        min(requested, maximum)
+        for requested, maximum in zip(requested_size, DEFAULT_WINDOW_SIZE, strict=True)
+    )
+    _LOG.info(
+        "Desktop size %dx%d; opening viewer at %dx%d (capped at %dx%d).",
+        desktop_width,
+        desktop_height,
+        *window_size,
+        *DEFAULT_WINDOW_SIZE,
+    )
+    return window_size
+
+
+def desktop_relative_window_size(screen_source=None) -> tuple[int, int]:
+    """Return an 80%-of-screen fallback for non-GLFW desktop backends."""
+    screen_size = desktop_size(screen_source)
+    if screen_size is None:
+        _LOG.warning("Could not detect desktop size; using %dx%d.", *DEFAULT_WINDOW_SIZE)
+        return DEFAULT_WINDOW_SIZE
+    return window_size_from_desktop_size(screen_size)
 
 
 def window_pixel_ratio(window) -> float:
