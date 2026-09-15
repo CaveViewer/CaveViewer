@@ -45,6 +45,7 @@ class PointerPressKind(Enum):
     COLOR_PICKER = auto()
     DISMISS_COLOR_PICKER = auto()
     MINIMAP_TELEPORT = auto()
+    VIEWPORT_TELEPORT = auto()
 
 
 @dataclass(frozen=True)
@@ -59,6 +60,7 @@ class PointerPressFacts:
     is_left_button: bool
     is_look_button: bool
     option_look_active: bool
+    shift_down: bool = False
 
 
 @dataclass(frozen=True)
@@ -70,6 +72,7 @@ class PointerPressIntent:
     adjustment: int = 0
     world_xz: tuple[float, float] | None = None
     option_left_look: bool = False
+    scene_teleport_requested: bool = False
 
 
 def pointer_press_intent(facts: PointerPressFacts) -> PointerPressIntent:
@@ -97,7 +100,10 @@ def pointer_press_intent(facts: PointerPressFacts) -> PointerPressIntent:
                 PointerPressKind.START_MOUSE_LOOK,
                 option_left_look=True,
             )
-        return PointerPressIntent(PointerPressKind.HUD)
+        return PointerPressIntent(
+            PointerPressKind.HUD,
+            scene_teleport_requested=facts.shift_down,
+        )
     if facts.is_look_button:
         return PointerPressIntent(PointerPressKind.START_MOUSE_LOOK)
     return PointerPressIntent(PointerPressKind.IGNORE)

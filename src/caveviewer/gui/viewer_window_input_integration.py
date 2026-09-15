@@ -9,7 +9,7 @@ from moderngl_window.context.base import KeyModifiers
 
 from caveviewer.core.chunking import builder as chunker
 from caveviewer.core.diagnostics.logging import get_logger
-from caveviewer.gui import recorded_dive, viewer_bookmarks, viewer_input
+from caveviewer.gui import recorded_dive, viewer_bookmarks, viewer_input, viewer_picking
 from caveviewer.gui.viewer_action_dispatch import ViewerKeyPressActions
 from caveviewer.gui.viewer_capture_workflow import CaptureOwner
 
@@ -564,6 +564,10 @@ class ViewerWindowInputIntegration:
                 is_left_button=button == left_button,
                 is_look_button=button == look_button,
                 option_look_active=self._option_look_active(),
+                shift_down=self._key_is_down(
+                    self.wnd.keys,
+                    "LEFT_SHIFT", "RIGHT_SHIFT", "LSHIFT", "RSHIFT", "SHIFT",
+                ),
             )
         )
 
@@ -571,6 +575,8 @@ class ViewerWindowInputIntegration:
         self,
         x: float,
         y: float,
+        *,
+        scene_teleport_requested: bool = False,
     ) -> viewer_input.PointerPressIntent:
         """Resolve pure HUD hit results before applying any state change."""
         column = self._right_column_layout(self.wnd.size)
@@ -633,6 +639,11 @@ class ViewerWindowInputIntegration:
                     world_xz=world_xz,
                 )
 
+        if scene_teleport_requested and self._has_map_loaded:
+            return viewer_input.PointerPressIntent(
+                viewer_input.PointerPressKind.VIEWPORT_TELEPORT,
+            )
+
         if self._active_presentation_profile().mouse_look_button_name == "left":
             return viewer_input.PointerPressIntent(
                 viewer_input.PointerPressKind.START_MOUSE_LOOK
@@ -667,15 +678,55 @@ class ViewerWindowInputIntegration:
 
     def _apply_minimap_teleport(self, world_xz: tuple[float, float]) -> None:
         """Apply one resolved minimap landing on the render-thread camera."""
+        self._apply_teleport(
+            world_xz,
+            preferred_y=float(self.camera.position[1]),
+            reason="minimap_teleport",
+        )
+
+    def _apply_viewport_teleport(self, x: float, y: float) -> None:
+        """Jump to the nearest resident cave surface under one Shift-click."""
+        width, height = self.wnd.size
+        aspect = width / max(height, 1)
+        ray = viewer_picking.viewport_ray(
+            screen_x=x,
+            screen_y=y,
+            viewport_size=self.wnd.size,
+            camera_position=self.camera.position,
+            view=self.camera.view_matrix(),
+            projection=self.camera.projection_matrix(aspect),
+        )
+        hit = viewer_picking.nearest_surface_hit(
+            ray,
+            chunk_aabbs=self._chunk_aabbs,
+            chunk_triangle_groups=self._chunk_normal_cache,
+        )
+        if hit is None:
+            return
+        target_x, target_y, target_z = hit.point
+        self._apply_teleport(
+            (target_x, target_z),
+            preferred_y=target_y,
+            reason="viewport_teleport",
+        )
+
+    def _apply_teleport(
+        self,
+        world_xz: tuple[float, float],
+        *,
+        preferred_y: float,
+        reason: str,
+    ) -> None:
+        """Apply a cache-safe landing from a minimap or viewport target."""
         if self._recorded_dive_is_active():
-            self._stop_recorded_dive(reason="minimap_teleport")
+            self._stop_recorded_dive(reason=reason)
         trace_pose_before_teleport = self._manual_dive_trace_pose()
         target_x, target_z = world_xz
         landing = chunker.find_landing_position(
             self.manifest,
             target_x,
             target_z,
-            preferred_y=float(self.camera.position[1]),
+            preferred_y=preferred_y,
         )
         pose = viewer_input.minimap_teleport_pose(
             self.camera.position,
@@ -688,7 +739,7 @@ class ViewerWindowInputIntegration:
             self.camera.roll = 0.0
         self._mark_manual_dive_trace_discontinuity(
             trace_pose_before_teleport,
-            reason="minimap_teleport",
+            reason=reason,
         )
         self.controls_overlay.show_panel()
 
@@ -712,7 +763,11 @@ class ViewerWindowInputIntegration:
             return
         if intent.kind is viewer_input.PointerPressKind.HUD:
             self._apply_pointer_press_intent(
-                self._resolve_hud_pointer_intent(x, y),
+                self._resolve_hud_pointer_intent(
+                    x,
+                    y,
+                    scene_teleport_requested=intent.scene_teleport_requested,
+                ),
                 x=x,
                 y=y,
             )
@@ -739,6 +794,9 @@ class ViewerWindowInputIntegration:
             return
         if intent.kind is viewer_input.PointerPressKind.MINIMAP_TELEPORT:
             self._apply_minimap_teleport(intent.world_xz)
+            return
+        if intent.kind is viewer_input.PointerPressKind.VIEWPORT_TELEPORT:
+            self._apply_viewport_teleport(x, y)
 
     def _pointer_release_kind(self, button) -> viewer_input.PointerReleaseKind:
         """Normalize one backend release into a testable cleanup action."""
