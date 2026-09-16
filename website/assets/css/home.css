@@ -228,6 +228,9 @@ body.platform-dialog-open { overflow: hidden; }
     position: relative;
     width: 38px;
     height: 38px;
+    /* Platform icons are centered 46px from the dialog edge. The larger
+       close target needs this offset so its visible X shares that column. */
+    margin-right: 9px;
     flex: 0 0 auto;
     display: grid;
     padding: 0;
@@ -263,7 +266,7 @@ body.platform-dialog-open { overflow: hidden; }
 .platform-download__mac-option > button {
     width: 100%;
     min-height: 58px;
-    padding: 10px 15px;
+    padding: 10px 36px 10px 15px;
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -310,12 +313,17 @@ body.platform-dialog-open { overflow: hidden; }
     height: 18px;
 }
 .platform-download__mac-option > button > b::after {
+    display: block;
+    box-sizing: border-box;
     width: 8px;
     height: 8px;
     content: "";
     border-right: 1.5px solid currentColor;
     border-bottom: 1.5px solid currentColor;
-    transform: rotate(-45deg);
+    /* The visible strokes sit on the glyph's right and lower edges. Shift
+       the chevron slightly left so it shares the download icons' visual
+       center within the fixed 20px column. */
+    transform: translateX(-2px) rotate(-45deg);
 }
 .platform-download__mac-choices {
     padding: 10px;
