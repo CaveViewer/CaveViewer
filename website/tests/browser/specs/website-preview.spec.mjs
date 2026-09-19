@@ -658,8 +658,8 @@ test("modern browsers choose responsive images with reserved layout geometry", a
     });
     await importImage.scrollIntoViewIfNeeded();
     await expect(importImage).toBeVisible();
-    await expect(importImage).toHaveAttribute("width", "2420");
-    await expect(importImage).toHaveAttribute("height", "1634");
+    await expect(importImage).toHaveAttribute("width", "4320");
+    await expect(importImage).toHaveAttribute("height", "4268");
     await expect.poll(async () => importImage.evaluate(image => image.naturalWidth))
         .toBeGreaterThan(0);
     expect(await importImage.evaluate(image => image.currentSrc)).toMatch(

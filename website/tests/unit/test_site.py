@@ -710,6 +710,7 @@ def test_website_uses_one_header_and_has_no_member_profile_routes() -> None:
     assert "K3rnalPanic" not in about
 
     docs = (SITE_ROOT / "docs.html").read_text(encoding="utf-8")
+    docs_styles = (SITE_ROOT / "assets/css/docs.css").read_text(encoding="utf-8")
     assert '<summary aria-current="page">Docs</summary>' in docs
     assert '<article class="docs-article">' in docs
     assert "docs-toc" not in docs
@@ -722,13 +723,20 @@ def test_website_uses_one_header_and_has_no_member_profile_routes() -> None:
     assert "preferences-import-1600.webp" in docs
     assert (
         '<img src="assets/images/features/preferences-import.png" '
-        'width="2420" height="1634"' in docs
+        'width="4320" height="4268"' in docs
+    )
+    assert re.search(
+        r"\.docs-figure picture\s*\{[^}]*overflow: hidden;[^}]*border-radius: 10px;"
+        r"[^}]*border: 1px solid rgba\(242, 217, 140, \.24\);[^}]*"
+        r"box-shadow: 0 18px 55px",
+        docs_styles,
+        re.DOTALL,
     )
     assert "preferences-streaming-800.webp" in docs
     assert "preferences-streaming-1600.webp" in docs
     assert (
         '<img src="assets/images/features/preferences-streaming.png" '
-        'width="2420" height="1634"' in docs
+        'width="4320" height="5632"' in docs
     )
     assert "preferences-backup-800.webp" in docs
     assert "preferences-backup-1600.webp" in docs
