@@ -871,6 +871,10 @@ def test_advantage_section_uses_the_real_preferences_and_capabilities() -> None:
         assert text in advantage
 
     assert ".advantages-page {" in styles
+    assert (
+        "radial-gradient(circle at 16% 14%, rgba(var(--accent-rgb), .05), transparent 28%)"
+        in styles
+    )
     assert ".advantages-page__sections {" in styles
     assert ".feature-section--advantage {" in styles
     assert ".feature-section--freedom {" in styles
@@ -1113,16 +1117,36 @@ def test_image_delivery_uses_responsive_webp_and_reserves_layout_space() -> None
         "advantage-streaming-1600.webp",
     ):
         assert source in advantage
-    assert 'width="2558" height="1556" loading="eager" fetchpriority="high"' in advantage
+    assert (
+        '<img src="assets/images/features/rendering-engine.png" '
+        'width="2458" height="1456" '
+        'loading="eager" fetchpriority="high" decoding="async"'
+        in advantage
+    )
     assert (
         '<img src="assets/images/features/advantage-streaming.png" '
-        'width="2420" height="1634"' in advantage
+        'width="4320" height="5632" '
+        'loading="lazy" decoding="async" '
+        'alt="CaveViewer Preferences with Streaming selected, showing CPU, memory, and frame-loading settings"'
+        in advantage
     )
     assert (
         '<img src="assets/images/features/map-library.png" '
-        'width="2420" height="1634"' in advantage
+        'width="4320" height="2560" '
+        'loading="lazy" decoding="async" '
+        'alt="CaveViewer Map Library showing recent and available cave maps, including local-map access"'
+        in advantage
+    )
+    assert (
+        '<img src="assets/images/features/capture-recording.png" '
+        'width="2458" height="1456" '
+        'loading="lazy" decoding="async" '
+        'alt="CaveViewer confirming that a cave-dive recording was saved"'
+        in advantage
     )
     assert advantage.count('loading="lazy" decoding="async"') == 3
+    assert ".feature-section__visual {" in feature_styles
+    assert "border-radius: 10px;" in feature_styles
     assert ".feature-section__visual picture" in feature_styles
 
     assert about.count("<picture>") == 6
