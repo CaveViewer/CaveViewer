@@ -341,7 +341,7 @@ test("the Why CaveViewer link reaches practical, readable map guidance", async (
     });
     await expect(streamingImage).toBeVisible();
     await expect(streamingImage).toHaveAttribute("width", "4320");
-    await expect(streamingImage).toHaveAttribute("height", "5632");
+    await expect(streamingImage).toHaveAttribute("height", "5468");
     const freedom = page.locator("#advantage-freedom");
     await freedom.scrollIntoViewIfNeeded();
     await expect(freedom.getByRole("heading", { name: "Pay Nothing" })).toBeVisible();

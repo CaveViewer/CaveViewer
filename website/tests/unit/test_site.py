@@ -723,7 +723,7 @@ def test_website_uses_one_header_and_has_no_member_profile_routes() -> None:
     assert "preferences-import-1600.webp" in docs
     assert (
         '<img src="assets/images/features/preferences-import.png" '
-        'width="4320" height="4268"' in docs
+        'width="4320" height="4216"' in docs
     )
     assert re.search(
         r"\.docs-figure picture\s*\{[^}]*overflow: hidden;[^}]*border-radius: 10px;"
@@ -736,7 +736,7 @@ def test_website_uses_one_header_and_has_no_member_profile_routes() -> None:
     assert "preferences-streaming-1600.webp" in docs
     assert (
         '<img src="assets/images/features/preferences-streaming.png" '
-        'width="4320" height="5632"' in docs
+        'width="4320" height="5468"' in docs
     )
     assert "preferences-backup-800.webp" in docs
     assert "preferences-backup-1600.webp" in docs
@@ -1133,7 +1133,7 @@ def test_image_delivery_uses_responsive_webp_and_reserves_layout_space() -> None
     )
     assert (
         '<img src="assets/images/features/advantage-streaming.png" '
-        'width="4320" height="5632" '
+        'width="4320" height="5468" '
         'loading="lazy" decoding="async" '
         'alt="CaveViewer Preferences with Streaming selected, showing CPU, memory, and frame-loading settings"'
         in advantage
