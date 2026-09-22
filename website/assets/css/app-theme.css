@@ -139,7 +139,7 @@ body {
 
 .page-about .about-team {
     background:
-        radial-gradient(circle at 82% 18%, rgba(var(--accent-rgb), .08), transparent 22%),
+        radial-gradient(circle at 82% 18%, rgba(var(--accent-rgb), .04), transparent 22%),
         radial-gradient(circle at 16% 4%, rgba(92, 92, 110, .10), transparent 28%),
         linear-gradient(180deg, #12121a 0%, var(--bg) 46%, var(--bg) 100%);
 }
@@ -166,7 +166,7 @@ body {
 
 body.page-contact {
     background:
-        radial-gradient(circle at 82% 14%, rgba(var(--accent-rgb), .12), transparent 24%),
+        radial-gradient(circle at 82% 14%, rgba(var(--accent-rgb), .06), transparent 24%),
         radial-gradient(circle at 13% 88%, rgba(92, 92, 110, .11), transparent 28%),
         linear-gradient(145deg, #12121a 0%, var(--bg) 54%, var(--bg) 100%);
 }
@@ -214,7 +214,7 @@ body.page-contact {
 
 .page-media .media-page {
     background:
-        radial-gradient(circle at 16% 14%, rgba(var(--accent-rgb), .1), transparent 28%),
+        radial-gradient(circle at 16% 14%, rgba(var(--accent-rgb), .05), transparent 28%),
         linear-gradient(165deg, #101016 0%, #0c0c11 58%, #09090d 100%);
 }
 

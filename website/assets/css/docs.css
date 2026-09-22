@@ -5,7 +5,7 @@
     min-height: calc(100svh - var(--site-endcap-h));
     overflow: hidden;
     padding: calc(var(--header-h) + clamp(40px, 5vw, 72px)) 0 clamp(64px, 7vw, 104px);
-    background: radial-gradient(circle at 14% 10%, rgba(var(--accent-rgb), .09), transparent 28%), linear-gradient(165deg, #101016 0%, #0c0c11 58%, #09090d 100%);
+    background: radial-gradient(circle at 14% 10%, rgba(var(--accent-rgb), .045), transparent 28%), linear-gradient(165deg, #101016 0%, #0c0c11 58%, #09090d 100%);
 }
 .docs-page__grid {
     position: absolute;

@@ -659,7 +659,7 @@ test("modern browsers choose responsive images with reserved layout geometry", a
     await importImage.scrollIntoViewIfNeeded();
     await expect(importImage).toBeVisible();
     await expect(importImage).toHaveAttribute("width", "4320");
-    await expect(importImage).toHaveAttribute("height", "4268");
+    await expect(importImage).toHaveAttribute("height", "4216");
     await expect.poll(async () => importImage.evaluate(image => image.naturalWidth))
         .toBeGreaterThan(0);
     expect(await importImage.evaluate(image => image.currentSrc)).toMatch(
@@ -672,8 +672,8 @@ test("modern browsers choose responsive images with reserved layout geometry", a
     });
     await streamingImage.scrollIntoViewIfNeeded();
     await expect(streamingImage).toBeVisible();
-    await expect(streamingImage).toHaveAttribute("width", "2420");
-    await expect(streamingImage).toHaveAttribute("height", "1634");
+    await expect(streamingImage).toHaveAttribute("width", "4320");
+    await expect(streamingImage).toHaveAttribute("height", "5468");
     await expect.poll(async () => streamingImage.evaluate(image => image.naturalWidth))
         .toBeGreaterThan(0);
     expect(await streamingImage.evaluate(image => image.currentSrc)).toMatch(
@@ -694,8 +694,8 @@ test("modern browsers choose responsive images with reserved layout geometry", a
     });
     await backupImage.scrollIntoViewIfNeeded();
     await expect(backupImage).toBeVisible();
-    await expect(backupImage).toHaveAttribute("width", "2420");
-    await expect(backupImage).toHaveAttribute("height", "1634");
+    await expect(backupImage).toHaveAttribute("width", "4320");
+    await expect(backupImage).toHaveAttribute("height", "2836");
     await expect.poll(async () => backupImage.evaluate(image => image.naturalWidth))
         .toBeGreaterThan(0);
     expect(await backupImage.evaluate(image => image.currentSrc)).toMatch(
@@ -715,8 +715,8 @@ test("modern browsers choose responsive images with reserved layout geometry", a
     });
     await troubleshootingImage.scrollIntoViewIfNeeded();
     await expect(troubleshootingImage).toBeVisible();
-    await expect(troubleshootingImage).toHaveAttribute("width", "2420");
-    await expect(troubleshootingImage).toHaveAttribute("height", "1634");
+    await expect(troubleshootingImage).toHaveAttribute("width", "2160");
+    await expect(troubleshootingImage).toHaveAttribute("height", "1142");
     await expect.poll(async () => troubleshootingImage.evaluate(image => image.naturalWidth))
         .toBeGreaterThan(0);
     expect(await troubleshootingImage.evaluate(image => image.currentSrc)).toMatch(
