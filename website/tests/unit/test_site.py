@@ -4,6 +4,7 @@ import json
 import importlib.util
 import re
 import shutil
+import socket
 import subprocess
 import sys
 from datetime import date
@@ -11,6 +12,7 @@ from html import escape
 from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import urlparse
+from urllib.request import urlopen
 
 import pytest
 
@@ -57,6 +59,94 @@ def _sync_release_module():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def _browser_test_support_module():
+    spec = importlib.util.spec_from_file_location(
+        "browser_test_support", SITE_ROOT / "scripts" / "browser_test_support.py"
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_local_browser_test_tooling_uses_the_python_virtual_environment(
+    tmp_path: Path,
+) -> None:
+    support = _browser_test_support_module()
+    requirements = (REPOSITORY_ROOT / "requirements-dev.txt").read_text(
+        encoding="utf-8"
+    )
+    readme = (SITE_ROOT / "README.md").read_text(encoding="utf-8")
+    windows_environment = tmp_path / "windows-environment"
+    posix_environment = tmp_path / "posix-environment"
+    windows_node = windows_environment / "Scripts" / "node.exe"
+    windows_npm = windows_environment / "Scripts" / "npm.cmd"
+    posix_node = posix_environment / "bin" / "node"
+    for executable in (windows_node, windows_npm, posix_node):
+        executable.parent.mkdir(parents=True, exist_ok=True)
+        executable.touch()
+
+    assert support.environment_executable(
+        windows_environment, "node", platform_name="nt"
+    ) == windows_node
+    assert support.environment_executable(
+        windows_environment, "npm", platform_name="nt"
+    ) == windows_npm
+    assert support.environment_executable(
+        posix_environment, "node", platform_name="posix"
+    ) == posix_node
+
+    version = support.pinned_node_version()
+    assert version == "24.21.0"
+    python = Path(".venv/Scripts/python.exe")
+    assert support.nodeenv_install_command(python, version) == [
+        str(python),
+        "-m",
+        "nodeenv",
+        "-p",
+        "--node=24.21.0",
+        "--prebuilt",
+    ]
+    assert support.npm_ci_command(windows_npm) == [
+        str(windows_npm),
+        "ci",
+        "--ignore-scripts",
+    ]
+    windows_npx = windows_environment / "Scripts" / "npx.cmd"
+    assert support.playwright_install_command(windows_npx) == [
+        str(windows_npx),
+        "playwright",
+        "install",
+        "chromium",
+    ]
+    assert "nodeenv==1.10.0" in requirements
+    assert "setup_browser_tests.py" in readme
+    assert "run_browser_tests.py" in readme
+    assert "one available loopback port for the whole suite" in " ".join(
+        readme.split()
+    )
+
+
+def test_managed_browser_test_server_stops_after_failure(tmp_path: Path) -> None:
+    support = _browser_test_support_module()
+    (tmp_path / "index.html").write_text("browser test", encoding="utf-8")
+
+    host = ""
+    port = 0
+    with pytest.raises(RuntimeError, match="expected test interruption"):
+        with support.managed_site_server(tmp_path) as base_url:
+            parsed = urlparse(base_url)
+            host = parsed.hostname or ""
+            port = parsed.port or 0
+            with urlopen(f"{base_url}/index.html", timeout=2) as response:
+                assert response.read() == b"browser test"
+            raise RuntimeError("expected test interruption")
+
+    with pytest.raises(OSError):
+        socket.create_connection((host, port), timeout=0.2)
 
 
 def test_pages_workflow_builds_only_the_approved_production_artifact(
@@ -710,6 +800,7 @@ def test_website_uses_one_header_and_has_no_member_profile_routes() -> None:
     assert "K3rnalPanic" not in about
 
     docs = (SITE_ROOT / "docs.html").read_text(encoding="utf-8")
+    docs_styles = (SITE_ROOT / "assets/css/docs.css").read_text(encoding="utf-8")
     assert '<summary aria-current="page">Docs</summary>' in docs
     assert '<article class="docs-article">' in docs
     assert "docs-toc" not in docs
@@ -722,13 +813,20 @@ def test_website_uses_one_header_and_has_no_member_profile_routes() -> None:
     assert "preferences-import-1600.webp" in docs
     assert (
         '<img src="assets/images/features/preferences-import.png" '
-        'width="2420" height="1634"' in docs
+        'width="4320" height="4216"' in docs
+    )
+    assert re.search(
+        r"\.docs-figure picture\s*\{[^}]*overflow: hidden;[^}]*border-radius: 10px;"
+        r"[^}]*border: 1px solid rgba\(242, 217, 140, \.24\);[^}]*"
+        r"box-shadow: 0 18px 55px",
+        docs_styles,
+        re.DOTALL,
     )
     assert "preferences-streaming-800.webp" in docs
     assert "preferences-streaming-1600.webp" in docs
     assert (
         '<img src="assets/images/features/preferences-streaming.png" '
-        'width="2420" height="1634"' in docs
+        'width="4320" height="5468"' in docs
     )
     assert "preferences-backup-800.webp" in docs
     assert "preferences-backup-1600.webp" in docs
@@ -871,10 +969,38 @@ def test_advantage_section_uses_the_real_preferences_and_capabilities() -> None:
         assert text in advantage
 
     assert ".advantages-page {" in styles
+    assert (
+        "radial-gradient(circle at 16% 14%, rgba(var(--accent-rgb), .05), transparent 28%)"
+        in styles
+    )
     assert ".advantages-page__sections {" in styles
     assert ".feature-section--advantage {" in styles
     assert ".feature-section--freedom {" in styles
     assert "scroll-margin-top: calc(var(--header-h) + 24px);" in styles
+
+
+def test_non_home_page_backgrounds_limit_amber_highlights() -> None:
+    docs = (SITE_ROOT / "docs.html").read_text(encoding="utf-8")
+    media = (SITE_ROOT / "media.html").read_text(encoding="utf-8")
+    about = (SITE_ROOT / "about.html").read_text(encoding="utf-8")
+    contact = (SITE_ROOT / "contact.html").read_text(encoding="utf-8")
+    docs_styles = (SITE_ROOT / "assets/css/docs.css").read_text(encoding="utf-8")
+    feature_styles = (SITE_ROOT / "assets/css/features.css").read_text(encoding="utf-8")
+    theme_styles = (SITE_ROOT / "assets/css/app-theme.css").read_text(encoding="utf-8")
+
+    assert 'assets/css/docs.css?v=20260921-1' in docs
+    assert 'assets/css/features.css?v=20260921-1' in media
+    for page in (about, contact, media):
+        assert 'assets/css/app-theme.css?v=20260921-1' in page
+
+    assert "radial-gradient(circle at 14% 10%, rgba(var(--accent-rgb), .045), transparent 28%)" in docs_styles
+    assert "radial-gradient(circle at 16% 14%, rgba(var(--accent-rgb), .05), transparent 28%)" in feature_styles
+    for glow in (
+        "radial-gradient(circle at 82% 18%, rgba(var(--accent-rgb), .04), transparent 22%)",
+        "radial-gradient(circle at 82% 14%, rgba(var(--accent-rgb), .06), transparent 24%)",
+        "radial-gradient(circle at 16% 14%, rgba(var(--accent-rgb), .05), transparent 28%)",
+    ):
+        assert glow in theme_styles
 
 
 def test_contact_page_preserves_the_current_form_submission_contract() -> None:
@@ -1113,16 +1239,36 @@ def test_image_delivery_uses_responsive_webp_and_reserves_layout_space() -> None
         "advantage-streaming-1600.webp",
     ):
         assert source in advantage
-    assert 'width="2558" height="1556" loading="eager" fetchpriority="high"' in advantage
+    assert (
+        '<img src="assets/images/features/rendering-engine.png" '
+        'width="2458" height="1456" '
+        'loading="eager" fetchpriority="high" decoding="async"'
+        in advantage
+    )
     assert (
         '<img src="assets/images/features/advantage-streaming.png" '
-        'width="2420" height="1634"' in advantage
+        'width="4320" height="5468" '
+        'loading="lazy" decoding="async" '
+        'alt="CaveViewer Preferences with Streaming selected, showing CPU, memory, and frame-loading settings"'
+        in advantage
     )
     assert (
         '<img src="assets/images/features/map-library.png" '
-        'width="2420" height="1634"' in advantage
+        'width="4320" height="2560" '
+        'loading="lazy" decoding="async" '
+        'alt="CaveViewer Map Library showing recent and available cave maps, including local-map access"'
+        in advantage
+    )
+    assert (
+        '<img src="assets/images/features/capture-recording.png" '
+        'width="2458" height="1456" '
+        'loading="lazy" decoding="async" '
+        'alt="CaveViewer confirming that a cave-dive recording was saved"'
+        in advantage
     )
     assert advantage.count('loading="lazy" decoding="async"') == 3
+    assert ".feature-section__visual {" in feature_styles
+    assert "border-radius: 10px;" in feature_styles
     assert ".feature-section__visual picture" in feature_styles
 
     assert about.count("<picture>") == 6

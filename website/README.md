@@ -26,13 +26,34 @@ python3 -m pytest -o addopts='' tests/unit/test_site.py -q
 python3 scripts/sync_release.py --check
 ```
 
-Run browser checks against the local artifact from a second terminal:
+From the repository root, install the browser-test runtime into the existing
+Python virtual environment once. This installs the repository-pinned Node
+release, locked npm packages, and Chromium without requiring a system Node
+installation:
+
+```powershell
+uv pip install --python .venv\Scripts\python.exe -r requirements-dev.txt
+.venv\Scripts\python.exe website\scripts\setup_browser_tests.py
+```
+
+On macOS or Linux, use the environment's POSIX Python path:
 
 ```bash
-cd tests/browser
-npm ci
-npx playwright install chromium
-npm test
+uv pip install --python .venv/bin/python -r requirements-dev.txt
+.venv/bin/python website/scripts/setup_browser_tests.py
+```
+
+Then run the complete browser suite with one automatically managed local
+server. The runner builds the production artifact in a temporary directory,
+uses one available loopback port for the whole suite, and stops the server on
+success, failure, or interruption:
+
+```powershell
+.venv\Scripts\python.exe website\scripts\run_browser_tests.py
+```
+
+```bash
+.venv/bin/python website/scripts/run_browser_tests.py
 ```
 
 ## Release and contact maintenance
