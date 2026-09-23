@@ -5720,6 +5720,43 @@ def test_mouse_callbacks_during_setup_return_before_controls_exist():
     window.on_mouse_release_event(10, 20, 1)
 
 
+@pytest.mark.parametrize("platform_name", ["win32", "linux", "darwin"])
+def test_primary_pointer_look_uses_right_button_on_every_platform(platform_name):
+    window = object.__new__(viewer_window.CaveViewerWindow)
+    window._window_setup_complete = True
+    window._presentation_profile = select_presentation_profile(
+        platform_name=platform_name
+    )
+    window._keys_down = set()
+    window._input_is_suppressed = lambda: False
+    window._recording_hides_hud = lambda: False
+    window._option_look_active = lambda: False
+    window.controls_overlay = SimpleNamespace(
+        is_waiting_for_begin=False,
+        is_manual_mode=False,
+    )
+    window.wnd = SimpleNamespace(
+        keys=SimpleNamespace(),
+        mouse=SimpleNamespace(left=1, right=2),
+    )
+
+    left_press = window._pointer_press_intent(1)
+    right_press = window._pointer_press_intent(2)
+
+    assert left_press.kind is viewer_window.viewer_input.PointerPressKind.HUD
+    assert (
+        right_press.kind
+        is viewer_window.viewer_input.PointerPressKind.START_MOUSE_LOOK
+    )
+
+    window._mouse_look_left_option_active = False
+    window._mouse_look_active = True
+    assert (
+        window._pointer_release_kind(2)
+        is viewer_window.viewer_input.PointerReleaseKind.STOP_MOUSE_LOOK
+    )
+
+
 def test_mouse_press_callback_routes_one_typed_intent():
     calls = []
     intent = viewer_window.viewer_input.PointerPressIntent(

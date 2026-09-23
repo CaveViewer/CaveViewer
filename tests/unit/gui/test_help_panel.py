@@ -9,7 +9,10 @@ from types import SimpleNamespace
 import pytest
 
 from caveviewer.gui import help_panel
-from caveviewer.gui.controls_catalog import keyboard_control_sections
+from caveviewer.gui.controls_catalog import (
+    keyboard_control_sections,
+    viewer_control_sections,
+)
 from caveviewer.gui.help_style import HELP_VISUAL_METRICS
 from caveviewer.gui.platform.presentation import select_presentation_profile
 
@@ -231,7 +234,7 @@ def test_capture_help_has_its_own_tab_with_artifact_specific_guidance():
 
 
 def test_keys_help_groups_shortcuts_as_move_look_and_navigate():
-    sections = keyboard_control_sections(
+    sections = viewer_control_sections(
         select_presentation_profile(platform_name="windows")
     )
 
@@ -252,11 +255,14 @@ def test_keys_help_groups_shortcuts_as_move_look_and_navigate():
     assert key_sections[0].shortcuts[-1].shortcut == "- ="
     assert key_sections[0].shortcuts[-1].action == "Decrease/increase speed"
     assert [shortcut.id for shortcut in key_sections[1].shortcuts] == [
+        "look-pointer",
         "look-arrows",
         "look-jlik",
         "look-roll",
         "view-reset",
     ]
+    assert key_sections[1].shortcuts[0].shortcut == "Right-drag"
+    assert key_sections[1].shortcuts[0].action == "Look around"
     assert [shortcut.id for shortcut in key_sections[2].shortcuts] == [
         "bookmark-save",
         "bookmark-recall",

@@ -188,7 +188,7 @@ def test_keycap_unit_spans_fit_control_labels(
         "→": 10.0,
         "↑": 10.0,
         "↓": 10.0,
-        "Left-drag": 58.0,
+        "Right-drag": 58.0,
         "Minimap click": 64.0,
         "map click": 64.0,
         "+": 8.0,
@@ -221,9 +221,9 @@ def test_keycap_unit_spans_fit_control_labels(
     )
     assert overlay._keycap_width("Del", 1.0, 4.0) == 53.0
     assert overlay._keycap_width("1–9", 1.0, 4.0) == 53.0
-    assert overlay._keycap_width("Left-drag", 1.0, 4.0) == 111.0
+    assert overlay._keycap_width("Right-drag", 1.0, 4.0) == 111.0
     assert (
-        overlay._keycap_width("Left-drag", 1.0, 4.0)
+        overlay._keycap_width("Right-drag", 1.0, 4.0)
         == overlay._measure_keycap_sequence("← → ↑ ↓", 1.0, 4.0)
     )
     assert overlay._measure_keycap_sequence("Ctrl + R", 1.0, 4.0) == 111.0
@@ -569,10 +569,10 @@ def test_recording_help_copy_is_shortcut_only_and_format_neutral():
     assert "Ctrl + Shift + 1–9" not in rows
 
 
-def test_controls_overlay_uses_the_shared_keyboard_catalog():
+def test_controls_overlay_uses_the_shared_viewer_catalog():
     source = inspect.getsource(controls_overlay._get_platform_control_sections)
 
-    assert "keyboard_control_sections(" in source
+    assert "viewer_control_sections(" in source
     assert '"Start/stop recording"' not in source
     assert '"Start/stop manual trace"' not in source
     assert '"Start/stop slice"' not in source
@@ -691,7 +691,7 @@ def test_control_help_copy_uses_profile_for_macos_shortcuts():
         select_presentation_profile(platform_name="darwin")
     )
 
-    assert rows["Right click + mouse"] == "Look around"
+    assert rows["Right-drag"] == "Look around"
     assert rows["Option + left click + mouse"] == "Look around (alternative)"
     assert rows["Cmd + 0"] == "Reset view (level horizon)"
     assert rows["Cmd + 1–9"] == "Save camera bookmark"
@@ -712,9 +712,9 @@ def test_control_help_copy_uses_profile_for_control_shortcuts():
     assert rows["-"] == "Decrease fly speed"
     assert rows["="] == "Increase fly speed"
     assert rows["Scroll"] == "Adjust fly speed"
-    assert rows["Left-drag"] == "Look around"
+    assert rows["Right-drag"] == "Look around"
     assert "Left click + mouse" not in rows
-    assert "Right click + mouse" not in rows
+    assert "Left-drag" not in rows
     assert rows["Ctrl + 0"] == "Reset view (level horizon)"
     assert rows["Ctrl + 1–9"] == "Save camera bookmark"
     assert "Ctrl + A" not in rows

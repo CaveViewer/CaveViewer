@@ -40,7 +40,7 @@ from caveviewer.gui.platform.runtime import create_platform_runtime
             "Inter",
             "Segoe UI",
             "Ctrl",
-            "left",
+            "right",
             1.0,
             False,
         ),
@@ -54,8 +54,8 @@ from caveviewer.gui.platform.runtime import create_platform_runtime
             1.15,
             False,
         ),
-        ("win32", "windows", "Inter", "Segoe UI", "Ctrl", "left", 1.0, False),
-        ("linux", "linux", "Inter", "sans-serif", "Ctrl", "left", 1.0, True),
+        ("win32", "windows", "Inter", "Segoe UI", "Ctrl", "right", 1.0, False),
+        ("linux", "linux", "Inter", "sans-serif", "Ctrl", "right", 1.0, True),
     ],
 )
 def test_presentation_profile_selects_static_platform_conventions(

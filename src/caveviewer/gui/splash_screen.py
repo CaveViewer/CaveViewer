@@ -68,7 +68,7 @@ from caveviewer.gui.cave_metadata_panel import (
     CaveMetadataPanel,
     CaveMetadataPanelStyle,
 )
-from caveviewer.gui.controls_catalog import keyboard_control_sections
+from caveviewer.gui.controls_catalog import viewer_control_sections
 from caveviewer.gui.help_panel import HelpPanel, HelpPanelStyle
 from caveviewer.gui.text_link import configure_text_link
 from caveviewer.gui.help_style import HELP_VISUAL_PALETTE, create_help_typography
@@ -2493,7 +2493,7 @@ def _show_splash_composition(
             help_surface,
             px=px,
             style=_help_panel_style(px=px),
-            sections=keyboard_control_sections(presentation_profile),
+            sections=viewer_control_sections(presentation_profile),
             log_information_controller=LogInformationController(
                 on_saved=_on_log_information_saved,
             ),

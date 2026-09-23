@@ -104,7 +104,7 @@ _CAPTURE_HELP_LAYOUT = (
 )
 _KEY_HELP_LAYOUT = (
     ("move", "Move", ("movement",)),
-    ("look", "Look", ("view",)),
+    ("look", "Look", ("pointer-look", "view")),
     ("navigate", "Navigate", ("bookmarks", "map", "recorded-dive")),
 )
 

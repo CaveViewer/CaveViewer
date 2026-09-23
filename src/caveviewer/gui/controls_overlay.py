@@ -28,10 +28,10 @@ from caveviewer.branding import BrandingAssets, resolve_branding_assets
 from caveviewer.gui import bitmap_font
 from caveviewer.gui.controls_catalog import (
     is_help_shortcut_visible,
-    keyboard_control_sections,
     minimap_navigation_control_shortcuts,
     shortcut_keycap_parts,
     shortcut_keycap_unit_count,
+    viewer_control_sections,
 )
 from caveviewer.gui.platform.presentation import (
     PresentationProfile,
@@ -154,16 +154,15 @@ def _paired_section_offsets(
 def _get_platform_control_sections(
     presentation_profile: PresentationProfile | None = None,
 ) -> list[tuple[str, list[tuple[str, str]]]]:
-    """Compose overlay controls from shared keyboard and local visual rows."""
+    """Compose overlay controls from the shared viewer-control catalog."""
     presentation_profile = presentation_profile or get_presentation_profile()
-    look_button = presentation_profile.mouse_look_button_name
     rows_by_section = {
         section.id: [
             (shortcut.shortcut, shortcut.action)
             for shortcut in section.shortcuts
             if is_help_shortcut_visible(shortcut)
         ]
-        for section in keyboard_control_sections(presentation_profile)
+        for section in viewer_control_sections(presentation_profile)
     }
 
     def catalog_rows(*section_ids: str) -> list[tuple[str, str]]:
@@ -173,18 +172,9 @@ def _get_platform_control_sections(
             for row in rows_by_section[section_id]
         ]
 
-    visual_look_rows = []
-    if look_button == "right":
-        visual_look_rows.append(("Right click + mouse", "Look around"))
-        visual_look_rows.append(
-            ("Option + left click + mouse", "Look around (alternative)")
-        )
-    else:  # left
-        visual_look_rows.append(("Left-drag", "Look around"))
-
     movement = catalog_rows("movement")
     movement.append(("Scroll", "Adjust fly speed"))
-    look = [*visual_look_rows, *catalog_rows("view")]
+    look = catalog_rows("pointer-look", "view")
     navigate = catalog_rows("bookmarks")
     navigate.extend(
         (shortcut.shortcut, shortcut.action)
@@ -968,7 +958,7 @@ class ControlsOverlay:
         unit_count = shortcut_keycap_unit_count(part)
         if unit_count is not None:
             return self._keycap_span_width(unit_count, key_size, key_pad_x)
-        if part == "Left-drag":
+        if part in {"Left-drag", "Right-drag"}:
             # Match the complete four-arrow row immediately below this
             # gesture while preserving their shared trailing edge.
             return self._keycap_span_width(4, key_size, key_pad_x)
