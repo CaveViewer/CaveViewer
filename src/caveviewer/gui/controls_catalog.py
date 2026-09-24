@@ -1,4 +1,4 @@
-"""Pure, platform-aware viewer-key catalog shared by CaveViewer help UIs."""
+"""Pure, platform-aware viewer-control catalog shared by CaveViewer help UIs."""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ class KeyboardShortcut:
 
 @dataclass(frozen=True, slots=True)
 class KeyboardShortcutSection:
-    """A stable, ordered group of related direct viewer key bindings."""
+    """A stable, ordered group of related direct viewer controls."""
 
     id: str
     title: str
@@ -108,6 +108,30 @@ def minimap_navigation_control_shortcuts() -> tuple[KeyboardShortcut, ...]:
             "Jump to that spot",
         ),
     )
+
+
+def pointer_look_control_shortcuts(
+    presentation_profile: PresentationProfile | None = None,
+) -> tuple[KeyboardShortcut, ...]:
+    """Return the pointer-look controls shared by both viewer references."""
+    profile = presentation_profile or get_presentation_profile()
+    look_button = profile.mouse_look_button_name
+    shortcuts = [
+        KeyboardShortcut(
+            "look-pointer",
+            f"{look_button.title()}-drag",
+            "Look around",
+        )
+    ]
+    if profile.option_left_mouse_look_enabled:
+        shortcuts.append(
+            KeyboardShortcut(
+                "look-option-left-pointer",
+                "Option + left click + mouse",
+                "Look around (alternative)",
+            )
+        )
+    return tuple(shortcuts)
 
 
 def keyboard_control_sections(
@@ -265,4 +289,19 @@ def keyboard_control_sections(
                 ),
             ),
         ),
+    )
+
+
+def viewer_control_sections(
+    presentation_profile: PresentationProfile | None = None,
+) -> tuple[KeyboardShortcutSection, ...]:
+    """Return pointer and keyboard controls for the viewer help surfaces."""
+    profile = presentation_profile or get_presentation_profile()
+    return (
+        KeyboardShortcutSection(
+            id="pointer-look",
+            title="Pointer Look",
+            shortcuts=pointer_look_control_shortcuts(profile),
+        ),
+        *keyboard_control_sections(profile),
     )

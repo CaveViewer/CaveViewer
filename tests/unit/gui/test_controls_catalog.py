@@ -1,4 +1,4 @@
-"""Exercise the shared, platform-aware catalog of direct viewer keys."""
+"""Exercise the shared, platform-aware catalog of direct viewer controls."""
 
 from __future__ import annotations
 
@@ -6,8 +6,10 @@ from caveviewer.gui.controls_catalog import (
     is_help_shortcut_visible,
     keyboard_control_sections,
     minimap_navigation_control_shortcuts,
+    pointer_look_control_shortcuts,
     shortcut_keycap_parts,
     shortcut_keycap_unit_count,
+    viewer_control_sections,
 )
 from caveviewer.gui.platform.presentation import select_presentation_profile
 
@@ -62,6 +64,27 @@ def test_keyboard_catalog_covers_each_direct_viewer_binding_once():
         shortcut.id for shortcut in sections_by_id["map-import"].shortcuts
     ] == ["import-pause"]
     assert is_help_shortcut_visible(rows["import-pause"]) is False
+
+
+def test_viewer_catalog_adds_the_shared_platform_pointer_look_controls():
+    windows = select_presentation_profile(platform_name="windows")
+    macos = select_presentation_profile(platform_name="darwin")
+
+    sections = viewer_control_sections(windows)
+
+    assert sections[0].id == "pointer-look"
+    assert sections[0].shortcuts == pointer_look_control_shortcuts(windows)
+    assert [
+        (shortcut.id, shortcut.shortcut, shortcut.action)
+        for shortcut in sections[0].shortcuts
+    ] == [("look-pointer", "Right-drag", "Look around")]
+    assert [
+        (shortcut.shortcut, shortcut.action)
+        for shortcut in pointer_look_control_shortcuts(macos)
+    ] == [
+        ("Right-drag", "Look around"),
+        ("Option + left click + mouse", "Look around (alternative)"),
+    ]
 
 
 def test_keyboard_catalog_uses_direct_control_bindings_and_capture_standard():
@@ -150,7 +173,7 @@ def test_keycap_unit_counts_define_complete_compact_spans():
     ):
         assert shortcut_keycap_unit_count(part) == 2
 
-    assert shortcut_keycap_unit_count("Left-drag") is None
+    assert shortcut_keycap_unit_count("Right-drag") is None
     assert shortcut_keycap_unit_count("Minimap click") is None
     assert shortcut_keycap_unit_count("+") is None
     assert shortcut_keycap_unit_count("/") is None
