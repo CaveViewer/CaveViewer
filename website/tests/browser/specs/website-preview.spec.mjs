@@ -336,8 +336,12 @@ test("the Why CaveViewer link reaches practical, readable map guidance", async (
     const streaming = page.locator("#advantage-streaming");
     await streaming.scrollIntoViewIfNeeded();
     await expect(streaming).toContainText("system and graphics-memory budgets");
-    await expect(streaming.getByRole("img", { name: "CaveViewer Preferences with the Streaming tab selected, showing memory, loading, and upload settings" }))
-        .toBeVisible();
+    const streamingImage = streaming.getByRole("img", {
+        name: "CaveViewer Preferences with Streaming selected, showing CPU, memory, and frame-loading settings",
+    });
+    await expect(streamingImage).toBeVisible();
+    await expect(streamingImage).toHaveAttribute("width", "4320");
+    await expect(streamingImage).toHaveAttribute("height", "5468");
     const freedom = page.locator("#advantage-freedom");
     await freedom.scrollIntoViewIfNeeded();
     await expect(freedom.getByRole("heading", { name: "Pay Nothing" })).toBeVisible();
@@ -588,8 +592,8 @@ test("modern browsers choose responsive images with reserved layout geometry", a
 
     await page.goto("advantage.html", { waitUntil: "networkidle" });
     const renderingImage = page.locator("#rendering picture img");
-    await expect(renderingImage).toHaveAttribute("width", "2558");
-    await expect(renderingImage).toHaveAttribute("height", "1556");
+    await expect(renderingImage).toHaveAttribute("width", "2458");
+    await expect(renderingImage).toHaveAttribute("height", "1456");
 
     const renderingMetrics = await renderingImage.evaluate(image => {
         const bounds = image.getBoundingClientRect();
@@ -608,17 +612,32 @@ test("modern browsers choose responsive images with reserved layout geometry", a
     expect(renderingMetrics.naturalHeight).toBeGreaterThan(0);
     expect(renderingMetrics.opacity).toBe("1");
     expect(renderingMetrics.visibility).toBe("visible");
-    expect(renderingMetrics.ratio).toBeCloseTo(2558 / 1556, 2);
+    expect(renderingMetrics.ratio).toBeCloseTo(2458 / 1456, 2);
 
     const mapLibraryImage = page.locator("#map-library picture img");
     await mapLibraryImage.scrollIntoViewIfNeeded();
     await expect(mapLibraryImage).toBeVisible();
-    await expect(mapLibraryImage).toHaveAttribute("width", "2420");
-    await expect(mapLibraryImage).toHaveAttribute("height", "1634");
+    await expect(mapLibraryImage).toHaveAttribute("width", "4320");
+    await expect(mapLibraryImage).toHaveAttribute("height", "2560");
+    await expect(mapLibraryImage).toHaveAttribute(
+        "alt",
+        "CaveViewer Map Library showing recent and available cave maps, including local-map access",
+    );
     await expect.poll(async () => mapLibraryImage.evaluate(image => image.naturalWidth))
         .toBeGreaterThan(0);
     expect(await mapLibraryImage.evaluate(image => image.currentSrc)).toMatch(
         /map-library-(800|1600)\.webp$/,
+    );
+
+    const captureImage = page.locator("#capture picture img");
+    await captureImage.scrollIntoViewIfNeeded();
+    await expect(captureImage).toBeVisible();
+    await expect(captureImage).toHaveAttribute("width", "2458");
+    await expect(captureImage).toHaveAttribute("height", "1456");
+    await expect.poll(async () => captureImage.evaluate(image => image.naturalWidth))
+        .toBeGreaterThan(0);
+    expect(await captureImage.evaluate(image => image.currentSrc)).toMatch(
+        /capture-recording-(800|1600)\.webp$/,
     );
 
     await page.setViewportSize({ width: 390, height: 844 });
@@ -639,8 +658,8 @@ test("modern browsers choose responsive images with reserved layout geometry", a
     });
     await importImage.scrollIntoViewIfNeeded();
     await expect(importImage).toBeVisible();
-    await expect(importImage).toHaveAttribute("width", "2420");
-    await expect(importImage).toHaveAttribute("height", "1634");
+    await expect(importImage).toHaveAttribute("width", "4320");
+    await expect(importImage).toHaveAttribute("height", "4216");
     await expect.poll(async () => importImage.evaluate(image => image.naturalWidth))
         .toBeGreaterThan(0);
     expect(await importImage.evaluate(image => image.currentSrc)).toMatch(
@@ -653,8 +672,8 @@ test("modern browsers choose responsive images with reserved layout geometry", a
     });
     await streamingImage.scrollIntoViewIfNeeded();
     await expect(streamingImage).toBeVisible();
-    await expect(streamingImage).toHaveAttribute("width", "2420");
-    await expect(streamingImage).toHaveAttribute("height", "1634");
+    await expect(streamingImage).toHaveAttribute("width", "4320");
+    await expect(streamingImage).toHaveAttribute("height", "5468");
     await expect.poll(async () => streamingImage.evaluate(image => image.naturalWidth))
         .toBeGreaterThan(0);
     expect(await streamingImage.evaluate(image => image.currentSrc)).toMatch(
@@ -675,8 +694,8 @@ test("modern browsers choose responsive images with reserved layout geometry", a
     });
     await backupImage.scrollIntoViewIfNeeded();
     await expect(backupImage).toBeVisible();
-    await expect(backupImage).toHaveAttribute("width", "2420");
-    await expect(backupImage).toHaveAttribute("height", "1634");
+    await expect(backupImage).toHaveAttribute("width", "4320");
+    await expect(backupImage).toHaveAttribute("height", "2836");
     await expect.poll(async () => backupImage.evaluate(image => image.naturalWidth))
         .toBeGreaterThan(0);
     expect(await backupImage.evaluate(image => image.currentSrc)).toMatch(
@@ -696,8 +715,8 @@ test("modern browsers choose responsive images with reserved layout geometry", a
     });
     await troubleshootingImage.scrollIntoViewIfNeeded();
     await expect(troubleshootingImage).toBeVisible();
-    await expect(troubleshootingImage).toHaveAttribute("width", "2420");
-    await expect(troubleshootingImage).toHaveAttribute("height", "1634");
+    await expect(troubleshootingImage).toHaveAttribute("width", "2160");
+    await expect(troubleshootingImage).toHaveAttribute("height", "1142");
     await expect.poll(async () => troubleshootingImage.evaluate(image => image.naturalWidth))
         .toBeGreaterThan(0);
     expect(await troubleshootingImage.evaluate(image => image.currentSrc)).toMatch(

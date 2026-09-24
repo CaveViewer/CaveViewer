@@ -32,7 +32,7 @@
 .advantages-page {
     scroll-margin-top: calc(var(--header-h) + 24px);
     background:
-        radial-gradient(circle at 16% 14%, rgba(var(--accent-rgb), .1), transparent 28%),
+        radial-gradient(circle at 16% 14%, rgba(var(--accent-rgb), .05), transparent 28%),
         linear-gradient(165deg, #101016 0%, #0c0c11 58%, #09090d 100%);
 }
 
@@ -40,7 +40,7 @@
     min-height: calc(100vh - var(--site-endcap-h));
     min-height: calc(100svh - var(--site-endcap-h));
     background:
-        radial-gradient(circle at 16% 14%, rgba(var(--accent-rgb), .1), transparent 28%),
+        radial-gradient(circle at 16% 14%, rgba(var(--accent-rgb), .05), transparent 28%),
         linear-gradient(165deg, #101016 0%, #0c0c11 58%, #09090d 100%);
 }
 
@@ -132,6 +132,7 @@
     margin: 0;
     justify-self: end;
     overflow: hidden;
+    border-radius: 10px;
     border: 1px solid rgba(242, 217, 140, .24);
     background: #030304;
     box-shadow:
