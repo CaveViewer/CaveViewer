@@ -22,7 +22,7 @@ def test_preferences_visual_metrics_match_the_reference_contract():
     assert metrics.section_corner_radius == 10
     assert metrics.section_padding_x == 24
     assert metrics.section_padding_y == 24
-    assert metrics.section_gap_y == 20
+    assert metrics.section_gap_y == 24
     assert metrics.section_heading_to_description_y == 6
     assert metrics.section_description_to_divider_y == 20
     assert metrics.section_divider_to_content_y == 24
@@ -31,13 +31,14 @@ def test_preferences_visual_metrics_match_the_reference_contract():
     assert metrics.card_item_gap_y == 20
     assert metrics.control_height == 40
     assert metrics.numeric_control_width == 90
-    assert metrics.action_min_width == 140
+    assert metrics.action_min_width == 160
     assert metrics.control_content_pad_x == 12
     assert metrics.numeric_content_pad_y == 8
     assert metrics.field_label_to_description_y == 4
     assert metrics.field_description_to_control_y == 8
     assert metrics.unit_gap_x == 12
-    assert metrics.footer_action_gap_x == 10
+    assert metrics.footer_action_gap_x == 16
+    assert metrics.footer_top_gap_y == 32
 
 
 def test_preferences_visual_metrics_apply_display_scaling_once():

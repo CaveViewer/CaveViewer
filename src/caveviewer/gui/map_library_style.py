@@ -7,6 +7,11 @@ from typing import Callable
 
 from caveviewer.gui.preferences_style import PREFERENCES_VISUAL_METRICS
 from caveviewer.gui.tk_feedback import ERROR_FEEDBACK_MS, SUCCESS_FEEDBACK_MS
+from caveviewer.gui.tk_layout import (
+    CARD_PADDING,
+    SHELL_MAIN_GUTTER,
+    SHELL_SCROLLBAR_RAIL_WIDTH,
+)
 from caveviewer.gui.tk_theme import (
     APPLICATION_PANEL_FILL,
     APPLICATION_SURFACE_FILL,
@@ -21,9 +26,9 @@ OPEN_LOCAL_MAP_DESCRIPTION = "Browse a cave map folder on your computer."
 OPEN_ANOTHER_LOCAL_MAP_TITLE = "Open another local map"
 MAP_LIBRARY_WINDOW_FILL = APPLICATION_SURFACE_FILL
 MAP_LIBRARY_PANEL_FILL = APPLICATION_PANEL_FILL
-MAP_LIBRARY_MAIN_LEFT_GAP = 26
-MAP_LIBRARY_RIGHT_MARGIN = 28
-MAP_LIBRARY_SCROLLBAR_RAIL_WIDTH = 14
+MAP_LIBRARY_MAIN_LEFT_GAP = SHELL_MAIN_GUTTER
+MAP_LIBRARY_RIGHT_MARGIN = SHELL_MAIN_GUTTER
+MAP_LIBRARY_SCROLLBAR_RAIL_WIDTH = SHELL_SCROLLBAR_RAIL_WIDTH
 MAP_LIBRARY_RECENT_CARD_BORDER = "#30343D"
 MAP_LIBRARY_CATALOG_CARD_BORDER = "#313337"
 MAP_LIBRARY_PRIMARY_FG = "#F5C451"
@@ -113,21 +118,21 @@ class MapLibraryVisualMetrics:
 
     surface_inset_x: int = 0
     surface_top_pad_y: int = 24
-    surface_bottom_pad_y: int = 30
+    surface_bottom_pad_y: int = 32
     section_corner_radius: int = 10
     section_border_thickness: int = 1
-    section_padding_x: int = 24
-    section_padding_y: int = 20
-    section_padding_bottom_y: int = 25
+    section_padding_x: int = CARD_PADDING
+    section_padding_y: int = CARD_PADDING
+    section_padding_bottom_y: int = CARD_PADDING
     section_gap_y: int = 24
     recent_card_min_height: int = 138
     catalog_card_min_height: int = 484
     section_header_height: int = 22
     section_header_to_body_y: int = PREFERENCES_VISUAL_METRICS.card_item_gap_y
-    local_action_height: int = 50
+    local_action_height: int = 48
     local_action_icon_width: int = 32
     local_action_icon_height: int = 32
-    local_action_icon_to_text_x: int = 14
+    local_action_icon_to_text_x: int = 12
     compact_local_action_height: int = 28
     compact_local_action_icon_width: int = 20
     compact_local_action_icon_height: int = 20

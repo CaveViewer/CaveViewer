@@ -161,10 +161,12 @@ appropriate weight, color, or interaction treatment instead.
 
 The primary shell uses `#0D0F13` as its application surface and `#15171C` as
 the shared panel/card fill for Map Library, Preferences, Help, and About. The
-Map Library main column starts 26 logical pixels after the 220-pixel sidebar,
-24 pixels below the top edge, and retains a 28-pixel right margin in the
-1080-by-740 reference frame. That top inset matches the 24-logical-pixel gap
-between the Recent Maps and CaveViewer Maps panels.
+main content column starts 32 logical pixels after the 220-pixel sidebar and
+retains a 32-pixel right gutter in the 1080-by-740 reference frame. This makes
+the reference content column 796 pixels wide, from x=252 through x=1048. Map
+Library begins 24 pixels below the top edge; tabbed surfaces begin with a
+16-pixel inset, a 44-pixel tab row, and a 24-pixel content gap. The 32-pixel
+right gutter reserves a 16-pixel scrollbar rail when a surface scrolls.
 
 Map Library owns one immutable, scale-once metrics snapshot in
 `caveviewer.gui.map_library_style`. Every value below is a logical pixel and is
@@ -175,7 +177,7 @@ converted by the active display-scale helper exactly once.
 | Recent/catalog card corner radius | 10 |
 | Card border | 1 |
 | Card horizontal padding | 24 |
-| Card top / bottom padding | 20 / 25 |
+| Card top / bottom padding | 24 / 24 |
 | Gap between cards | 24 |
 | Recent card minimum height | 138 |
 | Catalog card minimum height | 484 |
@@ -246,7 +248,7 @@ cannot be scaled again.
 | Control corner radius | 4 |
 | Section-card corner radius | 10 |
 | Section-card horizontal and vertical padding | 24 |
-| Gap between section cards | 20 |
+| Gap between section cards | 24 |
 | Card heading to first field | 24 |
 | Card heading to section description | 6 |
 | Section description to divider | 20 |
@@ -257,14 +259,15 @@ cannot be scaled again.
 | Action and compound path-control height | 40 |
 | Numeric-control height | 36 |
 | Compact numeric-control width | 90 |
-| Minimum action width | 140 |
+| Minimum prominent action width | 160 |
 | Control horizontal content padding | 12 |
 | Numeric-control vertical content padding | 8 |
 | Inline unit gap | 12 |
 | Gap between fields or actions in one card | 20 |
 | Compound-control seam thickness | 1 |
-| Preferences footer top gap | 20 |
-| Gap between footer actions | 10 |
+| Preferences footer top gap | 32 |
+| Gap between footer actions | 16 |
+| Prominent footer-action height | 44 |
 | Ordinary / focused control border | 1 / 2 |
 
 Preferences keeps its four text tabs outside the cards. Tabs remain
@@ -301,7 +304,7 @@ the panel's wheel scrolling. A taller fallback font is never clipped.
 
 Each preference group is a subtly raised panel-colored card with a
 10-logical-pixel radius. Cards share one left and right edge beneath the tabs,
-use title-case section-title labels, and remain separated by a 20-logical-pixel
+use title-case section-title labels, and remain separated by a 24-logical-pixel
 vertical gap. Every card has a one-logical-pixel `#30343D` border, including
 Storage and Backup cards. Amber decoration is reserved for primary actions
 rather than section surfaces. Streaming uses **Memory Use**, **CPU Use**, and **Frame
@@ -364,13 +367,14 @@ right-aligned. Clean or invalid state uses the neutral disabled treatment;
 valid pending edits enable the actions without moving the footer or form
 content.
 
-The unsaved Preferences confirmation follows its supplied SVG with the reviewed
-42-pixel description-to-action gap: a 552-by-219
-logical-pixel panel with a 12-pixel radius, `#15171C` fill and one-pixel
+The unsaved Preferences confirmation follows the shared 4-pixel grid: a
+560-logical-pixel-wide panel with a 220-logical-pixel minimum height, a
+10-pixel radius, `#15171C` fill and one-pixel
 `#30343D` border. Its 22-pixel Inter Bold heading uses `#F3A812`; the explanation
 uses 15-pixel Inter Regular `#A9AFBC` with 22-pixel line height. Text starts
-24 pixels from the top and sides. Three equal 160-by-44 actions have 4-pixel
-corners, 12-pixel gaps, 24-pixel side insets and a 23-pixel bottom inset.
+24 pixels from the top and sides. A 32-pixel spacer separates the description
+from three equal 160-by-44 actions. The actions have 4-pixel corners, 16-pixel
+gaps, 24-pixel side insets and a 24-pixel bottom inset.
 The title, description and Edit button share the same left edge. Window width
 equals the three button widths plus the two gaps and equal side padding.
 **Edit** and **Discard** use `#2A2D35` with 14-pixel Medium `#C8CBD0` text;
@@ -387,8 +391,8 @@ keyboard focus and keyboard activation.
 `caveviewer.gui.help_style` is the canonical source for Help geometry,
 semantic palette mappings, exact typography, and card purpose lines. Help
 shares the Preferences 4-logical-pixel control radius, 10-logical-pixel card
-radius, 24-logical-pixel card padding, header-divider spacing, and
-20-logical-pixel card and field gaps. Help-only
+radius, 24-logical-pixel card padding and card gaps, and header-divider
+spacing. Help keeps 20-logical-pixel gaps between fields and rows. Help-only
 canvas measurements define the keycap and action lanes, responsive stacking,
 error excerpt, and bottom scroll padding. The active shell display-scale helper
 converts every logical metric exactly once.
@@ -407,7 +411,7 @@ Inter Bold 16-logical-pixel heading in `#EFF1F5` and one short Inter Regular
 logical pixels, details use Inter Regular at 12 logical pixels, and keycaps use
 Inter Medium at 14 logical pixels. Cards share the Preferences content edges,
 use one `#30343D` divider beneath each purpose line, and remain separated by
-20 logical pixels. Keep shortcut and action rows separated by whitespace. At the ordinary
+24 logical pixels. Keep shortcut and action rows separated by whitespace. At the ordinary
 shell width, descriptions should occupy no more than two lines; shorten the copy
 instead of reducing type size or card spacing.
 

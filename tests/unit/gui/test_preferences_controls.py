@@ -285,8 +285,8 @@ def test_preferred_action_width_grows_for_platform_text_metrics():
     assert preferred_action_width(text_width=40, metrics=_METRICS) == (
         _METRICS.action_min_width
     )
-    assert preferred_action_width(text_width=130, metrics=_METRICS) == (
-        130
+    assert preferred_action_width(text_width=140, metrics=_METRICS) == (
+        140
         + (_METRICS.control_content_pad_x * 2)
         + (_METRICS.control_border_thickness * 2)
     )
@@ -380,6 +380,47 @@ def test_compound_entry_action_invokes_only_while_the_outer_control_is_enabled()
     assert entry._invoke_action() == "break"
 
     assert invoked == ["browse"]
+
+
+def test_compound_entry_action_invokes_on_pressed_pointer_release():
+    calls: list[str] = []
+    entry = object.__new__(RoundedEntryControl)
+    entry.action_button = object()
+    entry._action_command = lambda: calls.append("browse")
+    entry._interaction = ControlInteractionState(enabled=True)
+    entry._action_interaction = ControlInteractionState(
+        enabled=True,
+        pressed=True,
+    )
+    applied: list[ControlInteractionState] = []
+    entry._apply_visual = lambda: applied.append(entry._action_interaction)
+
+    entry._on_action_release(SimpleNamespace(widget=entry.action_button))
+
+    assert calls == ["browse"]
+    assert entry._action_interaction.pressed is False
+    assert applied == [entry._action_interaction]
+
+
+def test_compound_entry_action_ignores_unpressed_and_disabled_pointer_release():
+    calls: list[str] = []
+    entry = object.__new__(RoundedEntryControl)
+    entry.action_button = object()
+    entry._action_command = lambda: calls.append("browse")
+    entry._interaction = ControlInteractionState(enabled=True)
+    entry._action_interaction = ControlInteractionState(enabled=True)
+    entry._apply_visual = lambda: None
+
+    event = SimpleNamespace(widget=entry.action_button)
+    entry._on_action_release(event)
+    entry._interaction = ControlInteractionState(enabled=False)
+    entry._action_interaction = ControlInteractionState(
+        enabled=False,
+        pressed=True,
+    )
+    entry._on_action_release(event)
+
+    assert calls == []
 
 
 def test_compound_entry_owns_one_internal_seam_and_shared_focus_members():

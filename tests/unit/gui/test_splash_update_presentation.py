@@ -1404,7 +1404,7 @@ def test_splash_navigation_keeps_asymmetric_label_padding_in_pack_geometry():
         for call in label_calls
         for keyword in call.keywords
     )
-    assert 'item.pack(side="left", fill="both", expand=True, padx=(0, px(9)))' in source
+    assert 'item.pack(side="left", fill="both", expand=True, padx=(0, px(8)))' in source
 
 
 def test_splash_navigation_uses_consistent_row_spacing():
@@ -1455,7 +1455,7 @@ def test_unsaved_preferences_dialog_offers_three_explicit_close_choices():
     assert 'uniform="actions"' in source
     assert "RoundedActionButton(" in source
     assert "panel_width = content_width + 2 * px(24)" in source
-    assert "px(219)" in source
+    assert "px(220)" in source
     assert "if not on_save():" in source
     assert 'dialog.bind("<Escape>", _close_dialog)' in source
     assert 'dialog.protocol("WM_DELETE_WINDOW", _close_dialog)' in source
@@ -1546,7 +1546,7 @@ def test_splash_navigation_panel_uses_specified_bounds_insets_and_footer():
     assert "show_delayed_action=True" in source
     assert "update_cluster.pack_forget()" in source
     assert "update_progress_bar.pack_forget()" not in source
-    assert 'update_progress_bar.pack(anchor="w", fill="x", pady=(px(6), 0))' in source
+    assert 'update_progress_bar.pack(anchor="w", fill="x", pady=(px(8), 0))' in source
     assert source.count("update_progress_bar.pack(") == 1
     assert "update_progress_bar._cv_progress_visible" in source
     assert "if not update_progress_bar._cv_progress_visible:" in source
@@ -1559,7 +1559,7 @@ def test_splash_navigation_panel_uses_specified_bounds_insets_and_footer():
     assert source.count('anchor="center"') >= 3
     assert source.count('fill="x"') >= 3
     assert source.count("expand=True") >= 2
-    assert "padx=(px(6), 0) if presentation.status_text else 0" in source
+    assert "padx=(px(8), 0) if presentation.status_text else 0" in source
     assert "def _draw_update_progress_bar(progress_fraction: float | None)" in source
     assert "progress_segments(" in source
     assert "progress_control_photo(" not in source
@@ -1615,7 +1615,7 @@ def test_themed_about_content_owns_the_brand_identity_while_launch_stays_quiet()
     assert "www.caveviewer.com" in inspect.getsource(splash_screen)
     assert "www.bottomlineprojects.com" in inspect.getsource(splash_screen)
     assert "on_open_website: Callable[[str], None] | None = None" in content_source
-    assert 'website_label.pack(pady=(px(12) if index == 0 else px(6), 0))' in content_source
+    assert 'website_label.pack(pady=(px(12) if index == 0 else px(8), 0))' in content_source
     credits_source = content_source[
         content_source.index("text=_CREDITS_TEXT.strip()") : content_source.index(
             "for index, (label_text, website_url)"
@@ -2345,7 +2345,7 @@ def test_map_library_open_map_action_uses_the_existing_folder_callback(
     panel._px = lambda value: int(value)
     panel._style = SimpleNamespace(
         metrics=SimpleNamespace(
-            local_action_height=50,
+            local_action_height=48,
             focus_border_thickness=focus_border_thickness,
             local_action_icon_width=32,
             local_action_icon_height=32,
@@ -2373,7 +2373,7 @@ def test_map_library_open_map_action_uses_the_existing_folder_callback(
 
     action = canvases[0]
     assert action.options["takefocus"] is True
-    assert action.options["height"] == 50
+    assert action.options["height"] == 48
     assert action.options["bg"] == "#202025"
     assert action.pack_calls == [{"anchor": "w", "fill": "x"}]
     assert wheel_targets == [action]

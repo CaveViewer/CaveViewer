@@ -10,9 +10,9 @@ from caveviewer.gui import modal_dialog
 def test_standard_modal_geometry_anchors_actions_to_the_bottom():
     source = inspect.getsource(modal_dialog._show_modal)
 
-    assert modal_dialog.MODAL_MIN_WIDTH == 430
+    assert modal_dialog.MODAL_MIN_WIDTH == 432
     assert modal_dialog.MODAL_MIN_HEIGHT == 220
-    assert modal_dialog.MODAL_CONTENT_PAD_X == 28
+    assert modal_dialog.MODAL_CONTENT_PAD_X == 24
     assert modal_dialog.MODAL_CONTENT_PAD_Y == 24
     assert 'button_row.pack(side="bottom", fill="x")' in source
     assert "px(MODAL_MIN_WIDTH)" in source
@@ -134,7 +134,7 @@ def test_copy_feedback_uses_a_transient_geometric_confirmation_mark():
     assert 'accessible_name="Details copied"' in source
     assert "mark.pack_forget()" in source
     copy_action_pack = source.index(
-        'cancel_button.pack(side="right", padx=(0, px(8)))'
+        'cancel_button.pack(side="right", padx=(0, px(16)))'
     )
     feedback_pack = source.index(
         'copy_feedback.pack(side="right", padx=(0, px(ACTION_CONFIRMATION_GAP)))'

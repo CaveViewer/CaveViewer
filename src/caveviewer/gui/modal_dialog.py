@@ -18,9 +18,9 @@ from caveviewer.gui.tk_typography import create_tk_typography, resolve_tk_text_s
 
 
 MessageKind = Literal["info", "warning", "error"]
-MODAL_MIN_WIDTH = 430
+MODAL_MIN_WIDTH = 432
 MODAL_MIN_HEIGHT = 220
-MODAL_CONTENT_PAD_X = 28
+MODAL_CONTENT_PAD_X = 24
 MODAL_CONTENT_PAD_Y = 24
 
 
@@ -179,7 +179,7 @@ def create_semantic_heading(
         kind=kind,
         px=px,
         background=resolved_background,
-    ).pack(side="left", padx=(0, px(10)))
+    ).pack(side="left", padx=(0, px(12)))
     tk.Label(
         heading_row,
         text=title,
@@ -303,8 +303,8 @@ def _show_modal(
         lambda: close(accepted=True),
         font=typography.body_strong,
         kind="primary",
-        padx=px(14),
-        pady=px(7),
+        padx=px(16),
+        pady=px(8),
         dialog_layout=profile.dialog_layout,
     )
     confirm_button.pack(side="right")
@@ -339,11 +339,11 @@ def _show_modal(
             run_secondary_action,
             font=typography.body_strong,
             kind="secondary",
-            padx=px(14),
-            pady=px(7),
+            padx=px(16),
+            pady=px(8),
             dialog_layout=profile.dialog_layout,
         )
-        cancel_button.pack(side="right", padx=(0, px(8)))
+        cancel_button.pack(side="right", padx=(0, px(16)))
         if copy_feedback is not None:
             copy_feedback.pack(side="right", padx=(0, px(ACTION_CONFIRMATION_GAP)))
 

@@ -541,12 +541,20 @@ class RoundedEntryControl:
             self._apply_visual()
 
     def _on_action_release(self, _event=None) -> None:
-        if self._action_interaction.enabled:
-            self._action_interaction = replace(
-                self._action_interaction,
-                pressed=False,
-            )
-            self._apply_visual()
+        if not self._action_interaction.enabled:
+            return
+        was_pressed = self._action_interaction.pressed
+        self._action_interaction = replace(
+            self._action_interaction,
+            pressed=False,
+        )
+        self._apply_visual()
+        if (
+            was_pressed
+            and _event is not None
+            and _event.widget is self.action_button
+        ):
+            self._invoke_action()
 
     def _on_enter(self, _event=None) -> None:
         self._interaction = replace(self._interaction, hovered=True)
@@ -700,6 +708,7 @@ class RoundedActionButton:
         kind: ActionKind = "primary",
         enabled: bool = True,
         width: int | None = None,
+        height: int | None = None,
         outside_background: str | None = None,
     ) -> None:
         self._command = command
@@ -709,6 +718,7 @@ class RoundedActionButton:
         self._interaction = ControlInteractionState(enabled=bool(enabled))
         self._closed = False
         self._uses_default_width = width is None
+        self._height_override = height
         self._outside_uses_palette = outside_background is None
         self._outside_background = (
             palette.surface_background
@@ -720,10 +730,11 @@ class RoundedActionButton:
             if width is not None
             else self._default_width(parent=parent, text=text, font=font)
         )
+        resolved_height = height if height is not None else metrics.control_height
         self.widget = tk.Canvas(
             parent,
             width=resolved_width,
-            height=metrics.control_height,
+            height=resolved_height,
             bg=self._outside_background,
             borderwidth=0,
             highlightthickness=0,
@@ -741,7 +752,7 @@ class RoundedActionButton:
             anchor="center",
         )
         self._button_window = self.widget.create_window(
-            (resolved_width // 2, metrics.control_height // 2),
+            (resolved_width // 2, resolved_height // 2),
             window=self.button,
             anchor="center",
         )
@@ -757,7 +768,7 @@ class RoundedActionButton:
         self.button.bind("<FocusOut>", self._on_focus_out, add="+")
         self.widget.bind("<Configure>", self._on_configure, add="+")
         self.widget.bind("<Destroy>", self._on_destroy, add="+")
-        self._sync_geometry(resolved_width, metrics.control_height)
+        self._sync_geometry(resolved_width, resolved_height)
         self._apply_visual()
 
     def pack(self, **options) -> None:
@@ -790,7 +801,12 @@ class RoundedActionButton:
 
     def set_metrics(self, metrics: ScaledPreferencesVisualMetrics) -> None:
         self._metrics = metrics
-        options = {"height": metrics.control_height}
+        resolved_height = (
+            self._height_override
+            if getattr(self, "_height_override", None) is not None
+            else metrics.control_height
+        )
+        options = {"height": resolved_height}
         if self._uses_default_width:
             options["width"] = self._default_width(
                 parent=self.button,
@@ -798,7 +814,7 @@ class RoundedActionButton:
                 font=self.button.cget("font"),
             )
         self.widget.configure(**options)
-        self._sync_geometry(self.widget.winfo_width(), metrics.control_height)
+        self._sync_geometry(self.widget.winfo_width(), resolved_height)
         self._apply_visual()
 
     def configure_text(self, text: str) -> None:

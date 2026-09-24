@@ -98,7 +98,7 @@ def _scrollbar(*, visible: bool = False) -> tuple[CanvasVerticalScrollbar, _Fake
     scrollbar._widget = rail
     scrollbar._style = CanvasScrollbarStyle(background_color="#111111")
     scrollbar._rail_width = 14
-    scrollbar._thumb_width = 5
+    scrollbar._thumb_width = 4
     scrollbar._minimum_thumb_height = 36
     scrollbar._thumb = None
     scrollbar._fractions = (0.0, 0.5)

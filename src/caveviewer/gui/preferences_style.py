@@ -7,6 +7,17 @@ from typing import Callable
 
 from caveviewer.gui.tk_theme import DARK_THEME, TkTheme
 from caveviewer.gui.tk_typography import TkTypography
+from caveviewer.gui.tk_layout import (
+    ACTION_GAP,
+    CARD_GAP,
+    CARD_PADDING,
+    CARD_RADIUS,
+    COMPACT_CONTROL_HEIGHT,
+    COMPACT_NUMERIC_WIDTH,
+    FOOTER_GAP,
+    PROMINENT_ACTION_WIDTH,
+    REGULAR_CONTROL_HEIGHT,
+)
 
 
 PREFERENCES_PRIMARY_TEXT = "#EFF1F5"
@@ -50,10 +61,10 @@ class PreferencesVisualMetrics:
     """Unscaled logical geometry measured from the Preferences reference."""
 
     control_corner_radius: int = 4
-    section_corner_radius: int = 10
-    section_padding_x: int = 24
-    section_padding_y: int = 24
-    section_gap_y: int = 20
+    section_corner_radius: int = CARD_RADIUS
+    section_padding_x: int = CARD_PADDING
+    section_padding_y: int = CARD_PADDING
+    section_gap_y: int = CARD_GAP
     section_heading_to_fields_y: int = 24
     section_heading_to_description_y: int = 6
     section_description_to_divider_y: int = 20
@@ -61,17 +72,17 @@ class PreferencesVisualMetrics:
     section_divider_thickness: int = 1
     field_label_to_description_y: int = 4
     field_description_to_control_y: int = 8
-    control_height: int = 40
-    numeric_control_height: int = 36
-    numeric_control_width: int = 90
-    action_min_width: int = 140
+    control_height: int = REGULAR_CONTROL_HEIGHT
+    numeric_control_height: int = COMPACT_CONTROL_HEIGHT
+    numeric_control_width: int = COMPACT_NUMERIC_WIDTH
+    action_min_width: int = PROMINENT_ACTION_WIDTH
     control_content_pad_x: int = 12
     numeric_content_pad_y: int = 8
     unit_gap_x: int = 12
     control_seam_thickness: int = 1
     card_item_gap_y: int = 20
-    footer_action_gap_x: int = 10
-    footer_top_gap_y: int = 20
+    footer_action_gap_x: int = ACTION_GAP
+    footer_top_gap_y: int = FOOTER_GAP
     control_border_thickness: int = 1
     focus_border_thickness: int = 2
 

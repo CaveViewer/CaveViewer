@@ -65,9 +65,9 @@ def test_shortcut_row_keeps_aligned_lanes_at_ordinary_width():
 
     assert row.stacked is False
     assert row.keycap_x == 34
-    assert row.keycap_lane_width == 250
-    assert row.action_x == 316
-    assert row.action_width == 450
+    assert row.keycap_lane_width == 248
+    assert row.action_x == 314
+    assert row.action_width == 452
 
 
 def test_shortcut_row_stacks_before_the_action_lane_can_clip():
@@ -81,7 +81,7 @@ def test_shortcut_row_stacks_before_the_action_lane_can_clip():
 
     assert row.stacked is True
     assert row.keycap_x == row.action_x == 34
-    assert row.keycap_lane_width == 170
+    assert row.keycap_lane_width == 168
     assert row.action_width == 332
 
 

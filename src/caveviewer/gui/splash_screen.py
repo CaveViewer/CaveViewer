@@ -160,6 +160,16 @@ from caveviewer.gui.tk_feedback import (
 )
 from caveviewer.gui.tk_shortcuts import bind_primary_shortcut
 from caveviewer.gui.tk_theme import DARK_THEME
+from caveviewer.gui.tk_layout import (
+    ACTION_GAP,
+    CARD_RADIUS,
+    NAV_ICON_SIZE,
+    PROMINENT_ACTION_WIDTH,
+    PROMINENT_CONTROL_HEIGHT,
+    SHELL_MAIN_GUTTER,
+    SHELL_SIDEBAR_GUTTER,
+    SHELL_SIDEBAR_WIDTH,
+)
 from caveviewer.gui.tk_typography import (
     TkTypography,
     create_tk_typography,
@@ -297,14 +307,14 @@ _NAVIGATION_DIVIDER_COLOR = "#30343D"
 _NAVIGATION_SELECTED_FG = "#F5C451"
 _NAVIGATION_INACTIVE_FG = "#EFF1F5"
 _NAVIGATION_FOOTER_FG = "#A9AFBC"
-_NAVIGATION_PANEL_WIDTH = 220
-_NAVIGATION_PANEL_INSET_X = 16
+_NAVIGATION_PANEL_WIDTH = SHELL_SIDEBAR_WIDTH
+_NAVIGATION_PANEL_INSET_X = SHELL_SIDEBAR_GUTTER
 _NAVIGATION_PANEL_TOP_INSET = PRIMARY_LABEL_ROW_TOP_INSET
 _NAVIGATION_PANEL_BOTTOM_INSET = 16
-_NAVIGATION_ENTRY_WIDTH = 188
+_NAVIGATION_ENTRY_WIDTH = SHELL_SIDEBAR_WIDTH - (2 * SHELL_SIDEBAR_GUTTER)
 _NAVIGATION_ENTRY_HEIGHT = PRIMARY_LABEL_ROW_HEIGHT
 _NAVIGATION_ITEM_GAP = PRIMARY_LABEL_ROW_GAP
-_NAVIGATION_ICON_SIZE = 18
+_NAVIGATION_ICON_SIZE = NAV_ICON_SIZE
 _NAVIGATION_DIVIDER_WIDTH = 1
 _NAVIGATION_LABEL_SIZE = 13
 _NAVIGATION_FOOTER_SIZE = 13
@@ -992,12 +1002,17 @@ def _build_themed_about_content(
 
     content = tk.Frame(parent, bg=_BG_COLOR)
     if center_vertically:
-        content.pack(expand=True, padx=px(32), pady=px(28))
+        content.pack(expand=True, padx=px(SHELL_MAIN_GUTTER), pady=px(32))
     else:
-        content.pack(fill="both", expand=True, padx=px(32), pady=px(28))
+        content.pack(
+            fill="both",
+            expand=True,
+            padx=px(SHELL_MAIN_GUTTER),
+            pady=px(32),
+        )
 
     identity_lockup = tk.Frame(content, bg=_BG_COLOR)
-    identity_lockup.pack(pady=(0, px(18)))
+    identity_lockup.pack(pady=(0, px(20)))
 
     logo_photo = _load_brand_logo(parent, px=px, max_dimension=112)
     if logo_photo is not None:
@@ -1008,7 +1023,7 @@ def _build_themed_about_content(
             borderwidth=0,
         )
         logo_label.image = logo_photo
-        logo_label.pack(side="left", padx=(0, px(14)))
+        logo_label.pack(side="left", padx=(0, px(16)))
 
     identity_text = tk.Frame(identity_lockup, bg=_BG_COLOR)
     identity_text.pack(side="left")
@@ -1094,7 +1109,7 @@ def _build_themed_about_content(
 
             for sequence in ("<Button-1>", "<Return>", "<space>"):
                 website_label.bind(sequence, open_website)
-        website_label.pack(pady=(px(12) if index == 0 else px(6), 0))
+        website_label.pack(pady=(px(12) if index == 0 else px(8), 0))
 
     close_button = content
     if show_close:
@@ -1131,7 +1146,7 @@ def _build_themed_about_content(
             "<Leave>",
             lambda _event: set_close_button_hovered(False),
         )
-        close_button.pack(pady=(px(20), 0))
+        close_button.pack(pady=(px(24), 0))
 
     return close_button
 
@@ -1195,7 +1210,7 @@ def _show_themed_about_dialog(
     dialog.protocol("WM_DELETE_WINDOW", close_dialog)
 
     dialog.update_idletasks()
-    dialog_width = max(px(430), dialog.winfo_reqwidth())
+    dialog_width = max(px(MODAL_MIN_WIDTH), dialog.winfo_reqwidth())
     dialog_height = max(px(380), dialog.winfo_reqheight())
     try:
         screen_width = dialog.winfo_screenwidth()
@@ -1276,13 +1291,14 @@ def _show_unsaved_preferences_dialog(
     action_measure = tkfont.Font(root=dialog, font=action_font)
     save_measure = tkfont.Font(root=dialog, font=save_font)
     action_width = max(
-        px(160), action_measure.measure("Discard") + px(24),
+        px(PROMINENT_ACTION_WIDTH), action_measure.measure("Discard") + px(24),
         save_measure.measure("Save") + px(24),
     )
     metrics = replace(
         PREFERENCES_VISUAL_METRICS.scaled(px),
         control_height=max(
-            px(44), action_measure.metrics("linespace") + px(16),
+            px(PROMINENT_CONTROL_HEIGHT),
+            action_measure.metrics("linespace") + px(16),
             save_measure.metrics("linespace") + px(16),
         ),
     )
@@ -1295,7 +1311,7 @@ def _show_unsaved_preferences_dialog(
         secondary_action_border="#2A2D35",
         secondary_action_text="#C8CBD0",
     )
-    content_width = action_width * 3 + 2 * px(12)
+    content_width = action_width * 3 + 2 * px(ACTION_GAP)
     panel_width = content_width + 2 * px(24)
     surface = RoundedSectionSurface(
         dialog,
@@ -1303,10 +1319,10 @@ def _show_unsaved_preferences_dialog(
             outside_background=DARK_THEME.panel,
             fill=DARK_THEME.panel,
             border=palette.section_border,
-            border_width=px(1), radius=px(12),
+            border_width=px(1), radius=px(CARD_RADIUS),
             padding_x=px(24), padding_y=px(24),
-            padding_bottom_y=px(23),
-            minimum_height=px(219),
+            padding_bottom_y=px(24),
+            minimum_height=px(220),
         ),
     )
     surface.widget.configure(width=panel_width)
@@ -1352,13 +1368,13 @@ def _show_unsaved_preferences_dialog(
         wraplength=content_width,
     ).grid(row=1, column=0, sticky="ew")
 
-    content.rowconfigure(2, minsize=px(42))
+    content.rowconfigure(2, minsize=px(32))
     button_row = tk.Frame(content, bg=DARK_THEME.panel)
     button_row.grid(row=3, column=0, sticky="ew")
     for column in (0, 2, 4):
         button_row.columnconfigure(column, weight=1, uniform="actions")
     for column in (1, 3):
-        button_row.columnconfigure(column, minsize=px(12))
+        button_row.columnconfigure(column, minsize=px(ACTION_GAP))
 
     def _close_dialog(_event=None):
         if dialog_ref[0] is dialog:
@@ -1409,8 +1425,8 @@ def _show_unsaved_preferences_dialog(
     dialog.protocol("WM_DELETE_WINDOW", _close_dialog)
     dialog_width = panel_width
     dialog_height = max(
-        px(219),
-        px(24 + 23 + 16 + 42) + heading.winfo_reqheight()
+        px(220),
+        px(24 + 24 + 16 + 32) + heading.winfo_reqheight()
         + description_height + metrics.control_height,
     )
     try:
@@ -2061,7 +2077,7 @@ def _show_splash_composition(
     update_progress_bar._cv_progress_after_id = None
     update_progress_bar._cv_display_fraction = 0.0
     update_progress_bar._cv_progress_visible = False
-    update_progress_bar.pack(anchor="w", fill="x", pady=(px(6), 0))
+    update_progress_bar.pack(anchor="w", fill="x", pady=(px(8), 0))
 
     def _cancel_update_progress_animation(_event=None) -> None:
         after_id = update_progress_bar._cv_progress_after_id
@@ -2125,7 +2141,7 @@ def _show_splash_composition(
     def _set_update_cluster_visible(visible: bool) -> None:
         if visible:
             if not update_cluster.winfo_manager():
-                update_cluster.pack(anchor="w", fill="x", pady=(px(10), 0))
+                update_cluster.pack(anchor="w", fill="x", pady=(px(12), 0))
             return
         update_cluster.pack_forget()
 
@@ -2150,7 +2166,7 @@ def _show_splash_composition(
                 anchor="center",
                 fill="x",
                 expand=True,
-                padx=(px(6), 0) if presentation.status_text else 0,
+                padx=(px(8), 0) if presentation.status_text else 0,
             )
         if presentation.progress_visible:
             display_fraction = presentation.progress_fraction
@@ -2635,7 +2651,7 @@ def _show_splash_composition(
         focus_indicator = tk.Frame(item_row, bg=_NAVIGATION_SELECTED_FG)
         focus_indicator.place_forget()
         icon = _create_navigation_icon(item_row, icon_name)
-        icon.pack(side="left", padx=(px(11), px(6)))
+        icon.pack(side="left", padx=(px(24), px(12)))
         item = tk.Label(
             item_row,
             text=text,
@@ -2648,7 +2664,7 @@ def _show_splash_composition(
             takefocus=True,
             highlightthickness=0,
         )
-        item.pack(side="left", fill="both", expand=True, padx=(0, px(9)))
+        item.pack(side="left", fill="both", expand=True, padx=(0, px(8)))
         state = {"selected": selected}
 
         def show_keyboard_focus(_event=None) -> None:
