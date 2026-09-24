@@ -333,7 +333,7 @@ class HelpPanel:
                 background_color=style.background_color,
                 content_pad_left_x=0,
                 content_pad_right_x=0,
-                content_bottom_pad_y=14,
+                content_bottom_pad_y=0,
             ),
         )
         surface.pack(

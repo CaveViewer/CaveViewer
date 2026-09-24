@@ -102,7 +102,7 @@ class CaveMetadataPanel:
         back.pack(side="left", fill="y")
         self._back_control = back
         self._label(breadcrumb, "/", color=style.subtitle_color).pack(
-            side="left", padx=self._px(10), fill="y",
+            side="left", padx=self._px(12), fill="y",
         )
         name = self._label(breadcrumb, self.cave.name, color=style.subtitle_color)
         name.pack(side="left", fill="both", expand=True)
@@ -162,12 +162,12 @@ class CaveMetadataPanel:
             for source in self.cave.sources:
                 link = self._label(body, f"{source.title}  ↗", color=style.link_color, wrap=True)
                 self._bind_link(link, lambda url=source.url: self._on_open_source(url), color=style.link_color)
-                link.pack(fill="x", pady=(0, self._px(6)))
+                link.pack(fill="x", pady=(0, self._px(8)))
 
         self._label(
             body, "This describes the cave system, not necessarily this 3D map.",
             color=style.subtitle_color, font=style.small_font, wrap=True,
-        ).pack(fill="x", pady=(self._px(28), 0))
+        ).pack(fill="x", pady=(self._px(32), 0))
 
         self._canvas.bind("<Configure>", self._resize_content, add="+")
         body.bind("<Configure>", self._sync_scroll_region, add="+")
@@ -201,7 +201,7 @@ class CaveMetadataPanel:
 
     def _section_label(self, parent, text: str, *, first=False) -> None:
         self._label(parent, text.upper(), color=self._style.section_color, font=self._style.section_font).pack(
-            fill="x", pady=(0 if first else self._px(_SECTION_GAP), self._px(14)),
+            fill="x", pady=(0 if first else self._px(_SECTION_GAP), self._px(16)),
         )
 
     def _resize_content(self, event) -> None:

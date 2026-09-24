@@ -38,8 +38,8 @@ def test_map_library_metrics_scale_every_logical_value_once():
     assert scaled.surface_top_pad_y == 48
     assert scaled.section_corner_radius == 20
     assert scaled.section_padding_x == 48
-    assert scaled.section_padding_y == 40
-    assert scaled.section_padding_bottom_y == 50
+    assert scaled.section_padding_y == 48
+    assert scaled.section_padding_bottom_y == 48
     assert scaled.section_gap_y == 48
     assert scaled.recent_card_min_height == 276
     assert scaled.catalog_card_min_height == 968
@@ -66,9 +66,9 @@ def test_map_library_reference_frame_resolves_exact_card_coordinates():
         + MAP_LIBRARY_VISUAL_METRICS.section_gap_y
     )
 
-    assert MAP_LIBRARY_SCROLLBAR_RAIL_WIDTH == 14
-    assert main_x == 246
-    assert card_width == 806
+    assert MAP_LIBRARY_SCROLLBAR_RAIL_WIDTH == 16
+    assert main_x == 252
+    assert card_width == 796
     assert (
         MAP_LIBRARY_VISUAL_METRICS.surface_top_pad_y
         == MAP_LIBRARY_VISUAL_METRICS.section_gap_y
@@ -113,9 +113,9 @@ def test_map_library_panel_style_resolves_metrics_fonts_and_progress_colors():
         progress_fill_color="#ffaa00",
     )
 
-    assert style.metrics.section_padding_y == 30
-    assert style.metrics.section_padding_bottom_y == 38
-    assert style.metrics.local_action_height == 75
+    assert style.metrics.section_padding_y == 36
+    assert style.metrics.section_padding_bottom_y == 36
+    assert style.metrics.local_action_height == 72
     assert style.metrics.compact_local_action_height == 42
     assert SECTION_HEADING_FONT_SCALE == 0.8
     assert style.section_font == (

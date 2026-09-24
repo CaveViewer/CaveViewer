@@ -60,19 +60,19 @@ def test_help_keycaps_use_geometric_unit_spans_and_center_glyphs():
     assert panel._keycap_width("-") == 25
     assert panel._keycap_width("=") == 25
     assert panel._keycap_span_width(1) == 25
-    assert panel._keycap_span_width(2) == 55
-    assert panel._keycap_width("Cmd") == 55
-    assert panel._keycap_width("Ctrl") == 55
-    assert panel._keycap_width("Del") == 55
-    assert panel._keycap_width("Scroll") == 55
-    assert panel._keycap_width("Shift") == 55
-    assert panel._keycap_width("Escape") == 55
-    assert panel._keycap_width("Space") == 55
+    assert panel._keycap_span_width(2) == 54
+    assert panel._keycap_width("Cmd") == 54
+    assert panel._keycap_width("Ctrl") == 54
+    assert panel._keycap_width("Del") == 54
+    assert panel._keycap_width("Scroll") == 54
+    assert panel._keycap_width("Shift") == 54
+    assert panel._keycap_width("Escape") == 54
+    assert panel._keycap_width("Space") == 54
     assert panel._keycap_width("Space") == panel._keycap_width("Escape")
-    assert panel._keycap_width("1–9") == 55
+    assert panel._keycap_width("1–9") == 54
     assert panel._keycap_width("1–9") == panel._keycap_width("Ctrl")
     assert panel._keycap_width("Shift") == (
-        panel._keycap_width("E") + 5 + panel._keycap_width("Q")
+        panel._keycap_width("E") + 4 + panel._keycap_width("Q")
     )
     assert panel._keycap_width("Mouse") == 47
     assert panel._keycap_separator_width("+") == 25
@@ -112,7 +112,7 @@ def test_help_keycaps_use_geometric_unit_spans_and_center_glyphs():
 
     first_rect = bounds(polygon_calls[0])
     second_rect = bounds(polygon_calls[1])
-    assert second_rect[0] - first_rect[2] == 5
+    assert second_rect[0] - first_rect[2] == 4
     escape_rect = bounds(polygon_calls[2])
     space_rect = bounds(polygon_calls[3])
     assert escape_rect[2] - escape_rect[0] == space_rect[2] - space_rect[0]
@@ -166,9 +166,9 @@ def test_help_compound_shortcut_centers_separator_between_keycaps():
     final_left = min(final_points[0::2])
     separator = next(call for call in text_calls if call[1]["text"] == "+")
     separator_x = separator[0][0]
-    assert first_right == 65
-    assert final_left == 100
-    assert separator_x == 82.5
+    assert first_right == 64
+    assert final_left == 97
+    assert separator_x == 80.5
     assert separator[1]["anchor"] == "center"
     assert separator_x - first_right == final_left - separator_x
 
@@ -213,7 +213,7 @@ def test_help_compound_rows_share_the_same_separator_lane():
         for args, kwargs in text_calls
         if kwargs["text"] == "+"
     ]
-    assert separator_xs == [82.5, 82.5]
+    assert separator_xs == [80.5, 80.5]
     del_points = polygon_calls[2][0]
     range_points = polygon_calls[3][0]
     assert max(del_points[0::2]) - min(del_points[0::2]) == (
@@ -398,7 +398,7 @@ def test_help_and_preferences_first_tabs_share_the_same_shell_geometry(monkeypat
 
         assert preferences_shell.pack_info()["pady"] == (
             layout_px(16),
-            layout_px(14),
+            layout_px(32),
         )
         assert preferences_shell.pack_info()["pady"] == (
             help_surface._shell.pack_info()["pady"]
@@ -496,7 +496,7 @@ def test_help_cards_and_compact_shortcuts_keep_measured_alignment():
             card_bounds[index + 1][1] - card_bounds[index][3]
             for index in range(2)
         ]
-        assert card_gaps == [20, 20]
+        assert card_gaps == [24, 24]
 
         title_item = next(
             item
@@ -535,7 +535,7 @@ def test_help_cards_and_compact_shortcuts_keep_measured_alignment():
         assert {
             capture_bounds[index + 1][1] - capture_bounds[index][3]
             for index in range(3)
-        } == {20}
+        } == {24}
 
         panel._show_tab("troubleshooting")
         panel._render_table(800)
@@ -545,7 +545,7 @@ def test_help_cards_and_compact_shortcuts_keep_measured_alignment():
             assert canvas.itemcget(item, "outline").lower() == "#30343d"
             stroke_radius = float(canvas.itemcget(item, "width")) / 2
             assert max(canvas.coords(item)[0::2]) + stroke_radius < 800
-        assert troubleshooting_bounds[1][1] - troubleshooting_bounds[0][3] == 20
+        assert troubleshooting_bounds[1][1] - troubleshooting_bounds[0][3] == 24
         assert panel._troubleshooting_button is not None
         assert int(panel._troubleshooting_button.widget.cget("height")) == 40
         assert panel._log_choice.widget.cget("width") == panel._troubleshooting_button.widget.cget("width")

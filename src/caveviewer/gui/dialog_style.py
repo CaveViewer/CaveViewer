@@ -23,7 +23,7 @@ DialogNoticeKind = Literal["info", "warning", "error"]
 
 _DIALOG_LAYOUT = get_presentation_profile().dialog_layout
 DIALOG_BODY_PAD_X = _DIALOG_LAYOUT.body_pad_x
-DIALOG_BODY_PAD_Y = 18
+DIALOG_BODY_PAD_Y = 24
 DIALOG_PANEL_BORDER = DARK_THEME.entry_border
 
 _UNSET = object()
@@ -112,8 +112,8 @@ class DialogActionLabel(tk.Label):
         kind: DialogButtonKind = "primary",
         enabled: bool = True,
         width: int | None = None,
-        padx: int = 12,
-        pady: int = 6,
+        padx: int = 16,
+        pady: int = 8,
     ) -> None:
         self._cv_kind: DialogButtonKind = kind
         self._cv_command = command
@@ -193,8 +193,8 @@ def create_dialog_action_button(
     kind: DialogButtonKind = "primary",
     enabled: bool = True,
     width: int | None = None,
-    padx: int = 12,
-    pady: int = 6,
+    padx: int = 16,
+    pady: int = 8,
     default: str | None = None,
     dialog_layout: DialogLayoutPolicy | None = None,
 ):
@@ -321,7 +321,7 @@ def create_dialog_notice(
         justify="left",
         wraplength=wraplength,
     )
-    label.grid(row=0, column=1, sticky="ew", padx=(10, 12), pady=6)
+    label.grid(row=0, column=1, sticky="ew", padx=(12, 12), pady=8)
     frame._cv_accent = accent
     return frame, label
 

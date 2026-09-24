@@ -8,6 +8,7 @@ from typing import Callable
 
 from caveviewer.gui.tk_scrolling import vertical_scroll_pixels, vertical_scroll_units
 from caveviewer.gui.tk_theme import DARK_THEME
+from caveviewer.gui.tk_layout import SHELL_SCROLLBAR_RAIL_WIDTH
 
 
 @dataclass(frozen=True)
@@ -17,8 +18,8 @@ class CanvasScrollbarStyle:
     background_color: str
     thumb_color: str = DARK_THEME.secondary_button_border
     active_thumb_color: str = DARK_THEME.entry_focus_border
-    rail_width: int = 14
-    thumb_width: int = 5
+    rail_width: int = SHELL_SCROLLBAR_RAIL_WIDTH
+    thumb_width: int = 4
     minimum_thumb_height: int = 36
 
 

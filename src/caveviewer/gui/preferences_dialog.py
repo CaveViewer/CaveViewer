@@ -42,7 +42,6 @@ from caveviewer.gui.section_spacing import (
     PRIMARY_LABEL_ROW_TOP_INSET,
     PRIMARY_SURFACE_VERTICAL_MARGIN,
 )
-from caveviewer.gui.dialog_style import DIALOG_BODY_PAD_Y
 from caveviewer.gui.dpi_utils import tk_display_scale
 from caveviewer.gui.platform import (
     DesktopServiceError,
@@ -68,6 +67,10 @@ from caveviewer.gui.top_tab_strip import (
     TopTabbedContentSurfaceStyle,
     TopTabStripStyle,
 )
+from caveviewer.gui.tk_layout import (
+    PROMINENT_CONTROL_HEIGHT,
+    SHELL_SCROLLBAR_RAIL_WIDTH,
+)
 from caveviewer.gui.tk_theme import DARK_THEME
 from caveviewer.gui.tk_feedback import INFO_FEEDBACK_MS
 from caveviewer.gui.tk_typography import TkTypography, create_tk_typography
@@ -87,7 +90,7 @@ class PreferencesPanelSnapshot:
 
 _BG_COLOR = DARK_THEME.background
 
-_SCROLLBAR_RAIL_WIDTH = 14
+_SCROLLBAR_RAIL_WIDTH = SHELL_SCROLLBAR_RAIL_WIDTH
 _INLINE_FEEDBACK_PAD_X = 10
 _MIN_HINT_WRAP_LENGTH = 200
 _HINT_WRAP_INSET = 4
@@ -545,6 +548,7 @@ class PreferencesPanel:
         kind: str,
         outside_background: str = _BG_COLOR,
         width: int | None = None,
+        height: int | None = None,
     ) -> RoundedActionButton:
         """Create one Preferences action from the rounded control contract."""
         button = RoundedActionButton(
@@ -557,6 +561,7 @@ class PreferencesPanel:
             kind=kind,
             outside_background=outside_background,
             width=width,
+            height=height,
         )
         self.preference_action_buttons.append(button)
         return button
@@ -1354,7 +1359,7 @@ class PreferencesPanel:
                 background_color=_BG_COLOR,
                 content_pad_left_x=0,
                 content_pad_right_x=0,
-                content_bottom_pad_y=DIALOG_BODY_PAD_Y,
+                content_bottom_pad_y=0,
             ),
         )
         surface.pack(
@@ -1387,12 +1392,14 @@ class PreferencesPanel:
             "Discard",
             self.discard_changes,
             kind="secondary",
+            height=self._surface_px(PROMINENT_CONTROL_HEIGHT),
         )
         self.apply_button = self._new_preferences_action(
             self.button_row,
             "Save",
             self.apply,
             kind="primary",
+            height=self._surface_px(PROMINENT_CONTROL_HEIGHT),
         )
 
         self.apply_button.pack(side="right")

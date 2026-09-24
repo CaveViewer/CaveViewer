@@ -86,8 +86,10 @@ primitives remain documented in [design-system.md](design-system.md).
   headings, and the first content column. Use an additional inset only when it
   communicates real hierarchy consistently across the surface.
 - Keep each shell surface on a stable origin. The Map Library card stack begins
-  44 logical pixels below the window edge and 26 logical pixels after the fixed
-  sidebar; Preferences and Help retain their own established internal insets.
+  24 logical pixels below the window edge and 32 logical pixels after the fixed
+  sidebar. Preferences and Help begin at the same horizontal origin; their first
+  cards begin 84 pixels below the window edge after a 16-pixel inset, 44-pixel
+  tab row, and 24-pixel content gap.
   Switching destinations must not move the shell or navigation geometry.
 - Size normal desktop windows for their complete primary content, then clamp
   them to the usable display area. Scrolling is the fallback for compact
@@ -184,7 +186,8 @@ primitives remain documented in [design-system.md](design-system.md).
   semantic unit immediately to the right on the same baseline, and show the
   acceptable value range only in the entry placeholder.
 - Separate consecutive fields and actions inside a Preferences card with a
-  compact 20-logical-pixel gap. Do not draw between-field dividers or append an
+  compact 20-logical-pixel gap. Separate consecutive cards by 24 logical
+  pixels. Do not draw between-field dividers or append an
   explanatory footer after the final field.
 - Keep numeric inputs compact and path inputs wide enough to recognize the
   selected location.
@@ -222,7 +225,7 @@ primitives remain documented in [design-system.md](design-system.md).
   origin. Both surfaces must use the same display-scale helper so switching
   between them does not move the tab row.
 - Present each Help group as a subtly raised card with a 10-logical-pixel corner
-  radius, 24-logical-pixel internal padding, and a 20-logical-pixel gap before
+  radius, 24-logical-pixel internal padding, and a 24-logical-pixel gap before
   the next card. Add the same subtle muted border to Keys, Capture, and
   Troubleshooting cards. Use title-case headings and short purpose lines with
   one content-aligned divider below each purpose line. Keep rows separated by
@@ -270,8 +273,8 @@ primitives remain documented in [design-system.md](design-system.md).
 - **Escape** and the window close control choose the safe/cancel outcome.
   Keyboard focus starts on the primary action, and every action supports the
   established keyboard activation keys.
-- Ordinary confirmation and message dialogs use a 430 by 220 logical-pixel
-  minimum, 28 logical pixels of horizontal content inset, and 24 logical pixels
+- Ordinary confirmation and message dialogs use a 432 by 220 logical-pixel
+  minimum, 24 logical pixels of horizontal content inset, and 24 logical pixels
   of vertical content inset. Content may increase the requested size when text
   or accessibility scaling requires it.
 - Anchor the action row to the bottom content inset. This preserves a clear gap

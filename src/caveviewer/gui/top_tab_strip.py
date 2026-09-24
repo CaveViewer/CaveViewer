@@ -6,8 +6,13 @@ import tkinter as tk
 from dataclasses import dataclass, replace
 from typing import Callable, Iterable
 
+from caveviewer.gui.tk_layout import (
+    SHELL_SIDEBAR_GUTTER,
+    TABBED_CONTENT_GAP,
+)
 
-TABBED_CONTENT_TOP_GAP = 18
+
+TABBED_CONTENT_TOP_GAP = TABBED_CONTENT_GAP
 TABBED_CONTENT_ALIGNMENT_INSET = 12
 
 
@@ -30,11 +35,11 @@ class TopTabStripStyle:
     font: tuple
     active_font: tuple | None = None
     inactive_font: tuple | None = None
-    horizontal_inset: int = 14
+    horizontal_inset: int = SHELL_SIDEBAR_GUTTER
     top_inset: int = 8
     tab_pad_x: int = TABBED_CONTENT_ALIGNMENT_INSET
-    tab_pad_y: int = 7
-    tab_gap: int = 10
+    tab_pad_y: int = 8
+    tab_gap: int = 8
     focus_highlight_thickness: int = 1
     active_indicator_color: str | None = None
     active_indicator_thickness: int = 2

@@ -31,7 +31,7 @@ def test_help_metrics_align_with_the_approved_preferences_pattern():
     assert metrics.section_corner_radius == preferences.section_corner_radius == 10
     assert metrics.section_padding_x == preferences.section_padding_x == 24
     assert metrics.section_padding_y == preferences.section_padding_y == 24
-    assert metrics.section_gap_y == preferences.section_gap_y == 20
+    assert metrics.section_gap_y == preferences.section_gap_y == 24
     assert metrics.card_item_gap_y == preferences.card_item_gap_y == 20
     assert metrics.section_heading_to_description_y == 6
     assert metrics.detail_gap_y == preferences.field_label_to_description_y == 4
@@ -52,7 +52,7 @@ def test_help_metrics_apply_display_scaling_once():
     assert scaled.control_corner_radius == 6
     assert scaled.section_corner_radius == 15
     assert scaled.section_padding_x == 36
-    assert scaled.keycap_lane_min_width == 255
+    assert scaled.keycap_lane_min_width == 252
     assert not hasattr(scaled, "scaled")
 
 

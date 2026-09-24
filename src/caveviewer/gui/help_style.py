@@ -79,12 +79,12 @@ class HelpVisualMetrics:
     focus_border_thickness: int = PREFERENCES_VISUAL_METRICS.focus_border_thickness
     content_min_width: int = 320
     content_right_pad_x: int = 0
-    keycap_lane_min_width: int = 170
-    keycap_lane_max_width: int = 250
+    keycap_lane_min_width: int = 168
+    keycap_lane_max_width: int = 248
     action_lane_gap_x: int = 32
-    shortcut_row_pad_y: int = 7
-    keycap_content_pad_y: int = 2
-    keycap_sequence_gap_x: int = 5
+    shortcut_row_pad_y: int = 8
+    keycap_content_pad_y: int = 4
+    keycap_sequence_gap_x: int = 4
     detail_gap_y: int = PREFERENCES_VISUAL_METRICS.field_label_to_description_y
     error_excerpt_padding: int = 12
     content_bottom_pad_y: int = 16
