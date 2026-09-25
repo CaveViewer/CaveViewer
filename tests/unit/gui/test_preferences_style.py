@@ -30,7 +30,7 @@ def test_preferences_visual_metrics_match_the_reference_contract():
     assert metrics.numeric_control_height == 36
     assert metrics.card_item_gap_y == 20
     assert metrics.control_height == 40
-    assert metrics.numeric_control_width == 90
+    assert metrics.numeric_control_width == 84
     assert metrics.action_min_width == 160
     assert metrics.control_content_pad_x == 12
     assert metrics.numeric_content_pad_y == 8

@@ -24,6 +24,7 @@ def test_shell_spacing_and_control_tiers_follow_the_four_pixel_grid():
         tk_layout.CARD_PADDING,
         tk_layout.CARD_GAP,
         tk_layout.COMPACT_CONTROL_HEIGHT,
+        tk_layout.COMPACT_NUMERIC_WIDTH,
         tk_layout.REGULAR_CONTROL_HEIGHT,
         tk_layout.PROMINENT_CONTROL_HEIGHT,
         tk_layout.PROMINENT_ACTION_WIDTH,
@@ -34,4 +35,4 @@ def test_shell_spacing_and_control_tiers_follow_the_four_pixel_grid():
     assert all(value % tk_layout.TK_GRID_UNIT == 0 for value in grid_values)
     assert tk_layout.CARD_RADIUS == 10
     assert tk_layout.NAV_ICON_SIZE == 18
-    assert tk_layout.COMPACT_NUMERIC_WIDTH == 90
+    assert tk_layout.COMPACT_NUMERIC_WIDTH == 84
