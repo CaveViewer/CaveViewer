@@ -258,7 +258,7 @@ cannot be scaled again.
 | Field description to control row | 8 |
 | Action and compound path-control height | 40 |
 | Numeric-control height | 36 |
-| Compact numeric-control width | 90 |
+| Compact numeric-control width | 84 |
 | Minimum prominent action width | 160 |
 | Control horizontal content padding | 12 |
 | Numeric-control vertical content padding | 8 |
