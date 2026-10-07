@@ -1,11 +1,11 @@
 {
-  "download_size_bytes": 87382520,
-  "download_size_bytes_linux_appimage": 87382520,
-  "download_url": "https://github.com/CaveViewer/CaveViewer/releases/download/v1.0.98/CaveViewer-1.0.98-x86_64.AppImage",
-  "download_url_linux_appimage": "https://github.com/CaveViewer/CaveViewer/releases/download/v1.0.98/CaveViewer-1.0.98-x86_64.AppImage",
-  "latest_version": "1.0.98",
+  "download_size_bytes": 93555192,
+  "download_size_bytes_linux_appimage": 93555192,
+  "download_url": "https://github.com/CaveViewer/CaveViewer/releases/download/v1.1.3/CaveViewer-1.1.3-x86_64.AppImage",
+  "download_url_linux_appimage": "https://github.com/CaveViewer/CaveViewer/releases/download/v1.1.3/CaveViewer-1.1.3-x86_64.AppImage",
+  "latest_version": "1.1.3",
   "release_channel": "stable",
-  "release_notes": "CaveViewer release",
-  "sha256": "cfd2668bf2cef5b485a3e2c9ea4e86f992fa8170b4612ab0bfce338ed18a3503",
-  "sha256_linux_appimage": "cfd2668bf2cef5b485a3e2c9ea4e86f992fa8170b4612ab0bfce338ed18a3503"
+  "release_notes": "CaveViewer Stable 1.1.3 improves desktop layout consistency with 4px-grid alignment, makes Preferences numeric fields more compact, and adds right-drag navigation alongside Shift+click jumping.",
+  "sha256": "8768c01b933735f5b4b4905983a42c7bfa3936634b41af55b71fc76392cedb89",
+  "sha256_linux_appimage": "8768c01b933735f5b4b4905983a42c7bfa3936634b41af55b71fc76392cedb89"
 }
