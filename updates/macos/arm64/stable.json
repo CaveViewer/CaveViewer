@@ -1,13 +1,13 @@
 {
   "architecture": "arm64",
-  "download_size_bytes": 67840630,
-  "download_size_bytes_macosx_dmg": 67840630,
-  "download_url": "https://github.com/CaveViewer/CaveViewer/releases/download/v1.0.98/CaveViewer-1.0.98-macos-arm64.dmg",
-  "download_url_macosx_dmg": "https://github.com/CaveViewer/CaveViewer/releases/download/v1.0.98/CaveViewer-1.0.98-macos-arm64.dmg",
-  "latest_version": "1.0.98",
+  "download_size_bytes": 73792700,
+  "download_size_bytes_macosx_dmg": 73792700,
+  "download_url": "https://github.com/CaveViewer/CaveViewer/releases/download/v1.1.3/CaveViewer-1.1.3-macos-arm64.dmg",
+  "download_url_macosx_dmg": "https://github.com/CaveViewer/CaveViewer/releases/download/v1.1.3/CaveViewer-1.1.3-macos-arm64.dmg",
+  "latest_version": "1.1.3",
   "platform": "macos",
   "release_channel": "stable",
-  "release_notes": "CaveViewer release",
-  "sha256": "0ae415f28fe2399f5a1ff99fdfb34b2e7e6354ed7394e626d89100642a65a566",
-  "sha256_macosx_dmg": "0ae415f28fe2399f5a1ff99fdfb34b2e7e6354ed7394e626d89100642a65a566"
+  "release_notes": "CaveViewer Stable 1.1.3 improves desktop layout consistency with 4px-grid alignment, makes Preferences numeric fields more compact, and adds right-drag navigation alongside Shift+click jumping.",
+  "sha256": "978d4144a7a8c8288d5ba9b218ed680732c6efeeaa38b9499c50147244097af3",
+  "sha256_macosx_dmg": "978d4144a7a8c8288d5ba9b218ed680732c6efeeaa38b9499c50147244097af3"
 }

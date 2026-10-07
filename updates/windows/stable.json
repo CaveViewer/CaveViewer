@@ -1,13 +1,13 @@
 {
   "authenticode_status": "unsigned-community",
-  "download_size_bytes": 59100622,
-  "download_size_bytes_windows_exe": 59100622,
-  "download_url": "https://github.com/CaveViewer/CaveViewer/releases/download/v1.0.98/CaveViewer-1.0.98-windows.exe",
-  "download_url_windows_exe": "https://github.com/CaveViewer/CaveViewer/releases/download/v1.0.98/CaveViewer-1.0.98-windows.exe",
+  "download_size_bytes": 65106948,
+  "download_size_bytes_windows_exe": 65106948,
+  "download_url": "https://github.com/CaveViewer/CaveViewer/releases/download/v1.1.3/CaveViewer-1.1.3-windows.exe",
+  "download_url_windows_exe": "https://github.com/CaveViewer/CaveViewer/releases/download/v1.1.3/CaveViewer-1.1.3-windows.exe",
   "install_channel": "windows_installer",
-  "latest_version": "1.0.98",
+  "latest_version": "1.1.3",
   "release_channel": "stable",
-  "release_notes": "CaveViewer release",
-  "sha256": "d1cb6e8984ab71a36b1899992405f842fe820be6397ade2b20d7a9ca22e7c472",
-  "sha256_windows_exe": "d1cb6e8984ab71a36b1899992405f842fe820be6397ade2b20d7a9ca22e7c472"
+  "release_notes": "CaveViewer Stable 1.1.3 improves desktop layout consistency with 4px-grid alignment, makes Preferences numeric fields more compact, and adds right-drag navigation alongside Shift+click jumping.",
+  "sha256": "22f8baa32dd2628a43c01e5f1c315dc3ed203cf59dcb50b6ec9ec3fef21b4323",
+  "sha256_windows_exe": "22f8baa32dd2628a43c01e5f1c315dc3ed203cf59dcb50b6ec9ec3fef21b4323"
 }
