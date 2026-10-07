@@ -68,6 +68,9 @@ def test_macos_release_scripts_use_architecture_specific_contracts():
 
     assert "CaveViewer-${version}-macos-${macos_arch}.dmg" in packager
     assert '"architecture": "$macos_arch"' in packager
+    assert "create_dmg()" in packager
+    assert "hdiutil create failed; retrying" in packager
+    assert 'rm -f "$artifact_path"' in packager
     assert "updates/macos/$macos_arch/$manifest_channel.json" in publisher
     assert 'if [ "$macos_arch" = "arm64" ]; then' in publisher
     assert "updates/macos/$macos_arch/$channel.json" in manifest_writer
