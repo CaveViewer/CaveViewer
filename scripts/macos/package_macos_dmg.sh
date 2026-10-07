@@ -147,12 +147,37 @@ cp "$license_path" "$staging_dir/LICENSE"
 cp "$third_party_notices_path" "$staging_dir/THIRD_PARTY_NOTICES.md"
 ln -s /Applications "$staging_dir/Applications"
 
-hdiutil create \
-  -volname "$app_name $version" \
-  -srcfolder "$staging_dir" \
-  -ov \
-  -format UDZO \
-  "$artifact_path" >/dev/null
+create_dmg() {
+  local attempt=1
+  local max_attempts=5
+  local delay_seconds=5
+  local status=0
+
+  while [ "$attempt" -le "$max_attempts" ]; do
+    rm -f "$artifact_path"
+    if hdiutil create \
+      -volname "$app_name $version" \
+      -srcfolder "$staging_dir" \
+      -ov \
+      -format UDZO \
+      "$artifact_path" >/dev/null; then
+      return 0
+    fi
+    status=$?
+
+    if [ "$attempt" -eq "$max_attempts" ]; then
+      echo "Error: hdiutil create failed after $max_attempts attempts." >&2
+      return "$status"
+    fi
+
+    echo "hdiutil create failed; retrying in ${delay_seconds}s (attempt $attempt/$max_attempts)." >&2
+    sleep "$delay_seconds"
+    attempt=$((attempt + 1))
+    delay_seconds=$((delay_seconds * 2))
+  done
+}
+
+create_dmg
 
 sha256="$(cv_sha256 "$artifact_path")"
 size_bytes="$(cv_size_bytes "$artifact_path")"
